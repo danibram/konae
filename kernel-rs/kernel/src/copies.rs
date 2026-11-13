@@ -8,8 +8,13 @@
 //!
 //! With `KONAE_COPY_SECRET` set, every file sent to S3 is sealed with
 //! AES-256-GCM, as `mail.rs` seals queued links, and `restore` needs the
-//! same secret to open it. Every target also keeps the revocation record of
-//! `recovery.rs`, which `restore` applies before the Kernel serves.
+//! same secret to open it. The manifest of a sealed copy carries an
+//! HMAC-SHA256 `mac` over its copy ID and file list, and `restore` from S3
+//! refuses a copy that is not sealed, whose MAC fails, or that has none.
+//! `KONAE_COPY_ACCEPT_UNSIGNED=1` lets one restore accept a sealed copy and
+//! revocation entries from before MACs existed. Every target also keeps the
+//! revocation record of `recovery.rs`, which `restore` applies before the
+//! Kernel serves; entries sent to S3 carry a MAC too.
 
 use crate::installation::Installation;
 use std::{
@@ -28,7 +33,7 @@ use sha2::{Digest, Sha256};
 
 use ring::{
     aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey},
-    hkdf,
+    hkdf, hmac,
     rand::{SecureRandom, SystemRandom},
 };
 
@@ -143,6 +148,11 @@ impl CopyConfig {
 pub struct CopyKey {
     key: LessSafeKey,
     check: String,
+    /// Signs each manifest of a sealed copy. Its own HKDF label, so it is
+    /// neither the sealing key nor the `check` value.
+    manifest_mac: hmac::Key,
+    /// Signs each revocation entry sent to S3, under another label.
+    entry_mac: hmac::Key,
 }
 
 impl CopyKey {
@@ -164,7 +174,27 @@ impl CopyKey {
         // damaged file without revealing anything about the key.
         let mut check = [0u8; 32];
         prk.expand(&[b"key check"], HkdfLength(32)).expect("HKDF output fits 32 bytes").fill(&mut check).expect("32 bytes");
-        Self { key, check: hex::encode(check) }
+        let mac_key = |label: &'static [u8]| hmac::Key::from(prk.expand(&[label], hmac::HMAC_SHA256).expect("HKDF output fits HMAC-SHA256"));
+        Self { key, check: hex::encode(check), manifest_mac: mac_key(b"manifest mac"), entry_mac: mac_key(b"revocation entry mac") }
+    }
+
+    /// The MAC of a manifest for the copy folder `copy`. It covers the
+    /// canonical form of the manifest without its `mac` field.
+    fn sign_manifest(&self, copy: &str, manifest: &Manifest) -> String {
+        hex::encode(hmac::sign(&self.manifest_mac, &manifest_message(copy, manifest)).as_ref())
+    }
+
+    fn verify_manifest(&self, copy: &str, manifest: &Manifest, mac: &str) -> bool {
+        hex::decode(mac).is_ok_and(|mac| hmac::verify(&self.manifest_mac, &manifest_message(copy, manifest), &mac).is_ok())
+    }
+
+    /// The MAC of a revocation entry stored under the file name `name`.
+    pub(crate) fn sign_entry(&self, name: &str, entry: &recovery::Entry) -> Result<String> {
+        Ok(hex::encode(hmac::sign(&self.entry_mac, &entry_message(name, entry)?).as_ref()))
+    }
+
+    pub(crate) fn verify_entry(&self, name: &str, entry: &recovery::Entry, mac: &str) -> Result<bool> {
+        Ok(hex::decode(mac).is_ok_and(|mac| hmac::verify(&self.entry_mac, &entry_message(name, entry).unwrap_or_default(), &mac).is_ok()))
     }
 
     /// Seals one file. The copy ID and the file's path are the associated
@@ -191,6 +221,32 @@ impl CopyKey {
         let plain = self.key.open_in_place(nonce, Aad::from(format!("{copy}/{path}").as_bytes()), &mut buffer).ok()?;
         Some(plain.to_vec())
     }
+}
+
+/// The bytes a manifest's MAC covers: the copy ID, a zero byte, and the
+/// manifest serialised by its struct, so the field order is fixed, with
+/// `mac` left out. The writer and `restore` both build it from the struct.
+fn manifest_message(copy: &str, manifest: &Manifest) -> Vec<u8> {
+    let mut message = copy.as_bytes().to_vec();
+    message.push(0);
+    let plain = Manifest { mac: None, ..manifest.clone() };
+    message.extend(serde_json::to_vec(&plain).expect("a manifest serialises"));
+    message
+}
+
+/// The bytes an entry's MAC covers: its file name, a zero byte and the entry
+/// serialised by its struct.
+fn entry_message(name: &str, entry: &recovery::Entry) -> Result<Vec<u8>> {
+    let mut message = name.as_bytes().to_vec();
+    message.push(0);
+    message.extend(serde_json::to_vec(entry)?);
+    Ok(message)
+}
+
+/// Whether this restore accepts what an older Kernel wrote without a MAC.
+/// Read once by the caller, so the code under test never reads the environment.
+pub fn accept_unsigned_from_env() -> bool {
+    std::env::var("KONAE_COPY_ACCEPT_UNSIGNED").is_ok_and(|value| value == "1")
 }
 
 struct HkdfLength(usize);
@@ -246,6 +302,10 @@ impl CopyStatus {
 
     pub fn ledger_targets(&self) -> &[Target] {
         &self.ledger
+    }
+
+    pub fn key(&self) -> Option<&CopyKey> {
+        self.key.as_deref()
     }
 
     fn update(&self, kind: &'static str, change: impl FnOnce(&mut TargetReport)) {
@@ -308,6 +368,10 @@ struct Manifest {
     /// plain files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     encryption: Option<Encryption>,
+    /// Present on a sealed copy: HMAC-SHA256 of the copy ID and the
+    /// manifest without this field, so no entry can be added or dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mac: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -409,7 +473,7 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64)
     }
     let (root, id) = (staging.to_owned(), id.to_owned());
     tokio::task::spawn_blocking(move || {
-        let manifest = Manifest { version: 1, copy_id: id, created_at, files: list_files(&root)?, encryption: None };
+        let manifest = Manifest { version: 1, copy_id: id, created_at, files: list_files(&root)?, encryption: None, mac: None };
         std::fs::write(root.join(MANIFEST), serde_json::to_vec_pretty(&manifest)?)?;
         Ok(manifest)
     })
@@ -631,9 +695,15 @@ fn prune_directory(directory: &Path, now: u64) -> Result<usize> {
     Ok(expired.len())
 }
 
-/// The manifest a sealed copy carries.
+/// The manifest a sealed copy carries, signed for its copy ID.
 fn sealed_manifest(manifest: &Manifest, key: &CopyKey) -> Manifest {
-    Manifest { encryption: Some(Encryption { algorithm: ENCRYPTION.into(), key_check: key.check.clone() }), ..manifest.clone() }
+    let mut sealed = Manifest {
+        encryption: Some(Encryption { algorithm: ENCRYPTION.into(), key_check: key.check.clone() }),
+        mac: None,
+        ..manifest.clone()
+    };
+    sealed.mac = Some(key.sign_manifest(&manifest.copy_id, &sealed));
+    sealed
 }
 
 /// Uploads every file, then the manifest. A prefix without a manifest is an
@@ -814,7 +884,7 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
     let from = from.with_context(restore_usage)?;
     let destination = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     let source = source_for(&from).await?;
-    let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(), installation).await?;
+    let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(), accept_unsigned_from_env(), installation).await?;
     println!(
         "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials and ended every open email link; owners, agents and app users sign in again.",
         summary.copy_id,
@@ -834,14 +904,14 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
 
 /// Reads the revocation record next to the copies at `from`, for
 /// The `reconcile` command. `None` when the source keeps no record.
-pub async fn read_record(from: &str) -> Result<Option<Vec<Vec<u8>>>> {
+pub async fn read_record(from: &str, key: Option<&CopyKey>, accept_unsigned: bool) -> Result<Option<Vec<Vec<u8>>>> {
     let source = source_for(from).await?;
     // A directory that is itself one copy keeps the record one level up.
     let source = match source {
         Source::Directory(path) if path.join(MANIFEST).is_file() => Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
         other => other,
     };
-    source.record().await
+    source.record(key, accept_unsigned).await
 }
 
 async fn source_for(from: &str) -> Result<Source> {
@@ -898,7 +968,10 @@ impl Source {
 
     /// The revocation record's entries. `None` when `started.json` is
     /// missing: the source never kept a record, so it cannot prove none.
-    async fn record(&self) -> Result<Option<Vec<Vec<u8>>>> {
+    /// With a key, each entry on S3 must carry a valid MAC for its file name,
+    /// or the whole record is unreadable. An entry with no MAC passes only
+    /// under `accept_unsigned`. A directory is never sealed and is not checked.
+    async fn record(&self, key: Option<&CopyKey>, accept_unsigned: bool) -> Result<Option<Vec<Vec<u8>>>> {
         let dir = recovery::LEDGER_DIR;
         let start = recovery::LEDGER_START;
         match self {
@@ -923,8 +996,16 @@ impl Source {
                     return Ok(None);
                 }
                 let mut files = Vec::new();
-                for key in keys.iter().filter(|key| key.ends_with(".json") && key[base.len()..] != *start) {
-                    files.push(read_s3_bytes(client, bucket, key).await?);
+                let mut unsigned = 0;
+                for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
+                    let bytes = read_s3_bytes(client, bucket, object).await?;
+                    if let Some(key) = key {
+                        unsigned += recovery::check_signed(key, &object[base.len()..], &bytes, accept_unsigned)?;
+                    }
+                    files.push(bytes);
+                }
+                if unsigned > 0 {
+                    println!("KONAE_COPY_ACCEPT_UNSIGNED is set: accepted {unsigned} revocation entries that carry no MAC.");
                 }
                 Ok(Some(files))
             }
@@ -941,7 +1022,15 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
-async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: Option<&CopyKey>, installation: &Installation) -> Result<RestoreSummary> {
+/// `accept_unsigned` is `KONAE_COPY_ACCEPT_UNSIGNED`, read once by the caller.
+async fn restore(
+    source: &Source,
+    copy: Option<&str>,
+    destination: &Path,
+    key: Option<&CopyKey>,
+    accept_unsigned: bool,
+    installation: &Installation,
+) -> Result<RestoreSummary> {
     ensure_empty(destination)?;
     // A directory that is itself one copy.
     let direct;
@@ -967,6 +1056,12 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
         .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
     ensure!(manifest.version == 1, "The copy's manifest version is not supported.");
+    // Copies on S3 are sealed whenever a secret is set. A plain manifest there
+    // is not one this installation made, so the secret is not set aside for it.
+    ensure!(
+        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
+        "Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set. Unset it to restore a copy made without it. Nothing was installed."
+    );
     if let Some(encryption) = &manifest.encryption {
         ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
         let key = key.with_context(|| {
@@ -976,6 +1071,18 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
             key.check == encryption.key_check,
             "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
         );
+        match &manifest.mac {
+            Some(mac) => ensure!(
+                key.verify_manifest(&copy, &manifest, mac),
+                "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
+            ),
+            None if accept_unsigned => {
+                println!("KONAE_COPY_ACCEPT_UNSIGNED is set: restoring copy {copy} without checking its manifest, which carries no MAC.")
+            }
+            None => bail!(
+                "Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to restore it anyway. Nothing was installed."
+            ),
+        }
     }
     for file in &manifest.files {
         let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
@@ -1011,7 +1118,7 @@ async fn restore(source: &Source, copy: Option<&str>, destination: &Path, key: O
         })
         .await??;
         // Applied before anything is in place, or the installation holds.
-        let record = source.record().await;
+        let record = source.record(key, accept_unsigned).await;
         let root = staging.clone();
         let stores = installation.clone();
         let reconciled = tokio::task::spawn_blocking(move || recovery::apply_or_hold(&root, &stores, record)).await??;
@@ -1278,7 +1385,7 @@ mod tests {
         std::fs::write(files.join("index.json"), json!([{"id": kept}, {"id": vanished}]).to_string()).unwrap();
 
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
-        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         let folder = crate::layout::files(&restored, &deployment.id);
         assert_eq!(std::fs::read(folder.join(format!("{kept}.blob"))).unwrap(), b"attachment");
         let index: Value = serde_json::from_slice(&std::fs::read(folder.join("index.json")).unwrap()).unwrap();
@@ -1303,7 +1410,7 @@ mod tests {
         assert!(!copied.join("files/.index.json.tmp-x").exists(), "temporary files stay behind");
         assert!(!copied.join("backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
 
-        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         assert_eq!((summary.copy_id.as_str(), summary.deployments), (id.as_str(), 1));
         let loaded = load_deployments(&restored, "http://localhost").await.unwrap();
         let served = loaded.get("copy-test.localhost").expect("the restored Kernel knows the app");
@@ -1325,7 +1432,7 @@ mod tests {
         assert!(crate::http::holds_route_secret(&crate::http::secrets_store(&restored, &deployment.id).unwrap(), "a-copied-route-secret").unwrap(), "the app's secrets travel in a copy");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
-        let message = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(message.contains("not empty"), "{message}");
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
@@ -1345,9 +1452,9 @@ mod tests {
         let user: String = Connection::open(&identity).unwrap().query_row("SELECT id FROM app_users", [], |r| r.get(0)).unwrap();
         // Suspended after the copy was taken.
         let entry = recovery::Entry::new("app-user", Some(&deployment.id), &user, "suspended");
-        recovery::write(&[Target::Directory(copies.clone())], None, "data", &entry).await.unwrap();
+        recovery::write(&[Target::Directory(copies.clone())], None, "data", &entry, None).await.unwrap();
 
-        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         assert!(summary.reconciled.as_ref().is_ok_and(|changed| *changed >= 1), "{:?}", summary.reconciled);
         assert!(recovery::hold(&restored).is_none());
         let folder = crate::layout::folder(&restored, &deployment.id);
@@ -1355,7 +1462,7 @@ mod tests {
         assert!(restored_auth.login("writer@copy.test", "correct horse battery").is_err(), "the suspension survives the restore");
 
         std::fs::remove_file(copies.join(recovery::LEDGER_DIR).join(recovery::LEDGER_START)).unwrap();
-        let summary = restore(&Source::Directory(copies.clone()), None, &held, None, &crate::installation::Installation::for_test()).await.unwrap();
+        let summary = restore(&Source::Directory(copies.clone()), None, &held, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         assert!(summary.reconciled.as_ref().is_err_and(|reason| reason.contains("started.json")));
         assert!(recovery::hold(&held).is_some(), "an unreadable record keeps the installation in maintenance");
         assert!(crate::maintenance::pause(&held, &deployment.id).is_some());
@@ -1373,7 +1480,7 @@ mod tests {
         std::fs::create_dir_all(crate::layout::private(&source, &deployment.id)).unwrap();
         std::fs::write(crate::layout::private(&source, &deployment.id).join(crate::maintenance::MARKER_FILE), json!({"since": 1}).to_string()).unwrap();
         run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
-        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         let message = crate::maintenance::pause(&restored, &deployment.id).expect("the restored app stays in maintenance");
         assert!(message.contains("in maintenance"));
         for path in [source, copies, restored] {
@@ -1407,10 +1514,10 @@ mod tests {
         assert!(!bytes.windows(4).any(|w| w == b"kept"), "rows are not readable at rest");
 
         let refused_root = scratch("sealed-refused");
-        let without = restore(&Source::Directory(sealed.clone()), None, &refused_root, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let without = restore(&Source::Directory(sealed.clone()), None, &refused_root, None, false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(without.contains("is encrypted") && without.contains("KONAE_COPY_SECRET"), "{without}");
         let wrong = CopyKey::derive("another secret that is long enough for tests");
-        let refused = restore(&Source::Directory(sealed.clone()), None, &refused_root, Some(&wrong), &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let refused = restore(&Source::Directory(sealed.clone()), None, &refused_root, Some(&wrong), false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(refused.contains("does not open"), "{refused}");
 
         // A sealed file moved to another path does not open.
@@ -1418,11 +1525,11 @@ mod tests {
         let moved = scratch("sealed-moved-copy");
         copy_tree(&sealed, &moved).unwrap();
         std::fs::copy(moved.join(&id).join(&identity), moved.join(&id).join(&database)).unwrap();
-        let damaged = restore(&Source::Directory(moved.clone()), Some(&id), &refused_root, Some(&key), &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let damaged = restore(&Source::Directory(moved.clone()), Some(&id), &refused_root, Some(&key), false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(damaged.contains("does not decrypt"), "{damaged}");
 
         let restored = scratch("sealed-restored");
-        restore(&Source::Directory(sealed.clone()), Some(&id), &restored, Some(&key), &crate::installation::Installation::for_test()).await.unwrap();
+        restore(&Source::Directory(sealed.clone()), Some(&id), &restored, Some(&key), false, &crate::installation::Installation::for_test()).await.unwrap();
         let folder = crate::layout::folder(&restored, &deployment.id);
         assert_eq!(count(&folder.join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
         AuthService::open(folder.join("data/identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
@@ -1490,7 +1597,7 @@ mod tests {
         recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
         let key = CopyKey::derive(TEST_SECRET);
         let restored = scratch("planted-restored");
-        let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
+        let refused = restore(&s3_source(&client), None, &restored, Some(&key), false, &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
         assert!(refused.contains("is not encrypted") && refused.contains("KONAE_COPY_SECRET") && refused.contains("Nothing was installed"), "{refused}");
         assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0, "a refused restore installs nothing");
         for path in [source, copies, restored] {
@@ -1512,7 +1619,7 @@ mod tests {
         assert_eq!(manifest.files.len() + 1, before, "the artifact was listed");
         client.put_object().bucket("data").key(format!("copies/{id}/{MANIFEST}")).body(ByteStream::from(serde_json::to_vec_pretty(&manifest).unwrap())).send().await.unwrap();
         let restored = scratch("trimmed-restored");
-        let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("an altered manifest is refused").to_string();
+        let refused = restore(&s3_source(&client), None, &restored, Some(&key), false, &crate::installation::Installation::for_test()).await.err().expect("an altered manifest is refused").to_string();
         assert!(refused.contains("Nothing was installed"), "{refused}");
         assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0);
         for path in [source, copies, restored] {
@@ -1533,7 +1640,7 @@ mod tests {
         let name = format!("copies/{}/0000000000001-forged.json", recovery::LEDGER_DIR);
         client.put_object().bucket("data").key(name).body(ByteStream::from(serde_json::to_vec(&forged).unwrap())).send().await.unwrap();
         let restored = scratch("forged-restored");
-        let summary = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.unwrap();
+        let summary = restore(&s3_source(&client), None, &restored, Some(&key), false, &crate::installation::Installation::for_test()).await.unwrap();
         assert!(summary.reconciled.is_err(), "an entry without a valid MAC makes the record unreadable: {:?}", summary.reconciled);
         assert!(recovery::hold(&restored).is_some(), "the installation holds");
         let state: String = Connection::open(crate::layout::identity(&restored, &deployment.id)).unwrap().query_row("SELECT state FROM app_users", [], |r| r.get(0)).unwrap();
@@ -1553,20 +1660,135 @@ mod tests {
 
         send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
         let sealed_root = scratch("pairs-sealed");
-        restore(&s3_source(&client), None, &sealed_root, Some(&key), &stores).await.unwrap();
+        restore(&s3_source(&client), None, &sealed_root, Some(&key), false, &stores).await.unwrap();
         verify(&sealed_root);
 
         let other = fake_s3_client().await;
         send_genuine(&other, &copies.join(&id), &id, None).await;
         let open_root = scratch("pairs-open");
-        restore(&s3_source(&other), None, &open_root, None, &stores).await.unwrap();
+        restore(&s3_source(&other), None, &open_root, None, false, &stores).await.unwrap();
         verify(&open_root);
 
         // The directory target is never sealed, so a secret does not touch it.
         let directory_root = scratch("pairs-directory");
-        restore(&Source::Directory(copies.clone()), None, &directory_root, Some(&key), &stores).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &directory_root, Some(&key), false, &stores).await.unwrap();
         verify(&directory_root);
         for path in [source, copies, sealed_root, open_root, directory_root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_writers_mac_is_the_one_the_reader_recomputes_after_a_round_trip_through_json() {
+        let (source, copies, id, _) = plain_copy("roundtrip").await;
+        let key = CopyKey::derive(TEST_SECRET);
+        let manifest: Manifest = serde_json::from_slice(&std::fs::read(copies.join(&id).join(MANIFEST)).unwrap()).unwrap();
+        let sealed = sealed_manifest(&manifest, &key);
+        let mac = sealed.mac.clone().expect("a sealed manifest carries a MAC");
+        for bytes in [serde_json::to_vec(&sealed).unwrap(), serde_json::to_vec_pretty(&sealed).unwrap()] {
+            let read: Manifest = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(read.mac.as_deref(), Some(mac.as_str()));
+            assert!(key.verify_manifest(&id, &read, &mac));
+            assert!(!key.verify_manifest("2020-01-01T00-00-00.000Z", &read, &mac), "the MAC is bound to the copy ID");
+        }
+        let mut shorter = sealed.clone();
+        shorter.files.pop();
+        assert!(!key.verify_manifest(&id, &shorter, &mac), "a dropped entry changes the MAC");
+        assert!(!CopyKey::derive("another secret that is long enough for tests").verify_manifest(&id, &sealed, &mac));
+        assert!(!key.verify_manifest(&id, &sealed, "not hex"));
+        // The file-sealing key and the check value do not sign anything.
+        assert_ne!(mac, key.check);
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sealed_copy_without_a_mac_restores_only_when_the_override_is_passed() {
+        let (source, copies, id, deployment) = plain_copy("unsigned").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        // What an older Kernel wrote, or what someone stripping the field leaves.
+        let bytes = read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap();
+        let mut manifest: Manifest = serde_json::from_slice(&bytes).unwrap();
+        manifest.mac = None;
+        client.put_object().bucket("data").key(format!("copies/{id}/{MANIFEST}")).body(ByteStream::from(serde_json::to_vec_pretty(&manifest).unwrap())).send().await.unwrap();
+        let stores = crate::installation::Installation::for_test();
+        let refused_root = scratch("unsigned-refused");
+        let refused = restore(&s3_source(&client), None, &refused_root, Some(&key), false, &stores).await.err().expect("no MAC, no restore").to_string();
+        assert!(refused.contains("no manifest MAC") && refused.contains("KONAE_COPY_ACCEPT_UNSIGNED=1") && refused.contains("older Kernel"), "{refused}");
+        assert_eq!(std::fs::read_dir(&refused_root).map(|entries| entries.count()).unwrap_or(0), 0);
+        let restored = scratch("unsigned-restored");
+        restore(&s3_source(&client), None, &restored, Some(&key), true, &stores).await.unwrap();
+        assert_eq!(count(&crate::layout::folder(&restored, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+        // The override never lets a plain manifest through under a secret.
+        let plain_root = scratch("unsigned-plain");
+        let plain = fake_s3_client().await;
+        upload_plain(&plain, &copies.join(&id), &id).await;
+        recovery::start(&s3_target(), Some(&plain), "data").await.unwrap();
+        assert!(restore(&s3_source(&plain), None, &plain_root, Some(&key), true, &stores).await.is_err());
+        for path in [source, copies, refused_root, restored, plain_root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_signed_revocation_entry_applies_and_an_unsigned_one_only_under_the_override() {
+        let (source, copies, id, deployment) = plain_copy("signed").await;
+        let key = CopyKey::derive(TEST_SECRET);
+        let stores = crate::installation::Installation::for_test();
+        let identity = crate::layout::identity(&source, &deployment.id);
+        let user: String = Connection::open(&identity).unwrap().query_row("SELECT id FROM app_users", [], |r| r.get(0)).unwrap();
+        let suspended = |root: &Path| -> String {
+            Connection::open(crate::layout::identity(root, &deployment.id)).unwrap().query_row("SELECT state FROM app_users", [], |r| r.get(0)).unwrap()
+        };
+
+        // Written by a Kernel with the secret.
+        let client = fake_s3_client().await;
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let entry = recovery::Entry::new("app-user", Some(&deployment.id), &user, "suspended");
+        recovery::write(&[s3_target()], Some(&client), "data", &entry, Some(&key)).await.unwrap();
+        let applied = scratch("signed-applied");
+        let summary = restore(&s3_source(&client), None, &applied, Some(&key), false, &stores).await.unwrap();
+        assert!(summary.reconciled.as_ref().is_ok_and(|changed| *changed >= 1), "{:?}", summary.reconciled);
+        assert_eq!(suspended(&applied), "suspended");
+
+        // Signed with another secret: refused even under the override.
+        let other = fake_s3_client().await;
+        send_genuine(&other, &copies.join(&id), &id, Some(&key)).await;
+        let wrong = CopyKey::derive("another secret that is long enough for tests");
+        recovery::write(&[s3_target()], Some(&other), "data", &entry, Some(&wrong)).await.unwrap();
+        let wrong_root = scratch("signed-wrong");
+        let summary = restore(&s3_source(&other), None, &wrong_root, Some(&key), true, &stores).await.unwrap();
+        assert!(summary.reconciled.as_ref().is_err_and(|reason| reason.contains("does not verify")), "{:?}", summary.reconciled);
+        assert_ne!(suspended(&wrong_root), "suspended");
+
+        // Written before entries were signed.
+        let legacy = fake_s3_client().await;
+        send_genuine(&legacy, &copies.join(&id), &id, Some(&key)).await;
+        recovery::write(&[s3_target()], Some(&legacy), "data", &entry, None).await.unwrap();
+        let held = scratch("signed-held");
+        let summary = restore(&s3_source(&legacy), None, &held, Some(&key), false, &stores).await.unwrap();
+        assert!(summary.reconciled.as_ref().is_err_and(|reason| reason.contains("KONAE_COPY_ACCEPT_UNSIGNED=1")), "{:?}", summary.reconciled);
+        assert_ne!(suspended(&held), "suspended");
+        let accepted = scratch("signed-accepted");
+        let summary = restore(&s3_source(&legacy), None, &accepted, Some(&key), true, &stores).await.unwrap();
+        assert!(summary.reconciled.as_ref().is_ok_and(|changed| *changed >= 1), "{:?}", summary.reconciled);
+        assert_eq!(suspended(&accepted), "suspended");
+
+        // A signed entry moved to another file name does not verify.
+        let moved = fake_s3_client().await;
+        send_genuine(&moved, &copies.join(&id), &id, Some(&key)).await;
+        recovery::write(&[s3_target()], Some(&moved), "data", &entry, Some(&key)).await.unwrap();
+        let original = format!("copies/{}/{}", recovery::LEDGER_DIR, entry.file_name_for_test());
+        let bytes = read_s3_bytes(&moved, "data", &original).await.unwrap();
+        moved.delete_object().bucket("data").key(&original).send().await.unwrap();
+        moved.put_object().bucket("data").key(format!("copies/{}/0000000000001-moved.json", recovery::LEDGER_DIR)).body(ByteStream::from(bytes)).send().await.unwrap();
+        let moved_root = scratch("signed-moved");
+        let summary = restore(&s3_source(&moved), None, &moved_root, Some(&key), false, &stores).await.unwrap();
+        assert!(summary.reconciled.is_err());
+        for path in [source, copies, applied, wrong_root, held, accepted, moved_root] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -1593,7 +1815,7 @@ mod tests {
         crate::usage::flush();
         let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         assert!(crate::layout::usage(&copies.join(&id), &deployment.id).is_file());
-        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.unwrap();
 
         let restored_folder = crate::layout::folder(&restored, &deployment.id);
         let identity = restored_folder.join("data/identity.sqlite");
@@ -1633,7 +1855,7 @@ mod tests {
         drop(mail);
         let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
         assert!(copies.join(&id).join(crate::mail::MAIL_DATABASE).is_file());
-        restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
+        restore(&Source::Directory(copies.clone()), None, &restored, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         let restored_mail = restored.join(crate::mail::MAIL_DATABASE);
         let states: Vec<(String, String, bool)> = Connection::open(&restored_mail)
             .unwrap()
@@ -1659,16 +1881,16 @@ mod tests {
         copy_tree(&copies.join(&id), &unfinished).unwrap();
         std::fs::remove_file(unfinished.join(MANIFEST)).unwrap();
         let destination = scratch("damaged-restore");
-        let latest = restore(&Source::Directory(copies.clone()), None, &destination, None, &crate::installation::Installation::for_test()).await.unwrap();
+        let latest = restore(&Source::Directory(copies.clone()), None, &destination, None, false, &crate::installation::Installation::for_test()).await.unwrap();
         assert_eq!(latest.copy_id, id, "a copy without a manifest is never picked");
         let named = unfinished.file_name().unwrap().to_str().unwrap();
         let empty = scratch("damaged-empty");
-        let message = restore(&Source::Directory(copies.clone()), Some(named), &empty, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.clone()), Some(named), &empty, None, false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(message.contains("incomplete"), "{message}");
 
         let artifact = crate::layout::dist(&copies.join(&id), &deployment.id).join("index.html");
         std::fs::write(&artifact, "<main>tampered</main>").unwrap();
-        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(message.contains("does not match its checksum"), "{message}");
         assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0, "a refused restore leaves the directory empty");
 
@@ -1676,7 +1898,7 @@ mod tests {
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
         manifest["files"][0]["path"] = json!("../outside.sqlite");
         std::fs::write(&manifest_path, manifest.to_string()).unwrap();
-        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
+        let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, false, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(message.contains("outside a data directory"), "{message}");
         for path in [source, copies, destination, empty] {
             let _ = std::fs::remove_dir_all(path);

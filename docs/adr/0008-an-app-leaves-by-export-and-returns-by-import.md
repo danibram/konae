@@ -30,7 +30,7 @@ Moving an app with no lost write is maintenance on the origin, export, import on
 
 ### A copy and a restore recover an installation
 
-- The Kernel copies its data directory on a schedule, every app folder and every installation store, to a directory, an S3 prefix or both, with a manifest of sizes and SHA-256. With `KONAE_COPY_SECRET` set, each file sent to S3 is sealed with AES-256-GCM, and `restore` needs the same secret.
+- The Kernel copies its data directory on a schedule, every app folder and every installation store, to a directory, an S3 prefix or both, with a manifest of sizes and SHA-256. With `KONAE_COPY_SECRET` set, each file sent to S3 is sealed with AES-256-GCM, and `restore` needs the same secret. The secret also signs each manifest and each revocation entry sent to S3, so `restore` refuses a copy it cannot authenticate; `KONAE_COPY_ACCEPT_UNSIGNED=1` accepts copies and entries an older Kernel wrote without a signature.
 - `restore` installs one copy into an empty data directory. It signs out every session and agent credential and ends every open email link, because the people can sign in again in a minute. It keeps API keys live, because they sit in programs the owner may not control and the app is still the same app.
 - Every suspension of an account and every revocation of an API key is written to each copy target, as one file under `revocations/`, before the tool reports success. `restore` applies that record before the Kernel serves, so nothing suspended or revoked after the copy comes back. It applies only suspensions and revocations, never a resumption. When the record cannot be read, the restored installation starts in maintenance until `reconcile` applies it or the operator reopens without it.
 
