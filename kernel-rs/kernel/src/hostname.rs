@@ -163,7 +163,7 @@ impl Drop for Taking {
 
 fn take(state: &AppState, hostname: &str) -> Option<Taking> {
     let key = (state.data_root.clone(), hostname.to_owned());
-    // Build the Taking only when this call inserted the name: dropping one
+    // Build the Taking only when this call inserted the name. Dropping one
     // frees the name, which would release another caller's hold.
     let inserted = taking_set().insert(key.clone());
     if inserted { Some(Taking { key }) } else { None }
@@ -208,7 +208,7 @@ pub async fn planned(state: &AppState, slug: &str, id: &str) -> Option<String> {
 }
 
 /// The generated hostname for a first publish of the app `id`, held until
-/// the caller serves on it: the first of `candidates` that is free and is not
+/// the caller serves on it. It is the first of `candidates` that is free and not
 /// the installation's own host, else one with a random code.
 pub async fn choose(state: &AppState, slug: &str, id: &str) -> (String, Taking) {
     let mut names: Vec<String> = candidates(state, slug, id).into_iter().rev().collect();

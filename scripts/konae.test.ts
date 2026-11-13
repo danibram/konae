@@ -172,7 +172,7 @@ describe("konae CLI", () => {
     const refusal = "other.apps.example.com is another app's address on this installation. Choose another name.";
     const client = {
       async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
-        if (name === "project_inspect") return { deployment: { url: "https://notes-1a2b3c.apps.example.com" } } as T;
+        if (name === "domain_read") return { generatedUrl: "https://notes-1a2b3c.apps.example.com" } as T;
         if (input.name === "other") throw Error(refusal);
         return { url: `https://${input.name}.apps.example.com`, changed: true, previousHostnames: ["notes-1a2b3c.apps.example.com"],
           googleCallback: `https://${input.name}.apps.example.com/_konae/auth/google/callback` } as T;

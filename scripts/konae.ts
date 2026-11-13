@@ -381,7 +381,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   try {
     transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
     const released = await release<{ id: string; url: string }>(client, transfer.transferId, confirm, (plan) => {
-      if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url));
+      if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
     });
     await mkdir(path.join(root, ".konae"), { recursive: true });
     await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(released.plan, null, 2));
@@ -400,15 +400,14 @@ export async function publishLocal(root: string, config: Config, token: string, 
 }
 
 /** What a first publish prints before the release fixes the app's generated address. */
-export const firstReleaseAddress = (url: string) =>
-  `This first release names the app ${url}, and every later release keeps that name. To use another name under the same suffix, run konae hostname --set <name> before you register Google sign-in or share links.`;
+export const firstReleaseAddress = (url: string, id: string) =>
+  `This first release names the app ${url}, and every later release keeps that name. To use another name under the same suffix, run konae hostname --deployment ${id} --set <name> before you register Google sign-in or share links.`;
 
-/** hostname_set, or project_inspect without `set`. The Kernel checks the name, and its refusal reaches the caller unchanged. Returns the lines to print. */
+/** hostname_set, or domain_read without `set`. The Kernel checks the name, and its refusal reaches the caller unchanged. Returns the lines to print. */
 export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentId: string, set?: string): Promise<string[]> {
   if (set === undefined) {
-    const { deployment } = await client.call<{ deployment?: { url: string } | null }>("project_inspect", { projectId: deploymentId });
-    if (!deployment) throw Error("This app is not published yet. Its first publish names it.");
-    return [`This app answers at ${deployment.url}.`];
+    const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { deploymentId });
+    return [`This app answers at ${generatedUrl}.`];
   }
   const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { deploymentId, name: set });
   if (!moved.changed) return [`This app already answers at ${moved.url}.`];

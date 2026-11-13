@@ -1519,7 +1519,8 @@ async fn admin_call(
             let schema = validate_release(state, &input, None).await?;
             // The address the release answers on. A first release fixes it, so
             // the owner reads it here before configuring Google or DNS.
-            let (hostname, first_release) = match deployment_by_id(state, &input.project.id).await {
+            let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
+            let (hostname, first_release) = match existing {
                 Some(deployment) => (Some(deployment.hostname), false),
                 None => (super::hostname::planned(state, &input.project.slug, &input.project.id).await, true),
             };
