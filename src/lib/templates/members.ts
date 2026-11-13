@@ -136,7 +136,7 @@ async function loadMembers() {
   const members = await miniapp.actions.call('members.list');
   const owner = me.role === 'owner';
   $('#members').innerHTML = members.map(member =>
-    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(member.display_name) + '</p><small>' + member.role + '</small></div>' +
+    '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(member.display_name) + '</p><small>' + escapeHtml(member.role) + '</small></div>' +
     (owner && member.role === 'member' ? '<button class="ui-button ui-button-sm" data-promote="' + escapeHtml(member.user_id) + '">Make admin</button>'
       : owner && member.role === 'admin' ? '<button class="ui-button ui-button-sm" data-demote="' + escapeHtml(member.user_id) + '">Make member</button>' : '') +
     '</article>'
