@@ -6,6 +6,17 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- The editor opens a published app that has no editor files, such as one published from a folder or over MCP, on its database, its app accounts and what it did. **Open data and users** is on its card under Apps without editor files, and `/app/<id>` names the page. Its files, actions and visibility still change in the folder.
+- `examples/invitation` is a public app where a visitor asks for an invitation code. It refuses a repeated address and emails the owner for each request, and the home links to it at `<domain>/p/invitation/`.
+- The home is in English and Spanish, says what every app has, names the installation's own domain in its animation and links the privacy policy and terms where those pages answer.
+- `bun run release:local` builds and pushes the install images from your machine.
+
+### Fixed
+
+- Under the dark theme the data browser's cells, table list and buttons kept light surfaces with light text.
+
 ## [0.2.0] - 2026-11-13
 
 ### Added
