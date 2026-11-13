@@ -174,6 +174,25 @@ describe("refusals", () => {
       .rejects.toThrow("app.js imports CSS. Link the stylesheet from the page instead.");
   });
 
+  test("a whole document that loads no script, when nothing else runs the entry", async () => {
+    await refused({ "index.html": page("App", '<div id="root"></div><script src="/runtime.js"></script>'), "src/main.tsx": "", "src/main.ts": "" },
+      'index.html is a whole document that loads no script, so src/main.tsx never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts src/main.tsx into it, or add a <script type="module" src> that names a .js file importing src/main.tsx.');
+    await refused({ "pages/index.html": page("App"), "about.html": page("About"), "app.js": "" },
+      'pages/index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.');
+  });
+
+  test("a whole document with no script passes while the app runs elsewhere, or when there is no app", async () => {
+    const passes = (files: Record<string, string>) => expect(assemble(files)).resolves.toBeDefined();
+    // A fragment, or the default fragment a Capsule without index.html gets, runs the entry.
+    await passes({ "index.html": "<div id=root></div>", "404.html": page("Not found"), "app.js": "" });
+    await passes({ "about.html": page("About"), "app.js": "" });
+    // A document that loads its own script, inline or by src, and a static 404 beside it.
+    await passes({ "index.html": page("App", '<script type="module" src="app.js"></script>'), "404.html": page("Not found"), "app.js": "" });
+    await passes({ "index.html": page("App", "<script>document.title = 'x'</script>"), "app.js": "" });
+    // No entry: a page with no script is a static page.
+    await passes({ "index.html": page("Chores") });
+  });
+
   test("routing other than pages or spa", async () => {
     expect(checkRouting(undefined)).toBe("pages");
     expect(checkRouting("spa")).toBe("spa");
@@ -263,7 +282,7 @@ describe("the CLI and the editor build the same artifact", () => {
   });
 
   test("both refuse a missing reference with the same words", async () => {
-    const broken = { ...capsule, "about.html": page("About", '<img src="/team.jpg">') };
+    const broken = { ...capsule, "about.html": page("About", '<img src="/team.jpg"><script type="module" src="/app.js"></script>') };
     const root = await onDisk(broken);
     try {
       const message = "about.html references /team.jpg, but the Capsule holds no team.jpg.";
@@ -273,7 +292,7 @@ describe("the CLI and the editor build the same artifact", () => {
   });
 
   test("the CLI carries a binary file as base64; the editor holds text only and refuses the same reference", async () => {
-    const withImage = { ...capsule, "about.html": page("About", '<img src="/team.png">') };
+    const withImage = { ...capsule, "about.html": page("About", '<img src="/team.png"><script type="module" src="/app.js"></script>') };
     const root = await onDisk(withImage);
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
     await writeFile(path.join(root, "app", "team.png"), png);
@@ -283,6 +302,25 @@ describe("the CLI and the editor build the same artifact", () => {
       expect(new Uint8Array(Buffer.from(cli.files["team.png"], "base64"))).toEqual(png);
       await expect(buildProjectInBrowser(project(withImage))).rejects.toThrow("about.html references /team.png, but the Capsule holds no team.png.");
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  test("both run src/main.tsx in a fragment page, and refuse a whole document that never loads it with the same words", async () => {
+    const typed = { "index.html": "<div id=root></div>", "src/main.tsx": "const count: number = 2;\ndocument.title = String(count);\n" };
+    const root = await onDisk(typed);
+    try {
+      const cli = (await buildLocal(root)).artifact;
+      const editor = await buildProjectInBrowser(project(typed));
+      expect(cli.files["index.html"]).toContain("document.title = String(count)");
+      expect(editor.files["index.html"]).toContain("document.title = String(count)");
+    } finally { await rm(root, { recursive: true, force: true }); }
+
+    const blank = { ...typed, "index.html": page("App", '<div id="root"></div>') };
+    const broken = await onDisk(blank);
+    try {
+      const message = "index.html is a whole document that loads no script, so src/main.tsx never runs and the page stays empty.";
+      await expect(buildLocal(broken)).rejects.toThrow(message);
+      await expect(buildProjectInBrowser(project(blank))).rejects.toThrow(message);
+    } finally { await rm(broken, { recursive: true, force: true }); }
   });
 
   test("both refuse a routing value the Kernel would refuse", async () => {
@@ -327,5 +365,21 @@ describe("a path address finds its base path, and the SDK loader writes its tag 
     for (const file of ["src/mcp/runtime.js", "src/lib/static-artifact.js", "kernel-rs/kernel/src/accounts.rs"]) {
       expect(readFileSync(path.join(root, file), "utf8")).toContain(rule);
     }
+  });
+});
+
+describe("the Validation Gate refuses a page that never runs the app, as the build does", () => {
+  test("a whole-document index.html with no script beside app.js fails the Gate with the build's sentence", async () => {
+    const { default: initSqlJs } = await import("sql.js");
+    const { createCapsuleValidator } = await import("../agent/gate");
+    const { starterProject } = await import("./starter");
+    const validator = createCapsuleValidator(() => initSqlJs());
+    const files = { ...starterProject.files, "index.html": page("App", '<div id="app"></div>') };
+    const message = 'index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.';
+    const result = await validator.validate(files);
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContainEqual({ stage: "actions", message });
+    await expect(assemble(files)).rejects.toThrow(message);
+    expect((await validator.validate(starterProject.files)).ok).toBe(true);
   });
 });

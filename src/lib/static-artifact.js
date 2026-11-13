@@ -74,6 +74,55 @@ export function isDocument(html) {
   return /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype|html)[\s>]/i.test(html);
 }
 
+/** The files a fragment page runs, first held wins. */
+export const appEntries = ["src/main.tsx", "src/main.ts", "app.js"];
+
+/** The entry the build bundles into fragment pages, or null when the Capsule holds none. */
+export function appEntry(paths) {
+  const held = new Set(paths);
+  return appEntries.find((entry) => held.has(entry)) ?? null;
+}
+
+/**
+ * The refusal for a Capsule whose entry never runs: it holds an entry, every
+ * page is a whole document, and no page loads a script besides the SDK. A
+ * whole document keeps its own body, so the build puts no app in it. A page
+ * with no script of its own, such as a 404, passes while another page runs
+ * the app. `pages` maps each page's Capsule path to its HTML. Returns null
+ * when the Capsule passes.
+ */
+export function entryNeverRunsMessage(paths, pages) {
+  const list = [...paths];
+  const entry = appEntry(list);
+  if (entry === null) return null;
+  const sources = list.filter((source) => !source.startsWith("public/") && servedPath(source)?.endsWith(".html"));
+  const index = sources.find((source) => servedPath(source) === "index.html");
+  // Without index.html the build serves the fragment <main id=app></main>, which runs the entry.
+  if (index === undefined) return null;
+  for (const source of sources) {
+    const html = pages[source];
+    if (typeof html !== "string" || !isDocument(html) || loadsScript(html, servedPath(source))) return null;
+  }
+  const load = entry.endsWith(".js") ? `add <script type="module" src="${entry}"></script> to it` : `add a <script type="module" src> that names a .js file importing ${entry}`;
+  return `${index} is a whole document that loads no script, so ${entry} never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts ${entry} into it, or ${load}.`;
+}
+
+/** True when the page has a script element other than the SDK's tag. */
+function loadsScript(html, from) {
+  const visible = html.replace(/<!--[\s\S]*?-->/g, "");
+  for (const match of visible.matchAll(/<script\b((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>([\s\S]*?)(?:<\/script\s*>|$)/gi)) {
+    const src = parseAttributes(match[1] ?? "").src;
+    if (src === undefined) {
+      if (match[2].trim()) return true;
+      continue;
+    }
+    let target;
+    try { target = resolveReference(src, from); } catch { return true; }
+    if (target !== runtimeFile) return true;
+  }
+  return false;
+}
+
 /**
  * The one document shape a fragment page runs in, shared by the preview and
  * every Deployment. The compiled module is emitted as is: esbuild output may
@@ -170,9 +219,12 @@ export async function assembleStaticArtifact(input) {
     pending.push({ target, kind, from, raw });
   };
 
+  for (const [, source] of pages) if (source !== null) seen[source] = await text(source);
+  const neverRuns = entryNeverRunsMessage(held, seen);
+  if (neverRuns) throw new Error(neverRuns);
+
   for (const [served, source] of pages) {
-    const html = source === null ? defaultBody : await text(source);
-    if (source !== null) seen[source] = html;
+    const html = source === null ? defaultBody : seen[source];
     if (!isDocument(html)) {
       compiled ??= withoutModulePaths(await input.compile(), held);
       scanHtml(html, served, reference);
