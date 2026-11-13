@@ -151,6 +151,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
                 {"need": "Take the app elsewhere", "use": "export and import of the app folder", "not": "Copy (moves the installation)"},
                 {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull (an export of the data) + dev --reset (its import)", "not": "Publishing to find out"},
+                {"need": "Put data from the folder, or from another system, into the published app", "use": "konae push (an import of the folder's data/, after a backup)", "not": "A migration script that drives transfers and imports by hand"},
                 {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events", "not": "Reading the Kernel's files by hand"}
             ],
             "unit": "The app folder is the app: konae.json, app/, dist/ and data/ with its database, accounts, files and Usage. The Kernel keeps it under apps/<id>/, and an export hands the same folder over."

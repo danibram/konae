@@ -39,6 +39,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | export and import of the app folder | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` (an export of the data) + `dev --reset` (its import) | Publishing to find out |
+| Put data from the folder, or from another system, into the published app | `konae push` (an import of the folder's `data/`, after a backup) | A migration script that drives transfers and imports by hand |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
 
 Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.

@@ -329,7 +329,7 @@ fn owner_unauthorized(state: &Konae, headers: &HeaderMap) -> Response {
     let login = format!("{}{}", origin(state, headers), super::oauth::owner_login_path());
     let when = kernel::notify::format_now(expires);
     let message = if client.is_some() {
-        format!("This Konae MCP sign-in expired at {when}. OAuth sign-ins last 1 hour. Reconnect your MCP client to sign in again; it opens {login}.")
+        format!("This Konae sign-in expired at {when}. Run konae login --browser for the CLI, or reconnect your MCP client; either opens {login}.")
     } else {
         let lasts = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "1 hour" } else { "24 hours" };
         format!("This Konae token expired at {when}. Tokens from konae login last {lasts} on this installation. Run konae login for a new one, or sign in as the owner at {login}.")
@@ -2153,7 +2153,7 @@ mod tests {
         assert_eq!(cli, "This Konae token expired at 2023-11-14 22:13 UTC. Tokens from konae login last 24 hours on this installation. Run konae login for a new one, or sign in as the owner at https://app.konae.es/_konae/owner/login.");
         let (oauth_challenge, oauth) = read(call("lb_oauth").await.unwrap()).await;
         assert_eq!(oauth_challenge, challenge);
-        assert_eq!(oauth, "This Konae MCP sign-in expired at 2023-11-14 22:13 UTC. OAuth sign-ins last 1 hour. Reconnect your MCP client to sign in again; it opens https://app.konae.es/_konae/owner/login.");
+        assert_eq!(oauth, "This Konae sign-in expired at 2023-11-14 22:13 UTC. Run konae login --browser for the CLI, or reconnect your MCP client; either opens https://app.konae.es/_konae/owner/login.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
