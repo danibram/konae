@@ -1605,6 +1605,95 @@ mod tests {
         }
     }
 
+    /// A copy ID that sorts after every real one, as a planted copy would choose.
+    const LATER_ID: &str = "2099-01-01T00-00-00.000Z";
+
+    async fn put_manifest(client: &S3Client, id: &str, manifest: &Manifest) {
+        client.put_object().bucket("data").key(format!("copies/{id}/{MANIFEST}")).body(ByteStream::from(serde_json::to_vec_pretty(manifest).unwrap())).send().await.unwrap();
+    }
+
+    async fn restored_notes(source: &Source, copy: Option<&str>, label: &str, deployment: &Deployment, key: &CopyKey) -> (String, Result<String>) {
+        let root = scratch(label);
+        let outcome = restore(source, copy, &root, Some(key), false, &crate::installation::Installation::for_test()).await;
+        let outcome = outcome.map(|summary| {
+            assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+            summary.copy_id
+        });
+        let installed = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        let _ = std::fs::remove_dir_all(&root);
+        (installed.to_string(), outcome)
+    }
+
+    #[tokio::test]
+    async fn a_planted_plain_copy_does_not_hide_the_genuine_copy_from_the_default_choice() {
+        let (source, copies, id, deployment) = plain_copy("planted-later").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        upload_plain(&client, &copies.join(&id), LATER_ID).await;
+        let (_, outcome) = restored_notes(&s3_source(&client), None, "planted-later-restored", &deployment, &key).await;
+        assert_eq!(outcome.expect("the genuine copy is installed"), id);
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_planted_sealed_looking_copy_with_a_wrong_or_missing_mac_is_skipped() {
+        let (source, copies, id, deployment) = plain_copy("planted-mac").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let genuine: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap()).unwrap();
+        // The genuine manifest under another copy ID: sealed, right key check, MAC bound to the other ID.
+        put_manifest(&client, "2099-01-01T00-00-00.000Z", &genuine).await;
+        let mut unsigned = genuine.clone();
+        unsigned.mac = None;
+        put_manifest(&client, "2099-01-02T00-00-00.000Z", &unsigned).await;
+        let mut forged = genuine.clone();
+        forged.mac = Some("not hex".into());
+        put_manifest(&client, "2099-01-03T00-00-00.000Z", &forged).await;
+        let (_, outcome) = restored_notes(&s3_source(&client), None, "planted-mac-restored", &deployment, &key).await;
+        assert_eq!(outcome.expect("the genuine copy is installed"), id);
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn with_only_planted_copies_restore_refuses_and_installs_nothing() {
+        let (source, copies, id, deployment) = plain_copy("planted-only").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        upload_plain(&client, &copies.join(&id), &id).await;
+        upload_plain(&client, &copies.join(&id), LATER_ID).await;
+        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
+        let (installed, outcome) = restored_notes(&s3_source(&client), None, "planted-only-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("no copy can be authenticated").to_string();
+        assert!(refused.contains("2 skipped") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn naming_a_planted_copy_is_refused_without_telling_the_operator_to_unset_the_secret() {
+        let (source, copies, id, deployment) = plain_copy("planted-named").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        upload_plain(&client, &copies.join(&id), LATER_ID).await;
+        let (installed, outcome) = restored_notes(&s3_source(&client), Some(LATER_ID), "planted-named-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("a planted copy is refused when named").to_string();
+        assert!(refused.contains("is not encrypted") && refused.contains("KONAE_COPY_SECRET") && refused.contains("--copy") && refused.contains("Nothing was installed"), "{refused}");
+        assert!(!refused.to_lowercase().contains("unset"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
     #[tokio::test]
     async fn a_sealed_copy_with_an_entry_removed_from_its_manifest_is_refused() {
         let (source, copies, id, deployment) = plain_copy("trimmed").await;
