@@ -19,7 +19,8 @@
     "docs:site": "bun run scripts/docs-site.ts",
     "sdk:render": "bun run scripts/render-sdk.ts",
     "templates:render": "bun run scripts/render-templates.ts",
-    "ui:render": "bun run scripts/render-app-ui.ts"
+    "ui:render": "bun run scripts/render-app-ui.ts",
+    "release:local": "bash scripts/release-local.sh"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
