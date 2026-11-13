@@ -820,10 +820,14 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     };
     // The app keeps one ID: its folder, its project and its Deployment share it.
     let id = input.project.id.clone();
-    let hostname = match existing.as_ref() {
-        Some(item) => item.hostname.clone(),
-        // Same rule as a bare Kernel folder: the slug is the address when free.
-        None => folder::free_hostname(state, &input.project.slug).await,
+    // Same rule as a bare Kernel folder: the slug is the address when free.
+    // The name stays held until this release serves on it.
+    let (hostname, _taking) = match existing.as_ref() {
+        Some(item) => (item.hostname.clone(), None),
+        None => {
+            let (hostname, taking) = folder::free_hostname(state, &input.project.slug, &input.project.id).await;
+            (hostname, Some(taking))
+        }
     };
     let url = existing
         .as_ref()

@@ -1569,6 +1569,14 @@ async fn admin_call(
                 super::package::verify(state, principal, &input.project.id, package).await?;
             }
             let schema = validate_release(state, &input, None).await?;
+            // The address the release answers on. A first release fixes it, so
+            // the owner reads it here before configuring Google or DNS.
+            let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
+            let (hostname, first_release) = match existing {
+                Some(deployment) => (Some(deployment.hostname), false),
+                None => (super::hostname::planned(state, &input.project.slug, &input.project.id).await, true),
+            };
+            let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
@@ -1576,7 +1584,7 @@ async fn admin_call(
                 remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }
             Ok(
-                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json()}),
+                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
             )
         }
         "release_apply" => {

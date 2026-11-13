@@ -5,7 +5,7 @@ import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { formatEvent, mailEvents, serveEvents } from "./events";
-import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./konae";
+import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, hostnameLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -155,7 +155,7 @@ describe("konae CLI", () => {
       },
     };
     await expect(domainLocal(client, "d1", { set: "shop.apps.example.com" })).rejects.toThrow(
-      "shop.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Name a hostname outside it.");
+      "shop.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.");
     expect(calls).toEqual(["domain_read"]);
     expect(await domainLocal(client, "d1", { set: "Notes.Example.org" })).toEqual([
       "notes.example.org does not serve yet. No TXT record at _konae.notes.example.org yet.",
@@ -166,6 +166,24 @@ describe("konae CLI", () => {
       "https://notes.example.org serves this app, next to https://notes-1a2b3c.apps.example.com. Your proxy must terminate TLS for notes.example.org and forward Host unchanged.",
     ]);
     expect(await domainLocal(client, "d1", { clear: true })).toEqual(["notes.example.org no longer serves this app. https://notes-1a2b3c.apps.example.com keeps answering."]);
+  });
+
+  test("hostname shows the generated address, moves it, and passes the Kernel's refusal through unchanged", async () => {
+    const refusal = "other.apps.example.com is another app's address on this installation. Choose another name.";
+    const client = {
+      async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
+        if (name === "domain_read") return { generatedUrl: "https://notes-1a2b3c.apps.example.com" } as T;
+        if (input.name === "other") throw Error(refusal);
+        return { url: `https://${input.name}.apps.example.com`, changed: true, previousHostnames: ["notes-1a2b3c.apps.example.com"],
+          googleCallback: `https://${input.name}.apps.example.com/_konae/auth/google/callback` } as T;
+      },
+    };
+    expect(await hostnameLocal(client, "d1")).toEqual(["This app answers at https://notes-1a2b3c.apps.example.com."]);
+    await expect(hostnameLocal(client, "d1", "other")).rejects.toThrow(refusal);
+    expect(await hostnameLocal(client, "d1", "notes")).toEqual([
+      "This app now answers at https://notes.apps.example.com. notes-1a2b3c.apps.example.com redirects there with a 308 and stays this app's.",
+      "App users sign in again on the new name. If the app offers Google sign-in, add https://notes.apps.example.com/_konae/auth/google/callback to its Google client's redirect URIs. Give the new address to any service that calls the app's HTTP routes.",
+    ]);
   });
 
   test("a trailing --dir with no value is an error, not the current directory", async () => {

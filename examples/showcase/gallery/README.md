@@ -135,7 +135,7 @@ Rows with a status or a quoted message are answers the replay receives. Rows tha
 | The `contact.received` Signal in `action-contract.md` | | The Markdown has a Signal section that records `contact.received` with `topic` after the statement changes a row. |
 | The HEAD answer of `/feed.json` in the Action Contract | 405 | `feed.items` lists `A route does not answer HEAD. Send GET.` with 405 and says HTTP drops the body, and conform sends a HEAD and checks the status. |
 | `domain_set gallery.studio.example` while `_konae.gallery.studio.example` holds another value | | `The TXT record at _konae.gallery.studio.example holds "konae-verify-copied-from-another-app", not this Deployment's token. Set it to <token> and call domain_set again.` |
-| `domain_set gallery.localhost` | | `gallery.localhost is under this installation's app suffix localhost, where Konae names apps itself. Name a hostname outside it.` |
+| `domain_set gallery.localhost` | | `gallery.localhost is under this installation's app suffix localhost, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.` |
 | A page on the generated hostname calls the runtime on `gallery.studio.example` | 403 | `Cross-origin or unrecognized-host MCP request rejected.` |
 
 ## Conform with no credential

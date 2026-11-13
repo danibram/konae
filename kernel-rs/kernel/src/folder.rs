@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     find_project_deployment, initialize_database, layout, now_ms, open_auth, persist_deployment, runtime,
-    safe_slug, schema_change, AppState, BuildArtifact, DeployInput, Deployment, Installed, ProjectInput, Settings,
+    schema_change, AppState, BuildArtifact, DeployInput, Deployment, Installed, ProjectInput, Settings,
 };
 
 /// The variable that confirms a schema change that loses data, as
@@ -111,9 +111,12 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     }
     schema_change::apply(&database, &schema, &program, schema_change::Mode::Apply(plan.confirmation().as_deref()))?;
     let existing = find_project_deployment(&*state.deployments.read().await, id);
-    let (hostname, created_at) = match existing.as_ref() {
-        Some(deployment) => (deployment.hostname.clone(), deployment.created_at),
-        None => (free_hostname(state, &settings.slug).await, now_ms()),
+    let (hostname, created_at, _taking) = match existing.as_ref() {
+        Some(deployment) => (deployment.hostname.clone(), deployment.created_at, None),
+        None => {
+            let (hostname, taking) = free_hostname(state, &settings.slug, id).await;
+            (hostname, now_ms(), Some(taking))
+        }
     };
     let deployment = settings.deployment(Installed { hostname, created_at, actions, artifact_version }, &state.public_origin);
     open_auth(state, &deployment)?;
@@ -139,16 +142,10 @@ fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::Action
 
 /// Hostname for a first publish or a bare-folder open: `<slug>.<suffix>` when
 /// free, otherwise `<slug>-<code>.<suffix>`. A republish keeps the address it
-/// already has; this only runs when none is stored yet.
-pub async fn free_hostname(state: &AppState, slug: &str) -> String {
-    let slug = Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into());
-    let wanted = format!("{slug}.{}", state.host_suffix);
-    // A name another app held before it moved still redirects to that app.
-    if !state.deployments.read().await.contains_key(&wanted) && crate::hostname::held_by(state, &wanted).is_none() {
-        return wanted;
-    }
-    let short_id = Uuid::new_v4().simple().to_string().chars().take(6).collect::<String>();
-    format!("{slug}-{short_id}.{}", state.host_suffix)
+/// already has; this only runs when none is stored yet. Hold the second value
+/// until the Deployment serves on the name.
+pub async fn free_hostname(state: &AppState, slug: &str, id: &str) -> (String, crate::hostname::Taking) {
+    crate::hostname::choose(state, slug, id).await
 }
 
 /// Every file under `dist/`, by its path inside it.

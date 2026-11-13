@@ -10,8 +10,13 @@ export type SchemaLoss = { table: string; column: string | null; sentence: strin
  */
 export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null };
 
-/** `schema` is absent when release_plan replays an import it already applied. */
-export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema?: SchemaChange };
+/**
+ * `schema` is absent when release_plan replays an import it already applied.
+ * `hostname` and `url` name the generated address the release answers on; on a
+ * first release (`firstRelease`) they are the name it will take, null when the
+ * slug and its coded name are both taken.
+ */
+export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
 
 /** Asks the owner about a schema change that loses data. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
@@ -29,8 +34,9 @@ export class SchemaChangeDeclined extends Error {
  * `konae dev` all release through here, so each one shows the same plan and
  * asks before the same losses.
  */
-export async function release<Receipt>(client: Pick<McpClient, "call">, transferId: string, confirm: ConfirmSchema): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
+export async function release<Receipt>(client: Pick<McpClient, "call">, transferId: string, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
   const plan = await client.call<ReleasePlan>("release_plan", { transferId });
+  onPlan?.(plan);
   const confirmation = plan.schema?.confirmation;
   if (plan.schema && confirmation && !await confirm(plan.schema)) throw new SchemaChangeDeclined(plan.schema);
   const receipt = await client.call<Receipt>("release_apply", { planId: plan.planId, ...(confirmation ? { confirmSchema: confirmation } : {}) });

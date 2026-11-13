@@ -30,7 +30,7 @@ await probe("domain", 23060, async (kit) => {
 
   // Names the Kernel refuses before it stores anything.
   const underSuffix = await kit.errorText(set(app.deploymentId, "guestbook.localhost"));
-  assert.equal(underSuffix, "guestbook.localhost is under this installation's app suffix localhost, where Konae names apps itself. Name a hostname outside it.");
+  assert.equal(underSuffix, "guestbook.localhost is under this installation's app suffix localhost, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.");
   const notAName = await kit.errorText(set(app.deploymentId, "https://guestbook.example.org/"));
   assert.match(notAName, /is not a valid DNS name/);
   assert.equal((await owner.call<Domain>("domain_read", { deploymentId: app.deploymentId })).status, "none");

@@ -32,7 +32,7 @@ export function checkHostname(raw: string, rules: DomainRules): HostnameCheck {
   if (/^[0-9]+$/.test(labels[labels.length - 1])) return refuse("domain.ip", `${hostname} is an IP address. Name a hostname under a domain you control.`);
   const suffix = rules.suffix.replace(/^\.+/, "").toLowerCase();
   if (suffix && (hostname === suffix || hostname.endsWith(`.${suffix}`))) {
-    return refuse("domain.app-suffix", `${hostname} is under this installation's app suffix ${suffix}, where Konae names apps itself. Name a hostname outside it.`);
+    return refuse("domain.app-suffix", `${hostname} is under this installation's app suffix ${suffix}, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.`);
   }
   if (hostname === "localhost" || hostname.endsWith(".localhost")) return refuse("domain.local", `${hostname} is a local name. Name a hostname under a domain you control.`);
   if (rules.installationHosts.some((host) => host.toLowerCase() === hostname)) {
