@@ -3616,7 +3616,16 @@ pub fn json_sql(value: &Value) -> std::result::Result<SqlValue, String> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Columns this thread has turned into JSON, so a test can see where a
+    /// result stopped being read.
+    pub static COLUMNS_CONVERTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn sql_json(value: rusqlite::types::ValueRef<'_>) -> Value {
+    #[cfg(test)]
+    COLUMNS_CONVERTED.with(|count| count.set(count.get() + 1));
     match value {
         rusqlite::types::ValueRef::Null => Value::Null,
         rusqlite::types::ValueRef::Integer(value) => json!(value),
@@ -5055,5 +5064,59 @@ pub mod tests {
         assert_eq!(list_files(State(private_state), member).await.status(), StatusCode::OK);
 
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    fn query_definition(statement: &str) -> ActionDefinition {
+        let program: ActionProgram = serde_json::from_value(json!({"version": 1, "actions": {
+            "rows.read": {"kind": "query", "access": "anonymous", "statement": statement, "bindings": []}
+        }})).unwrap();
+        program.actions["rows.read"].clone()
+    }
+
+    fn converted_after<T>(work: impl FnOnce() -> T) -> (T, usize) {
+        COLUMNS_CONVERTED.with(|count| count.set(0));
+        let value = work();
+        (value, COLUMNS_CONVERTED.with(|count| count.get()))
+    }
+
+    /// K-03. Three 700,000 byte blobs cost 4.2 MB as hex. The result is
+    /// refused when the second column passes 2 MiB, and the third is not read.
+    const THREE_BLOBS: &str = "SELECT zeroblob(700000) a, zeroblob(700000) b, zeroblob(700000) c";
+
+    #[test]
+    fn an_action_result_stops_being_read_once_it_passes_2_mib() {
+        let root = std::env::temp_dir().join(format!("konae-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(THREE_BLOBS), Vec::new()));
+        assert_eq!(outcome.unwrap_err().to_string(), "Query result exceeds 2 MiB or 1000 rows.");
+        assert_eq!(converted, 1, "the column that passes the cap is the last one read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn owner_sql_stops_reading_a_result_once_it_passes_2_mib() {
+        let root = std::env::temp_dir().join(format!("konae-admin-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let (outcome, converted) = converted_after(|| run_admin_sql(&path, THREE_BLOBS));
+        assert_eq!(outcome.unwrap_err().to_string(), "SQL result exceeds 2 MiB.");
+        assert_eq!(converted, 1, "the column that passes the cap is the last one read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_result_under_the_cap_comes_back_unchanged() {
+        let root = std::env::temp_dir().join(format!("konae-row-small-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let sql = "SELECT x'00ff10' AS b, 'héllo \"q\"' AS t, 7 AS n, 1.5 AS r, NULL AS z";
+        let expected = json!({"b": "00ff10", "t": "héllo \"q\"", "n": 7, "r": 1.5, "z": null});
+        assert_eq!(run_query(&path, &query_definition(sql), Vec::new()).unwrap(), vec![expected.clone()]);
+        assert_eq!(run_admin_sql(&path, sql).unwrap()["rows"], json!([expected]));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
