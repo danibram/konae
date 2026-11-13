@@ -69,7 +69,7 @@ The `refusals` topic of `platform_guide` lists every code with its fix.
 
 ## What the Gate does not check
 
-The Gate checks the schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`. The Gate also does not judge a Build Artifact. The builders refuse a bad reference. See [Named divergences](./divergences.md).
+The Gate checks the schema, `actions.json` and `manifest.fileAccess`. Of the pages, it checks only that one runs the entrypoint. When every page is a whole document that loads no script, the Gate and the build refuse with the same sentence, which names the page and the entrypoint. The Kernel's release check reads `actions.json` and `schema.sql`, never the sources of the pages, so it has no such check. A page that names a missing file fails at build or release, not at `validate_capsule`. The Gate also does not judge a Build Artifact. The builders refuse a bad reference. See [Named divergences](./divergences.md).
 
 ## Read next
 

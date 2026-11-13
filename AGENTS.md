@@ -61,7 +61,7 @@ These are not bugs to paper over. Say them when they matter.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
 - The editor's build reads npm packages from esm.sh; `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
-- The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`.
+- The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
 - The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes. Try such a change on `konae dev` or a published Deployment.
 - `konae dev` sends no email. Account email and notices land in `.konae/kernel/mailbox.jsonl`, and `konae events` lists them.
 
@@ -70,7 +70,7 @@ These are not bugs to paper over. Say them when they matter.
 - `src/` is the editor. `src/components/ProjectDashboard.tsx` is the project list, `src/components/AgentPanel.tsx` is the conversation, and `src/App.tsx` is the file editor.
 - `src/agent/system-prompt.ts` is what the build agent is told. `src/agent/gate.ts` is the Validation Gate. `src/lib/query-bound.ts` is the row limit both doors share.
 - `kernel-rs/kernel` is the Kernel: a library and the `kernel` binary, which serves app folders alone. `layout.rs` names every path of an app folder, and `operator.rs` holds the `kernel` commands.
-- `kernel-rs/konae` is the `konae` binary, which links the Kernel and adds owners, the owner's MCP and the project list. `guide.rs` is what `platform_guide` answers, including `rules` and `pieces`.
+- `kernel-rs/konae` is the `konae` binary, which links the Kernel and adds owners, the owner's MCP and the project list. `guide.rs` is what `platform_guide` answers, including `rules` and `pieces`. `editor.rs` serves the built editor that `KONAE_EDITOR_DIR` names on the editor host.
 - `src/kernel/actions.ts` parses `actions.json` for the editor. `kernel-rs/kernel/src/action_shape.rs` parses it again for every Deployment, including one served from an export. The case files beside it hold the rules both run.
 - `scripts/konae.ts` is the `konae` CLI. `src/lib/app-folder.ts` writes the files every app folder carries, its own `AGENTS.md` among them.
 - `CONTEXT.md` holds the language. `docs/adr/` holds the decisions. `docs/architecture.md` is the shape. `examples/product-fit/` is the set of apps used to see what the Kernel can publish.

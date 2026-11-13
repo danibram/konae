@@ -81,7 +81,7 @@ That prints the rows of each table here against the published rows, what happens
 bun run konae -- push --dir ./my-app --yes
 ```
 
-The app goes into maintenance, the import backs up the published data, and the app comes out of maintenance. `push` prints the backup's id; `database_execute` with `operation` `restore-backup` and that `backupId` brings the earlier data back.
+The app goes into maintenance, the import backs up the published data, and the app comes out of maintenance. An app that was in maintenance before `push` stays there. `push` prints the backup's id; `database_execute` with `operation` `restore-backup` and that `backupId` brings the earlier data back.
 
 ## Read next
 

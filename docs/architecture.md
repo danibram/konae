@@ -18,7 +18,7 @@ kernel-rs/
 
 `kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, applies the schema change `app/schema.sql` asks of `data/database.sqlite`, and serves it with every primitive: Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
 
-`konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics and the project list. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
+`konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics and the project list. When `KONAE_EDITOR_DIR` names the built editor, as it does in the `konae` image, it serves the editor on the editor host too. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
 
 The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the owner's MCP. `konae dev` talks to neither: it builds the folder and runs the `kernel` binary on it.
 
@@ -60,6 +60,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `sources.rs` | The editor's saved sources as the files of `app/` |
 | `maintenance.rs` | The maintenance state and its guard |
 | `hosts.rs` | The hosts an installation answers on |
+| `hostname.rs` | The generated hostname: the name a first publish takes, `hostname_set`, and the redirect from each earlier name |
 | `domain.rs` | Custom domains and their TXT proof |
 | `path.rs`, `path_name.rs` | Path addresses and their names |
 | `security.rs` | The response headers of every host |
@@ -80,6 +81,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `admission.rs` | Invitation codes and the setup key's one use |
 | `clerk.rs` | Optional hosted owner sign-in |
 | `guide.rs` | What `platform_guide` answers |
+| `editor.rs` | The built editor, served on the editor host from `KONAE_EDITOR_DIR` |
 | `state.rs` | Konae's state beside the Kernel's: the setup key, the MCP origin and the owner verification mode |
 
 ## The app folder
@@ -97,11 +99,13 @@ apps/<id>/
 │   ├── usage.sqlite    # Usage and Signals
 │   ├── files/          # index.json, and the uploads unless a bucket holds them
 │   └── secrets.sqlite  # signing secrets and the Google client
-├── actions.d.ts, action-contract.md, AGENTS.md, compose.yaml, .env.example, package.json
+├── actions.d.ts, action-contract.md, AGENTS.md, compose.yaml, .env.example, .gitignore
+├── package.json, tsconfig.json, scripts/   # npm run build type-checks app/src/ and writes dist/
 └── .konae/             this installation's part, never exported
     ├── deployment.json # hostname, release and the published actions.json
     ├── sources.json    # the editor's name, manifest and folders of app/
     ├── backups/        # snapshots before an import or on request
+    ├── hostname.json   # the generated names the app held before, which redirect to its current one
     ├── domain.json     # the custom domain and its proof
     ├── path.json       # the path address
     └── maintenance.json # only while the app is in maintenance
@@ -138,13 +142,13 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 
 A bare `kernel` keeps no owner and no audit log. Under Konae the same Kernel adds `owners.sqlite` and `mcp.sqlite` to the stores a copy carries and a restore installs.
 
-With an S3 file store the bytes of uploads live in the data bucket, and `data/files/index.json` in the app folder still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). With S3 configured, the Kernel also uploads each artifact to the artifact bucket and reads it back only when the local file is missing.
+With an S3 file store the bytes of uploads live in the bucket `KONAE_FILES_S3_BUCKET` names, and `data/files/index.json` in the app folder still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). With S3 configured, the Kernel also uploads each artifact to the artifact bucket and reads it back only when the local file is missing.
 
 ## Two doors, one set of refusals
 
 A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, and when the `kernel` binary starts a folder. Both refuse with the same code and sentence, and each rule has one case file in `kernel-rs/kernel/src` that both test suites run, such as `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json` ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other.
 
-An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
+An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. It refuses a Capsule with an entry (`src/main.tsx`, `src/main.ts` or `app.js`) whose pages are all whole documents that load no script, because that entry would never run, and the Validation Gate refuses it with the same sentence. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
 
 ## The editor preview
 
@@ -196,7 +200,7 @@ The browser never receives a database credential, the SQLite file, a generic SQL
 
 The owner side is a different trust domain. SQL on the live database, backups, export and import go through the owner's MCP, with the owner's permissions and Konae's audit log. An app session never authorizes an owner tool, and the old operation routes under `/_konae/` answer 410, except `GET /_konae/files/<id>`.
 
-An upload is private to the app user who uploaded it unless the upload sets it public. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in app user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. Only the uploader changes a file's visibility or deletes it. Nothing is served from the bucket, and no bucket URL reaches the browser.
+An upload is private to the app user who uploaded it unless the upload sets it public. With `manifest.fileAccess` set to `"app-users"` in `konae.json`, every signed-in user of the app may read every upload, no upload can be public, and only the uploader deletes one. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in app user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. Only the uploader changes a file's visibility or deletes it. Nothing is served from the bucket, and no bucket URL reaches the browser.
 
 Every verification, recovery and invitation link leaves through the queue in `mail.sqlite` ([ADR-0012](./adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md)). The transaction that issues a challenge writes its email job too, and a worker in the Kernel sends due jobs, retrying a provider outage for about two hours. While the sender preflight refuses, signup and recovery answer 503 and nothing is queued.
 
@@ -204,7 +208,7 @@ A scheduled copy takes each app's locks, snapshots its SQLite files with `VACUUM
 
 ## Isolation of hosted code
 
-Every app runs on its own host, `<slug>.<KONAE_HOST_SUFFIX>` when that name is free, or `<slug>-<code>.<KONAE_HOST_SUFFIX>` when another Deployment already holds the slug, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set). An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). The Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. `kernel-rs/kernel/src/security.rs` adds the headers below to every response, so a bare `kernel` sends them too.
+Every app runs on its own host, `<slug>.<KONAE_HOST_SUFFIX>` when that name is free, or `<slug>-<code>.<KONAE_HOST_SUFFIX>` when another Deployment already holds the slug, and the editor runs on a host no app shares (`app.<domain>` when `KONAE_DOMAIN` is set). `hostname_set` moves an app to another free name under the same suffix. Each earlier name answers with a 308 redirect to the same path on the new one and stays reserved for that app, and app users sign in again on the new origin. An app may also answer on one custom domain its owner proved with a TXT record ([ADR-0014](./adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md)). The Kernel resolves it to the same Deployment, so it is that app's origin too, and no other app or the editor can take it. `kernel-rs/kernel/src/security.rs` adds the headers below to every response, so a bare `kernel` sends them too.
 
 `<domain>` is one origin that the installation home and every path address share. An app on a path address answers its pages, routes and runtime under `<domain>/p/<id>` or `<domain>/p/<name>`, so a script of one app can open another app's page in the same origin, read its DOM through `window.open`, and send another app's session cookie with a request to its runtime. The Kernel refuses a runtime call whose Referer names another app's path, but only when the browser sends a Referer, so that check is not a boundary. The owner accepts this sharing when turning a path address on for an app with accounts or a private app. The isolation this section describes holds for generated hostnames and custom domains only.
 
@@ -219,7 +223,7 @@ connect-src 'self'; form-action 'self'; frame-ancestors 'none';
 object-src 'none'; base-uri 'none'
 ```
 
-A fragment page in a Build Artifact inlines the runtime and the compiled module. A whole-document page loads the runtime from `/runtime.js` and its modules from the app's origin. The Kernel hashes every inline `<script>` of each HTML response and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, Blob scripts and scripts from other origins do not run.
+A fragment page in a Build Artifact inlines the runtime and the compiled module. A whole-document page loads the runtime from `/runtime.js` and its modules from the app's origin. The Kernel hashes every inline `<script>` of each HTML response and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, `new Function`, WebAssembly, Blob scripts and scripts from other origins do not run, because `script-src` names neither `'unsafe-eval'` nor `'wasm-unsafe-eval'`.
 
 - Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML` and the artifact inlines `styles.css`. Google Fonts is the only other origin, because the templates import it. Neither font host can read app data.
 - Images and media accept `blob:` and `data:` because `miniapp.files.read` hands a file to the page as a Blob URL.
@@ -227,7 +231,7 @@ A fragment page in a Build Artifact inlines the runtime and the compiled module.
 
 Every host sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. Konae's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes, and its JSON and errors get `default-src 'none'`. When `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. A custom domain gets `max-age=31536000` alone, because the names under the owner's domain are not the installation's.
 
-Neither binary serves the editor. Vite serves it in development and in the Docker stack, and a gateway that serves the built editor must send `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The editor has no script policy yet, because its preview is a `srcdoc` iframe that inherits the editor's policy, and esbuild, sql.js and the model providers the agent calls need more than `'self'`.
+`konae` serves the built editor on the editor host when `KONAE_EDITOR_DIR` names the folder `bun run build` writes, as the `konae` image does (`kernel-rs/konae/src/editor.rs`). It answers every GET and HEAD there except `/mcp`, `/_konae`, `/oauth` and `/.well-known`, answers `index.html` for a path with no file extension, such as `/app/<id>`, and sends `frame-ancestors 'none'` and `X-Frame-Options: DENY` with every file. The `kernel` binary never serves the editor. Vite serves it under `bun run dev:local`, and under Compose the gateway sends the editor host's other paths to the Vite container. The editor has no script policy yet, because its preview is a `srcdoc` iframe that inherits the editor's policy, and esbuild, sql.js and the model providers the agent calls need more than `'self'`.
 
 Under HTTPS the owner cookie is `__Host-konae_owner_session` and the app cookie `__Host-konae_app_session`, both `Secure`, `Path=/` and without `Domain`. The Kernel ignores unprefixed names under HTTPS, so an app cannot plant a cookie for another. The app cookie is `SameSite=Lax` and the owner cookie `SameSite=Strict`. Over plain HTTP, as in the local stack, the cookies keep unprefixed names and no HSTS is sent.
 

@@ -181,17 +181,17 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 - The page talks to the database only through the named Server Actions in \`app/actions.json\`. \`action-contract.md\` lists them.
 - A query that reads rows names a LIMIT.
 - \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table, column or index on the next publish or start, and a change that drops or retypes one only with the confirmation it names.
-- A page loads no script from another origin and uses no inline event handler.
+- A page loads no script from another origin, uses no inline event handler, and runs no WebAssembly or \`eval\`. It fetches only from its own origin and the origins \`manifest.connects\` in \`konae.json\` names.
 
 ## Run it
 
-1. \`npm install\`, then \`npm run build\` to write \`dist/\`, minified. \`npm run build -- --dev\` leaves it readable.
+1. \`npm install\`, then \`npm run build\` to write \`dist/\`, minified. \`npm run build -- --dev\` leaves it readable. \`konae build\`, \`dev\` and \`publish\` run \`npm install\` themselves the first time.
 2. On this machine, from a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
-4. To publish on a Konae installation: \`bun run konae -- login --dir <this folder> --url <installation>\`, then \`bun run konae -- publish --dir <this folder>\`.
+4. To publish on a Konae installation: \`bun run konae -- login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`bun run konae -- publish --dir <this folder>\`. \`bun run konae -- push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so, after a backup.
 
 At startup the Kernel checks the folder as Konae checks a release. It refuses a folder whose \`dist/\` breaks the publishing rules, whose actions break a rule above, or whose \`schema.sql\` drops or retypes a column, and says which. To apply a change that loses data, start it once with the \`KONAE_CONFIRM_SCHEMA\` value it names.
-${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`secret_set\` on Konae. The Kernel does not serve the app until each is set.\n` : ""}
+${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`bun run konae -- secret set <name> --dir <this folder>\` on Konae, which reads the value from standard input. The Kernel does not serve the app until each is set.\n` : ""}
 ## Commands
 
 Outside Konae, the Kernel's commands manage the app. Each refuses with the same words as the tool in Konae's editor, and prints the answer as JSON. Under Compose, run each as \`docker compose exec kernel kernel <command>\`. All but \`import\` work while the Kernel serves.

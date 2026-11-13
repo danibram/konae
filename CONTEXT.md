@@ -35,7 +35,7 @@ _Avoid_: owner, editor user
 ### The app and its files
 
 **Project**:
-An app as Konae's project list knows it: its ID, its name, the owner who holds it and the sources the editor saves. Its ID names its app folder and its Deployment.
+An app as Konae's project list knows it: its ID, its name, the owner who holds it and the sources the editor saves. Its ID names its app folder and its Deployment. A Project published from a folder or over MCP has no saved sources, so the editor opens only its data, its accounts and what it did, and its files change in the folder.
 _Avoid_: workspace, repo, app (when the editable source is meant)
 
 **App Folder**:
@@ -77,7 +77,7 @@ _Avoid_: library allowlist, vendored copy
 ### The published app
 
 **Deployment**:
-The published app on one installation: its generated hostname, optional custom domain and path address, visibility, Signup Policy and database. It shares its Project's ID and lives in that app folder. A publish replaces its Build Artifact and keeps its hostname and data, all or nothing (ADR-0005).
+The published app on one installation: its generated hostname, optional custom domain and path address, visibility, Signup Policy and database. It shares its Project's ID and lives in that app folder. A publish replaces its Build Artifact and keeps its hostname and data, all or nothing (ADR-0005). `hostname_set` moves the generated hostname to another name under the installation's suffix, and the old name redirects to the new one.
 _Avoid_: project, preview
 
 **Public Deployment**:
@@ -189,7 +189,7 @@ The app folder handed over: `konae.json`, `app/` and `dist/` in one download, an
 _Avoid_: kit, dump, full backup
 
 **Import**:
-An export taken in. Into a new app the data travels with the first release as `initialPackage`; into an existing app `project_import` replaces the sources, the data or both, and `kernel import` the data, after a backup and never merging rows. `konae dev --reset` imports what `konae pull` exported (ADR-0008).
+An export taken in. Into a new app the data travels with the first release as `initialPackage`; into an existing app `project_import` replaces the sources, the data or both, and `kernel import` the data, after a backup and never merging rows. `konae dev --reset` imports what `konae pull` exported, and `konae push` imports the folder's `data/` into the published app (ADR-0008).
 _Avoid_: migration, sync, restore (that installs a copy)
 
 **Maintenance**:

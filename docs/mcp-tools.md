@@ -4,13 +4,13 @@ An agent operates Konae through the owner's MCP on `/mcp`. The editor calls the 
 
 ## Connect
 
-Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256. The token lasts 24 hours when the client redirects to `127.0.0.1` or `localhost`, one hour otherwise, with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/platform-access`, or from `token_create`.
+Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256. The token lasts 24 hours when the client redirects to `127.0.0.1`, `localhost` or `[::1]`, one hour otherwise, with no refresh token. Under Clerk every token lasts one hour. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/platform-access`, or from `token_create`. An expired token answers 401 with the time it expired and how to get a new one: `konae login`, `konae login --browser` or reconnecting the MCP client.
 
 ```text
 Authorization: Bearer YOUR_TOKEN
 ```
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `export_data`. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
+OAuth offers `read`, `write`, `publish` and `manage_users`, and `export_data` only to a client that redirects to this machine, such as `konae login --browser --export-data`. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
 
 ## platform_guide topics
 
@@ -20,11 +20,11 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `e
 | --- | --- |
 | `rules` | The yardstick, the first run, the read-back after every write, and the named divergences between preview and published app. |
 | `pieces` | Which Capsule declaration to use for a need. See [Pick the smallest piece](./pieces.md). |
-| `credentials` | `konae login` and its flags, OAuth, what each permission allows, and the refusal a missing permission gives. |
-| `development` | The CLI cycle: `init`, `dev`, `pull`, `sql`, `events`, `contract` and `conform`. |
+| `credentials` | `konae login` and its flags, `login --browser`, `konae secret set`, OAuth, what each permission allows, and the refusal a missing permission gives. |
+| `development` | The CLI cycle: `init`, `dev`, `build`, `publish`, `pull`, `push`, `sql`, `events`, `secret`, `hostname`, `contract` and `conform`. |
 | `actions` | The `actions.json` format and its rules. |
 | `sdk` | The `window.miniapp` modules, rendered from `src/sdk/contract.ts`. |
-| `publishing` | The release steps as MCP calls, the schema change, the first Signup Policy, custom domain, path address and maintenance. |
+| `publishing` | `konae publish`, then the same release steps as MCP calls, the schema change, the first Signup Policy, the generated hostname, custom domain, path address and maintenance. |
 | `users` | Signup Policy, Google sign-in, invitations, app accounts, entering as a user, and roles inside an app. |
 | `portability` | Export, running the folder on a `kernel` binary without Konae, and import into a new or an existing app. |
 | `refusals` | Every code a refused Capsule answers, with who fixes it and a one-line remedy. |

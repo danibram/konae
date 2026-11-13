@@ -6,7 +6,7 @@ You describe an app to an agent in the editor, or write its files in a folder. E
 
 ## Two halves
 
-Konae is the platform. It holds the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. It is the `konae` binary in `kernel-rs/konae` and the `konae` CLI in `scripts/konae.ts`.
+Konae is the platform. It holds the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. It is the editor in `src/`, the `konae` binary in `kernel-rs/konae`, which serves the built editor next to the owner's MCP, and the `konae` CLI in `scripts/konae.ts`.
 
 The Kernel runs apps. It answers Server Actions, keeps each app's accounts, files, schedule, notices, routes, calls and Usage, and serves the built pages under a Content Security Policy. It is a Rust library and the `kernel` binary in `kernel-rs/kernel`, which serves a directory of app folders with no Konae around it. Konae links the Kernel, and `konae dev` runs the `kernel` binary on one folder.
 
@@ -30,6 +30,7 @@ editor in the browser           konae CLI on a folder
 
 - [Bun](https://bun.sh) 1.3 or newer. The Docker images pin Bun 1.3.11.
 - A Rust toolchain with Cargo 1.91 or newer.
+- Node.js with npm, for the build of an app folder from `init` or `export`, which runs `npm install` once and then `npm run build`.
 - Google Chrome, for the Playwright suites, which run with `channel: "chrome"`.
 - Docker with Compose, for the full stack, the S3 store the tests use, and running an exported app in a container.
 
@@ -44,7 +45,7 @@ bun run dev:local
 
 `dev:local` compiles and starts Konae, with its Kernel, on port `8790` and the editor on port `4173`. `KONAE_KERNEL_PORT` and `KONAE_EDITOR_PORT` change the ports. Open [http://localhost:4173](http://localhost:4173). It opens on the owner sign-in page. Press **Create owner account**, enter an email and a password, and keep the setup key the page fills in for this computer.
 
-Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothing sends real email locally. Account links and invitations land in `data/kernel-local/mailbox.jsonl`.
+Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothing sends real email locally. Account links and invitations land in `data/kernel-local/mailbox.jsonl`, and an app invitation also hands its link to the owner who sent it.
 
 `docker compose up --build` runs the complete stack, with a gateway and an S3 store, at [http://app.localhost:8080](http://app.localhost:8080). [Operate an installation](./docs/operate.md) covers it, along with every environment variable, copies and restores, email, and what to set before a Kernel is reachable from outside.
 
@@ -61,7 +62,7 @@ bun run konae -- init --dir /tmp/my-list --name "My list" --template tasks
 bun run konae -- dev --dir /tmp/my-list
 ```
 
-`init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `dev` builds `dist/` and runs the `kernel` binary on the folder at `http://my-list.localhost:8796`, with the folder's own `data/`, and restarts it when a file in `app/` changes.
+`init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example`, `.gitignore`, `tsconfig.json`, and a `package.json` whose `npm run build` runs `scripts/build.mjs` to type-check `app/src/` and write a minified `dist/`. `dev` runs `npm install` the first time, builds a readable `dist/` and runs the `kernel` binary on the folder at `http://my-list.localhost:8796`, with the folder's own `data/`, and restarts it when a file in `app/` changes.
 
 The `tasks` template is a public list that anyone with the link can use. The default template, `notes`, is private and takes accounts by invitation only, and `dev` prints the `kernel invite` command that creates a test account.
 
@@ -71,6 +72,8 @@ To publish, `login` saves a credential and the installation's address in the fol
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/my-list --url http://localhost:4173 --export-data
 bun run konae -- publish --dir /tmp/my-list
 ```
+
+`login --browser` signs in through the browser instead and needs no password in the shell. The first `publish` prints the generated address the release fixes, and `hostname --deployment <id> --set <name>` moves the app to another name later. `secret set <name>` reads a secret's value from stdin, so it never sits in shell history.
 
 An app published from a folder appears on the editor's project list under **Apps without editor files**. Its files stay in the folder, and you publish its changes from there. **Open data and users** on its card opens its database, its app accounts and what it did.
 
@@ -137,6 +140,7 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 - [`examples/probes`](./examples/probes/README.md) has small Capsules that each prove one capability.
 - [`examples/docs-site`](./examples/docs-site/README.md) is the docs site.
 - [`examples/home`](./examples/home/README.md) is the page an installation answers on its bare domain once an app's path address is named `konae-home`.
+- [`examples/invitation`](./examples/invitation/README.md) is the public form where a visitor asks the operator for an invitation code, at `<domain>/p/invitation/`.
 - [`examples/politica-de-privacidad`](./examples/politica-de-privacidad/README.md) and [`examples/terminos-y-condiciones`](./examples/terminos-y-condiciones/README.md) are the legal pages at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`.
 - [`examples/architecture-map`](./examples/architecture-map/README.md) is a map of the system.
 

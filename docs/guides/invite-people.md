@@ -26,16 +26,16 @@ A project published from a folder with the CLI shows on the project list under "
     bun run konae -- login --dir <folder> --url http://localhost:4173 --manage-users
     ```
 
-    The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
+    To sign in through the browser without putting the password in the shell, run `login --browser` with the same flags instead. The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
 2. Set the policy if the app needs another one. Call `signup_policy_set` with `deploymentId` and a `mode` of `open`, `invitation`, `closed` or `allowlist`, plus the allowlist entries for `allowlist`. The Deployment's ID is the `id` in `konae.json`.
-3. Call `mail_status` and look for `sending: true`. Without a mail transport, `app_invitations_create` refuses and creates nothing.
-4. Call `app_invitations_create` with `deploymentId`, `emails` and an `idempotencyKey`. It emails each address a link to `/_konae/invitation#invitation=<token>` on the app's host. Call it only when the owner asked for those invitations.
-5. The person opens the link and chooses a password, and the page signs them in.
-6. `app_invitation_resend` sends a new link that replaces the earlier one. `app_invitation_revoke` ends an invitation and removes the pending account it created, if nobody used it.
+3. Call `mail_status` and look for `sending: true`. Without a mail transport, `app_invitations_create` refuses and creates nothing. `sending: true` with `delivery: "local-mailbox"` means the transport is `KONAE_MAIL_TRANSPORT=development`, which writes every email to the server's `mailbox.jsonl` and sends none.
+4. Call `app_invitations_create` with `deploymentId`, `emails` and an `idempotencyKey`. It emails each address a link to `/_konae/invitation#invitation=<token>` on the app's host. Call it only when the owner asked for those invitations. On the development transport, each result answers `delivery: "local-mailbox"` with that link as `acceptUrl`, once, so you can pass it on yourself. A retry with the same `idempotencyKey` answers `queued` without the link.
+5. The person opens the link and chooses a password, or continues with Google when the app has Google turned on and the Google account has the invited email. The page signs them in.
+6. `app_invitation_resend` sends a new link that replaces the earlier one. On the development transport it answers the new `acceptUrl`, the way to get a link again. `app_invitation_revoke` ends an invitation and removes the pending account it created, if nobody used it.
 
 ## Where the email lands while you try it
 
-- On `bun run dev:local`, every account and invitation email lands in `data/kernel-local/mailbox.jsonl` and goes to no provider.
+- On `bun run dev:local`, every account and invitation email lands in `data/kernel-local/mailbox.jsonl` and goes to no provider. Right after you send, the Users view shows each invitation's link once, to send yourself.
 - On `bun run konae -- dev --dir <folder>`, it lands in `<folder>/.konae/kernel/mailbox.jsonl`. When the policy is not Open, `dev` prints a `kernel invite <email> --app <id>` command that invites a test account. `bun run konae -- events --dir <folder>` lists each email with its link.
 
 The editor preview sends no email, so try invitations on one of these or on a Deployment.

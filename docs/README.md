@@ -27,7 +27,7 @@ The editor runs at `http://localhost:4173` after `bun run dev:local`, at `http:/
 
 ### 1. Sign in
 
-The editor opens on the owner sign-in page. The first owner of an installation presses **Create owner account** and gives the setup key, which a local install fills in. Every later owner needs an invitation code, which the operator issues with `konae creator-code-create` (see [Creator admission](./operate.md#creator-admission)). From the CLI, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
+The editor opens on the owner sign-in page. The first owner of an installation presses **Create owner account** and gives the setup key, which a local install fills in. Every later owner needs an invitation code, which the operator issues with `konae creator-code-create` (see [Creator admission](./operate.md#creator-admission)). The editor's sign-in page is `/platform-access`. Konae answers its own at `/_konae/owner/login`, and the link that verifies a new owner's email opens that one. From the CLI, `login --browser` signs in through the browser. Without `--browser`, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
 
 ### 2. Make an app in the editor
 
@@ -40,7 +40,7 @@ Run the commands from the Konae repository.
 ```sh
 bun run konae -- init --dir ./my-app --name 'My app'
 bun run konae -- dev --dir ./my-app
-bun run konae -- login --dir ./my-app --url http://localhost:4173
+bun run konae -- login --dir ./my-app --url http://localhost:4173 --browser
 bun run konae -- publish --dir ./my-app
 ```
 

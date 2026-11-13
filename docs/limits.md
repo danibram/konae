@@ -112,7 +112,7 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 | App user transfers | Expire after 10 minutes, two at a time per app user, 32 per Deployment |
 | Visitor transfers | Two at a time per client address, 16 per public Deployment |
 | Owner transfer size | Up to 32 MiB, or an export component's limit |
-| Publishing payload | 26 MB, with its artifact at most 16 MiB after base64 is decoded |
+| Publishing payload | 26 MB, with its artifact at most 1000 files and 16 MiB after base64 is decoded |
 | Export components | Database 256 MiB, accounts 64 MiB, Usage 128 MiB, files within the destination's quota |
 
 ## Usage store

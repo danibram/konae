@@ -6,10 +6,10 @@ A release is a git tag `vX.Y.Z` whose version matches `package.json` and the Car
 
 | Image | Dockerfile | Pull |
 | --- | --- | --- |
-| Konae (Kernel + owners, MCP, project list) | `Dockerfile.konae` | `ghcr.io/danibram/konae:X.Y.Z` |
+| Konae (Kernel + owners, MCP, project list, built editor) | `Dockerfile.konae` | `ghcr.io/danibram/konae:X.Y.Z` |
 | Kernel alone (exported app folders) | `Dockerfile.kernel` | `ghcr.io/danibram/konae-kernel:X.Y.Z` |
 
-Each push also tags `X.Y` and `latest`. The published architecture is `linux/amd64`. The editor image in `Dockerfile` stays local to Compose and is not published.
+Each push also tags `X.Y` and `latest`. The published architecture is `linux/amd64`. `Dockerfile.konae` runs `bun run build`, and the image serves the result on the editor host from `KONAE_EDITOR_DIR`, so one container answers the editor, the owner's MCP and the apps. `Dockerfile` builds the Vite development server that Compose runs, and no release publishes it.
 
 After the first release, set each package's visibility to Public under the repository's Packages settings, or GHCR keeps them private to the account.
 
@@ -54,7 +54,7 @@ After the first release, set each package's visibility to Public under the repos
 Use this path when a deploy cannot wait for Actions, for example during a rollout when each fix has to reach the installation within minutes. The script builds the same two images with the same tags and labels as the Release workflow, so a local release and an Actions release are interchangeable.
 
 1. Cut the release as above through step 4: Changelog section, both version fields, the commit. The script refuses a working tree with uncommitted changes, because it labels the images with the commit at `HEAD`.
-2. Log Docker in to GHCR once, with a GitHub token that has `write:packages`:
+2. The script needs `jq`. Log Docker in to GHCR once, with a GitHub token that has `write:packages`:
 
    ```sh
    docker login ghcr.io -u <github-user>
@@ -74,9 +74,9 @@ The script checks that `package.json`, `kernel-rs/Cargo.toml` and a `## [X.Y.Z]`
 | `--dry-run` | Runs the local checks, then prints every build and push command without running it. A Docker check that fails is reported and the plan is still printed. |
 | `--no-push` | Builds both images and loads them into local Docker. Needs no GHCR login. |
 | `--overwrite` | Pushes even when `X.Y.Z` is already on GHCR. Without it the script refuses, and when only one of the two images is there it says an earlier run stopped halfway. |
-| `--any-host` | Allows a Linux workstation. |
+| `--any-host` | Allows a host other than macOS, such as a Linux workstation. |
 
-The build runs on your machine and only there. The server pulls the pushed image and never builds it, and never receives the repository or `kernel-rs/target`. The script refuses to run on Linux unless you pass `--any-host`, so it does not run on the server by mistake.
+The build runs on your machine and only there. The server pulls the pushed image and never builds it, and never receives the repository or `kernel-rs/target`. The script runs only on macOS unless you pass `--any-host`, so it does not run on the server by mistake. `KONAE_RELEASE_REGISTRY` and `KONAE_RELEASE_OWNER` change the registry and the account it pushes to, `ghcr.io` and `danibram` by default.
 
 Bump the version for every image you deploy. A deploy that names `ghcr.io/danibram/konae:X.Y.Z` starts a new image only when that tag is new to the server. Podman, and NixOS `oci-containers` by default, pull an image only when it is missing, and an unchanged image line does not restart the container. When you replace a version with `--overwrite`, set your deploy's image to the printed `ghcr.io/danibram/konae@sha256:...` instead. A new digest changes the image line, so the server pulls and restarts.
 
@@ -100,6 +100,8 @@ An installation that runs Konae:
 ```sh
 docker pull ghcr.io/danibram/konae:X.Y.Z
 ```
+
+It answers the editor on the editor host, such as `app.<domain>`, beside the owner's MCP. An empty `KONAE_EDITOR_DIR` turns the editor off.
 
 An exported app folder's Compose file reads `KONAE_KERNEL_IMAGE` from `.env`:
 

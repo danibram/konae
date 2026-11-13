@@ -18,15 +18,15 @@ Product terms keep their capitals in a heading. In a sentence these are lowercas
 
 ## The app and its files
 
-**Project.** An app as Konae's project list knows it: its ID, its name, its owner and the sources the editor saves. Its ID names its app folder and its Deployment.
+**Project.** An app as Konae's project list knows it: its ID, its name, its owner and the sources the editor saves. Its ID names its app folder and its Deployment. A published app whose sources the editor never saved, such as one published from a folder, is listed under Apps without editor files, where the editor opens its database, app accounts and activity.
 
-**App folder.** Everything an app is, in one layout that is the same on a laptop, inside the Kernel and in an export: `konae.json`, `app/`, `dist/`, `data/`, `actions.d.ts`, `action-contract.md`, `AGENTS.md`, `compose.yaml` and `.env.example`. `konae init` writes it, `konae dev` serves it, and the Kernel keeps each app in one under `apps/<id>/`. [The architecture](./architecture.md#the-app-folder) shows every path.
+**App folder.** Everything an app is, in one layout that is the same on a laptop, inside the Kernel and in an export: `konae.json`, `app/`, `dist/`, `data/`, `actions.d.ts`, `action-contract.md`, `AGENTS.md`, `compose.yaml`, `.env.example`, and the build: `package.json`, `tsconfig.json` and `scripts/`. `konae init` writes it, `konae dev` serves it, and the Kernel keeps each app in one under `apps/<id>/`. [The architecture](./architecture.md#the-app-folder) shows every path.
 
 **Capsule.** The app's editable sources, `app/` of the app folder: its pages, styles and scripts, `schema.sql`, `actions.json` and an optional `package.json`. See [The Capsule](./capsule.md).
 
 **Server Action.** A named operation in `actions.json` and the only way a page reaches the database. The Kernel authorizes the Runtime Actor from the action's access and bindings, then runs its one SQL statement, records its Signal or queues its call. See [Server Actions](./server-actions.md).
 
-**Validation Gate.** The editor's check of `schema.sql` and `actions.json` that a change must pass before Apply. It and the Kernel refuse with the same code and sentence. See [The Gate and the Kernel](./gate-and-kernel.md).
+**Validation Gate.** The editor's check of `schema.sql`, `actions.json` and the pages' entrypoint that a change must pass before Apply. It and the Kernel refuse with the same code and sentence. See [The Gate and the Kernel](./gate-and-kernel.md).
 
 **Refusal.** What either door answers when the app's files break a rule: `{ code, message, hint }`, where `hint.fix` says whether the Capsule, the owner or the operator clears it.
 
@@ -68,7 +68,7 @@ Product terms keep their capitals in a heading. In a sentence these are lowercas
 
 **Signature scheme.** How a route's signature is computed and where it travels: `konae` by default, or a provider's `hmac-body`, `timestamped` or `svix`.
 
-**Signing secret.** A value the owner sets with `secret_set` or `kernel secret set`, for a route, a call or the Google client. It never travels in `actions.json`, a Build Artifact or an export.
+**Signing secret.** A value the owner sets with `secret_set`, `konae secret set` or `kernel secret set`, for a route, a call or the Google client. It never travels in `actions.json`, a Build Artifact or an export.
 
 **API key.** A token the owner issues for one Deployment so a program can call its routes and read its files. The Kernel keeps only its hash, and an import revokes it.
 

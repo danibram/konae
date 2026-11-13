@@ -7,7 +7,7 @@ bun run konae -- <command> [options]
 bun run konae -- help
 ```
 
-`init`, `dev`, `build` and `contract` need no credential. Every other command except `login` reads its credential from `<folder>/.konae/credentials.json` or from `KONAE_MCP_TOKEN`. Never put a token in app source.
+`init`, `dev`, `build` and `contract` need no credential, and neither do `sql` and `events` without `--prod` or `export` without `--with-data`. `conform` takes the app's own credentials as flags. Every other command except `login` reads its credential from `<folder>/.konae/credentials.json` or from `KONAE_MCP_TOKEN`. Never put a token in app source.
 
 ## login
 
@@ -19,7 +19,7 @@ bun run konae -- login --dir ./my-app --url http://localhost:4173 \
   [--verify-from <mailbox.jsonl>]
 ```
 
-With `--browser`, login prints an address and opens it in the system browser, unless `--no-open`. The owner opens it in a browser on the same machine, signs in and allows access within 5 minutes. The browser hands the code to a port on `127.0.0.1` that login listens on, and login trades it for the token with PKCE. Neither the password nor the token passes through the terminal, so an agent can run login and hand the address to the owner. It saves the same 24-hour token as a password login, one hour on an installation that signs owners in through Clerk.
+With `--browser`, login prints an address and opens it in the system browser, unless `--no-open`. The owner opens it in a browser on the same machine, signs in and allows access within 5 minutes. The browser hands the code to a port on `127.0.0.1` that login listens on, and login trades it for the token with PKCE. Neither the password nor the token passes through the terminal, so an agent can run login and hand the address to the owner. It saves the same 24-hour token as a password login, one hour on an installation that signs owners in through Clerk. When that token expires, the installation answers when it expired and that `login --browser` gets a new one.
 
 Without `--browser`, login reads `KONAE_EMAIL` and `KONAE_PASSWORD`. Add `KONAE_INVITATION_CODE`, the code the operator issued, to create the account, or `KONAE_SETUP_KEY` for an installation's first owner. It saves a 24-hour token with `read`, `write` and `publish`.
 
@@ -72,7 +72,7 @@ Without `--yes` it prints the rows of each table here against the published rows
 2. uploads each part in the block size `transfer_begin` answers;
 3. runs `project_import`, which backs up the published data first;
 4. reads back the backup with `list-backups` and the published row counts with `database_execute` `inspect`;
-5. takes the app out of maintenance, also when a step fails or you press Ctrl-C.
+5. takes the app out of maintenance, also when a step fails or you press Ctrl-C, unless it was in maintenance before `push` began.
 
 It prints the backup's id. `database_execute` with `operation` `restore-backup` and that `backupId` brings the published data back. When the published schema would drop a column or a table that `data/` holds, nothing changes. `push` prints the plan and its confirmation, and `--confirm-schema` with that confirmation applies it. [Bring existing data](./guides/bring-existing-data.md) says how to write `data/` from another source.
 
@@ -98,7 +98,7 @@ Lists what the app did besides answer its page: email, calls to other services, 
 bun run konae -- build --dir ./my-app
 ```
 
-Builds `app/` into `dist/` by the same rules as the editor's Publish and the folder's `npm run build`.
+Builds `app/` into `dist/` by the same rules as the editor's Publish and the folder's `npm run build`. A folder from `init` or `export` builds with its own `package.json`. The first `build`, `dev` or `publish` in a folder without `node_modules` runs `npm install` once, and npm's output shows only when it fails. That build minifies with `NODE_ENV` set to `production`, and `dev` builds readable. When `app/src/` holds TypeScript, it first type-checks it against `actions.d.ts` and stops on an error. The build refuses an app whose pages are all whole documents that load no script, because its entry would never run.
 
 ## contract
 

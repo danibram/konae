@@ -38,7 +38,7 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
     }
     ```
 
-3. Set the secret before you publish. A release that signs with an unset secret is refused, and the refusal names each one. The value is 16 to 512 printable characters with no spaces. Set it in the editor's Auth > Integrations view, or call `secret_set` with `projectId`, `name` and `value`. For a folder published with the CLI, the first `publish` registers the project and stops at this refusal, so call `secret_set` then and publish again.
+3. Set the secret before you publish. A release that signs with an unset secret is refused, and the refusal names each one. The value is 16 to 512 printable characters with no spaces. Set it in the editor's Auth > Integrations view, or call `secret_set` with `projectId`, `name` and `value`. For a folder published with the CLI, the first `publish` registers the project and stops at this refusal. Then run `bun run konae -- secret set status_webhook --dir <folder>`, which reads the value from stdin or a hidden prompt and reads the name back, and publish again. `konae dev` sets a local value for each secret by itself and prints it.
 4. Publish, then give the sender the Deployment's URL plus the route path. The Kernel accepts each signed request once.
 5. To let a program of yours call a route without a signature, declare `callers` as `["key"]`. This is the starter app's route.
 

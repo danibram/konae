@@ -4,7 +4,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Before you start
 
-`init` and `dev` need nothing but a checkout of the repository. To publish you need a Konae installation to talk to, and an account on it. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`. To create the account in the same step, also set `KONAE_INVITATION_CODE`, the code the operator issued, or `KONAE_SETUP_KEY` for the installation's first owner. The commands below run from a checkout of the repository.
+`init` and `dev` need nothing but a checkout of the repository. To publish you need a Konae installation to talk to, and an account on it. `login --browser` prints an address that the owner opens in a browser on the same machine, so no password passes through the terminal. Without `--browser`, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`. To create the account in the same step, also set `KONAE_INVITATION_CODE`, the code the operator issued, or `KONAE_SETUP_KEY` for the installation's first owner. The commands below run from a checkout of the repository.
 
 ## Steps
 
@@ -32,11 +32,17 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 5. Log in. This saves a 24-hour token with `read`, `write` and `publish` in `<folder>/.konae/credentials.json`. Keep `.konae` out of Git. `KONAE_MCP_TOKEN` overrides the file.
 
     ```sh
+    bun run konae -- login --browser --dir /tmp/my-app --url http://localhost:4173
+    ```
+
+    Or, with the password in the environment:
+
+    ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
     bun run konae -- login --dir /tmp/my-app --url http://localhost:4173
     ```
 
-6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL. The project appears on the editor's project list under **Apps without editor files**, because its files live in this folder. **Open data and users** on its card opens its database, its app accounts and what it did.
+6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first build in the folder runs `npm install` once. The first publish registers the project there and prints the generated address before the release fixes it; `bun run konae -- hostname` moves it. It prints the Deployment URL. If the app signs a route or a call with a secret, set it first with `bun run konae -- secret set <name> --dir /tmp/my-app`, which reads the value from stdin. The project appears on the editor's project list under **Apps without editor files**, because its files live in this folder. **Open data and users** on its card opens its database, its app accounts and what it did.
 
     ```sh
     bun run konae -- publish --dir /tmp/my-app
@@ -59,7 +65,7 @@ Do not treat the URL `publish` printed as proof. Read the Deployment back throug
 
 ## What differs from the editor preview
 
-`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema and `actions.json` only, so a page that names a missing file fails at build or publish.
+`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema, `actions.json`, `manifest.fileAccess` and whether any page runs the app, so a page that names a missing file fails at build or publish.
 
 ## Read next
 

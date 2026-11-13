@@ -29,7 +29,7 @@ my-app/
 
 ## Export the app
 
-1. Log in with `export_data`.
+1. Log in with `export_data`. With `--browser` the owner signs in through the browser instead of setting `KONAE_EMAIL` and `KONAE_PASSWORD`.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
@@ -127,7 +127,7 @@ Into a new app over MCP:
 3. Upload the release JSON built from `app/` and `dist/`, with `initialPackage` holding the `manifest` and a `components` map of part name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same data imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.
 
-`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull/data`, and `dev --reset` imports it into the folder's `data/` with the `kernel` binary's `import` command, after a backup.
+`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull/data`, and `dev --reset` imports it into the folder's `data/` with the `kernel` binary's `import` command, after a backup. `konae push` goes the other way and imports the folder's `data/` into the published app with `project_import`, after a backup. [Bring existing data](./bring-existing-data.md) shows it.
 
 ## Check it worked
 

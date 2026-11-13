@@ -44,7 +44,7 @@ A notice goes to the app's contact email, to the calling app user, or to the app
 
 4. To list the changed rows in the body, name up to 8 of their columns in `"changes"` and write `{changes}` in the body. The subject takes `{changes.count}` only.
 5. Keep within the limits. The subject is 1 to 120 characters on one line. The body is 1 to 2000 characters, with line breaks and no other control characters. `notify` belongs on a mutation, never on a query or a signal action. An address or `{input.email}` as `to` is refused.
-6. Make sure the installation can send. Call `mail_status` and look for `sending: true`. Without a mail transport the Kernel queues nothing and Usage records `no-transport`.
+6. Make sure the installation can send. Call `mail_status` and look for `sending: true`. Without a mail transport the Kernel queues nothing and Usage records `no-transport`. With `KONAE_MAIL_TRANSPORT=development`, `mail_status` reports `sending: true` and `delivery: "local-mailbox"`, and every notice goes to the server's `mailbox.jsonl` instead of a person.
 
 ## When no email goes out
 
