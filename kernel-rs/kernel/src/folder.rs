@@ -138,13 +138,20 @@ fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::Action
 }
 
 /// Hostname for a first publish or a bare-folder open: `<slug>.<suffix>` when
-/// free, otherwise `<slug>-<code>.<suffix>`. A republish keeps the address it
+/// `hostname_set` would allow it, otherwise `<slug>-<code>.<suffix>`. A republish keeps the address it
 /// already has; this only runs when none is stored yet.
 pub async fn free_hostname(state: &AppState, slug: &str) -> String {
     let slug = Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into());
     let wanted = format!("{slug}.{}", state.host_suffix);
-    // A name another app held before it moved still redirects to that app.
-    if !state.deployments.read().await.contains_key(&wanted) && crate::hostname::held_by(state, &wanted).is_none() {
+    // The same rule `hostname_set` applies. A name another app held before it
+    // moved still redirects to that app, and the installation's own hosts
+    // and the path host are never an app's.
+    let mut reserved = crate::domain::Rules::of(state).installation_hosts;
+    reserved.extend(crate::path::path_host(state));
+    let taken = state.deployments.read().await.contains_key(&wanted)
+        || crate::hostname::held_by(state, &wanted).is_some()
+        || crate::domain::claimed(state, &wanted);
+    if crate::hostname::check_free(&wanted, &reserved, taken).is_ok() {
         return wanted;
     }
     let short_id = Uuid::new_v4().simple().to_string().chars().take(6).collect::<String>();
@@ -334,5 +341,52 @@ mod tests {
         assert!(refused.contains("LIMIT"), "{refused}");
         assert!(!layout::record(&root, "notes_app").exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn editor_state(root: &Path) -> AppState {
+        AppState {
+            public_origin: "http://app.apps.example.com".into(),
+            host_suffix: "apps.example.com".into(),
+            ..AppState::for_test(root)
+        }
+    }
+
+    fn is_coded(hostname: &str, slug: &str) -> bool {
+        let code = hostname.strip_prefix(&format!("{slug}-")).and_then(|rest| rest.strip_suffix(".apps.example.com"));
+        code.is_some_and(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_hexdigit()))
+    }
+
+    #[tokio::test]
+    async fn a_first_publish_never_takes_the_editor_host() {
+        let root = scratch();
+        let state = editor_state(&root);
+        let hostname = free_hostname(&state, "app").await;
+        assert!(is_coded(&hostname, "app"), "{hostname}");
+        // An empty slug, and one that `safe_slug` empties, fall back to `app`.
+        for slug in ["", "!!!", "日本語"] {
+            let hostname = free_hostname(&state, slug).await;
+            assert!(is_coded(&hostname, "app"), "{slug:?} gave {hostname}");
+        }
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn a_first_publish_never_takes_an_own_origin_or_a_claimed_name() {
+        let root = scratch();
+        let state = AppState { own_origins: vec!["http://mcp.apps.example.com".into()], ..editor_state(&root) };
+        let hostname = free_hostname(&state, "mcp").await;
+        assert!(is_coded(&hostname, "mcp"), "{hostname}");
+        let state = AppState { path_origin: Some("http://paths.apps.example.com".into()), ..editor_state(&root) };
+        let hostname = free_hostname(&state, "paths").await;
+        assert!(is_coded(&hostname, "paths"), "{hostname}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_slug_is_returned_bare() {
+        let root = scratch();
+        let state = editor_state(&root);
+        assert_eq!(free_hostname(&state, "Notes").await, "notes.apps.example.com");
+        std::fs::remove_dir_all(root).ok();
     }
 }

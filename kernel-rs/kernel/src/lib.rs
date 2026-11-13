@@ -564,6 +564,10 @@ pub async fn start(
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
     path::load(&state);
+    let own_hosts = domain::Rules::of(&state).installation_hosts;
+    for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {
+        eprintln!("Not serving apps/{}: {} is this installation's own host. Move the app with hostname_set.", deployment.id, deployment.hostname);
+    }
     if let Some(config) = copy_config {
         copies::spawn_schedule(state.clone(), config);
     }
@@ -3357,7 +3361,9 @@ pub async fn deployment_for(state: &AppState, headers: &HeaderMap) -> Option<Dep
     deployment_by_id(state, id).await
 }
 
-/// The Deployment for a generated hostname or a verified alias.
+/// The Deployment for a generated hostname or a verified alias. The
+/// installation's own hosts answer as no app, whatever the map holds, so a
+/// stored record on one of them cannot take the owner door.
 pub async fn deployment_for_host(state: &AppState, headers: &HeaderMap) -> Option<Deployment> {
     let host = headers
         .get(header::HOST)?
@@ -3365,6 +3371,9 @@ pub async fn deployment_for_host(state: &AppState, headers: &HeaderMap) -> Optio
         .ok()?
         .split(':')
         .next()?;
+    if domain::Rules::of(state).installation_hosts.iter().any(|own| own.eq_ignore_ascii_case(host.trim_end_matches('.'))) {
+        return None;
+    }
     let deployments = state.deployments.read().await;
     if let Some(deployment) = deployments.get(host) {
         return Some(deployment.clone());
@@ -3771,6 +3780,30 @@ pub mod tests {
         })).unwrap();
 
         assert_eq!(input.initial_signup_policy.unwrap().mode, SignupMode::Closed);
+    }
+
+    #[tokio::test]
+    async fn a_stored_deployment_on_the_editor_host_does_not_capture_the_owner_door() {
+        let root = std::env::temp_dir().join(format!("konae-editor-host-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let mut deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        deployment.hostname = "app.apps.example.com".into();
+        let state = AppState {
+            public_origin: "http://app.apps.example.com".into(),
+            host_suffix: "apps.example.com".into(),
+            deployments: Arc::new(RwLock::new(HashMap::from([(deployment.hostname.clone(), deployment)]))),
+            ..state
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("app.apps.example.com"));
+        assert!(deployment_for_host(&state, &headers).await.is_none());
+        assert!(deployment_for(&state, &headers).await.is_none());
+        headers.insert(header::HOST, HeaderValue::from_static("app.apps.example.com:8080"));
+        assert!(deployment_for_host(&state, &headers).await.is_none());
+        // A page on the editor host is not an app origin either.
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://app.apps.example.com"));
+        assert!(!security::from_app_origin(&state, &headers).await);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     pub async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {

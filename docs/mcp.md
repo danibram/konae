@@ -783,7 +783,7 @@ An export carries the hostname without its token. The import creates a pending c
 
 ## Generated hostname
 
-The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
+The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug or the name is one of the installation's own hosts, such as `app.<domain>`, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
 
 ```json
 { "deploymentId": "…", "hostname": "notes.apps.example.com", "url": "https://notes.apps.example.com", "changed": true,
