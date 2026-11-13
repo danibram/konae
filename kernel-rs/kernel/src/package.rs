@@ -748,14 +748,18 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
                 |r| r.get(0),
             )?;
             ensure!(has_users, "The accounts component has no app_users table.");
-            let has_hashes: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('app_users') WHERE lower(name)='password_hash')", [], |r| r.get(0))?;
-            if has_hashes {
-                let mut hashes = db.prepare("SELECT password_hash FROM app_users")?;
-                let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
-                for hash in rows {
-                    let known = matches!(hash?, rusqlite::types::Value::Text(hash) if auth::is_stored_password_hash(&hash));
-                    ensure!(known, "The accounts component holds a password hash this Kernel did not write.");
+            // Only a missing column means there are no hashes. A generated
+            // column is hidden from `pragma_table_info`, so the scan asks for it by name.
+            match db.prepare("SELECT password_hash FROM app_users") {
+                Ok(mut hashes) => {
+                    let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
+                    for hash in rows {
+                        let known = matches!(hash?, rusqlite::types::Value::Text(hash) if auth::is_stored_password_hash(&hash));
+                        ensure!(known, "The accounts component holds a password hash this Kernel did not write.");
+                    }
                 }
+                Err(rusqlite::Error::SqlInputError { msg, .. } | rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.starts_with("no such column") => {}
+                Err(error) => return Err(error.into()),
             }
             Some(db)
         }
