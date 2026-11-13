@@ -6,6 +6,28 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- `konae login --browser` signs the owner in through the browser with OAuth and PKCE on a loopback port and saves a 24-hour credential without a password. OAuth clients that redirect to `127.0.0.1` or `localhost` get 24-hour tokens and may ask for `export_data`.
+- `konae secret set <name> [--use route|call|google]` reads the value from stdin and reads the name back. `konae secret list` prints names and uses, never values.
+- `konae push` replaces the published app's data with the folder's `data/` through `project_import`. It checks the installation's file limits before sending anything, runs the import in maintenance after a backup, and refuses without `--yes`. [Bring existing data](./docs/guides/bring-existing-data.md) explains how to write a `data/` from another source.
+- `release_plan` and `konae publish` name the generated hostname before a first release fixes it. `konae hostname` shows it or moves it, and the old name answers with a 308 to the new one.
+
+### Changed
+
+- Owner transfers over MCP move in 4 MiB blocks, so a release takes a few `transfer_write` calls instead of dozens. The proxy in front of `/mcp` must accept bodies of about 5.4 MiB. CLIs from 0.3.0 and earlier refuse download blocks over 64 KiB, so `export` and `pull` against an upgraded installation need this CLI.
+- The `rules` topic no longer asks for `transfer_status` after each block or for a second `release_plan`, and says that "Transfer not found or expired." after `transfer_cancel` means the cancel worked. The `publishing` topic starts with `konae publish` and gives the full release payload.
+- New app folders get a `build.mjs` that minifies with `NODE_ENV` set to production (`--dev` for `konae dev`) and type-checks `app/src/` against `actions.d.ts` with a pinned TypeScript. `src/main.tsx` is an entry in every build.
+- With `KONAE_MAIL_TRANSPORT=development`, invitations answer `delivery: "local-mailbox"` and their `acceptUrl` once. A Kernel serving over https with that transport warns at startup, and health and `mail_status` report it.
+
+### Fixed
+
+- The owner MCP says when a token expired and how to get a new one, instead of the same answer as no token.
+- A pending sign-in no longer says "the link we sent" when the installation sends no email, and names a waiting invitation.
+- The build and the Validation Gate refuse an app whose pages are all whole documents that load no script, since its entry would never run.
+- A first publish holds its generated name against a concurrent move and never takes the installation's own host. A call from another app to a moved app's old name still reaches it. The suffix refusal from `domain_set` points at `hostname_set`.
+- The docs say that published apps refuse WebAssembly and `eval`, and explain `manifest.fileAccess: "app-users"`.
+
 ## [0.3.0] - 2026-11-13
 
 ### Added
