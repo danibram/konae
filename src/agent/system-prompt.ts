@@ -17,6 +17,7 @@ const PIECES = `| Need | Use | Not |
 | Another service calls this app | \`http\` on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | This app calls another host | \`kind: call\` | \`fetch\` of a secret from the browser |
 | Uploaded files | \`miniapp.files\` | Large bytes in a SQLite column |
+| Every signed-in user reads every uploaded file | \`manifest.fileAccess\` set to \`app-users\` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |`;
 

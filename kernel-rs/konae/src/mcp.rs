@@ -1,7 +1,12 @@
 use super::*;
 use super::runtime::*;
-use super::transfers::{CHUNK, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
+use super::transfers::{ADMIN_CHUNK, ADMIN_MCP_BODY_BYTES, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
 use rusqlite::params;
+
+/// The refusal of an owner's MCP request over [`ADMIN_MCP_BODY_BYTES`].
+fn admin_body_refused() -> String {
+    format!("MCP request exceeds {ADMIN_MCP_BODY_BYTES} bytes. Write a transfer in blocks of at most chunkBytes ({ADMIN_CHUNK} bytes).")
+}
 
 pub(super) fn owner_cookie_name(state: &Konae) -> &'static str {
     let mcp_https = state.mcp_origin.as_deref().is_some_and(|origin| origin.starts_with("https://"));
@@ -887,8 +892,13 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     }
     let principal = format!("owner:{}", owner.id);
     let tools = admin_tools(&owner);
-    let call = match read_call(request).await {
-        Ok(call) => call,
+    // Only a transfer_write may carry a block of ADMIN_CHUNK bytes; every
+    // other call keeps the 200 KB bound of the runtime endpoint.
+    let call = match read_call_up_to(request, ADMIN_MCP_BODY_BYTES, &admin_body_refused()).await {
+        Ok((call, size)) if size > MCP_BODY_BYTES && !(call["method"] == "tools/call" && call["params"]["name"] == "transfer_write") => {
+            return error(StatusCode::PAYLOAD_TOO_LARGE, MCP_BODY_REFUSED);
+        }
+        Ok((call, _)) => call,
         Err(response) => return response,
     };
     let id = call.get("id").cloned().unwrap_or(Value::Null);
@@ -985,7 +995,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             match export_transfer.as_ref().filter(|_| name == "transfer_read") {
                 // One row per component download, written at its first
                 // block or on a refusal, so a 256 MiB database read in
-                // 64 KiB blocks does not push the rest out of the log.
+                // 64 blocks does not push the rest out of the log.
                 Some(t) if arguments["offset"] == 0 || result.is_err() => {
                     let target = json!({"deploymentId":t["deploymentId"],"component":t["component"]});
                     audit(&state, &principal, "package_download", &target, None, &result);
@@ -1135,7 +1145,7 @@ async fn admin_call(
                 "name":"Konae",
                 "protocolVersion":VERSION,
                 "runtimeEndpoint":"/_konae/mcp",
-                "chunkBytes":CHUNK,
+                "chunkBytes":ADMIN_CHUNK,
                 "maxTransferBytes":MAX_TRANSFER,
                 "files":{"quotaBytes":state.files.limits.quota_bytes,"maxFileBytes":state.files.limits.max_file_bytes},
                 "yardstick":"A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
@@ -1146,9 +1156,9 @@ async fn admin_call(
                     "a credential: platform_guide topic credentials",
                     "project_create",
                     "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-                    "build locally",
-                    "transfer_begin/write/complete",
-                    "release_plan",
+                    "build locally, or write the release JSON of the publishing topic",
+                    "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
+                    "release_plan once",
                     "release_apply",
                     "project_inspect"
                 ],

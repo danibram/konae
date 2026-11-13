@@ -4,7 +4,7 @@
 //! The helpers that read a call and wrap an answer serve every MCP door.
 
 use super::*;
-use super::transfers::{CHUNK, MAX_TRANSFER, download_body, transfer, transfer_call, transfer_path};
+use super::transfers::{ADMIN_CHUNK, CHUNK, MAX_TRANSFER, download_body, transfer, transfer_call, transfer_path};
 use rusqlite::params;
 
 pub const VERSION: &str = "2025-11-25";
@@ -22,11 +22,22 @@ pub fn routes() -> Router<AppState> {
     Router::new().route("/_konae/mcp", post(runtime))
 }
 
+/// The largest JSON-RPC call an MCP door reads, except an owner's
+/// `transfer_write`, which may carry a block of `ADMIN_CHUNK` bytes.
+pub const MCP_BODY_BYTES: usize = 200_000;
+pub const MCP_BODY_REFUSED: &str = "MCP request exceeds 200 KB.";
+
 /// Reads one JSON-RPC call of at most 200 KB.
 pub async fn read_call(request: Request) -> Result<Value, Response> {
-    let bytes = match axum::body::to_bytes(request.into_body(), 200_000).await {
+    read_call_up_to(request, MCP_BODY_BYTES, MCP_BODY_REFUSED).await.map(|(call, _)| call)
+}
+
+/// Reads one JSON-RPC call of at most `limit` bytes and answers it with its
+/// size; a larger body is refused with `refused`.
+pub async fn read_call_up_to(request: Request, limit: usize, refused: &str) -> Result<(Value, usize), Response> {
+    let bytes = match axum::body::to_bytes(request.into_body(), limit).await {
         Ok(bytes) => bytes,
-        Err(_) => return Err(error(StatusCode::PAYLOAD_TOO_LARGE, "MCP request exceeds 200 KB.")),
+        Err(_) => return Err(error(StatusCode::PAYLOAD_TOO_LARGE, refused)),
     };
     let call: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
@@ -41,7 +52,7 @@ pub async fn read_call(request: Request) -> Result<Value, Response> {
     {
         return Err(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request."));
     }
-    Ok(call)
+    Ok((call, bytes.len()))
 }
 
 /// The answer to a call without an ID: a notification is accepted, anything
@@ -434,7 +445,7 @@ pub fn transfer_tools(runtime: bool) -> Vec<Value> {
         ),
         tool(
             "transfer_cancel",
-            "Delete a transfer and its temporary bytes.",
+            "Delete a transfer and its temporary bytes. Afterwards transfer_status answers \"Transfer not found or expired.\", which confirms the cancel.",
             json!({"transferId":{"type":"string"}}),
             &["transferId"],
             false,
@@ -454,8 +465,8 @@ pub fn transfer_tools(runtime: bool) -> Vec<Value> {
         ),
         tool(
             "transfer_write",
-            "Append a base64 block at an exact byte offset. Identical retries are accepted.",
-            json!({"transferId":{"type":"string"},"offset":{"type":"integer","minimum":0},"data":{"type":"string","maxLength":CHUNK.div_ceil(3)*4}}),
+            "Append a base64 block of at most chunkBytes, which transfer_begin answers, at an exact byte offset. The answer's nextOffset is the offset of the next block, so no transfer_status is needed between writes. Identical retries are accepted.",
+            json!({"transferId":{"type":"string"},"offset":{"type":"integer","minimum":0},"data":{"type":"string","maxLength":(if runtime { CHUNK } else { ADMIN_CHUNK }).div_ceil(3)*4}}),
             &["transferId", "offset", "data"],
             false,
         ),

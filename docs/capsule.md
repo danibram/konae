@@ -50,7 +50,7 @@ The Gate checks the schema and `actions.json`. A page that names a missing file 
 
 ## What the published page may do
 
-A published app runs under the Kernel's Content Security Policy. Its own inline scripts and same-origin files load. Inline event handler attributes such as `onclick="..."` and other origins do not. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin. The editor preview applies no such policy, so code that works there can still fail once published.
+A published app runs under the Kernel's Content Security Policy. Its own inline scripts and same-origin files load. Inline event handler attributes such as `onclick="..."` and other origins do not. WebAssembly, `eval` and `new Function` do not run either, because `script-src` names neither `'wasm-unsafe-eval'` nor `'unsafe-eval'`; a library that compiles WebAssembly fails with `Compiling or instantiating WebAssembly module violates the following Content Security policy directive`, on `konae dev` as on a Deployment. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin. The editor preview applies no such policy, so code that works there can still fail once published.
 
 ## Where the sources live
 

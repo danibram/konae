@@ -861,8 +861,8 @@ An expression column without `AS`, such as `count(*)`, is listed under `unnamed`
     ],
     "excluded": ["app sessions", "verification, recovery and invitation links", "…"]
   },
-  "downloads": { "database": { "transferId": "…", "size": 268435456, "sha256": "…", "chunkBytes": 65536, "expiresAt": 0 } },
-  "folder": { "transferId": "…", "size": 40960, "sha256": "…", "chunkBytes": 65536, "expiresAt": 0 },
+  "downloads": { "database": { "transferId": "…", "size": 268435456, "sha256": "…", "chunkBytes": 4194304, "expiresAt": 0 } },
+  "folder": { "transferId": "…", "size": 40960, "sha256": "…", "chunkBytes": 4194304, "expiresAt": 0 },
   "sourcesAhead": false
 }
 ```
@@ -943,6 +943,6 @@ An owner moves an app with no lost write in three steps: put it in maintenance, 
 
 ## Transfers
 
-A client starts a transfer by declaring the size and SHA-256, writes chunks of at most 64 KiB in base64, and completes it, which checks the size and hash and freezes the bytes. The server accepts an identical retry at the same offset and refuses different content. `transfer_status` lets a client resume from the last offset. Cancel transfers you no longer need. [The limits page](./limits.md#transfers-and-publishing) lists how many a caller holds, how long they last and how large they may be.
+A client starts a transfer by declaring the size and SHA-256, writes blocks of at most `chunkBytes` in base64, and completes it, which checks the size and hash and freezes the bytes. `transfer_begin` answers `chunkBytes`: 4 MiB on the owner's `/mcp` and 64 KiB on an app's runtime endpoint, and `transfer_read` answers blocks of that size. Follow that number, not a constant; a smaller block is accepted. Each `transfer_write` answers `nextOffset`, the offset of the next block, so a 5 MB release is two writes and needs no `transfer_status` between them. The server accepts an identical retry at the same offset and refuses different content. `transfer_status` lets a client resume from the last offset after an interrupted call. Cancel transfers you no longer need; `transfer_status` then answers `Transfer not found or expired.`, which confirms the cancel. [The limits page](./limits.md#transfers-and-publishing) lists how many a caller holds, how long they last and how large they may be.
 
 The audit log in Konae's `mcp.sqlite` records each owner tool call with its project or Deployment, and never an email, a token or a secret's value. An export download or a component upload writes one row at its first block, not one per chunk. The log keeps the newest 10,000 rows per owner and drops rows older than 30 days. For app users the Kernel records only an upload that stores a new file and a delete that removes one.

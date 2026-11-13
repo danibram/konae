@@ -87,7 +87,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```json
 {
   "result": {
-    "chunkBytes": 65536,
+    "chunkBytes": 4194304,
     "files": {
       "maxFileBytes": 2097152,
       "quotaBytes": 20971520
@@ -125,9 +125,9 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "a credential: platform_guide topic credentials",
       "project_create",
       "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-      "build locally",
-      "transfer_begin/write/complete",
-      "release_plan",
+      "build locally, or write the release JSON of the publishing topic",
+      "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
+      "release_plan once",
       "release_apply",
       "project_inspect"
     ],
@@ -1253,28 +1253,28 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
   "result": {
     "downloads": {
       "database": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 12288,
         "transferId": "<database download>"
       },
       "files": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 3072,
         "transferId": "<files download>"
       },
       "identity": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 118784,
         "transferId": "<identity download>"
       },
       "usage": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 57344,
@@ -1282,7 +1282,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       }
     },
     "folder": {
-      "chunkBytes": 65536,
+      "chunkBytes": 4194304,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
       "size": 28672,
@@ -1354,8 +1354,8 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
 ```json
 {
   "result": {
-    "data": "<base64 of the first 65536 bytes>",
-    "nextOffset": 65536,
+    "data": "<base64 of the first 118784 bytes>",
+    "nextOffset": 118784,
     "offset": 0,
     "sha256": "<sha256>",
     "size": 118784
@@ -1443,7 +1443,7 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
 ```json
 {
   "result": {
-    "chunkBytes": 65536,
+    "chunkBytes": 4194304,
     "expiresAt": <time ms>,
     "sha256": "<sha256>",
     "size": 12288,
@@ -1458,7 +1458,7 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
   "arguments": {
     "transferId": "<database upload>",
     "offset": 0,
-    "data": "<base64 of up to 65536 bytes from offset 0>"
+    "data": "<base64 of up to 4194304 bytes from offset 0>"
   }
 }
 ```

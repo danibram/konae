@@ -72,7 +72,7 @@ export class McpClient {
       while (offset < transfer.size) {
         const block = await this.call<{ data: string; offset: number; nextOffset: number }>("transfer_read", { transferId: transfer.transferId, offset });
         const data = decodeBase64(block.data);
-        if (block.offset !== offset || !data.length || data.length > 64 * 1024 || block.nextOffset !== offset + data.length || block.nextOffset > bytes.length) throw new McpError("Invalid MCP download block.");
+        if (block.offset !== offset || !data.length || data.length > blockLimit(transfer) || block.nextOffset !== offset + data.length || block.nextOffset > bytes.length) throw new McpError("Invalid MCP download block.");
         bytes.set(data, offset);
         offset = block.nextOffset;
       }
@@ -113,6 +113,12 @@ export const platformMcp = new McpClient();
 export async function checksum(bytes: Uint8Array): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** The largest block a transfer moves in: the chunkBytes that transfer_begin or the download answered. */
+export function blockLimit(transfer: Pick<Transfer, "chunkBytes">): number {
+  if (!Number.isSafeInteger(transfer.chunkBytes) || transfer.chunkBytes <= 0) throw new McpError("Invalid MCP transfer block size.");
+  return transfer.chunkBytes;
 }
 
 export function encodeBase64(bytes: Uint8Array): string {

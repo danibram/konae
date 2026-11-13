@@ -79,7 +79,9 @@ The app runtime and app account tools run on an app's runtime endpoint, `/_konae
 
 ## Read back after every write
 
-Every tool that writes has a tool that observes its effect through the same door. After a write, call the read-back before retrying or telling the owner it worked. Verify a `service_timeout` or an interrupted call the same way. Bytes in an open transfer are not a Deployment. `transfer_status` reads staging, and `project_inspect` reads a release that consumed them.
+Every tool that writes has a way to observe its effect through the same door. After a write, call the read-back before retrying or telling the owner it worked. Verify a `service_timeout` or an interrupted call the same way. Bytes in an open transfer are not a Deployment. `transfer_status` reads staging, and `project_inspect` reads a release that consumed them.
+
+Two writes answer with their own observation, so no second call follows them. `transfer_write` answers `nextOffset`, where the next block starts; call `transfer_status` only to resume after an interrupted call. `release_plan` changes nothing live, and its answer is the plan; pass its `planId` to `release_apply`, because another `release_plan` makes a new plan with a new `planId`. After `transfer_cancel`, `transfer_status` answers `Transfer not found or expired.`, and that answer is the cancel confirmed.
 
 | Write | Read-back |
 | --- | --- |
@@ -91,7 +93,6 @@ Every tool that writes has a tool that observes its effect through the same door
 | `secret_delete` | `secrets_list` |
 | `api_keys_create` | `api_keys_list` |
 | `api_keys_revoke` | `api_keys_list` |
-| `release_plan` | `release_plan` |
 | `release_apply` | `project_inspect` |
 | `signup_policy_set` | `signup_policy_read` |
 | `sign_in_methods_set` | `sign_in_methods_read` |
@@ -109,7 +110,6 @@ Every tool that writes has a tool that observes its effect through the same door
 | `maintenance_set` | `maintenance_read` |
 | `contact_email_set` | `contact_email_read` |
 | `transfer_begin` | `transfer_status` |
-| `transfer_write` | `transfer_status` |
 | `transfer_complete` | `transfer_status` |
 | `transfer_cancel` | `transfer_status` |
 | `project_export` | `transfer_read` |

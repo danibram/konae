@@ -442,7 +442,7 @@ describe("the MCP walkthrough", () => {
     for (const [name, transfer] of Object.entries(result.downloads)) r.name(transfer.transferId, `<${name} download>`);
     const first = await callTool(`${a.url}/mcp`, { authorization: `Bearer ${s.token}` }, "transfer_read", { transferId: result.downloads.identity.transferId, offset: 0 });
     r.json({ name: "transfer_read", arguments: { transferId: result.downloads.identity.transferId, offset: 0 } });
-    r.json({ result: { ...(first.result as object), data: "<base64 of the first 65536 bytes>" } });
+    r.json({ result: { ...(first.result as object), data: `<base64 of the first ${(first.result as any).nextOffset} bytes>` } });
     const source = new McpClient(`${a.url}/mcp`, { token: s.token });
     const components: Record<string, Uint8Array> = {};
     for (const [name, transfer] of Object.entries(result.downloads)) components[name] = await source.download(transfer);
@@ -470,10 +470,11 @@ describe("the MCP walkthrough", () => {
       const begun = await tool("transfer_begin", { size: bytes.length, sha256, projectId: s.projectId, component: name }, { token: s.tokenB, kernel: b });
       uploads[name] = (begun.result as any).transferId;
       r.name(uploads[name], `<${name} upload>`);
-      for (let offset = 0; offset < bytes.length; offset += 65536) {
-        const written = await client.call<object>("transfer_write", { transferId: uploads[name], offset, data: encodeBase64(bytes.subarray(offset, offset + 65536)) });
+      const chunkBytes = (begun.result as any).chunkBytes as number;
+      for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+        const written = await client.call<object>("transfer_write", { transferId: uploads[name], offset, data: encodeBase64(bytes.subarray(offset, offset + chunkBytes)) });
         if (offset === 0) {
-          r.json({ name: "transfer_write", arguments: { transferId: uploads[name], offset: 0, data: "<base64 of up to 65536 bytes from offset 0>" } });
+          r.json({ name: "transfer_write", arguments: { transferId: uploads[name], offset: 0, data: `<base64 of up to ${chunkBytes} bytes from offset 0>` } });
           r.json({ result: written });
         }
       }
