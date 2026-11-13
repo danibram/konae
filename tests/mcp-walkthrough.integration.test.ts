@@ -235,7 +235,10 @@ describe("the MCP walkthrough", () => {
     const page = await (await fetch(`${a.url}/oauth/authorize?${new URLSearchParams(args)}`, { headers: { cookie } })).text();
     const csrf = page.match(/name=csrf value="([^"]+)"/)![1];
     r.name(csrf, "<csrf>");
-    r.add("text", page.match(/<h1>.*?<\/p><p>.*?<\/p><p>.*?<\/p>/)![0].replace(/<\/(h1|p)>/g, "\n").replace(/<[^>]+>/g, "").replace(/ +\n/g, "\n").trim());
+    const consent = page.match(/<h1>.*?<\/dl>/)![0]
+      .replace(/<\/dt>/g, ": ").replace(/<small>/g, "\n").replace(/<\/code><span>/g, "</code>: ")
+      .replace(/<\/(h1|p|div|li|small)>/g, "\n").replace(/<[^>]+>/g, "").replace(/ +\n/g, "\n").replace(/\n+/g, "\n");
+    r.add("text", consent.trim());
     const approved = await fetch(`${a.url}/oauth/authorize`, { method: "POST", redirect: "manual", headers: { cookie, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...args, csrf }) });
     const back = new URL(approved.headers.get("location")!);
     r.name(back.searchParams.get("code"), "<authorization code>");

@@ -33,6 +33,7 @@ mod editor;
 mod guide;
 mod mcp;
 mod oauth;
+mod owner_page;
 mod owners;
 mod state;
 use state::Konae;
@@ -81,6 +82,7 @@ fn owner_routes(konae: Konae) -> Router<AppState> {
         .merge(mcp::routes())
         .merge(oauth::routes())
         .merge(owners::routes())
+        .merge(owner_page::routes())
         .with_state(konae)
 }
 

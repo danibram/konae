@@ -221,11 +221,14 @@ fn authorization(
                 .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)),
         "Invalid PKCE challenge."
     );
-    let body: String = mcp::store(state)?.query_row(
-        "SELECT body FROM oauth_clients WHERE id=?1",
-        [get("client_id")],
-        |r| r.get(0),
-    )?;
+    let body: String = mcp::store(state)?
+        .query_row(
+            "SELECT body FROM oauth_clients WHERE id=?1",
+            [get("client_id")],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow::anyhow!("Unknown client. Its registration expired or never existed; the client must register again."))?;
     let client: Value = serde_json::from_str(&body)?;
     anyhow::ensure!(
         client["redirect_uris"]
@@ -261,6 +264,9 @@ async fn authorize_page(
     }
     let client = match authorization(&state, &headers, &a) {
         Ok(c) => c,
+        // A browser gets the same words on a page with a way back; an agent
+        // or script keeps the JSON answer.
+        Err(e) if wants_html(&headers) => return refusal_page(&host_of(&origin(&state, &headers)), &e.to_string()),
         Err(e) => return oauth_error("invalid_request", &e.to_string()),
     };
     let owner = match mcp::authenticate_owner(&state, &headers) {
@@ -307,14 +313,19 @@ async fn authorize_page(
     // origin-specific policy blocks. default-src 'none' keeps scripts out;
     // the POST target and redirect_uri stay server-chosen.
     let pub_origin = origin(&state, &headers);
-    let body = format!(
-        "<!doctype html><html lang=en><meta charset=utf-8><title>Authorize Konae access</title><main><h1>Allow access for {destination}?</h1><p>Approving sends an access token to <strong>{destination}</strong>. Only continue if you started this sign-in from an app you trust at that address.</p><p>The client calls itself \"{}\". Clients register themselves, so Konae has not verified this name.</p><p>The token grants {} access to <strong>all of your projects</strong> for one hour. You can revoke it on your owner account page in the editor.</p><form method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button>Allow access</button></form><a href=/_konae/owner/login>Cancel</a></main></html>",
-        escape(client["client_name"].as_str().unwrap()),
-        escape(a.get("scope").unwrap()),
-        destination = escape(&destination),
-        authorize = escape(&format!("{pub_origin}/oauth/authorize")),
-    );
-    let csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+    let body = consent_page(&Consent {
+        client: client["client_name"].as_str().unwrap(),
+        destination: &destination,
+        scopes: a.get("scope").unwrap(),
+        owner: owner.display.as_deref(),
+        installation: &host_of(&pub_origin),
+        authorize: &format!("{pub_origin}/oauth/authorize"),
+        fields: &fields,
+        csrf: &csrf,
+    });
+    // The page runs no script. Its one inline stylesheet is allowed by hash
+    // and its typefaces come from this origin.
+    let csp = owner_page_policy();
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8".into()),
@@ -324,6 +335,117 @@ async fn authorize_page(
         body,
     )
         .into_response()
+}
+
+fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"))
+}
+
+/// `host:port` of an origin, as the owner sees it in the address bar.
+fn host_of(origin: &str) -> String {
+    url::Url::parse(origin)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| match u.port() { Some(p) => format!("{h}:{p}"), None => h.to_owned() }))
+        .unwrap_or_default()
+}
+
+/// The CSP of a page that runs no script and inlines only the owner stylesheet.
+fn owner_page_policy() -> String {
+    format!(
+        "default-src 'none'; style-src {}; font-src 'self'; img-src data:; frame-ancestors 'none'; base-uri 'none'",
+        *super::owner_page::STYLE_HASH
+    )
+}
+
+/// The consent request a browser cannot continue, such as one whose client
+/// registration expired, in the consent page's shell.
+fn refusal_page(installation: &str, description: &str) -> Response {
+    let body = format!(
+        "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><meta name=referrer content=same-origin><title>This request cannot continue · Konae</title>{icon}<style>{css}</style><body>{header}<main class=main><div class=card><p class=kicker>Connect an agent · {installation}</p><h1>This request cannot continue</h1><div class=stack><p class=note>This server cannot honour the link that opened this page. Nothing was shared. Go back to your agent and connect again, which starts a fresh request.</p><p class=detail><span>Detail</span> {description}</p><div class=actions><a class=button href=/_konae/owner/login>Open your owner page</a></div></div></div></main></body></html>",
+        icon = super::owner_page::ICON,
+        css = super::owner_page::CSS,
+        header = super::owner_page::HEADER,
+        installation = escape(installation),
+        description = escape(description),
+    );
+    (
+        StatusCode::BAD_REQUEST,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_owned()),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+            (header::CONTENT_SECURITY_POLICY, owner_page_policy()),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// What the consent page shows. Every value arrives unescaped.
+struct Consent<'a> {
+    client: &'a str,
+    destination: &'a str,
+    scopes: &'a str,
+    owner: Option<&'a str>,
+    installation: &'a str,
+    authorize: &'a str,
+    /// Hidden inputs, already escaped.
+    fields: &'a str,
+    csrf: &'a str,
+}
+
+/// What each OAuth scope lets the client do, in the owner's words.
+/// The owner page's word for each OAuth scope, and what it lets the client do.
+/// `owner-login.html` uses the same words for the tokens it lists.
+fn scope_meaning(scope: &str) -> (&'static str, &'static str) {
+    match scope {
+        "read" => ("Read", "See your projects, their files and their data"),
+        "write" => ("Edit", "Change project files and data"),
+        "publish" => ("Publish", "Publish and roll back your apps"),
+        "manage_users" => ("Manage users", "Decide who may sign in to your apps"),
+        _ => ("", ""),
+    }
+}
+
+fn consent_page(c: &Consent) -> String {
+    let scopes = c
+        .scopes
+        .split_whitespace()
+        .map(|scope| {
+            let (word, meaning) = scope_meaning(scope);
+            format!(
+                "<li><code{}>{}</code><span>{}</span></li>",
+                if matches!(scope, "publish" | "manage_users") { " class=risk" } else { "" },
+                word,
+                meaning
+            )
+        })
+        .collect::<String>();
+    let account = c
+        .owner
+        .map(|owner| format!("<span class=signed-as>Signed in as <strong>{}</strong></span>", escape(owner)))
+        .unwrap_or_default();
+    let host = c.destination.rsplit_once(':').map_or(c.destination, |(host, _)| host);
+    let local = matches!(host, "127.0.0.1" | "localhost" | "[::1]");
+    let (gloss, where_note) = if local {
+        ("an agent on this computer", "<small>Usually an agent in your terminal or your code editor.</small>")
+    } else {
+        ("a server on the internet", "<small>Allow only if you recognise this address.</small>")
+    };
+    format!(
+        "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><meta name=referrer content=same-origin><title>Allow {destination}, {gloss}, to use your Konae projects?</title>{icon}<style>{css}</style><body>{header}<main class=main><div class=\"card card-wide\"><p class=kicker>Connect an agent · {installation}</p><h1>Allow {destination}, {gloss}, to use your Konae projects?</h1><p class=lead>Allowing sends it an access token. Only continue if you started this sign-in from an agent you trust.</p><dl class=consent><div><dt>Client</dt><dd><strong>{client}</strong> <span class=\"badge badge-warning\">Name not verified</span><small>Clients name themselves when they register, so Konae cannot confirm this one.</small></dd></div><div><dt>Token goes to</dt><dd><code>{destination}</code>{where_note}</dd></div><div><dt>It may</dt><dd><ul class=scopes>{scopes}</ul></dd></div><div><dt>For</dt><dd><span>One hour. After that it must ask again. You can revoke it sooner on <a href=/_konae/owner/login target=_blank rel=noopener>your owner page</a>.</span></dd></div><div><dt>On</dt><dd><span><strong>All of your projects</strong> on {installation}</span></dd></div><div><dt>It cannot</dt><dd><span>See your password or create more tokens</span></dd></div></dl><form class=\"actions decide\" method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button class=\"button button-primary\">Allow access</button><a class=button href=/_konae/owner/login>Cancel</a>{account}</form></div></main></body></html>",
+        css = super::owner_page::CSS,
+        header = super::owner_page::HEADER,
+        icon = super::owner_page::ICON,
+        destination = escape(c.destination),
+        client = escape(c.client),
+        authorize = escape(c.authorize),
+        fields = c.fields,
+        csrf = c.csrf,
+        installation = escape(c.installation),
+    )
 }
 
 async fn authorize(
@@ -490,6 +612,35 @@ fn escape(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A browser that opens a consent link Konae cannot honour gets a page
+    /// with a way back; an agent or script gets the same words as JSON.
+    #[tokio::test]
+    async fn a_refused_consent_request_is_a_page_only_for_browsers() {
+        use super::super::accounts::tests::fixture;
+        use tower::ServiceExt;
+
+        let fixture = fixture(auth::Verification::Local, false);
+        let router = routes().with_state(Konae::for_test(fixture.state.clone()));
+        let get = |accept: &str| {
+            Request::builder()
+                .uri("/oauth/authorize?client_id=gone&redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcb&response_type=code")
+                .header(header::HOST, "localhost")
+                .header(header::ACCEPT, accept)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let page = router.clone().oneshot(get("text/html,application/xhtml+xml")).await.unwrap();
+        assert_eq!(page.status(), StatusCode::BAD_REQUEST);
+        assert!(page.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+        let html = String::from_utf8(axum::body::to_bytes(page.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+        assert!(html.contains("This request cannot continue") && html.contains("href=/_konae/owner/login"));
+        let json = router.oneshot(get("*/*")).await.unwrap();
+        assert_eq!(json.status(), StatusCode::BAD_REQUEST);
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(json.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(body["error"], "invalid_request");
+        assert!(html.contains(&escape(body["error_description"].as_str().unwrap())));
+    }
+
     #[tokio::test]
     async fn consent_allows_cursor_redirect_without_form_action() {
         use super::super::accounts::tests::{cookie_of, fixture, request, PASSWORD};
@@ -531,9 +682,17 @@ mod tests {
         for directive in ["default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"] {
             assert!(csp.contains(directive));
         }
+        // The page runs no script; only its own stylesheet is allowed inline.
+        assert!(!csp.contains("script-src"));
+        assert!(csp.contains(&format!("style-src {}", *crate::owner_page::STYLE_HASH)));
         let html = String::from_utf8(
             axum::body::to_bytes(consent.into_body(), usize::MAX).await.unwrap().to_vec(),
         ).unwrap();
+        assert!(html.contains(&format!("<style>{}</style>", crate::owner_page::CSS)));
+        assert!(html.contains("<code>www.cursor.com</code>"));
+        // no-referrer makes a browser send `Origin: null` with the Allow form,
+        // which same_origin refuses.
+        assert!(html.contains("<meta name=referrer content=same-origin>") && !html.contains("no-referrer"));
         let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();
         let form = format!("{query}&csrf={csrf}");
         let changed_form = form.replace(

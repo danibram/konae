@@ -199,10 +199,19 @@ location: /_konae/owner/login?returnTo=%2Foauth%2Fauthorize%3F<the same paramete
 ```
 
 ```text
-Allow access for 127.0.0.1:9999?
-Approving sends an access token to 127.0.0.1:9999. Only continue if you started this sign-in from an app you trust at that address.
-The client calls itself "Walkthrough agent". Clients register themselves, so Konae has not verified this name.
-The token grants read write publish manage_users access to all of your projects for one hour. You can revoke it on your owner account page in the editor.
+Allow 127.0.0.1:9999, an agent on this computer, to use your Konae projects?
+Allowing sends it an access token. Only continue if you started this sign-in from an agent you trust.
+Client: Walkthrough agent Name not verified
+Clients name themselves when they register, so Konae cannot confirm this one.
+Token goes to: 127.0.0.1:9999
+Usually an agent in your terminal or your code editor.
+It may: Read: See your projects, their files and their data
+Edit: Change project files and data
+Publish: Publish and roll back your apps
+Manage users: Decide who may sign in to your apps
+For: One hour. After that it must ask again. You can revoke it sooner on your owner page.
+On: All of your projects on localhost:4173
+It cannot: See your password or create more tokens
 ```
 
 ```sh

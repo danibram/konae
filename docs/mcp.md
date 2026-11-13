@@ -128,7 +128,7 @@ The runtime tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` 
 
 ## Owner signup
 
-`POST /_konae/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode, or `"setupKey"` instead of the code for the first owner. One transaction consumes the code and creates the account, which is pending with a verification link in required mode and active with a session in local mode. A code for an email whose account is active or suspended is consumed, creates nothing and gets the same 202. When both `code` and `setupKey` arrive, the code decides. `GET /_konae/owner/config` answers `"admission": "setup-key"` while the key can still create an account and `"code"` otherwise.
+`POST /_konae/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode, or `"setupKey"` instead of the code for the first owner. One transaction consumes the code and creates the account, which is pending with a verification link in required mode and active with a session in local mode. A code for an email whose account is active or suspended is consumed, creates nothing and gets the same 202. When both `code` and `setupKey` arrive, the code decides. `GET /_konae/owner/config` answers `"admission": "setup-key"` while the key can still create an account and `"code"` otherwise. It also answers `"editor": true` when this server serves the editor from `KONAE_EDITOR_DIR`, so the owner page links to the project list only where one exists, and `"mailToFile": true` under `KONAE_MAIL_TRANSPORT=development`, so the page says a link was written to the mailbox file instead of sent.
 
 | Request | Status | Message |
 | --- | --- | --- |

@@ -1773,7 +1773,13 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     match super::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => Json(json!({"mode":"clerk","publishableKey":config.publishable_key})).into_response(),
-        Ok(None) => Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str()})).into_response(),
+        Ok(None) => {
+            // The owner page links to the project list only where an editor serves it.
+            let editor = std::env::var("KONAE_EDITOR_DIR").is_ok_and(|dir| !dir.trim().is_empty());
+            // With the development transport, owner email lands in a file, not an inbox.
+            let mail = std::env::var("KONAE_MAIL_TRANSPORT").unwrap_or_default();
+            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"editor":editor,"mailToFile":mail == "development"})).into_response()
+        }
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }
 }
@@ -2000,13 +2006,12 @@ async fn owner_page(State(state): State<Konae>, headers: HeaderMap) -> Response 
     if !super::oauth::valid_owner_host(&state, &headers).await {
         return error(StatusCode::FORBIDDEN, "Owner authentication is unavailable on this origin.");
     }
-    let html = include_str!("owner-login.html");
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        html,
+        super::owner_page::LOGIN.as_str(),
     )
         .into_response()
 }

@@ -6,6 +6,22 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /_konae/owner/config` answers `editor` and `mailToFile`, so the owner page links to the project list only where the editor runs and says when a link was written to the mailbox file instead of sent.
+- A browser that opens a consent link Konae cannot honour, such as one whose client registration expired, gets a page with the reason and a way back. Agents and scripts keep the JSON answer.
+
+### Changed
+
+- The owner sign-in at `/_konae/owner/login` and the OAuth consent at `/oauth/authorize` follow the design system in light and dark. The binary serves their typefaces, so an installation without the editor shows them the same way.
+- The consent page names the client as unverified, says where the token goes, what each permission allows, for how long and what it cannot do, and keeps Allow and Cancel in view on a phone.
+- The owner page separates sign-in from creating an account and lists the commands to connect an agent. A token can be limited to chosen projects, an uncopied token is replaced only after a confirmation, and revoking asks first and names the token it revoked.
+
+### Fixed
+
+- A consent request for an unknown client answered `Query returned no rows`. It now says the client must register again.
+- A reset or confirmation link pasted into an open sign-in tab opens the set-password form.
+
 ## [0.3.0] - 2026-11-13
 
 ### Added
