@@ -728,12 +728,19 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
 pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits) -> Result<()> {
     let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
     let database = path("database").context("The package has no database.")?;
+    // The integrity check connects every virtual table and runs its module on
+    // the file's shadow tables, so no component is checked before all three are
+    // known to hold no trigger, view or virtual table.
+    no_trigger_or_view(&database, "database", "database")?;
+    for (name, label, what) in [("identity", "accounts", "accounts component"), ("usage", "usage", "usage component")] {
+        if let Some(component) = path(name) {
+            no_trigger_or_view(&component, label, what)?;
+        }
+    }
     integrity(&database, "database")?;
-    no_trigger_or_view(&database, "database")?;
     let accounts = match path("identity") {
         Some(identity) => {
             integrity(&identity, "accounts")?;
-            no_trigger_or_view(&identity, "accounts component")?;
             let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let has_users: bool = db.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)='app_users')",
@@ -759,20 +766,19 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     }
     if let Some(usage) = path("usage") {
         integrity(&usage, "usage")?;
-        no_trigger_or_view(&usage, "usage component")?;
     }
     Ok(())
 }
 
 /// Refuses a component that holds a trigger, a view or a virtual table. The
 /// Kernel creates none of them in any of its files.
-fn no_trigger_or_view(path: &Path, what: &str) -> Result<()> {
-    let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).and_then(|db| {
-        match super::sql_rules::stored_trigger_or_view(&db, what)? {
+fn no_trigger_or_view(path: &Path, label: &str, what: &str) -> Result<()> {
+    let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|db| match super::sql_rules::stored_trigger_or_view(&db, what)? {
             Some(refusal) => Ok(Some(refusal)),
             None => super::sql_rules::stored_virtual_table(&db, what),
-        }
-    })?;
+        })
+        .with_context(|| format!("The {label} component is not a SQLite database."))?;
     match stored {
         Some(refusal) => anyhow::bail!(refusal),
         None => Ok(()),
