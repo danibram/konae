@@ -6,6 +6,8 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
 ### Added
 
 - `GET /_konae/owner/config` answers `editor` and `mailToFile`, so the owner page links to the project list only where the editor runs and says when a link was written to the mailbox file instead of sent.
