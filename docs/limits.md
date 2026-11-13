@@ -34,7 +34,7 @@ A Capsule and a Deployment run into these numbers. The Validation Gate and the K
 | Statement time | 2 seconds, checked between SQLite steps |
 | `LIKE` or `GLOB` pattern | 500 bytes |
 | One value | 2 MiB |
-| SQLite memory, all apps together | Half of available memory, including Linux cgroup limits; 256 MiB when unknown, or `KONAE_SQLITE_HEAP_BYTES`. A statement past it fails with SQLite's out-of-memory error. The figure is one for the whole process, so while one statement holds SQLite at the ceiling, other apps' statements can fail with out-of-memory too, and the process stays up |
+| SQLite memory, all apps together | Half of available memory, including Linux cgroup limits; 256 MiB when unknown, or `KONAE_SQLITE_HEAP_BYTES`. A statement past it fails with SQLite's out-of-memory error. The figure is one for the whole process, so while one statement holds SQLite at the ceiling, other apps' statements can fail with out-of-memory too, and the process stays up. The installation's own stores, owner sign-in and the mail queue, share the figure |
 | App database | 256 MiB |
 | Accounts database, `identity.sqlite` | 64 MiB |
 | Usage store, `usage.sqlite` | 128 MiB |
