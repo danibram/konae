@@ -1277,15 +1277,31 @@ fn hash_password(password: &str) -> Result<String, AuthError> {
     ))
 }
 
-/// Splits `pbkdf2-sha256$<iterations>$<salt hex>$<hash hex>` into its parts.
+/// Parses a stored hash only when its work matches a count the Kernel wrote.
 fn parse_password_hash(encoded: &str) -> Option<(u32, Vec<u8>, Vec<u8>)> {
+    // A u32 has at most ten digits. Check the encoded size before decoding
+    // any bytes from a file an owner may have imported.
+    if encoded.len()
+        > "pbkdf2-sha256".len() + 3 + 10 + PASSWORD_SALT_BYTES * 2 + PASSWORD_HASH_BYTES * 2
+    {
+        return None;
+    }
     let mut parts = encoded.split('$');
     if parts.next() != Some("pbkdf2-sha256") {
         return None;
     }
-    let iterations = parts.next().and_then(|value| value.parse::<u32>().ok()).filter(|value| *value > 0)?;
-    let salt = parts.next().and_then(|value| hex::decode(value).ok()).filter(|value| value.len() == PASSWORD_SALT_BYTES)?;
-    let expected = parts.next().and_then(|value| hex::decode(value).ok()).filter(|value| value.len() == PASSWORD_HASH_BYTES)?;
+    let iterations = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| WRITTEN_HASH_ITERATIONS.contains(value))?;
+    let salt = parts
+        .next()
+        .and_then(|value| hex::decode(value).ok())
+        .filter(|value| value.len() == PASSWORD_SALT_BYTES)?;
+    let expected = parts
+        .next()
+        .and_then(|value| hex::decode(value).ok())
+        .filter(|value| value.len() == PASSWORD_HASH_BYTES)?;
     if parts.next().is_some() {
         return None;
     }
@@ -1296,17 +1312,16 @@ fn parse_password_hash(encoded: &str) -> Option<(u32, Vec<u8>, Vec<u8>)> {
 /// password" marker, or a well-formed hash with an iteration count it has
 /// written. An imported accounts file may hold anything else.
 pub fn is_stored_password_hash(hash: &str) -> bool {
-    hash == NO_PASSWORD || parse_password_hash(hash).is_some_and(|(iterations, _, _)| WRITTEN_HASH_ITERATIONS.contains(&iterations))
+    hash == NO_PASSWORD || parse_password_hash(hash).is_some()
 }
 
 fn verify_password(password: &str, encoded: &str) -> Result<(), AuthError> {
-    let (iterations, salt, expected) = parse_password_hash(encoded).ok_or(AuthError::PasswordHash)?;
-    if !WRITTEN_HASH_ITERATIONS.contains(&iterations) {
-        // The stored count would set the work, so it is never run. The answer
-        // and the time match an unknown email.
+    let Some((iterations, salt, expected)) = parse_password_hash(encoded) else {
+        // Invalid encodings and counts run the same bounded work as an
+        // unknown email, then give the same answer.
         let _ = verify_password(password, DUMMY_PASSWORD_HASH);
         return Err(AuthError::InvalidCredentials);
-    }
+    };
     pbkdf2::verify(
         pbkdf2::PBKDF2_HMAC_SHA256,
         std::num::NonZeroU32::new(iterations).ok_or(AuthError::PasswordHash)?,
@@ -1858,27 +1873,81 @@ mod tests {
     #[test]
     fn a_stored_hash_naming_an_iteration_count_the_kernel_never_wrote_is_refused_fast() {
         let salt = "00".repeat(PASSWORD_SALT_BYTES);
-        let started = std::time::Instant::now();
-        let huge = format!("pbkdf2-sha256$100000000${salt}${}", "00".repeat(PASSWORD_HASH_BYTES));
-        assert!(matches!(verify_password("correct horse battery", &huge), Err(AuthError::InvalidCredentials)));
-        assert!(started.elapsed() < std::time::Duration::from_secs(3), "the stored count set the work: {:?}", started.elapsed());
+        let huge = format!(
+            "pbkdf2-sha256$100000000${salt}${}",
+            "00".repeat(PASSWORD_HASH_BYTES)
+        );
+        assert!(
+            parse_password_hash(&huge).is_none(),
+            "an unwritten count must not reach the KDF"
+        );
+        assert!(matches!(
+            verify_password("correct horse battery", &huge),
+            Err(AuthError::InvalidCredentials)
+        ));
         // One iteration is cheap to write and cheap to guess against, so it is refused even for the right password.
         let mut weak = [0_u8; PASSWORD_HASH_BYTES];
-        pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, std::num::NonZeroU32::new(1).unwrap(), &[0; PASSWORD_SALT_BYTES], b"correct horse battery", &mut weak);
+        pbkdf2::derive(
+            pbkdf2::PBKDF2_HMAC_SHA256,
+            std::num::NonZeroU32::new(1).unwrap(),
+            &[0; PASSWORD_SALT_BYTES],
+            b"correct horse battery",
+            &mut weak,
+        );
         let one = format!("pbkdf2-sha256$1${salt}${}", hex::encode(weak));
-        assert!(matches!(verify_password("correct horse battery", &one), Err(AuthError::InvalidCredentials)));
+        assert!(parse_password_hash(&one).is_none());
+        assert!(matches!(
+            verify_password("correct horse battery", &one),
+            Err(AuthError::InvalidCredentials)
+        ));
+    }
+
+    #[test]
+    fn a_malformed_stored_hash_answers_like_an_unknown_email() {
+        for encoded in [
+            "",
+            "unrecognized",
+            "pbkdf2-sha256$600000$00$00",
+            &format!("{}$extra", DUMMY_PASSWORD_HASH),
+        ] {
+            assert!(
+                matches!(
+                    verify_password("correct horse battery", encoded),
+                    Err(AuthError::InvalidCredentials)
+                ),
+                "{encoded}"
+            );
+        }
+        assert!(
+            parse_password_hash(&format!(
+                "pbkdf2-sha256$600000${}$00",
+                "00".repeat(1_000_000)
+            ))
+            .is_none()
+        );
     }
 
     #[test]
     fn the_stored_hash_check_accepts_what_the_kernel_writes() {
         assert!(is_stored_password_hash(NO_PASSWORD));
-        assert!(is_stored_password_hash(&hash_password("correct horse battery").unwrap()));
+        assert!(is_stored_password_hash(
+            &hash_password("correct horse battery").unwrap()
+        ));
         assert!(is_stored_password_hash(&unusable_password_hash().unwrap()));
         assert!(is_stored_password_hash(DUMMY_PASSWORD_HASH));
-        let (salt, hash) = ("00".repeat(PASSWORD_SALT_BYTES), "00".repeat(PASSWORD_HASH_BYTES));
-        assert!(!is_stored_password_hash(&format!("pbkdf2-sha256$4294967295${salt}${hash}")));
-        assert!(!is_stored_password_hash(&format!("pbkdf2-sha256$1${salt}${hash}")));
-        assert!(!is_stored_password_hash(&format!("pbkdf2-sha256$600000${salt}")));
+        let (salt, hash) = (
+            "00".repeat(PASSWORD_SALT_BYTES),
+            "00".repeat(PASSWORD_HASH_BYTES),
+        );
+        assert!(!is_stored_password_hash(&format!(
+            "pbkdf2-sha256$4294967295${salt}${hash}"
+        )));
+        assert!(!is_stored_password_hash(&format!(
+            "pbkdf2-sha256$1${salt}${hash}"
+        )));
+        assert!(!is_stored_password_hash(&format!(
+            "pbkdf2-sha256$600000${salt}"
+        )));
         assert!(!is_stored_password_hash(""));
     }
 }
