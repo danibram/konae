@@ -1060,4 +1060,82 @@ mod tests {
         .unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    /// A database file with a trigger whose `type` the way a hand edit spells it.
+    fn file_with(root: &Path, name: &str, statements: &str, edit_type: Option<&str>) -> PathBuf {
+        let path = root.join(name);
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(statements).unwrap();
+        if let Some(kind) = edit_type {
+            db.execute_batch("PRAGMA writable_schema=ON;").unwrap();
+            db.execute("UPDATE sqlite_master SET type = ?1 WHERE type = 'trigger'", [kind]).unwrap();
+            db.execute_batch("PRAGMA writable_schema=OFF;").unwrap();
+        }
+        path
+    }
+
+    fn components(root: &Path, database: PathBuf, identity: Option<PathBuf>, usage: Option<PathBuf>) -> Vec<(String, PathBuf)> {
+        let _ = root;
+        let mut list = vec![("database".to_owned(), database)];
+        list.extend(identity.map(|path| ("identity".to_owned(), path)));
+        list.extend(usage.map(|path| ("usage".to_owned(), path)));
+        list
+    }
+
+    fn accounts_with_hash(root: &Path, name: &str, hash: &str) -> PathBuf {
+        let path = root.join(name);
+        AuthService::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute("INSERT INTO app_users (id, email, password_hash, created_at) VALUES ('u1', 'a@example.test', ?1, 0)", [hash])
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn an_accounts_file_with_a_password_hash_this_kernel_did_not_write_is_refused() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let (salt, hash) = ("00".repeat(16), "00".repeat(32));
+        let refused = "The accounts component holds a password hash this Kernel did not write.";
+        for hash in [format!("pbkdf2-sha256$4294967295${salt}${hash}"), format!("pbkdf2-sha256$1${salt}${hash}"), "x".to_owned()] {
+            let identity = accounts_with_hash(&root, "bad.sqlite", &hash);
+            let error = check_components(&components(&root, database.clone(), Some(identity), None), &Default::default()).unwrap_err();
+            assert_eq!(error.to_string(), refused, "{hash}");
+            std::fs::remove_file(root.join("bad.sqlite")).unwrap();
+        }
+        // What the Kernel itself writes: a signup, a pending account and a Google-only account.
+        let identity = root.join("identity.sqlite");
+        let auth = AuthService::open(&identity).unwrap();
+        auth.signup("ana@example.test", "ana's password").unwrap();
+        drop(auth);
+        let db = Connection::open(&identity).unwrap();
+        db.execute("INSERT INTO app_users (id, email, password_hash, created_at, state) VALUES ('p1', 'p@example.test', ?1, 0, 'pending')", [auth::NO_PASSWORD]).unwrap();
+        drop(db);
+        check_components(&components(&root, database, Some(identity), None), &Default::default()).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_component_is_refused_when_it_holds_a_trigger_or_a_view_of_any_spelling() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let trigger = "CREATE TABLE t(v); CREATE TRIGGER leak AFTER INSERT ON t BEGIN SELECT 1; END;";
+        let upper = file_with(&root, "upper.sqlite", trigger, Some("TRIGGER"));
+        let error = check_components(&components(&root, upper, None, None), &Default::default()).unwrap_err();
+        assert!(error.to_string().contains("CREATE TRIGGER leak"), "{error}");
+
+        let identity = root.join("identity.sqlite");
+        AuthService::open(&identity).unwrap();
+        Connection::open(&identity).unwrap().execute_batch("CREATE TRIGGER leak AFTER INSERT ON app_sessions BEGIN SELECT 1; END;").unwrap();
+        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert!(error.to_string().contains("accounts component holds CREATE TRIGGER leak"), "{error}");
+
+        let usage = file_with(&root, "usage.sqlite", "CREATE TABLE u(v); CREATE VIEW seen AS SELECT v FROM u;", None);
+        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
+        assert!(error.to_string().contains("usage component holds CREATE VIEW seen"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

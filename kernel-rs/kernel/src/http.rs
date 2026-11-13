@@ -437,7 +437,7 @@ pub struct ApiKey {
 /// owner revoked has no reason.
 pub const REVOKED_AT_IMPORT: &str = "import";
 
-fn keys_table(db: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn keys_table(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS api_keys(
            id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,

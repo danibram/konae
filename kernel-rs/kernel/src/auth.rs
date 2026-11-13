@@ -1844,4 +1844,18 @@ mod tests {
             Err(AuthError::InvalidCredentials)
         ));
     }
+
+    #[test]
+    fn a_stored_hash_naming_an_iteration_count_the_kernel_never_wrote_is_refused_fast() {
+        let salt = "00".repeat(PASSWORD_SALT_BYTES);
+        let started = std::time::Instant::now();
+        let huge = format!("pbkdf2-sha256$100000000${salt}${}", "00".repeat(PASSWORD_HASH_BYTES));
+        assert!(matches!(verify_password("correct horse battery", &huge), Err(AuthError::InvalidCredentials)));
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "the stored count set the work: {:?}", started.elapsed());
+        // One iteration is cheap to write and cheap to guess against, so it is refused even for the right password.
+        let mut weak = [0_u8; PASSWORD_HASH_BYTES];
+        pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, std::num::NonZeroU32::new(1).unwrap(), &[0; PASSWORD_SALT_BYTES], b"correct horse battery", &mut weak);
+        let one = format!("pbkdf2-sha256$1${salt}${}", hex::encode(weak));
+        assert!(matches!(verify_password("correct horse battery", &one), Err(AuthError::InvalidCredentials)));
+    }
 }

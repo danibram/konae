@@ -528,4 +528,41 @@ mod tests {
         assert_eq!(name, "live key");
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn carry_access_never_runs_sql_text_read_from_the_live_file() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let victim = root.join("victim.sqlite");
+        Connection::open(&victim).unwrap().execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t VALUES('kept');").unwrap();
+        let live_path = root.join("live.sqlite");
+        AuthService::open(&live_path).unwrap();
+        {
+            let db = Connection::open(&live_path).unwrap();
+            super::super::http::keys_table(&db).unwrap();
+            db.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
+            // An earlier import installed this file byte for byte, so its schema text is the uploader's.
+            let evil = format!("; ATTACH DATABASE '{}' AS o; UPDATE o.t SET v = 'changed'", victim.display());
+            db.execute_batch("PRAGMA writable_schema=ON;").unwrap();
+            db.execute("UPDATE sqlite_master SET sql = sql || ?1 WHERE type='table' AND name='api_keys'", [evil]).unwrap();
+            db.execute_batch("PRAGMA writable_schema=OFF;").unwrap();
+        }
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        carry_access(&incoming_path, &live_path).unwrap();
+        let value: String = Connection::open(&victim).unwrap().query_row("SELECT v FROM t", [], |row| row.get(0)).unwrap();
+        assert_eq!(value, "kept", "text from the live file ran as SQL");
+        let incoming = Connection::open(&incoming_path).unwrap();
+        let columns: Vec<String> = incoming
+            .prepare("SELECT name FROM pragma_table_info('api_keys') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(columns, ["id", "token_hash", "name", "actions", "files", "created_at", "revoked_at", "revoked_reason"]);
+        let name: String = incoming.query_row("SELECT name FROM api_keys WHERE id='k1'", [], |row| row.get(0)).unwrap();
+        assert_eq!(name, "live key");
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
