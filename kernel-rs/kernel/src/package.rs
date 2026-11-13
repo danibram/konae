@@ -1226,6 +1226,30 @@ mod tests {
     }
 
     #[test]
+    fn a_generated_password_hash_column_is_scanned_too() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let (salt, hash) = ("00".repeat(16), "00".repeat(32));
+        let identity = file_with(
+            &root,
+            "generated.sqlite",
+            &format!(
+                "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL, created_at INTEGER NOT NULL,
+                   password_hash TEXT GENERATED ALWAYS AS ('pbkdf2-sha256$4294967295${salt}${hash}') VIRTUAL);
+                 INSERT INTO app_users (id, email, created_at) VALUES ('u1', 'a@example.test', 0);"
+            ),
+            None,
+        );
+        let error = check_components(&components(&root, database.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.");
+        // An accounts file with no such column at all has no hashes to read and still imports.
+        let bare = file_with(&root, "bare.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT)", None);
+        check_components(&components(&root, database, Some(bare), None), &Default::default()).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_virtual_table_is_refused_before_sqlite_runs_its_code_on_the_file() {
         let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
