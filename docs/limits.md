@@ -99,7 +99,7 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 | API keys per Deployment | 50 live keys |
 | `konae login` token, or one from the owner sign-in page | 24 hours |
 | `token_create` | Up to 30 days, or one hour under Clerk |
-| OAuth token | One hour, no refresh token |
+| OAuth token | 24 hours for a client that redirects to `127.0.0.1` or `localhost`, one hour otherwise or under Clerk, no refresh token |
 | Owner invitation code | 14 days by default, `1h` to `90d` |
 
 ## Transfers and publishing

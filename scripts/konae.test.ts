@@ -5,7 +5,7 @@ import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { formatEvent, mailEvents, serveEvents } from "./events";
-import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, hostnameLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./konae";
+import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, browserLogin, creatorVerificationToken, domainLocal, hostnameLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, pipedSecret, publishLocal, setSecret, signupPolicyWarning } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -107,6 +107,69 @@ describe("konae CLI", () => {
     expect(loginScopes(["--export-data", "--manage-users"])).toEqual(["read", "write", "publish", "manage_users", "export_data"]);
   });
 
+  test("login --browser checks state, exchanges the code with its PKCE verifier, and gives up after the timeout", async () => {
+    let challenge = ""; let exchanged: URLSearchParams | undefined;
+    const issuer = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url); const origin = url.origin;
+        if (url.pathname === "/.well-known/oauth-protected-resource") return Response.json({ resource: `${origin}/mcp`, authorization_servers: [origin] });
+        if (url.pathname === "/.well-known/oauth-authorization-server") return Response.json({ issuer: origin, authorization_endpoint: `${origin}/oauth/authorize`, token_endpoint: `${origin}/oauth/token`, registration_endpoint: `${origin}/oauth/register` });
+        if (url.pathname === "/oauth/register") return Response.json({ client_id: "cli", ...(await request.json() as object) }, { status: 201 });
+        if (url.pathname === "/oauth/token") { exchanged = new URLSearchParams(await request.text()); return Response.json({ access_token: "lb_token", expires_in: 86400 }); }
+        return new Response("", { status: 404 });
+      },
+    });
+    const origin = `http://127.0.0.1:${issuer.port}`;
+    const lines: string[] = [];
+    try {
+      // The browser: a stray answer with another state first, which login ignores, then the owner's.
+      const signedIn = await browserLogin(origin, ["read", "write", "publish", "export_data"], {
+        print: (line) => lines.push(line),
+        openUrl: (address) => void (async () => {
+          const authorize = new URL(address);
+          challenge = authorize.searchParams.get("code_challenge")!;
+          const callback = new URL(authorize.searchParams.get("redirect_uri")!);
+          callback.searchParams.set("code", "the-code"); callback.searchParams.set("state", "forged");
+          expect((await fetch(callback)).status).toBe(400);
+          callback.searchParams.set("state", authorize.searchParams.get("state")!); callback.searchParams.set("iss", origin);
+          expect((await fetch(callback)).status).toBe(200);
+        })(),
+      });
+      expect(signedIn).toEqual({ token: "lb_token", expiresIn: 86400 });
+      expect(exchanged?.get("code")).toBe("the-code");
+      expect(exchanged?.get("resource")).toBe(`${origin}/mcp`);
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(exchanged!.get("code_verifier")!)));
+      expect(Buffer.from(digest).toString("base64url")).toBe(challenge);
+      expect(lines.join("\n")).toContain(`${origin}/oauth/authorize?`);
+      expect(lines.join("\n")).toContain("scope=read+write+publish+export_data");
+      expect(lines.join("\n")).not.toContain("the-code");
+
+      await expect(browserLogin(origin, ["read"], { print: () => {}, open: false, timeoutMs: 50 })).rejects.toThrow("Nobody finished the sign-in within");
+    } finally { issuer.stop(true); }
+    expect(HELP).toContain("--browser");
+    expect(NO_INSTALLATION).toContain("--url");
+    expect(NO_INSTALLATION).toContain("login --browser");
+  });
+
+  test("secret set takes the value from stdin without its last line break and reads the name back", async () => {
+    expect(pipedSecret("abc\n")).toBe("abc");
+    expect(pipedSecret("abc\r\n")).toBe("abc");
+    expect(pipedSecret("abc\n\n")).toBe("abc\n");
+    const made: Array<[string, unknown]> = [];
+    const listed = { secrets: [{ name: "google_client_secret", use: "google", updatedAt: 0 }] };
+    const client = { call: async (name: string, input: unknown) => { made.push([name, input]); return (name === "secrets_list" ? listed : {}) as never; } };
+    const line = await setSecret(client, "p1", "google_client_secret", "a-value-of-16-chars", "google");
+    expect(made).toEqual([
+      ["secret_set", { projectId: "p1", name: "google_client_secret", value: "a-value-of-16-chars", use: "google" }],
+      ["secrets_list", { projectId: "p1" }],
+    ]);
+    expect(line).toContain("google_client_secret on p1 for use google");
+    expect(line).not.toContain("a-value-of-16-chars");
+    await expect(setSecret(client, "p1", "other", "a-value-of-16-chars")).rejects.toThrow("secrets_list does not list other");
+    expect(made[2]).toEqual(["secret_set", { projectId: "p1", name: "other", value: "a-value-of-16-chars" }]);
+  });
+
   test("login --verify-from reads the newest creator verification link for the email and works only on this machine", async () => {
     const line = (to: string, scope: string, purpose: string, token: string) => JSON.stringify({ to, purpose, scope, link: `http://127.0.0.1:4173/_konae/owner/login#${purpose}=${token}`, expiresAt: 1 });
     const mailbox = [
@@ -132,7 +195,7 @@ describe("konae CLI", () => {
   });
 
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template", "--browser", "--no-open", "secret", "--use"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");

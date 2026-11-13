@@ -101,7 +101,7 @@ An app's own Google OAuth client, which its owner makes in their own Google Clou
 _Avoid_: OAuth app, installation Google client
 
 **Agent Credential**:
-An owner's delegated token for an agent: an expiry, a set of projects and the permissions `read`, `write`, `publish`, `manage_users` and `export_data`. OAuth offers the first four. A tool the credential lacks answers with the permission it needs (ADR-0002).
+An owner's delegated token for an agent: an expiry, a set of projects and the permissions `read`, `write`, `publish`, `manage_users` and `export_data`. OAuth offers the first four, and `export_data` only to a client that redirects to this machine. A tool the credential lacks answers with the permission it needs (ADR-0002).
 _Avoid_: runtime session, setup key
 
 ### As the app grows

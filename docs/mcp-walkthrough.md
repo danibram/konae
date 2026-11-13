@@ -150,12 +150,13 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```json
 {
   "result": {
+    "browser": "When nobody has the owner's password, run bun run konae -- login --browser --dir <folder> --url <Kernel URL>, with the same flags. It prints an address and opens it; hand the address to the owner, who opens it in a browser on the same machine, signs in and allows access within 5 minutes. It saves the same 24-hour token in the same file. No password or token passes through the terminal or the agent.",
     "flags": {
       "--export-data": "adds export_data",
       "--manage-users": "adds manage_users"
     },
     "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
-    "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
+    "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. A client that redirects to http://127.0.0.1 or localhost gets a 24-hour token and may also ask for export_data; any other client gets a one-hour token without export_data. Under Clerk every token lasts one hour. There is no refresh token.",
     "permissions": {
       "export_data": "project_export",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
@@ -163,7 +164,8 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
-    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
+    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds.",
+    "secrets": "bun run konae -- secret set <name> --dir <folder> [--use route|call|google] reads the value from stdin, so it stays out of the agent's context and argv. The owner pipes it in or types it at the hidden prompt. It reads the name back with secrets_list. secret list prints names and uses, never values. Prefer it to secret_set with the value as an argument."
   }
 }
 ```
@@ -175,14 +177,14 @@ An MCP client that speaks OAuth registers itself, sends the owner to the consent
 
 <!-- walkthrough:oauth-register -->
 ```sh
-curl -i -X POST 'http://localhost:4173/oauth/register' -H 'content-type: application/json' --data '{"client_name":"Walkthrough agent","redirect_uris":["http://127.0.0.1:9999/callback"]}'
+curl -i -X POST 'http://localhost:4173/oauth/register' -H 'content-type: application/json' --data '{"client_name":"Walkthrough agent","redirect_uris":["https://agent.example/callback"]}'
 ```
 
 ```text
 HTTP 201
 content-type: application/json
 
-{"client_id":"<client id>","client_name":"Walkthrough agent","grant_types":["authorization_code"],"redirect_uris":["http://127.0.0.1:9999/callback"],"response_types":["code"],"token_endpoint_auth_method":"none"}
+{"client_id":"<client id>","client_name":"Walkthrough agent","grant_types":["authorization_code"],"redirect_uris":["https://agent.example/callback"],"response_types":["code"],"token_endpoint_auth_method":"none"}
 ```
 <!-- /walkthrough:oauth-register -->
 
@@ -190,7 +192,7 @@ A signed-out owner is sent to sign in first, and `returnTo` brings them back. Si
 
 <!-- walkthrough:oauth-authorize -->
 ```sh
-curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+write+publish+manage_users&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough'
+curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=https%3A%2F%2Fagent.example%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+write+publish+manage_users&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough'
 ```
 
 ```text
@@ -199,8 +201,8 @@ location: /_konae/owner/login?returnTo=%2Foauth%2Fauthorize%3F<the same paramete
 ```
 
 ```text
-Allow access for 127.0.0.1:9999?
-Approving sends an access token to 127.0.0.1:9999. Only continue if you started this sign-in from an app you trust at that address.
+Allow access for agent.example?
+Approving sends an access token to agent.example. Only continue if you started this sign-in from an app you trust at that address.
 The client calls itself "Walkthrough agent". Clients register themselves, so Konae has not verified this name.
 The token grants read write publish manage_users access to all of your projects for one hour. You can revoke it on your owner account page in the editor.
 ```
@@ -211,7 +213,7 @@ curl -i -X POST 'http://localhost:4173/oauth/authorize' -H 'cookie: konae_owner_
 
 ```text
 HTTP 303
-location: http://127.0.0.1:9999/callback?code=<authorization code>&state=walkthrough&iss=http%3A%2F%2Flocalhost%3A4173
+location: https://agent.example/callback?code=<authorization code>&state=walkthrough&iss=http%3A%2F%2Flocalhost%3A4173
 ```
 <!-- /walkthrough:oauth-authorize -->
 
@@ -219,7 +221,7 @@ The client exchanges the code with its verifier:
 
 <!-- walkthrough:oauth-token -->
 ```sh
-curl -i -X POST 'http://localhost:4173/oauth/token' -H 'content-type: application/x-www-form-urlencoded' --data 'grant_type=authorization_code&client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&code=<authorization code>&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&code_verifier=walkthrough-verifier-0123456789-0123456789-0123456789'
+curl -i -X POST 'http://localhost:4173/oauth/token' -H 'content-type: application/x-www-form-urlencoded' --data 'grant_type=authorization_code&client_id=<client id>&redirect_uri=https%3A%2F%2Fagent.example%2Fcallback&code=<authorization code>&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&code_verifier=walkthrough-verifier-0123456789-0123456789-0123456789'
 ```
 
 ```text
@@ -262,18 +264,18 @@ content-type: application/json
 ```
 <!-- /walkthrough:oauth-token -->
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting needs a token from `konae login`:
+A client that redirects to another machine gets `read`, `write`, `publish` and `manage_users`. Exporting needs a token from `konae login`, with a password or with `--browser`:
 
 <!-- walkthrough:oauth-scope -->
 ```sh
-curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+export_data&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough' -H 'cookie: konae_owner_session=<owner session>'
+curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=https%3A%2F%2Fagent.example%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+export_data&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough' -H 'cookie: konae_owner_session=<owner session>'
 ```
 
 ```text
 HTTP 400
 content-type: application/json
 
-{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it."}
+{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. Only a client that redirects to this machine, such as konae login --browser --export-data, may ask for export_data."}
 ```
 <!-- /walkthrough:oauth-scope -->
 
