@@ -216,23 +216,38 @@ pub fn stored_trigger_or_view(db: &rusqlite::Connection, what: &str) -> rusqlite
 
 /// The refusal for a database file that arrives holding a virtual table. The
 /// bundled SQLite compiles FTS3, FTS5, RTREE and DBSTAT, the Kernel creates no
-/// virtual table in any of its files, and schema.sql cannot declare one. SQLite
-/// stores a virtual table as a table row with `rootpage` 0, which the sql text
-/// read as tokens confirms, so a comment or spacing in a hand edit does not hide it.
+/// virtual table in any of its files, and schema.sql cannot declare one.
+///
+/// A table row is accepted only when it has a b-tree of its own (`rootpage`
+/// above 0) and its sql begins with the words `CREATE TABLE`, which is how
+/// SQLite stores every ordinary table, `sqlite_sequence` and `sqlite_stat1`
+/// among them, read both as raw text and as tokens. Anything else is refused, so a spelling the tokenizer here and
+/// SQLite's read differently, such as a byte-order mark, hides nothing. The
+/// check reads `sqlite_master` only: listing tables with `pragma_table_list`
+/// would make SQLite connect each virtual table and run its module code.
 pub fn stored_virtual_table(db: &rusqlite::Connection, what: &str) -> rusqlite::Result<Option<String>> {
     let mut statement = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE lower(type) = 'table' ORDER BY name")?;
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
         let (name, rootpage, sql): (String, Option<i64>, Option<String>) = (row.get(0)?, row.get(1)?, row.get(2)?);
-        let words: Vec<String> = sql_tokens(&sql.unwrap_or_default())
+        let sql = sql.unwrap_or_default();
+        let words: Vec<String> = sql_tokens(&sql)
             .into_iter()
             .filter(|token| token.kind == SqlTokKind::Word)
             .take(3)
             .map(|token| token.text.to_ascii_uppercase())
             .collect();
-        if rootpage == Some(0) || words == ["CREATE", "VIRTUAL", "TABLE"] {
-            return Ok(Some(format!("The {what} holds CREATE VIRTUAL TABLE {name}, and Konae runs no virtual tables. Drop it before importing.")));
+        let plain_prefix = sql.get(..12).is_some_and(|prefix| prefix.eq_ignore_ascii_case("create table")) && sql[12..].starts_with(|c: char| c.is_ascii_whitespace());
+        let is_table = rootpage.is_some_and(|page| page != 0) && plain_prefix && words.starts_with(&["CREATE".to_owned(), "TABLE".to_owned()]);
+        if is_table {
+            continue;
         }
+        let virtual_table = rootpage == Some(0) || words == ["CREATE", "VIRTUAL", "TABLE"];
+        return Ok(Some(if virtual_table {
+            format!("The {what} holds CREATE VIRTUAL TABLE {name}, and Konae runs no virtual tables. Drop it before importing.")
+        } else {
+            format!("The {what} holds a table {name} that does not read as CREATE TABLE, and Konae runs no virtual tables. Drop it before importing.")
+        }));
     }
     Ok(None)
 }
