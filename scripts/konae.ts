@@ -17,6 +17,7 @@ import { describeSchemaChange, release, type ConfirmSchema } from "../src/deploy
 import { PROJECT_TEMPLATES_FILE, type ProjectTemplates } from "./project-templates";
 import type { AppEvent } from "./events";
 import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
+import { pushData } from "./push";
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
   actionContractSchema, generateActionContract, renderActionContractMarkdown, serializeActionContract,
@@ -132,6 +133,11 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
 pull      --dir <folder> [--url <Kernel URL>]
           Exports the published app's data (database, accounts, files, Usage) into
           <folder>/.konae/pull/data. Needs a credential from login --export-data. dev --reset imports it.
+push      --dir <folder> [--url <Kernel URL>] [--yes] [--confirm-schema <confirmation>]
+          Replaces the published app's data with <folder>/data: database, accounts, files and Usage.
+          Rows are never merged. Without --yes it prints rows here against published rows and sends
+          nothing. With it, the app goes into maintenance, the import backs up the published data
+          first and prints the backup's id, and maintenance ends, on failure too.
 build     --dir <folder>                 Builds app/ into dist/.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
           actions.d.ts, which types miniapp.actions.call.
@@ -869,7 +875,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain", "hostname", "secret"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "push", "sql", "events", "domain", "hostname", "secret"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -1024,6 +1030,13 @@ async function main() {
     const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id);
     console.log(`Exported the data ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
     console.log(`Import it into the local app with: bun run konae -- dev --dir ${root} --reset`);
+    return;
+  }
+  if (command === "push") {
+    const settings = await readSettings(root);
+    const pushed = await pushData(root, new McpClient(endpoint(await installation()), { token: await credentials(root) }), { id: settings.id, name: settings.name, visibility: settings.visibility },
+      { yes: args.includes("--yes"), confirmSchema: option("confirm-schema") });
+    console.log(`Pushed. To undo it, restore backup ${pushed.backupId} with database_execute { deploymentId: "${pushed.deploymentId}", operation: "restore-backup", input: { backupId: "${pushed.backupId}" } }.`);
     return;
   }
   if (command === "dev") {

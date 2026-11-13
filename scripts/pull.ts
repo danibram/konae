@@ -1,7 +1,7 @@
 // `konae pull` exports the published app's data into .konae/pull, an app
 // folder that holds only data/, and `konae dev --reset` imports it with the
-// kernel binary's import command. The data travels one way. Nothing here
-// writes to the app it came from.
+// kernel binary's import command. Nothing here writes to the app it came
+// from; push.ts sends data/ back.
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

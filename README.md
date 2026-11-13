@@ -74,12 +74,14 @@ bun run konae -- publish --dir /tmp/my-list
 
 An app published from a folder appears on the editor's project list under **Apps without editor files**. Its files stay in the folder, and you publish its changes from there. **Open data and users** on its card opens its database, its app accounts and what it did.
 
-To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Nothing travels back:
+To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Neither changes the published app:
 
 ```sh
 bun run konae -- pull --dir /tmp/my-list
 bun run konae -- dev --dir /tmp/my-list --reset
 ```
+
+`push --yes` sends the local `data/` back and replaces the published data with it, after a backup.
 
 [Edit files with the CLI](./docs/guides/edit-files-with-the-cli.md) explains each step, and [the CLI reference](./docs/cli.md) covers `sql`, `events`, `contract` and `conform`. `bun link` in this repository puts `konae` on your path.
 
