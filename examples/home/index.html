@@ -11,8 +11,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="home.css?v=2">
-<script type="module" src="home.js?v=2"></script>
+<link rel="stylesheet" href="home.css?v=3">
+<script type="module" src="home.js?v=4"></script>
 </head>
 <body>
 <a class="ui-skip" href="#main">Skip to content</a>
@@ -22,7 +22,8 @@
     <a href="p/docs/" data-link="docs" data-t="nav.docs">Docs</a>
     <a class="gh" href="https://github.com/danibram/konae"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.33.66.07-.52.28-.87.5-1.07-1.77-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"/></svg>GitHub</a>
     <button class="lang" type="button" data-lang hidden>Español</button>
-    <a class="ui-button ui-button-sm wide-only bar-cta" href="p/docs/" data-link="editor" data-t="cta.editor">Open the editor</a>
+    <a class="wide-only" href="p/docs/" data-link="editor" data-t="cta.signin">Sign in</a>
+    <a class="ui-button ui-button-sm wide-only bar-cta" href="p/invitation/" data-link="invite" data-t="cta.invite">Request an invitation</a>
   </nav>
 </header>
 
@@ -34,11 +35,11 @@
       <p class="ui-lede hero-lede" data-t="hero.lede">Konae turns a description into a working web app with its own database, sign-in, files and address. An assistant writes it, or you write the code yourself. Any app can leave for another server with its accounts and its data.</p>
       <p class="hero-for" data-t="hero.for">For things like a club's sign-up sheet, a shop's stock list or a team's room booking.</p>
       <div class="ui-actions hero-actions">
-        <a class="ui-button ui-button-primary" href="p/docs/" data-link="editor" data-t="cta.editor">Open the editor</a>
-        <a class="ui-button" href="p/docs/guides/first-app-from-the-editor" data-link="first-app" data-t="cta.first">See how a first app is made</a>
-        <a class="more" href="https://github.com/danibram/konae" data-t="cta.source">Source on GitHub</a>
+        <a class="ui-button ui-button-primary" href="p/invitation/" data-link="invite" data-t="cta.invite">Request an invitation</a>
+        <a class="ui-button" href="#developers" data-t="cta.self">Run it on your server</a>
+        <a class="more" href="p/docs/" data-link="editor" data-t="cta.have">I have an account</a>
       </div>
-      <p class="need-line" data-t="hero.need">You need an invitation code and an AI key. <a href="#how-to-start">How to start</a></p>
+      <p class="need-line" data-t="hero.need">Making apps on this site is by invitation, and the assistant runs on your own AI key. <a href="#how-to-start">How to start</a></p>
       <ul class="trust" role="list">
         <li data-t="trust.mit">Open source under the MIT licence</li>
         <li data-t="trust.host">Runs on your own server with Docker</li>
@@ -57,7 +58,7 @@
         <button class="ui-button ui-button-sm replay" type="button" data-move hidden>Move to apps.example.net</button>
       </div>
       <div class="server" data-slot="0">
-        <div class="server-bar"><span class="server-label" data-t="stage.this">This site</span><span class="server-name">konae.example.com</span></div>
+        <div class="server-bar"><span class="server-label" data-t="stage.this">This site</span><span class="server-name" data-host="0">konae.example.com</span></div>
         <div class="slot">
           <div class="app" data-app>
             <div class="app-bar"><span class="dot" aria-hidden="true"></span><span class="app-url" data-url>football.konae.example.com</span></div>
@@ -73,7 +74,7 @@
       </div>
       <div class="package" aria-hidden="true"><span class="package-chip" data-package>Package: accounts, data, files, rules</span></div>
       <div class="server" data-slot="1">
-        <div class="server-bar"><span class="server-label" data-t="stage.other">Another server running Konae</span><span class="server-name">apps.example.net</span></div>
+        <div class="server-bar"><span class="server-label" data-t="stage.other">Another server running Konae</span><span class="server-name" data-host="1">apps.example.net</span></div>
         <div class="slot"><p class="slot-empty" aria-hidden="true">Nothing here yet</p></div>
       </div>
       <p class="sr-only" aria-live="polite" data-announce></p>
@@ -233,12 +234,13 @@ bun run konae -- publish --dir app</pre></figure>
         <div><p data-t="start.lede">Three steps, and the first two you do once.</p></div>
       </div>
       <ol class="ui-list ui-steps start-steps" role="list">
-        <li class="ui-list-item" data-reveal><span class="ui-list-lead" aria-hidden="true">1</span><div class="ui-list-main"><p data-t="start.1.t">Get an invitation code</p><small data-t="start.1.p">Ask the person who sent you this link, or whoever runs this site. You use it once, to create your account. Without one you can still read the <a href="p/docs/" data-link="docs">docs</a> or <a href="#developers">run your own installation</a>.</small></div></li>
+        <li class="ui-list-item" data-reveal><span class="ui-list-lead" aria-hidden="true">1</span><div class="ui-list-main"><p data-t="start.1.t">Get an invitation code</p><small data-t="start.1.p"><a href="p/invitation/" data-link="invite">Request one with your email</a>, and whoever runs this site sends it to you. You use it once, to create your account. Without one you can still read the <a href="p/docs/" data-link="docs">docs</a> or <a href="#developers">run your own installation</a>.</small></div></li>
         <li class="ui-list-item" data-reveal><span class="ui-list-lead" aria-hidden="true">2</span><div class="ui-list-main"><p data-t="start.2.t">Get an AI key</p><small data-t="start.2.p">The assistant runs on your own account with <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic</a>, <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">OpenAI</a> or <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a>, which bills you for what it uses. Paste the key in the editor's settings. It stays in your browser.</small></div></li>
         <li class="ui-list-item" data-reveal><span class="ui-list-lead" aria-hidden="true">3</span><div class="ui-list-main"><p data-t="start.3.t">Describe the app, then publish it</p><small data-t="start.3.p">Say what it is for and who uses it. Ask for changes the same way. It gets its own address, and you decide who may open it.</small></div></li>
       </ol>
       <div class="ui-actions start-actions" data-reveal>
-        <a class="ui-button ui-button-primary" href="p/docs/" data-link="editor" data-t="cta.editor">Open the editor</a>
+        <a class="ui-button ui-button-primary" href="p/invitation/" data-link="invite" data-t="cta.invite">Request an invitation</a>
+        <a class="ui-button" href="p/docs/" data-link="editor" data-t="cta.editor">Open the editor</a>
         <a class="ui-button" href="https://github.com/danibram/konae" data-t="cta.star">Star it on GitHub</a>
         <a class="more" href="p/docs/guides/first-app-from-the-editor" data-link="first-app" data-t="cta.guide">Read the first-app guide</a>
       </div>
@@ -247,7 +249,7 @@ bun run konae -- publish --dir app</pre></figure>
 </main>
 
 <footer class="foot ui-page ui-page-wide">
-  <nav class="foot-links" aria-label="Footer" data-t-label="nav.footer"><a href="p/docs/" data-link="docs" data-t="nav.docs">Docs</a><a href="https://github.com/danibram/konae">GitHub</a><a href="p/docs/llms.txt" data-link="llms">llms.txt</a></nav>
+  <nav class="foot-links" aria-label="Footer" data-t-label="nav.footer"><a href="p/docs/" data-link="docs" data-t="nav.docs">Docs</a><a href="https://github.com/danibram/konae">GitHub</a><a href="p/docs/llms.txt" data-link="llms">llms.txt</a><a href="p/politica-de-privacidad/" data-link="privacy" data-legal hidden data-t="nav.privacy">Privacy policy</a><a href="p/terminos-y-condiciones/" data-link="terms" data-legal hidden data-t="nav.terms">Terms</a></nav>
   <p data-t="foot">Each installation publishes its own home the same way it publishes any app, and <strong>this page is itself a Konae app</strong>. Konae is open source under the <a href="https://github.com/danibram/konae/blob/main/LICENSE">MIT licence</a>.</p>
 </footer>
 </body>

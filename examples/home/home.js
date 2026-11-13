@@ -27,6 +27,9 @@ const links = {
   operate: docs("operate"),
   "mcp-guide": docs("mcp-guide"),
   pieces: docs("pieces"),
+  invite: at(domain, "/p/invitation/"),
+  privacy: at(domain, "/p/politica-de-privacidad/"),
+  terms: at(domain, "/p/terminos-y-condiciones/"),
   examples: docs("examples"),
 };
 const point = () => {
@@ -201,8 +204,11 @@ if (stage) {
   const typed = stage.querySelector("[data-typed]");
   const status = stage.querySelector("[data-status]");
   const prompts = { en: typed.textContent, es: es["stage.prompt"] };
-  const hosts = ["konae.example.com", "apps.example.net"];
-  const addresses = ["football.konae.example.com", "football.apps.example.net"];
+  // The first server is this installation, under its real name. The second
+  // has a made-up name in the visitor's language.
+  const names0 = stage.querySelectorAll("[data-host]");
+  const here = domain === "localhost" || /^[\d.]+$/.test(domain) ? "konae.example.com" : domain;
+  const hosts = () => [here, w.otherHost];
   const places = 14;
   let names = [];
   let at = 0;
@@ -232,6 +238,8 @@ if (stage) {
     const latest = rest[rest.length - 1];
     const between = rest[rest.length - 2];
     typed.textContent = prompts[lang].slice(0, letters);
+    for (const [i, name] of [...names0].entries()) name.textContent = hosts()[i];
+    url.textContent = `football.${hosts()[at]}`;
     status.textContent = phase ? w[phase] : "";
     who.textContent = short(first ?? "Dana");
     row.classList.toggle("in", Boolean(first));
@@ -249,14 +257,14 @@ if (stage) {
     meter.style.width = `${(total() / places) * 100}%`;
     chip.textContent = arrived ? w.arrived : w.package;
     for (const [i, slot] of slots.entries()) slot.querySelector(".slot-empty").textContent = visited.has(i) ? w.emptyNow : w.emptyYet;
-    mover.textContent = moving ? w.moving : w.moveTo(hosts[1 - at]);
+    mover.textContent = moving ? w.moving : w.moveTo(hosts()[1 - at]);
     if (busy) mover.setAttribute("aria-disabled", "true"); else mover.removeAttribute("aria-disabled");
     add.textContent = full ? w.startOver : w.add;
   };
   const place = (index) => {
     at = index;
     slots[index].prepend(app);
-    url.textContent = addresses[index];
+    url.textContent = `football.${hosts()[index]}`;
     for (const [i, slot] of slots.entries()) slot.classList.toggle("empty", i !== index);
     visited.add(index);
     stage.classList.toggle("moved", index === 1);
@@ -313,7 +321,7 @@ if (stage) {
     arrived = true;
     stage.classList.add("arrived");
     if (names.length) { rowState = "still"; newestState = "still"; }
-    announce.textContent = w.saidMoved(hosts[next], names);
+    announce.textContent = w.saidMoved(hosts()[next], names);
     busy = false;
     moving = false;
     render();
@@ -326,7 +334,7 @@ if (stage) {
     rowState = "joined";
     newestState = "joined";
     render();
-    announce.textContent = w.saidJoined(name, hosts[at]);
+    announce.textContent = w.saidJoined(name, hosts()[at]);
   };
   // The description types itself, then the app appears where it was hidden.
   const describe = async () => {
@@ -364,7 +372,7 @@ if (stage) {
       stage.classList.remove("arrived");
       field.value = "";
       render();
-      announce.textContent = w.saidReset;
+      announce.textContent = w.saidReset(here);
       field.focus();
       return;
     }
@@ -420,6 +428,12 @@ const heroCta = document.querySelector(".hero-actions");
 const barCta = document.querySelector(".bar-cta");
 if (heroCta && barCta && "IntersectionObserver" in window) {
   new IntersectionObserver((entries) => barCta.classList.toggle("quiet", entries.some((entry) => entry.isIntersecting))).observe(heroCta);
+}
+
+// The privacy and terms links show only where the installation has those
+// pages. The check needs the same origin, so it is skipped on the app's own hostname.
+if (!ownHostname) for (const element of document.querySelectorAll("[data-legal]")) {
+  fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
 }
 
 speak();
