@@ -1432,6 +1432,145 @@ mod tests {
         }
     }
 
+    async fn fake_s3_client() -> S3Client {
+        let credentials = aws_credential_types::Credentials::new("konae", "konae-secret", None, None, "copies-test");
+        let config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .credentials_provider(credentials)
+            .endpoint_url(crate::file_store::tests::fake_s3().await)
+            .force_path_style(true)
+            .request_checksum_calculation(aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired)
+            .response_checksum_validation(aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired)
+            .build();
+        S3Client::from_conf(config)
+    }
+
+    const TEST_SECRET: &str = "a copy secret that is long enough for tests";
+
+    fn s3_source(client: &S3Client) -> Source {
+        Source::S3 { client: client.clone(), bucket: "data".into(), prefix: "copies/".into() }
+    }
+
+    fn s3_target() -> Target {
+        Target::S3 { prefix: "copies/".into() }
+    }
+
+    /// Puts a plain copy folder in the bucket as it is, the way someone who
+    /// can write to the bucket but does not hold the secret would.
+    async fn upload_plain(client: &S3Client, copy: &Path, id: &str) {
+        let mut paths = list_files(copy).unwrap().into_iter().map(|file| file.path).collect::<Vec<_>>();
+        paths.push(MANIFEST.into());
+        for path in paths {
+            let body = ByteStream::from(std::fs::read(copy.join(&path)).unwrap());
+            client.put_object().bucket("data").key(format!("copies/{id}/{path}")).body(body).send().await.unwrap();
+        }
+    }
+
+    /// What a Kernel sends to S3: the writer's own function, sealed when a key is given.
+    async fn send_genuine(client: &S3Client, copy: &Path, id: &str, key: Option<&CopyKey>) {
+        let manifest: Manifest = serde_json::from_slice(&std::fs::read(copy.join(MANIFEST)).unwrap()).unwrap();
+        send_to_s3(client, "data", "copies/", copy, &manifest, id, key).await.unwrap();
+        recovery::start(&s3_target(), Some(client), "data").await.unwrap();
+    }
+
+    async fn plain_copy(label: &str) -> (PathBuf, PathBuf, String, Deployment) {
+        let (source, copies) = (scratch(&format!("{label}-source")), scratch(&format!("{label}-copies")));
+        let (deployment, _) = seed(&source);
+        let id = run_copy(&state(&source), &[Target::Directory(copies.clone())]).await.unwrap();
+        (source, copies, id, deployment)
+    }
+
+    #[tokio::test]
+    async fn a_planted_plain_copy_is_refused_when_a_secret_is_set() {
+        let (source, copies, id, _) = plain_copy("planted").await;
+        let client = fake_s3_client().await;
+        // Plain files, a manifest with no encryption and checksums that match.
+        upload_plain(&client, &copies.join(&id), &id).await;
+        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
+        let key = CopyKey::derive(TEST_SECRET);
+        let restored = scratch("planted-restored");
+        let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
+        assert!(refused.contains("is not encrypted") && refused.contains("KONAE_COPY_SECRET") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0, "a refused restore installs nothing");
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sealed_copy_with_an_entry_removed_from_its_manifest_is_refused() {
+        let (source, copies, id, deployment) = plain_copy("trimmed").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let sealed_manifest_bytes = read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap();
+        let mut manifest: Manifest = serde_json::from_slice(&sealed_manifest_bytes).unwrap();
+        let artifact = format!("apps/{}/dist/index.html", deployment.id);
+        let before = manifest.files.len();
+        manifest.files.retain(|file| file.path != artifact);
+        assert_eq!(manifest.files.len() + 1, before, "the artifact was listed");
+        client.put_object().bucket("data").key(format!("copies/{id}/{MANIFEST}")).body(ByteStream::from(serde_json::to_vec_pretty(&manifest).unwrap())).send().await.unwrap();
+        let restored = scratch("trimmed-restored");
+        let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("an altered manifest is refused").to_string();
+        assert!(refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0);
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_forged_revocation_entry_does_not_suspend_an_account_when_a_secret_is_set() {
+        let (source, copies, id, deployment) = plain_copy("forged").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let identity = crate::layout::identity(&source, &deployment.id);
+        let user: String = Connection::open(&identity).unwrap().query_row("SELECT id FROM app_users", [], |r| r.get(0)).unwrap();
+        // Written by someone who can write to the bucket and holds no secret.
+        let forged = recovery::Entry::new("app-user", Some(&deployment.id), &user, "suspended");
+        let name = format!("copies/{}/0000000000001-forged.json", recovery::LEDGER_DIR);
+        client.put_object().bucket("data").key(name).body(ByteStream::from(serde_json::to_vec(&forged).unwrap())).send().await.unwrap();
+        let restored = scratch("forged-restored");
+        let summary = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.unwrap();
+        assert!(summary.reconciled.is_err(), "an entry without a valid MAC makes the record unreadable: {:?}", summary.reconciled);
+        assert!(recovery::hold(&restored).is_some(), "the installation holds");
+        let state: String = Connection::open(crate::layout::identity(&restored, &deployment.id)).unwrap().query_row("SELECT state FROM app_users", [], |r| r.get(0)).unwrap();
+        assert_ne!(state, "suspended", "the forged entry changed nothing");
+        for path in [source, copies, restored] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn copies_made_with_a_secret_and_without_one_restore_as_before() {
+        let (source, copies, id, deployment) = plain_copy("pairs").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        let stores = crate::installation::Installation::for_test();
+        let verify = |root: &Path| assert_eq!(count(&crate::layout::folder(root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let sealed_root = scratch("pairs-sealed");
+        restore(&s3_source(&client), None, &sealed_root, Some(&key), &stores).await.unwrap();
+        verify(&sealed_root);
+
+        let other = fake_s3_client().await;
+        send_genuine(&other, &copies.join(&id), &id, None).await;
+        let open_root = scratch("pairs-open");
+        restore(&s3_source(&other), None, &open_root, None, &stores).await.unwrap();
+        verify(&open_root);
+
+        // The directory target is never sealed, so a secret does not touch it.
+        let directory_root = scratch("pairs-directory");
+        restore(&Source::Directory(copies.clone()), None, &directory_root, Some(&key), &stores).await.unwrap();
+        verify(&directory_root);
+        for path in [source, copies, sealed_root, open_root, directory_root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
     /// A restore brings back the same installation for the same owner, so
     /// API keys stay valid (ADR-0008); an import
     /// into another installation revokes them. The Usage store travels.
