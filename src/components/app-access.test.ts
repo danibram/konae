@@ -141,6 +141,9 @@ describe("invitation state", () => {
     expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "queued" }).tone).toBe("success");
     expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: false, delivery: "queued" }).text).toContain("allowlist does not include this address");
     expect(invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "failed" }).text).toContain("Resend");
+    const local = invitationResultMessage({ email: "a@x.test", status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "local-mailbox", acceptUrl: "https://notes.example.test/_konae/invitation#invitation=t" });
+    expect(local.tone).toBe("success");
+    expect(local.text).toContain("https://notes.example.test/_konae/invitation#invitation=t");
     expect(invitationResultMessage({ email: "a@x.test", status: "already-member" }).text).toBe("Already has an active app account.");
     expect(invitationResultMessage({ email: "a@x.test", status: "suspended" }).text).toContain("Resume");
     expect(invitationResultMessage({ email: "nope", status: "invalid-email" }).tone).toBe("danger");

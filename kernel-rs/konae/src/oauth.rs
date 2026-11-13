@@ -251,6 +251,12 @@ fn authorization(
     Ok(client)
 }
 
+/// Where an owner signs in on this installation: the editor's page when
+/// Clerk holds owner identity, Konae's own page otherwise.
+pub(super) fn owner_login_path() -> &'static str {
+    if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" }
+}
+
 async fn authorize_page(
     State(state): State<Konae>,
     headers: HeaderMap,
@@ -273,7 +279,7 @@ async fn authorize_page(
             let query = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("returnTo", &target)
                 .finish();
-            let login = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" };
+            let login = owner_login_path();
             return (
                 StatusCode::SEE_OTHER,
                 [(header::LOCATION, format!("{login}?{query}"))],
