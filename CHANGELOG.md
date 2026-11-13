@@ -6,6 +6,8 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-13
+
 ### Added
 
 - `KONAE_S3_BUCKET` names one private bucket for the installation. File bytes go under `files/`, and with `KONAE_COPY_S3=1` copies and the revocation record go under `copies/`, all with the `KONAE_S3_*` key pair. The older `KONAE_FILES_S3_*`, `KONAE_DATA_BUCKET` and `KONAE_COPY_S3_PREFIX` settings keep working, and the Kernel refuses to start with both.
