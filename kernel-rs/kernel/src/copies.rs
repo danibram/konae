@@ -1022,6 +1022,81 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
+/// Reads and parses a copy's manifest.
+async fn read_manifest(source: &Source, copy: &str) -> Result<Manifest> {
+    let manifest_bytes = source
+        .read(copy, MANIFEST)
+        .await
+        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
+    ensure!(manifest.version == 1, "The copy's manifest version is not supported.");
+    Ok(manifest)
+}
+
+fn not_encrypted(copy: &str) -> String {
+    format!("Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set, and a copy this installation sends to S3 with the secret is always encrypted.")
+}
+
+/// Checks an encrypted copy's manifest against the secret. Returns true when
+/// the manifest carries no MAC and `accept_unsigned` let it pass.
+fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>, accept_unsigned: bool) -> Result<bool> {
+    let Some(encryption) = &manifest.encryption else {
+        return Ok(false);
+    };
+    ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
+    let key = key.with_context(|| {
+        format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
+    })?;
+    ensure!(
+        key.check == encryption.key_check,
+        "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
+    );
+    match &manifest.mac {
+        Some(mac) => {
+            ensure!(
+                key.verify_manifest(copy, manifest, mac),
+                "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
+            );
+            Ok(false)
+        }
+        None if accept_unsigned => Ok(true),
+        None => bail!(
+            "Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to restore it anyway. Nothing was installed."
+        ),
+    }
+}
+
+/// The newest copy on S3 whose manifest is encrypted and signed under the
+/// secret. Each copy passed over is named with its reason, so a planted copy
+/// is seen and does not hide the genuine ones.
+async fn newest_authentic_copy(source: &Source, key: &CopyKey, accept_unsigned: bool) -> Result<String> {
+    let copies = source.complete_copies().await?;
+    ensure!(!copies.is_empty(), "No complete copy found. A complete copy has a manifest.json.");
+    let mut skipped = 0;
+    let mut newest_reason = String::new();
+    for copy in copies.iter().rev() {
+        let verdict = match read_manifest(source, copy).await {
+            Ok(manifest) if manifest.encryption.is_none() => Err(not_encrypted(copy)),
+            Ok(manifest) => check_sealed(copy, &manifest, Some(key), accept_unsigned).map(|_| ()).map_err(|error| error.to_string()),
+            Err(error) => Err(error.to_string()),
+        };
+        match verdict {
+            Ok(()) => return Ok(copy.clone()),
+            Err(reason) => {
+                let reason = reason.trim_end_matches(" Nothing was installed.").to_owned();
+                println!("Skipped copy {copy}: {reason}");
+                if skipped == 0 {
+                    newest_reason = reason;
+                }
+                skipped += 1;
+            }
+        }
+    }
+    bail!(
+        "No copy in the source could be authenticated, {skipped} skipped. The newest: {newest_reason} While KONAE_COPY_SECRET is set, only a copy encrypted and signed with it is restored, and a copy that is not encrypted never is. Nothing was installed."
+    )
+}
+
 /// `accept_unsigned` is `KONAE_COPY_ACCEPT_UNSIGNED`, read once by the caller.
 async fn restore(
     source: &Source,
@@ -1041,6 +1116,10 @@ async fn restore(
             (&direct, name.to_owned())
         }
         (source, Some(copy)) => (source, copy.to_owned()),
+        (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
+            let key = key.expect("checked by the guard");
+            (source, newest_authentic_copy(source, key, accept_unsigned).await?)
+        }
         (source, None) => {
             let latest = source.complete_copies().await?.pop();
             (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
@@ -1050,39 +1129,17 @@ async fn restore(
         !copy.is_empty() && !copy.contains('/') && copy != "." && copy != "..",
         "The copy ID is invalid."
     );
-    let manifest_bytes = source
-        .read(&copy, MANIFEST)
-        .await
-        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
-    ensure!(manifest.version == 1, "The copy's manifest version is not supported.");
+    let manifest = read_manifest(source, &copy).await?;
     // Copies on S3 are sealed whenever a secret is set. A plain manifest there
     // is not one this installation made, so the secret is not set aside for it.
     ensure!(
         !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
-        "Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set. Unset it to restore a copy made without it. Nothing was installed."
+        "{} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.",
+        not_encrypted(&copy),
+        crate::program()
     );
-    if let Some(encryption) = &manifest.encryption {
-        ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
-        let key = key.with_context(|| {
-            format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
-        })?;
-        ensure!(
-            key.check == encryption.key_check,
-            "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
-        );
-        match &manifest.mac {
-            Some(mac) => ensure!(
-                key.verify_manifest(&copy, &manifest, mac),
-                "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
-            ),
-            None if accept_unsigned => {
-                println!("KONAE_COPY_ACCEPT_UNSIGNED is set: restoring copy {copy} without checking its manifest, which carries no MAC.")
-            }
-            None => bail!(
-                "Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to restore it anyway. Nothing was installed."
-            ),
-        }
+    if check_sealed(&copy, &manifest, key, accept_unsigned)? {
+        println!("KONAE_COPY_ACCEPT_UNSIGNED is set: restoring copy {copy} without checking its manifest, which carries no MAC.");
     }
     for file in &manifest.files {
         let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
