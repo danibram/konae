@@ -112,11 +112,11 @@ function AccountUsage({ apps }: { apps: UsageApp[] }) {
         const hasOutcomes = value.metrics.some((m) => m.feature === "execution");
         return <tr key={app.projectId}><th scope="row">{app.name}<small><a href={value.url} target="_blank" rel="noopener">{new URL(value.url).hostname}</a></small></th>
           <td data-label="Page views">{number.format(kindTotal(value, "page_view"))}</td>
-          <td data-label="Active accounts">{value.accounts ? number.format(value.accounts.active) : "Not reported"}</td>
+          <td data-label="Active accounts">{number.format(value.accounts.active)}</td>
           <td data-label="Operations">{value.usage.days.length || hasOutcomes ? number.format(usageActivity(value)) : "No data yet"}</td>
           <td data-label="Results">{hasOutcomes ? <span className="usage-overview-results"><span>{number.format(outcomes.ok ?? 0)} correct</span><span>{number.format(outcomes.refused ?? 0)} refused</span><span className={(outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}>{number.format(outcomes.failed ?? 0)} failed</span>{(outcomes.unchanged ?? 0) > 0 && <span>{number.format(outcomes.unchanged)} no changes</span>}</span> : "No outcomes yet"}</td>
           <td data-label="Active features"><span>{features.length ? features.flatMap((f, i) => i ? [", ", f] : [f]) : "No recorded activity"}</span></td>
-          <td data-label="Latest day">{latest ?? "No data"}</td><td data-label="Storage">{value.storage ? formatBytes(value.storage.total) : "Not reported"}</td><td data-label="Detail"><a href={`/usage?deployment=${encodeURIComponent(value.deploymentId)}`} aria-label={`View usage for ${app.name}`}>View usage <ArrowUpRight size={13} /></a></td></tr>;
+          <td data-label="Latest day">{latest ?? "No data"}</td><td data-label="Storage">{formatBytes(value.storage.total)}</td><td data-label="Detail"><a href={`/usage?deployment=${encodeURIComponent(value.deploymentId)}`} aria-label={`View usage for ${app.name}`}>View usage <ArrowUpRight size={13} /></a></td></tr>;
       })}</tbody></table></div>
     <p className="usage-note">Recorded operations count successful action calls, HTTP requests, scheduled attempts and queued service calls. Results cover instrumented executions only and may cover less history than operations. Authentication and file activity appear in the feature detail. Active accounts count signed-in app accounts, each app on its own, so one person with accounts in two apps counts in both. Storage is what each app takes now, whatever the period.</p>
   </section></>;
@@ -126,12 +126,11 @@ function AccountUsage({ apps }: { apps: UsageApp[] }) {
 function OverviewCharts({ apps }: { apps: UsageApp[] }) {
   const published = apps.flatMap((app) => app.summary ? [{ app, summary: app.summary }] : []);
   if (!published.length) return null;
-  const stored = published.filter(({ summary }) => summary.storage);
   const tiles = [
     ["Published apps", number.format(published.length)],
     ["Page views", number.format(published.reduce((sum, { summary }) => sum + kindTotal(summary, "page_view"), 0))],
-    ["Active accounts", number.format(published.reduce((sum, { summary }) => sum + (summary.accounts?.active ?? 0), 0))],
-    ["Storage now", stored.length ? formatBytes(stored.reduce((sum, { summary }) => sum + summary.storage!.total, 0)) : "Not reported"],
+    ["Active accounts", number.format(published.reduce((sum, { summary }) => sum + summary.accounts.active, 0))],
+    ["Storage now", formatBytes(published.reduce((sum, { summary }) => sum + summary.storage.total, 0))],
   ] as const;
   return <section aria-labelledby="usage-overview-heading"><h2 id="usage-overview-heading">All apps</h2>
     <dl className="ui-stats">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
@@ -140,8 +139,8 @@ function OverviewCharts({ apps }: { apps: UsageApp[] }) {
         rows={published.map(({ app, summary }) => ({ key: app.projectId, label: <a href={`/usage?deployment=${encodeURIComponent(summary.deploymentId)}`}>{app.name}</a>, value: usageActivity(summary), detail: `${number.format(kindTotal(summary, "page_view"))} page views` }))}
         empty="No app recorded an operation in this period." /></div>
       <div className="usage-chart-card"><BarList title="Storage by app" unit="bytes" labelHeading="App" format={formatBytes}
-        rows={stored.map(({ app, summary }) => ({ key: app.projectId, label: <a href={`/usage?deployment=${encodeURIComponent(summary.deploymentId)}`}>{app.name}</a>, value: summary.storage!.total, detail: `${number.format(summary.storage!.files)} uploaded ${summary.storage!.files === 1 ? "file" : "files"}` }))}
-        empty={stored.length ? "No app stores anything yet." : "These apps run on a Kernel that does not report storage."} /></div>
+        rows={published.map(({ app, summary }) => ({ key: app.projectId, label: <a href={`/usage?deployment=${encodeURIComponent(summary.deploymentId)}`}>{app.name}</a>, value: summary.storage.total, detail: `${number.format(summary.storage.files)} uploaded ${summary.storage.files === 1 ? "file" : "files"}` }))}
+        empty="No app stores anything yet." /></div>
     </div>
   </section>;
 }
@@ -208,7 +207,6 @@ function People({ summary }: { summary: UsageSummary }) {
   const [sort, setSort] = useState<"actions" | "opens">("actions");
   const accounts = summary.accounts;
   const heading = <h2 id="usage-people-heading">People</h2>;
-  if (!accounts) return <section aria-labelledby="usage-people-heading">{heading}<p>This app's Kernel does not count activity per account. Whoever runs this installation can update its Kernel to collect it.</p></section>;
   const days = dailyActiveAccounts(summary);
   const name = (row: { email: string | null; account: string }) => row.email ?? `Account removed (${row.account.slice(0, 8)})`;
   const tiles = [["Active accounts", accounts.active], ["App opens", accounts.opens], ["Actions", accounts.actions]] as const;
@@ -237,7 +235,6 @@ function People({ summary }: { summary: UsageSummary }) {
 function Storage({ summary }: { summary: UsageSummary }) {
   const storage = summary.storage;
   const heading = <h2 id="usage-storage-heading">Storage</h2>;
-  if (!storage) return <section aria-labelledby="usage-storage-heading">{heading}<p>This app's Kernel does not report storage. Whoever runs this installation can update its Kernel to report it.</p></section>;
   const rows = storageRows(storage);
   const backups = storage.parts.find((part) => part.part === "backups");
   return <section aria-labelledby="usage-storage-heading">{heading}

@@ -16,7 +16,7 @@ const s3Env = {
   KONAE_S3_ENDPOINT: s3Endpoint,
   KONAE_S3_ACCESS_KEY: process.env.KONAE_TEST_S3_ACCESS_KEY ?? "konae",
   KONAE_S3_SECRET_KEY: process.env.KONAE_TEST_S3_SECRET_KEY ?? "konae-secret",
-  KONAE_DATA_BUCKET: s3Bucket,
+  KONAE_S3_BUCKET: s3Bucket,
 };
 const minio = await fetch(`${s3Endpoint}/minio/health/live`, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok, () => false);
 if (!minio) console.warn(`MinIO is not reachable at ${s3Endpoint}; the S3 copy target test is skipped.`);
@@ -49,8 +49,8 @@ async function stop(child: ReturnType<typeof Bun.spawn>) {
   await child.exited;
 }
 
-async function restore(from: string, root: string, extra: Record<string, string> = {}) {
-  const child = Bun.spawn([binary, "restore", "--from", from], { env: kernelEnv(root, extra), stdout: "pipe", stderr: "pipe" });
+async function restore(from: string, root: string, extra: Record<string, string> = {}, copy?: string) {
+  const child = Bun.spawn([binary, "restore", "--from", from, ...(copy ? ["--copy", copy] : [])], { env: kernelEnv(root, extra), stdout: "pipe", stderr: "pipe" });
   const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { status, output: stdout + stderr };
 }
@@ -86,7 +86,7 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     const payload = { project: { id: "copy_proof", name: "Copy proof", slug: "copy-proof", manifest: { version: 1, visibility: "public" }, files: project }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Copied app</main>" } } };
     const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(payload)), "copy_proof");
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
-    const { hostname } = await owner.call<{ hostname: string }>("release_apply", { planId: plan.planId });
+    const { id, hostname } = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     await owner.cancel(transfer.transferId);
 
     const cookie = await sign(url, "/_konae/auth/signup", { email: "writer@copy.test", password }, hostname);
@@ -106,7 +106,7 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     }
     expect(copies!.alert).toBeNull();
     expect(copies!.targets.every((target) => target.lastAttemptAt! > written && target.lastSuccessAt! >= target.lastAttemptAt!)).toBe(true);
-    return { hostname, cookie, fileId: file.id };
+    return { id, hostname, cookie, fileId: file.id };
   } finally {
     await stop(child);
   }
@@ -153,22 +153,51 @@ describe("copies off the volume", () => {
     }
   }, 120_000);
 
-  // Needs the data bucket to exist, as `docker compose up minio minio-init` creates it.
+  // Needs the bucket to exist, as `docker compose up minio minio-init` creates it.
+  // Copies go under copies/ and file bytes under files/ in that one bucket,
+  // which other Kernels may share, so the test restores the copy that holds
+  // its own Deployment by ID and removes only that copy and its files.
   test.skipIf(!minio)("an S3 copy restores into an empty data directory and serves the same app", async () => {
     const scratch = await mkdtemp(path.join(tmpdir(), "konae-copy-s3-"));
-    const prefix = `copy-test-${crypto.randomUUID()}/`;
+    const bucket = new Bun.S3Client({ endpoint: s3Endpoint, bucket: s3Bucket, accessKeyId: s3Env.KONAE_S3_ACCESS_KEY, secretAccessKey: s3Env.KONAE_S3_SECRET_KEY });
+    const keys = async (prefix: string) => {
+      const found: string[] = [];
+      let continuationToken: string | undefined;
+      do {
+        const page = await bucket.list({ prefix, continuationToken });
+        found.push(...(page.contents ?? []).map((object) => object.key));
+        continuationToken = page.isTruncated ? page.nextContinuationToken : undefined;
+      } while (continuationToken);
+      return found;
+    };
+    /** IDs of the copies whose manifest names the Deployment's folder. */
+    const copiesOf = async (deployment: string) => {
+      const ids: string[] = [];
+      for (const key of (await keys("copies/")).filter((key) => /^copies\/[^/]+\/manifest\.json$/.test(key))) {
+        const manifest = await bucket.file(key).json().catch(() => undefined) as { files?: { path: string }[] } | undefined;
+        if (manifest?.files?.some((file) => file.path.startsWith(`apps/${deployment}/`))) ids.push(key.split("/")[1]);
+      }
+      return ids.sort();
+    };
+    let deployment: string | undefined;
     try {
-      const app = await publishAndCopy(path.join(scratch, "source"), { ...s3Env, KONAE_COPY_S3_PREFIX: prefix });
+      const app = await publishAndCopy(path.join(scratch, "source"), { ...s3Env, KONAE_COPY_S3: "1" });
+      deployment = app.id;
+      const copy = (await copiesOf(deployment)).at(-1);
+      expect(copy).toBeDefined();
+      expect((await keys(`files/${deployment}/`)).length).toBeGreaterThan(0);
       const restored = path.join(scratch, "restored");
-      const first = await restore(`s3://${s3Bucket}/${prefix}`, restored, s3Env);
+      const first = await restore(`s3://${s3Bucket}/copies/`, restored, s3Env, copy);
       expect(first.output).toContain("checksums verified");
       expect(first.status).toBe(0);
       await expectSameApp(restored, app);
     } finally {
       await rm(scratch, { recursive: true, force: true });
-      const bucket = new Bun.S3Client({ endpoint: s3Endpoint, bucket: s3Bucket, accessKeyId: s3Env.KONAE_S3_ACCESS_KEY, secretAccessKey: s3Env.KONAE_S3_SECRET_KEY });
-      const listed = await bucket.list({ prefix }).catch(() => undefined);
-      await Promise.all((listed?.contents ?? []).map((object) => bucket.delete(object.key)));
+      if (deployment) {
+        const copies = await copiesOf(deployment).catch(() => [] as string[]);
+        const added = [...(await Promise.all(copies.map((copy) => keys(`copies/${copy}/`)))).flat(), ...await keys(`files/${deployment}/`).catch(() => [] as string[])];
+        await Promise.all(added.map((key) => bucket.delete(key)));
+      }
     }
   }, 120_000);
 });

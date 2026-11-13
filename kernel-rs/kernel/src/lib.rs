@@ -61,7 +61,6 @@ pub mod schedule;
 pub mod schema_change;
 pub mod security;
 pub mod sources;
-pub mod storage_migration;
 pub mod sql_rules;
 pub mod transfers;
 #[cfg(test)]
@@ -516,7 +515,6 @@ fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::resul
 pub async fn operator_command(installation: &installation::Installation) -> Result<bool> {
     Ok(copies::operator_command(installation).await?
         || file_store::operator_command().await?
-        || storage_migration::operator_command().await?
         || recovery::operator_command(installation).await?)
 }
 

@@ -10,6 +10,8 @@ const summary = (totals: { kind: string; name: string; count: number }[]): Usage
   deploymentId: "d", projectId: "p", projectName: "Form", url: "http://form.localhost", updatedAt: 0,
   usage: { from: "2026-11-01", to: "2026-11-08", days: totals.map((t) => ({ ...t, day: "2026-11-08" })), totals },
   metrics: [], actions: [{ name: "messages.send", kind: "mutation", http: null, signal: null, schedule: null, notify: { to: "owner" } }],
+  accounts: { active: 0, opens: 0, actions: 0, days: [], top: [], limit: 20, startedAt: null },
+  storage: { total: 0, files: 0, parts: [] },
   calls: { states: [], retainedOnly: true }, mail: { states: [], retainedOnly: true },
   coverage: { startedAt: null, earliestMetricDay: null, prunedThrough: null, retentionDays: 400, approximate: true, previewIncluded: false, queueFlushed: true, installationDroppedSinceRestart: 0, installationWriteErrorsSinceRestart: 0 },
 });
@@ -87,7 +89,7 @@ test("storage leaves backups out, ranks the parts and warns near a limit", () =>
   expect(rows.map((row) => [row.part, row.tone])).toEqual([["files", "warning"], ["published", undefined], ["database", undefined]]);
 });
 
-test("active accounts fill every day of the range, and a Kernel without them reads as zero", () => {
+test("active accounts fill every day of the range, and a day without any reads as zero", () => {
   const base = summary([]);
   expect(dailyActiveAccounts(base).every((day) => day.value === 0)).toBe(true);
   const withAccounts = { ...base, accounts: { active: 2, opens: 3, actions: 4, days: [{ day: "2026-11-03", active: 2 }], top: [], limit: 20, startedAt: null } };

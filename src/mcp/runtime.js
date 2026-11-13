@@ -40,12 +40,6 @@
     return result.structuredContent.result;
   }
 
-  function base64(bytes) {
-    let text = '';
-    for (const byte of bytes) text += String.fromCharCode(byte);
-    return btoa(text);
-  }
-
   async function checksum(bytes) {
     return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
   }
@@ -66,15 +60,13 @@
     return base + '/_konae/files/' + encodeURIComponent(fileId(id));
   }
 
-  // Sends the whole file in one request. A Kernel without the path answers
-  // 404, 405 or 410, and the caller then sends 64 KiB blocks over MCP.
+  // Sends the whole file in one request, which completes the transfer.
   async function sendWhole(transferId, bytes) {
     const response = await fetch(base + '/_konae/transfers/' + encodeURIComponent(transferId), {
       method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: bytes,
     });
-    if ([404, 405, 410].includes(response.status)) return false;
     const body = await response.json().catch(() => ({}));
-    if (response.ok && body.result?.complete === true) return true;
+    if (response.ok && body.result?.complete === true) return;
     const error = new Error(typeof body.error === 'string' ? body.error : 'File upload failed.');
     error.status = response.status;
     throw error;
@@ -85,12 +77,7 @@
     const bytes = new Uint8Array(await file.arrayBuffer());
     const transfer = await call('transfer_begin', { size: bytes.length, sha256: await checksum(bytes) });
     try {
-      if (!await sendWhole(transfer.transferId, bytes)) {
-        for (let offset = 0; offset < bytes.length; offset += transfer.chunkBytes) {
-          await call('transfer_write', { transferId: transfer.transferId, offset, data: base64(bytes.subarray(offset, offset + transfer.chunkBytes)) });
-        }
-        await call('transfer_complete', { transferId: transfer.transferId });
-      }
+      await sendWhole(transfer.transferId, bytes);
       const saved = { transferId: transfer.transferId, name: file.name, type: file.type || 'application/octet-stream', visibility: chosen };
       const stored = await call('files_upload', saved);
       return { ...stored, url: fileUrl(stored.id) };

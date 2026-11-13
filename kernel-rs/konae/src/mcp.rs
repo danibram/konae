@@ -842,7 +842,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     }
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":OWNER_INSTRUCTIONS}),
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":env!("CARGO_PKG_VERSION")},"instructions":OWNER_INSTRUCTIONS}),
         ),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools})),

@@ -13,10 +13,8 @@ export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
   usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[] };
   metrics: Metric[]; actions: PublishedAction[];
-  /** Absent from a Kernel older than per-account Usage. */
-  accounts?: UsageAccounts;
-  /** Absent from a Kernel older than storage in Usage. */
-  storage?: UsageStorage;
+  accounts: UsageAccounts;
+  storage: UsageStorage;
   calls: { states: { state: string; count: number }[]; retainedOnly: boolean };
   mail: { states: { state: string; count: number }[]; retainedOnly: boolean };
   coverage: { startedAt: number | null; earliestMetricDay: string | null; prunedThrough: number | null; retentionDays: number; approximate: boolean; previewIncluded: boolean; queueFlushed: boolean; installationDroppedSinceRestart: number; installationWriteErrorsSinceRestart: number };
@@ -183,6 +181,6 @@ export function storageRows(storage: UsageStorage) {
 
 /** Signed-in accounts active each day of the range, zero on a day with none. */
 export function dailyActiveAccounts(summary: UsageSummary) {
-  const byDay = new Map((summary.accounts?.days ?? []).map((row) => [row.day, row.active]));
+  const byDay = new Map((summary.accounts.days).map((row) => [row.day, row.active]));
   return rangeDays(summary.usage.from, summary.usage.to).map((day) => ({ day, value: byDay.get(day) ?? 0 }));
 }

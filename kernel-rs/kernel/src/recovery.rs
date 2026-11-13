@@ -177,7 +177,7 @@ pub async fn record(state: &AppState, entry: Entry) -> Result<()> {
 /// Kernel. Reads the copy settings from the environment.
 pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
-    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3_PREFIX").is_none() && read("KONAE_COPY_S3").is_none() {
+    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3").is_none() {
         return Ok(());
     }
     let run = async {
@@ -226,10 +226,9 @@ pub fn parse(files: &[Vec<u8>]) -> Result<Vec<Entry>> {
         .collect()
 }
 
-/// Checks one S3 entry file against its MAC. Returns how many entries passed
-/// without one because `accept_unsigned` is set. An entry with a MAC that does
-/// not verify is refused either way: only an absent MAC is an old Kernel's.
-pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8], accept_unsigned: bool) -> Result<usize> {
+/// Checks one S3 entry file against its MAC. An entry without a MAC, or with
+/// one that does not verify, is refused.
+pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8]) -> Result<()> {
     let value: Value = serde_json::from_slice(bytes).with_context(|| format!("The revocation record file {name} does not parse."))?;
     let entry: Entry = serde_json::from_value(value.clone()).with_context(|| format!("The revocation record file {name} does not parse."))?;
     match value.get("mac") {
@@ -238,13 +237,10 @@ pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8], accept_unsigned: bo
                 key.verify_entry(name, &entry, mac)?,
                 "The revocation record file {name} has a MAC that does not verify, so it was not written with this KONAE_COPY_SECRET or was altered."
             );
-            Ok(0)
+            Ok(())
         }
         Some(_) => bail!("The revocation record file {name} has a MAC that does not verify, so it was not written with this KONAE_COPY_SECRET or was altered."),
-        None if accept_unsigned => Ok(1),
-        None => bail!(
-            "The revocation record file {name} carries no MAC: an older Kernel wrote it, or someone without KONAE_COPY_SECRET did. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to accept entries an older Kernel wrote."
-        ),
+        None => bail!("The revocation record file {name} carries no MAC, so someone without this KONAE_COPY_SECRET wrote it."),
     }
 }
 
@@ -325,7 +321,7 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
         }
         Some("--from") if args.len() == 3 => {
             let record = match copies::CopyKey::from_env() {
-                Ok(key) => copies::read_record(&args[2], key.as_ref(), copies::accept_unsigned_from_env()).await,
+                Ok(key) => copies::read_record(&args[2], key.as_ref()).await,
                 Err(error_value) => Err(error_value),
             };
             match apply_or_hold(&root, installation, record)? {
@@ -364,9 +360,9 @@ mod tests {
             let files = std::fs::read_dir(root.join(LEDGER_DIR)).unwrap().count();
             assert!(files >= 1);
         }
-        let record = copies::read_record(one.to_str().unwrap(), None, false).await.unwrap().unwrap();
+        let record = copies::read_record(one.to_str().unwrap(), None).await.unwrap().unwrap();
         assert_eq!(parse(&record).unwrap(), vec![entry]);
-        assert!(copies::read_record(two.to_str().unwrap(), None, false).await.unwrap().is_none(), "no started.json means no readable record");
+        assert!(copies::read_record(two.to_str().unwrap(), None).await.unwrap().is_none(), "no started.json means no readable record");
         std::fs::remove_dir_all(one).unwrap();
         std::fs::remove_dir_all(two).unwrap();
     }

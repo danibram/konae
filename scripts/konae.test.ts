@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
@@ -61,6 +61,33 @@ function cli(...args: string[]) {
     stderr: "pipe",
   });
 }
+
+const rootPackage = JSON.parse(await readFile(path.join(import.meta.dir, "../package.json"), "utf8")) as { version: string };
+
+test("the version init writes is the one package.json and kernel-rs/Cargo.toml name", async () => {
+  const cargo = await readFile(path.join(import.meta.dir, "../kernel-rs/Cargo.toml"), "utf8");
+  const workspace = cargo.slice(cargo.indexOf("[workspace.package]"));
+  expect(workspace.match(/^version = "(.*)"$/m)?.[1]).toBe(rootPackage.version);
+});
+
+test("a folder init wrote builds without npm install, with the built-in bundler", async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), "konae-fresh-"));
+  try {
+    const run = (...args: string[]) => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), ...args], {
+      cwd: folder, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))) as Record<string, string>, stdout: "pipe", stderr: "pipe",
+    });
+    const init = run("init", "--dir", folder, "--name", "Fresh");
+    expect(await init.exited).toBe(0);
+    expect(await stat(path.join(folder, "node_modules")).then(() => true, () => false)).toBe(false);
+    const built = run("build", "--dir", folder);
+    const [status, stderr] = await Promise.all([built.exited, new Response(built.stderr).text()]);
+    expect(stderr).not.toContain("npm run build failed");
+    expect(status).toBe(0);
+    expect(await readFile(path.join(folder, "dist/index.html"), "utf8")).toContain("<");
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}, 60_000);
 
 describe("konae CLI", () => {
   test.each(["release_plan", "release_apply"])("a failed %s releases its upload so later publishes can proceed", async (step) => {
@@ -257,7 +284,7 @@ describe("konae CLI", () => {
     expect(calls).toEqual([]);
     const written = JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"));
     expect(written.url).toBeUndefined();
-    expect(written).toMatchObject({ name: "Field Notes!", slug: "field-notes", kernel: "0.1.0" });
+    expect(written).toMatchObject({ name: "Field Notes!", slug: "field-notes", kernel: rootPackage.version });
     expect(written.id).toMatch(/^app_[0-9a-f-]{36}$/);
     for (const file of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect((await readFile(path.join(directory, "app", file), "utf8")).length).toBeGreaterThan(0);
     for (const file of ["AGENTS.md", "action-contract.md", "actions.d.ts", "compose.yaml", ".env.example", "package.json", "scripts/build.mjs", "scripts/static-artifact.mjs", "scripts/runtime.js"]) {

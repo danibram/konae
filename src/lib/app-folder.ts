@@ -12,6 +12,7 @@ import { generateActionContract, renderActionContractMarkdown } from "./action-c
 import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
 import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
+import { version } from "../../package.json";
 
 export type FolderEntry = { path: string; contents: string | Uint8Array };
 
@@ -36,8 +37,8 @@ export const SETTINGS_FILE = "konae.json";
 export const SOURCES_FOLDER = "app";
 export const DIST_FOLDER = "dist";
 export const DATA_FOLDER = "data";
-/** The Kernel this checkout builds. kernel-rs/Cargo.toml names the same version. */
-export const KERNEL_VERSION = "0.1.0";
+/** The Kernel this checkout builds. package.json names its version, and kernel-rs/Cargo.toml repeats it. */
+export const KERNEL_VERSION: string = version;
 
 /** Where each part of an export's data lands in the folder. */
 export const dataPaths: Record<PackageComponentName, string> = {

@@ -1,6 +1,7 @@
-//! Transfers: how bytes travel over MCP in 64 KiB blocks, for an app user's
-//! file and for an administrative upload or download such as a release or an
-//! export. Each transfer is a file under `transfers/` and a row in
+//! Transfers: how bytes travel over MCP in 64 KiB blocks, for an
+//! administrative upload or download such as a release or an export. The SDK
+//! sends an app user's file in one request body, `PUT /_konae/transfers/<id>`,
+//! on a transfer opened the same way. Each transfer is a file under `transfers/` and a row in
 //! `transfers.sqlite`, which also keeps the receipt of each finished file
 //! upload so a retry gets the same answer.
 

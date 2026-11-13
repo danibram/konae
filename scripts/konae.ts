@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -129,7 +129,8 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
 pull      --dir <folder> [--url <Kernel URL>]
           Exports the published app's data (database, accounts, files, Usage) into
           <folder>/.konae/pull/data. Needs a credential from login --export-data. dev --reset imports it.
-build     --dir <folder>                 Builds app/ into dist/.
+build     --dir <folder>                 Builds app/ into dist/. It runs npm run build once node_modules is
+          installed, and the built-in bundler before that.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
           actions.d.ts, which types miniapp.actions.call.
 publish   --dir <folder> [--url <Kernel URL>] [--confirm-schema <confirmation>]
@@ -281,15 +282,16 @@ async function bundleModule(root: string, entry: string) {
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
-/** True when the app folder's package.json names a build script that writes dist/. */
+/** True when the app folder's package.json names a build script that writes dist/ and its packages are installed. */
 async function hasPackageBuild(root: string) {
   try {
     const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
-    return typeof manifest.scripts?.build === "string";
+    if (typeof manifest.scripts?.build !== "string") return false;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+  return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
 }
 
 /** Packs an existing dist/ into the artifact shape a release uploads. */
@@ -320,8 +322,9 @@ async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Rec
 /**
  * Builds `app/` into `dist/` by the static publishing contract in
  * src/lib/static-artifact.js, the rules the editor's build runs too.
- * When the folder has package.json with a build script (from init), that
- * script writes dist/ and this packs it; otherwise the built-in bundler runs.
+ * When the folder has package.json with a build script (from init) and a
+ * node_modules folder, that script writes dist/ and this packs it. Otherwise
+ * the built-in bundler runs, so a folder nobody ran npm install in builds too.
  */
 export async function buildLocal(root: string) {
   const files = await sources(root);

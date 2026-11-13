@@ -1,13 +1,14 @@
 //! The hosts an installation answers on (ADR-0014).
 //!
-//! `KONAE_DOMAIN` derives the public origin and the app suffix. Each older
-//! variable still wins when it is set. Without the domain the defaults are
-//! the ones the Kernel used before the domain existed.
+//! `KONAE_DOMAIN` derives the public origin and the app suffix.
+//! `KONAE_PUBLIC_ORIGIN` and `KONAE_HOST_SUFFIX` win when they are set.
+//! Without the domain the Kernel answers on `http://localhost:8080` and
+//! `localhost`.
 
 use anyhow::{bail, Result};
 
-const LEGACY_PUBLIC_ORIGIN: &str = "http://localhost:8080";
-const LEGACY_HOST_SUFFIX: &str = "localhost";
+const DEFAULT_PUBLIC_ORIGIN: &str = "http://localhost:8080";
+const DEFAULT_HOST_SUFFIX: &str = "localhost";
 
 /// The origins and suffix one installation serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +39,8 @@ pub fn from_env() -> Result<Hosts> {
 pub fn resolve(get: impl Fn(&str) -> Option<String>) -> Result<Hosts> {
     let Some(raw_domain) = non_empty(&get, "KONAE_DOMAIN") else {
         return Ok(Hosts {
-            public_origin: get("KONAE_PUBLIC_ORIGIN").unwrap_or_else(|| LEGACY_PUBLIC_ORIGIN.into()),
-            host_suffix: get("KONAE_HOST_SUFFIX").unwrap_or_else(|| LEGACY_HOST_SUFFIX.into()),
+            public_origin: get("KONAE_PUBLIC_ORIGIN").unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.into()),
+            host_suffix: get("KONAE_HOST_SUFFIX").unwrap_or_else(|| DEFAULT_HOST_SUFFIX.into()),
             path_origin: None,
             domain: None,
         });

@@ -149,10 +149,10 @@ export function readMailStatus(refresh = false) {
 
 /**
  * One row of `secrets_list`. `use` is "call" for a secret a route may not sign
- * with. `svixKey` says whether the value decodes as a svix whsec_ key; a
- * Kernel older than the flag leaves it out. The value never leaves the Kernel.
+ * with. `svixKey` says whether the value decodes as a svix whsec_ key.
+ * The value never leaves the Kernel.
  */
-export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "call"; svixKey?: boolean };
+export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "call"; svixKey: boolean };
 
 /**
  * The project's signing secrets. The app's Google client (`use` "google")

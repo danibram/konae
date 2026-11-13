@@ -198,7 +198,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
     let mut session_cookie: Option<HeaderValue> = None;
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":"0.1.0"},"instructions":INSTRUCTIONS}),
+            json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"konae","version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS}),
         ),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":tools})),
