@@ -14,7 +14,7 @@ import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import type { ProjectMetadata } from "../lib/project-sources";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { templateChoices, type TemplateId } from "../lib/templates";
+import { defaultTemplate, templateChoices, type TemplateId } from "../lib/templates";
 
 type Props = {
   projects: MiniAppProject[];
@@ -40,7 +40,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
-  const [template, setTemplate] = useState<TemplateId>("tasks");
+  const [template, setTemplate] = useState<TemplateId>(defaultTemplate);
   const filtered = useMemo(
     () => [...projects].sort((a, b) => newestFirst ? b.updatedAt - a.updatedAt : a.updatedAt - b.updatedAt),
     [projects, newestFirst],
@@ -163,7 +163,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
             {templateChoices.map((choice) => (
               <label key={choice.id} className={template === choice.id ? "selected" : ""}>
                 <input type="radio" name="project-template" value={choice.id} checked={template === choice.id} onChange={() => setTemplate(choice.id)} />
-                <strong>{choice.name}</strong>
+                <span className="start-title"><strong>{choice.name}</strong><Badge tone={choice.visibility === "public" ? "success" : "accent"}>{choice.visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{choice.visibility === "public" ? "Public" : "Private"}</Badge></span>
                 <small>{choice.sentence}</small>
               </label>
             ))}

@@ -120,6 +120,7 @@ Rules the Validation Gate checks for you. When it refuses, validate_capsule retu
 Rules the gate cannot check, so they are on you. A passing validation says nothing about these:
 - Every action authorizes its caller before touching data. Use "access": "anonymous" only for data that may be read or written by any visitor. Rows owned by a person need { "source": "actor", "field": "id" } in both the write and the read, plus "access": "authenticated".
 - An uploaded file is private to the signed-in user. Pass { visibility: "public" } only when every visitor of a public app may read those bytes. The gate does not guess this from a column name: a shared board and a private journal can both store user_id. In the final paragraph, name each new action as personal or shared.
+- Text from a row, an upload or a user reaches the page through textContent or the template's escapeHtml, in attributes too, and is never concatenated into HTML unescaped.
 
 ${sdkPromptSection}
 

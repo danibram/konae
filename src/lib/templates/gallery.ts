@@ -81,7 +81,7 @@ async function load() {
   $('#count').textContent = photos.length + (photos.length === 1 ? ' image' : ' images');
   const urls = await Promise.all(photos.map(photo => miniapp.files.url(photo.file_id)));
   $('#photos').innerHTML = photos.length ? photos.map((photo, index) =>
-    '<figure class="ui-tile"><img src="' + urls[index] + '" alt="' + escapeHtml(photo.title) + '"><figcaption><span>' + escapeHtml(photo.title) + '</span>' +
+    '<figure class="ui-tile"><img src="' + escapeHtml(urls[index]) + '" alt="' + escapeHtml(photo.title) + '"><figcaption><span>' + escapeHtml(photo.title) + '</span>' +
     (mine.has(photo.file_id) ? '<button class="ui-button ui-button-ghost ui-button-sm" data-remove="' + escapeHtml(photo.file_id) + '">Remove</button>' : '') +
     '</figcaption></figure>'
   ).join('') : '<p class="ui-list-empty">No images yet.</p>';

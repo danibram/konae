@@ -94,6 +94,10 @@ describe("what the prompt leaves to the Validation Gate", () => {
     expect(prompt).toContain('"invalid-signature"');
   });
 
+  test("tells the agent to escape text from rows, uploads and users, in attributes too", () => {
+    expect(prompt).toContain("through textContent or the template's escapeHtml, in attributes too");
+  });
+
   test("stays well under the 66,000 characters it had before declaration refusals left it", () => {
     expect(prompt.length).toBeLessThan(60_000);
   });

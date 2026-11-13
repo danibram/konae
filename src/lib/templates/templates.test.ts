@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
 import type { CapsuleFiles } from "../../agent/contracts";
 import { createCapsuleValidator } from "../../agent/gate";
 import { notifyReturning, notifyReturningStatement, parseServerActionSource } from "../../kernel/actions";
 import { cloneStarter } from "../starter";
 import { adminCheck } from "./members";
+import { DEFAULT_TEMPLATE } from "../../../scripts/project-templates";
+import * as templates from "./index";
 import { applyTemplate, templateChoices, type TemplateId } from "./index";
 
 let sql: Promise<SqlJsStatic> | undefined;
@@ -35,6 +39,21 @@ describe("a project born from a template", () => {
       const { visibility: chosen, runtime } = born(id).manifest;
       expect(runtime.auth.mode).toBe(chosen === "private" ? "required" : "optional");
     }
+  });
+
+  test("the new project dialog starts on the private notes template, the one konae init and project_create default to", () => {
+    expect(templates.defaultTemplate).toBe("notes");
+    expect(templates.defaultTemplate).toBe(DEFAULT_TEMPLATE);
+    const created = applyTemplate({ ...cloneStarter(), id: "app_default", name: "Default", slug: "default" }, templates.defaultTemplate);
+    expect(created.manifest.visibility).toBe("private");
+    expect(created.manifest.runtime.auth.mode).toBe("required");
+    const dashboard = readFileSync(path.join(import.meta.dir, "../../components/ProjectDashboard.tsx"), "utf8");
+    expect(dashboard).toContain("useState<TemplateId>(defaultTemplate)");
+    expect(dashboard).not.toContain('useState<TemplateId>("tasks")');
+  });
+
+  test("each choice says before creation whether the app starts public, the way the project is born", () => {
+    for (const choice of templateChoices) expect(choice.visibility, choice.id).toBe(born(choice.id).manifest.visibility);
   });
 
   test("a project described from scratch starts private", () => {

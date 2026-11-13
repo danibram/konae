@@ -1307,6 +1307,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .reset-confirm.ui-button-danger { background: #9f1239; color: #fff; border-color: #171910; box-shadow: 3px 3px 0 #171910; }
 .new-project-dialog { padding: 4px 0 0; }
 .new-project-dialog .ui-field label { display: block; margin: 0 0 10px; line-height: 16px; position: relative; z-index: 1; }
+.start-cards .start-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .start-cards small { display: block; font-size: 13px; font-weight: 450; line-height: 1.4; }
 /* Seven cards outgrow a short screen: the heading and the Create button stay put and the body scrolls. */
 .new-project.ui-dialog { display: flex; flex-direction: column; overflow: hidden; }
