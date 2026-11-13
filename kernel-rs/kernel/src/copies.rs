@@ -26,7 +26,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1317,11 +1317,7 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
     let mut clear = |path: &Path, names: &[&str]| -> Result<()> {
         let connection = Connection::open(path)?;
         for name in names {
-            let exists = connection
-                .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(()))
-                .optional()?
-                .is_some();
-            if exists {
+            if crate::table_exists(&connection, name)? {
                 removed += connection.execute(&format!("DELETE FROM \"{name}\""), [])?;
             }
         }
