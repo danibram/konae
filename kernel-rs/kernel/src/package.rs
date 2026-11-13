@@ -1208,6 +1208,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A file whose FTS5 shadow table is damaged, so SQLite's integrity check, which
+    /// runs the module's own code on the shadow tables, reports a problem.
+    fn damaged_fts(root: &Path, name: &str, base: &str) -> PathBuf {
+        let path = file_with(root, name, &format!("{base}; CREATE VIRTUAL TABLE notes USING fts5(body); INSERT INTO notes VALUES('one two three');"), None);
+        let db = Connection::open(&path).unwrap();
+        db.execute("UPDATE notes_data SET block = x'0001' WHERE id > 10", []).unwrap();
+        let problem: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        assert_ne!(problem, "ok", "the fixture must fail the integrity check");
+        path
+    }
+
+    #[test]
+    fn a_virtual_table_is_refused_before_sqlite_runs_its_code_on_the_file() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = file_with(&root, "plain.sqlite", "CREATE TABLE t(v)", None);
+        let identity = damaged_fts(&root, "identity.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, password_hash TEXT)");
+        let usage = damaged_fts(&root, "usage.sqlite", "CREATE TABLE u(v)");
+        let database = damaged_fts(&root, "database.sqlite", "CREATE TABLE d(v)");
+        let sentence = |what: &str| format!("The {what} holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing.");
+        let error = check_components(&components(&root, database, None, None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), sentence("database"));
+        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), sentence("accounts component"));
+        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), sentence("usage component"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn a_component_is_refused_when_it_holds_a_virtual_table_and_a_kernel_file_still_imports() {
         let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
