@@ -58,4 +58,26 @@ describe("a template escapes text it writes into HTML", () => {
     expect(html).toContain(`alt="x&quot; style=&quot;position:fixed`);
     expect(html).toContain(`src="blob:x&quot; onerror=&quot;alert(1)"`);
   });
+
+  test("a member's role and id stay text in the members list", async () => {
+    const element = () => ({ hidden: false, textContent: "", innerHTML: "", value: "", dataset: {}, addEventListener() {} });
+    const elements = new Map<string, ReturnType<typeof element>>();
+    const document = { querySelector: (selector: string) => elements.get(selector) ?? elements.set(selector, element()).get(selector)!, addEventListener() {} };
+    const rows: Record<string, unknown[]> = {
+      "me.join": [],
+      "me.get": [{ role: "owner", user_id: "me" }],
+      "posts.list": [],
+      "members.list": [{ display_name: "Ana", role: `member"><img src=x onerror=alert(1)>`, user_id: `u"1` }, { display_name: "Ben", role: "member", user_id: `u"2` }],
+    };
+    const miniapp = {
+      auth: { session: async () => ({ role: "member", name: "me@example.com" }), signIn: async () => {}, signOut: async () => {} },
+      actions: { call: async (name: string) => rows[name] ?? [] },
+    };
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => (...values: unknown[]) => Promise<void>;
+    await new AsyncFunction("document", "miniapp", born("members").files["app.js"] as string)(document, miniapp);
+    const html = elements.get("#members")!.innerHTML;
+    expect(html).not.toContain("<img");
+    expect(html).toContain("member&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).not.toContain(`data-promote="u"`);
+  });
 });
