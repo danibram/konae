@@ -729,14 +729,11 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
     let database = path("database").context("The package has no database.")?;
     integrity(&database, "database")?;
-    let stored = Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .and_then(|db| super::sql_rules::stored_trigger_or_view(&db))?;
-    if let Some(refusal) = stored {
-        anyhow::bail!(refusal);
-    }
+    no_trigger_or_view(&database, "database")?;
     let accounts = match path("identity") {
         Some(identity) => {
             integrity(&identity, "accounts")?;
+            no_trigger_or_view(&identity, "accounts component")?;
             let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let has_users: bool = db.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_users')",
@@ -744,6 +741,15 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
                 |r| r.get(0),
             )?;
             ensure!(has_users, "The accounts component has no app_users table.");
+            let has_hashes: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('app_users') WHERE name='password_hash')", [], |r| r.get(0))?;
+            if has_hashes {
+                let mut hashes = db.prepare("SELECT password_hash FROM app_users")?;
+                let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
+                for hash in rows {
+                    let known = matches!(hash?, rusqlite::types::Value::Text(hash) if auth::is_stored_password_hash(&hash));
+                    ensure!(known, "The accounts component holds a password hash this Kernel did not write.");
+                }
+            }
             Some(db)
         }
         None => None,
@@ -753,8 +759,20 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     }
     if let Some(usage) = path("usage") {
         integrity(&usage, "usage")?;
+        no_trigger_or_view(&usage, "usage component")?;
     }
     Ok(())
+}
+
+/// Refuses a component that holds a trigger or a view. The Kernel creates
+/// neither in any of its files.
+fn no_trigger_or_view(path: &Path, what: &str) -> Result<()> {
+    let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|db| super::sql_rules::stored_trigger_or_view(&db, what))?;
+    match stored {
+        Some(refusal) => anyhow::bail!(refusal),
+        None => Ok(()),
+    }
 }
 
 fn integrity(path: &Path, label: &str) -> Result<()> {

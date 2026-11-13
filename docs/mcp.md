@@ -906,6 +906,8 @@ To import into a new app on another installation, create the project there with 
 | A component over its limit | `Transfer size is outside the limit of 67108864 bytes for the identity component.` |
 | Not enough disk at `transfer_begin`, `project_export` or `release_plan` | `Not enough free space on the Kernel volume to import this app: 340 MiB needed, 120 MiB free.` |
 | A database that holds a trigger or a view | `The database holds CREATE TRIGGER <name>, and Konae runs no triggers or views. Drop it before importing.` |
+| An accounts or usage component that holds a trigger or a view | `The accounts component holds CREATE TRIGGER <name>, and Konae runs no triggers or views. Drop it before importing.` |
+| An accounts component with a password hash this Kernel did not write | `The accounts component holds a password hash this Kernel did not write.` |
 
 ### Import into an existing app
 

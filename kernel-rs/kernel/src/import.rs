@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::package::InitialPackage;
@@ -407,6 +407,17 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
     if !live.exists() {
         return Ok(());
     }
+    // The key table comes from the Kernel's own DDL, never from text in a file.
+    // It is made before the attach, because `IF NOT EXISTS` also looks at the
+    // attached database's tables.
+    let live_has_keys: bool = Connection::open(live)?.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE lower(type) = 'table' AND name = 'api_keys')",
+        [],
+        |row| row.get(0),
+    )?;
+    if live_has_keys {
+        super::http::keys_table(&connection)?;
+    }
     connection.execute("ATTACH DATABASE ?1 AS live", [live.to_string_lossy().as_ref()])?;
     // The schema goes in as the pragma's argument, because a `main.` prefix
     // on the function still reads the attached database's table.
@@ -423,15 +434,13 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
     )?;
     let live_keys = columns("live", "api_keys")?;
     if !live_keys.is_empty() {
-        let created: Option<String> = connection
-            .query_row("SELECT sql FROM live.sqlite_master WHERE type='table' AND name='api_keys'", [], |row| row.get(0))
-            .optional()?;
-        if columns("main", "api_keys")?.is_empty() {
-            connection.execute_batch(&created.context("The live app's API keys cannot be read.")?)?;
-        }
-        super::http::add_revoked_reason(&connection)?;
         let incoming_keys = columns("main", "api_keys")?;
-        let shared = live_keys.iter().filter(|name| incoming_keys.contains(name)).map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", ");
+        let shared = super::http::API_KEY_COLUMNS
+            .iter()
+            .filter(|name| live_keys.iter().any(|live| live == *name) && incoming_keys.iter().any(|incoming| incoming == *name))
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
         connection.execute("DELETE FROM main.api_keys", [])?;
         connection.execute(&format!("INSERT INTO main.api_keys ({shared}) SELECT {shared} FROM live.api_keys"), [])?;
     }
@@ -518,9 +527,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         AuthService::open(root.join("live.sqlite")).unwrap();
-        Connection::open(root.join("live.sqlite")).unwrap()
-            .execute_batch("CREATE TABLE api_keys(id TEXT PRIMARY KEY, name TEXT, revoked_at INTEGER); INSERT INTO api_keys VALUES('k1','live key',NULL);")
-            .unwrap();
+        let live = Connection::open(root.join("live.sqlite")).unwrap();
+        super::super::http::keys_table(&live).unwrap();
+        live.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
+        drop(live);
         let incoming_path = root.join("incoming.sqlite");
         AuthService::open(&incoming_path).unwrap();
         carry_access(&incoming_path, &root.join("live.sqlite")).unwrap();
