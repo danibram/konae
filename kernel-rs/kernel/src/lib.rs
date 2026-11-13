@@ -569,6 +569,15 @@ pub async fn start(
     }
     schedule::spawn(state.clone(), schedule_clock);
     if let Some(queue) = state.accounts.queue.clone() {
+        // A public installation starts anyway: refusing would take a live
+        // one down at its next restart. It says so loudly instead.
+        if let Some(mailbox) = queue.local_mailbox().filter(|_| security::https(&state)) {
+            eprintln!(
+                "WARNING: {} serves over https with KONAE_MAIL_TRANSPORT=development. No email leaves this server. Invitations, confirmation and recovery links and notices all go to {} instead. Set KONAE_MAIL_TRANSPORT to resend or smtp.",
+                state.public_origin,
+                mailbox.display()
+            );
+        }
         mail::spawn_worker(queue);
     }
     calls::spawn_worker(state.clone());
@@ -1493,6 +1502,12 @@ pub async fn auth_request(
             usage::count(&state.data_root, &deployment.id, operation);
             let cookie_name = app_cookie_name(state, &deployment.id, headers);
             accounts::app_session_response(&cookie_name, session)
+        }
+        // The password matched, so naming a waiting invitation reveals
+        // nothing to someone who only knows the email.
+        Err(AuthError::AccountPending) => {
+            let invited = accounts::invitation_pending(state, &deployment, &failed_email).await;
+            error(StatusCode::FORBIDDEN, &accounts::pending_message(state, invited))
         }
         Err(error_value) => auth_error(error_value),
     }

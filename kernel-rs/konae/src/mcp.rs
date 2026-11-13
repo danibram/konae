@@ -295,6 +295,47 @@ pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<O
         }))
 }
 
+/// The 401 of the owner's MCP. A token this installation issued for this
+/// endpoint that has passed its expiry says when it expired and how to get a
+/// new one. Any other refusal answers as before, so an unknown or malformed
+/// token learns nothing. The `WWW-Authenticate` header stays the same, so an
+/// OAuth client still finds where to sign in again.
+fn owner_unauthorized(state: &Konae, headers: &HeaderMap) -> Response {
+    let refused = unauthorized(state, headers);
+    let Some(token) = bearer(headers) else { return refused };
+    let record: Option<(u64, Option<String>, Option<String>)> = store(state)
+        .and_then(|db| {
+            Ok(db
+                .query_row(
+                    "SELECT expires,audience,client FROM credentials WHERE hash=?1",
+                    [digest(token.as_bytes())],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?)
+        })
+        .ok()
+        .flatten();
+    let resource = format!("{}/mcp", origin(state, headers));
+    let Some((expires, _, client)) = record
+        .filter(|(expires, audience, _)| *expires <= now_ms() && audience.as_ref().is_none_or(|audience| audience == &resource))
+    else {
+        return refused;
+    };
+    let login = format!("{}{}", origin(state, headers), super::oauth::owner_login_path());
+    let when = kernel::notify::format_now(expires);
+    let message = if client.is_some() {
+        format!("This Konae MCP sign-in expired at {when}. OAuth sign-ins last 1 hour. Reconnect your MCP client to sign in again; it opens {login}.")
+    } else {
+        let lasts = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "1 hour" } else { "24 hours" };
+        format!("This Konae token expired at {when}. Tokens from konae login last {lasts} on this installation. Run konae login for a new one, or sign in as the owner at {login}.")
+    };
+    let mut response = error(StatusCode::UNAUTHORIZED, &message);
+    if let Some(value) = refused.headers().get(header::WWW_AUTHENTICATE) {
+        response.headers_mut().insert(header::WWW_AUTHENTICATE, value.clone());
+    }
+    response
+}
+
 pub(super) fn owned_project(state: &Konae, owner: &Owner, id: &str, scope: &str) -> Result<(Value, u64)> {
     owner.require(scope, Some(id))?;
     let record: Option<(String, u64)> = store(state)?
@@ -838,7 +879,8 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     }
     let owner = match authenticate_owner(&state, &headers) {
         Ok(Some(owner)) => owner,
-        _ => return unauthorized(&state, &headers),
+        Ok(None) => return owner_unauthorized(&state, &headers),
+        Err(_) => return unauthorized(&state, &headers),
     };
     if headers.get("x-konae-owner-id").is_some_and(|expected| expected.as_bytes() != owner.id.as_bytes()) {
         return error(StatusCode::CONFLICT, "The signed-in owner changed. Reload before continuing.");
@@ -1928,6 +1970,7 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
             }
             owner_session_response(&state, session)
         }
+        Err(AuthError::AccountPending) => error(StatusCode::FORBIDDEN, &super::accounts::pending_message(&state, false)),
         Err(e) => auth_error(e),
     }
 }
@@ -2036,6 +2079,58 @@ mod tests {
             let response = crate::stack(state.clone(), crate::owner_routes(konae.clone())).oneshot(request).await.unwrap();
             assert_eq!(response.status(), 403, "{path}");
         }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    /// An expired token says when it expired and how to get a new one, with
+    /// the same 401 and `WWW-Authenticate` as any refused token. An unknown
+    /// token, and a token issued for another endpoint, learn nothing more.
+    #[tokio::test]
+    async fn an_expired_token_says_it_expired() {
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("konae-expired-token-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState {
+            public_origin: "https://app.konae.es".into(),
+            host_suffix: "konae.es".into(),
+            ..AppState::for_test(&root)
+        };
+        let konae = Konae::for_test(state.clone());
+        let expired = 1_700_000_000_000u64;
+        let db = store(&konae).unwrap();
+        for (token, audience, client) in [
+            ("lb_cli", None, None),
+            ("lb_oauth", Some("https://app.konae.es/mcp"), Some("client-1")),
+            ("lb_elsewhere", Some("https://other.example/mcp"), Some("client-1")),
+        ] {
+            db.execute(
+                "INSERT INTO credentials(hash,owner,scopes,projects,expires,audience,client) VALUES(?1,'o','[\"read\"]','[]',?2,?3,?4)",
+                params![digest(token.as_bytes()), expired, audience, client],
+            )
+            .unwrap();
+        }
+        let call = |token: &'static str| {
+            let request = Request::builder().method("POST").uri("/mcp").header(header::HOST, "app.konae.es")
+                .header(header::CONTENT_TYPE, "application/json").header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string())).unwrap();
+            crate::stack(state.clone(), crate::owner_routes(konae.clone())).oneshot(request)
+        };
+        let read = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let challenge = response.headers()[header::WWW_AUTHENTICATE].to_str().unwrap().to_owned();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (challenge, serde_json::from_slice::<Value>(&body).unwrap()["error"].as_str().unwrap().to_owned())
+        };
+        let (challenge, unknown) = read(call("lb_unknown").await.unwrap()).await;
+        assert_eq!(challenge, "Bearer resource_metadata=\"https://app.konae.es/.well-known/oauth-protected-resource\"");
+        assert_eq!(unknown, "Sign in to use Konae MCP.");
+        assert_eq!(read(call("lb_elsewhere").await.unwrap()).await, (challenge.clone(), unknown.clone()));
+        let (cli_challenge, cli) = read(call("lb_cli").await.unwrap()).await;
+        assert_eq!(cli_challenge, challenge);
+        assert_eq!(cli, "This Konae token expired at 2023-11-14 22:13 UTC. Tokens from konae login last 24 hours on this installation. Run konae login for a new one, or sign in as the owner at https://app.konae.es/_konae/owner/login.");
+        let (oauth_challenge, oauth) = read(call("lb_oauth").await.unwrap()).await;
+        assert_eq!(oauth_challenge, challenge);
+        assert_eq!(oauth, "This Konae MCP sign-in expired at 2023-11-14 22:13 UTC. OAuth sign-ins last 1 hour. Reconnect your MCP client to sign in again; it opens https://app.konae.es/_konae/owner/login.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
