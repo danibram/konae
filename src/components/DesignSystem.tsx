@@ -4,7 +4,7 @@ import { readOwnerProjectCount } from "../lib/project-sources";
 import { defaultTemplate, templateChoices, type TemplateId } from "../lib/templates";
 import type { OwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Actions, Steps, Alert, Avatar, Composer, Identity, Lede, List, ListItem, Page, PageHeader, SectionHead, Tick, Tile, Tiles, Badge, BarChart, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
+import { Actions, Steps, Alert, Avatar, Composer, Identity, Lede, List, ListItem, Page, PageHeader, SectionHead, Tick, Tile, Tiles, Badge, BarChart, BarList, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
 
 function Sample({ id, title, note, children }: { id: string; title: string; note?: string; children: ReactNode }) {
   return <section className="ds-sample" id={id} aria-labelledby={`${id}-title`}><h2 id={`${id}-title`}>{title}</h2>{note && <p className="ds-note">{note}</p>}{children}</section>;
@@ -187,6 +187,7 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
                 <Card className="ds-chart-card"><LineChart title="Visits" unit="visits" labels={days.map((d) => d.label)} series={viewSeries} area empty="Nothing recorded." /></Card>
                 <Card className="ds-chart-card"><DonutChart title="Where views come from" unit="views" slices={[{ id: "home", label: "Home", value: 5120 }, { id: "list", label: "List", value: 3304 }, { id: "about", label: "About", value: 1450 }, { id: "other", label: "Other", value: 640 }]} empty="Nothing recorded." /></Card>
               </div>
+              <Card className="ds-chart-card ds-gap"><BarList title="Storage by part" unit="MiB" labelHeading="Part" format={(value) => `${value} MiB`} rows={[{ key: "database", label: "Database", value: 42, detail: "16% of the 256 MiB limit" }, { key: "files", label: "Uploaded files", value: 17, detail: "85% of the 20 MiB limit", tone: "warning" }, { key: "usage", label: "Usage history", value: 3 }]} empty="Nothing stored." /></Card>
               <Card className="ds-chart-card ds-gap"><BarChart title="A quiet period" unit="views" points={days.slice(0, 7).map((d) => ({ key: d.key, label: d.label, value: 0 }))} empty="No page views recorded in this period." /></Card>
             </Sample>
             <Sample id="patterns" title="App patterns" note="What a small app screen is made of. Published apps get the same classes in their styles.css, in whichever variant the app picked.">

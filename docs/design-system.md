@@ -43,7 +43,7 @@ Import shared controls from `src/components/ui`. The ones a form or a dialog nee
 | `LoadingBlock` | One loading surface: `role="status"` with one label for screen readers, and skeleton shapes (`rows`, or your own children) that hold the layout. Fades in after 200 ms. `sinceNavigation` counts that from the page load, for boot stages. |
 | `Dialog` | Title, optional description and footer, `open`, `onClose`, optional `initialFocus`. Traps focus, handles Escape and restores focus when closed. |
 
-The same module exports `Tabs`, `Switch`, `Checkbox`, `Radio`, `Segmented`, `Alert`, `ToastRegion`, `Progress`, `Avatar`, `Kbd`, `Breadcrumb`, `Disclosure`, `StatStrip`, `Table`, `Tooltip` and `Menu`, the charts in `charts.tsx` (`BarChart`, `LineChart`, `DonutChart`, `Sparkline`, `ChartLegend`), and the page patterns an app uses: `Page`, `PageHeader`, `Lede`, `Actions`, `Steps`, `Identity`, `SectionHead`, `List`, `ListItem`, `Composer`, `Tiles`, `Tile` and `Tick`. The gallery shows them.
+The same module exports `Tabs`, `Switch`, `Checkbox`, `Radio`, `Segmented`, `Alert`, `ToastRegion`, `Progress`, `Avatar`, `Kbd`, `Breadcrumb`, `Disclosure`, `StatStrip`, `Table`, `Tooltip` and `Menu`, the charts in `charts.tsx` (`BarChart`, `BarList`, `LineChart`, `DonutChart`, `Sparkline`, `ChartLegend`), and the page patterns an app uses: `Page`, `PageHeader`, `Lede`, `Actions`, `Steps`, `Identity`, `SectionHead`, `List`, `ListItem`, `Composer`, `Tiles`, `Tile` and `Tick`. The gallery shows them.
 
 ```tsx
 import { Button, Dialog, Field, Input } from "./components/ui";
