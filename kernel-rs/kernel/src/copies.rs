@@ -1967,6 +1967,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_restore_signs_out_sessions_in_tables_spelled_in_capitals() {
+        let root = scratch("signout-case");
+        let identity = crate::layout::apps(&root).join("one").join("data").join("identity.sqlite");
+        std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        let db = Connection::open(&identity).unwrap();
+        db.execute_batch(
+            "CREATE TABLE app_users(id TEXT PRIMARY KEY);
+             CREATE TABLE APP_SESSIONS(token_hash TEXT); INSERT INTO app_sessions VALUES('session');
+             CREATE TABLE Account_Challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('link');",
+        )
+        .unwrap();
+        drop(db);
+        let removed = invalidate_sessions(&root, &crate::installation::Installation::for_test()).unwrap();
+        let db = Connection::open(&identity).unwrap();
+        let left: i64 = db.query_row("SELECT (SELECT COUNT(*) FROM app_sessions) + (SELECT COUNT(*) FROM account_challenges)", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "sessions or links survived the restore");
+        assert_eq!(removed, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn a_sealed_copy_with_an_entry_removed_from_its_manifest_is_refused() {
         let (source, copies, id, deployment) = plain_copy("trimmed").await;
