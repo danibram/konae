@@ -48,8 +48,6 @@ async function bundleInBrowser(files: Record<string, string>, entrypoint: string
     format: "esm",
     platform: "browser",
     target: "es2022",
-    // JSX imports react/jsx-runtime, as `konae build` and an app folder's build compile it.
-    jsx: "automatic",
     outdir: "out",
     plugins: [projectFilesPlugin(files), packagesPlugin(declaredPackages(files))],
   });

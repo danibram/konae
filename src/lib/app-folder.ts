@@ -141,8 +141,9 @@ function packageManifest(settings: AppSettings) {
 }
 
 /**
- * What `npm run build` type-checks a TypeScript app against: app/ and
- * actions.d.ts. Not strict, so a type that is only implicit passes; a call
+ * What `npm run build` type-checks a TypeScript app against: app/src/, the
+ * files it imports, and actions.d.ts. A script beside the app, such as a
+ * replay script at the root of app/, stays out. Not strict, so a type that is only implicit passes; a call
  * to an action that does not exist, or with an input it does not take, fails.
  */
 const tsconfig = `${JSON.stringify({
@@ -158,7 +159,7 @@ const tsconfig = `${JSON.stringify({
     skipLibCheck: true,
     noEmit: true,
   },
-  include: ["app", ACTION_TYPES_FILE],
+  include: ["app/src", ACTION_TYPES_FILE],
 }, null, 2)}\n`;
 
 function agentsGuide(settings: AppSettings, secrets: string[]) {
@@ -173,7 +174,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
 - \`action-contract.md\`: every Server Action with its inputs and the columns it returns.
-- \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call. When \`app/\` holds TypeScript, \`npm run build\` checks it against them with \`tsconfig.json\` and stops on an error.
+- \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call. When \`app/src/\` holds TypeScript, \`npm run build\` checks it, and what it imports, against them with \`tsconfig.json\` and stops on an error.
 
 ## Rules the Kernel checks
 
@@ -230,7 +231,7 @@ const development = process.argv.includes('--dev');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));
 const runtime = await readFile(path.join(root, 'scripts/runtime.js'), 'utf8');
 const paths = await walk('');
-if (paths.some((file) => /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
+if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,
   read: async (file) => {
@@ -267,12 +268,12 @@ async function bundle(entry) {
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '' };
 }
 
-// tsconfig.json includes app/ and actions.d.ts, which types miniapp.actions.call for each action.
+// tsconfig.json includes app/src/ and actions.d.ts, which types miniapp.actions.call for each action.
 function typecheck() {
   let tsc;
   try { tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc'); }
   catch { throw new Error('app/ holds TypeScript, and the build checks its types with the typescript package, which is not installed. Run npm install, then build again.'); }
-  const checked = spawnSync(process.execPath, [tsc, '--noEmit', '--pretty', '-p', path.join(root, 'tsconfig.json')], { cwd: root, stdio: 'inherit' });
+  const checked = spawnSync(process.execPath, [tsc, '--noEmit', '--pretty', 'false', '-p', path.join(root, 'tsconfig.json')], { cwd: root, stdio: 'inherit' });
   if (checked.status !== 0) {
     console.error('The type check failed, so dist/ is unchanged. Fix the errors above. A call to miniapp.actions.call must match an action in actions.d.ts, which konae dev and konae contract write from app/actions.json.');
     process.exit(1);
