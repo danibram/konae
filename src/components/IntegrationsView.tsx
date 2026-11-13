@@ -1,3 +1,4 @@
+import { platformAccessHref } from "./owner-session";
 import { Copy, KeyRound, Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
@@ -18,7 +19,9 @@ type Props = {
   actionsSource?: string;
 };
 
-const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_konae/owner/login">owner sign-in</a> to manage signing secrets and API keys.</p>;
+function SignedOut() {
+  return <p className="access-note">Sign in with <a href={platformAccessHref(window.location.pathname)}>owner sign-in</a> to manage signing secrets and API keys.</p>;
+}
 
 /** Signing secrets for signed routes and API keys for programs the owner writes. */
 export function IntegrationsView({ projectId, deploymentId, deploymentUrl, actionsSource }: Props) {
@@ -28,7 +31,7 @@ export function IntegrationsView({ projectId, deploymentId, deploymentUrl, actio
   return (
     <section className="access-view" aria-label="Integrations">
       <p className="access-intro">Other programs reach this app on its HTTP routes. A service proves itself with a signature made with a secret; a program you write sends an API key. Neither is an app account or an owner.</p>
-      {ownerSignedOut ? <Card className="access-card">{SIGNED_OUT}</Card> : <>
+      {ownerSignedOut ? <Card className="access-card"><SignedOut /></Card> : <>
         <SecretsCard projectId={projectId} actionsSource={actionsSource} onSignedOut={onSignedOut} />
         {deploymentId && deploymentUrl
           ? <ApiKeysCard deploymentId={deploymentId} deploymentUrl={deploymentUrl} routes={routes} onSignedOut={onSignedOut} />

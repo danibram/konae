@@ -1190,6 +1190,8 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .workshop .topbar .avatar { color: var(--ink); background: var(--paper); border-color: #46483f; }
   .workshop .alpha-tag { border-color: #555b4a; color: #c7cbbd; }
   .explorer-panel, .action-decisions, .publish-actions, .explorer-create, .mobile-project-actions > div { background: #1a1c14; color: #eceef4; }
+  .mobile-project-actions button:not(.is-danger), .mobile-project-actions a { color: #eceef4; }
+  .mobile-project-actions button:hover, .mobile-project-actions a:hover { background: #262a34; }
   .action-decisions p { color: #a4abba; }
   .project-card, .project-card-body { background: #1c1f28; color: #eceef4; }
   .project-window-bar { background: #262a22; color: #eceef4; }

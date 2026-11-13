@@ -1778,7 +1778,11 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
             let editor = std::env::var("KONAE_EDITOR_DIR").is_ok_and(|dir| !dir.trim().is_empty());
             // With the development transport, owner email lands in a file, not an inbox.
             let mail = std::env::var("KONAE_MAIL_TRANSPORT").unwrap_or_default();
-            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"editor":editor,"mailToFile":mail == "development"})).into_response()
+            // On a local installation that still runs with the published default
+            // key, the page fills it in, as `bun run dev:local` expects. Nowhere else.
+            let local = url::Url::parse(&state.public_origin).ok().and_then(|u| u.host_str().map(crate::is_local_host)).unwrap_or(false);
+            let default_key = local && state.admin_key == crate::DEFAULT_ADMIN_KEY;
+            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_ADMIN_KEY)})).into_response()
         }
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }

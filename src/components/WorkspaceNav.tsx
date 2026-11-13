@@ -42,7 +42,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
           <span aria-hidden="true">{initials ?? <UserRound size={15} />}</span>
           <div>
             <strong>{ownerSession.state === "signed-in" ? ownerSession.email ?? "Owner signed in" : "Owner sign-in"}</strong>
-            {ownerSession.state === "signed-in" && <small>Can deploy from this browser</small>}
+            {ownerSession.state === "signed-in" && <small>Owner session active in this browser</small>}
           </div>
         </a>}
       <Dialog
@@ -55,7 +55,7 @@ export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
         <nav className="nav-more-sheet" aria-label="More workspace links">
           <a href="/" aria-current={active === "projects" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Projects</a>
           <a href="/usage" aria-current={active === "usage" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Usage</a>
-          <a href={accessHref} onClick={() => setMoreOpen(false)}>Owner sign-in</a>
+          <a href={accessHref} onClick={() => setMoreOpen(false)}>{ownerSession.state === "signed-in" ? "Owner account" : "Owner sign-in"}</a>
           {showDesignSystemLink && <a href="/design-system" aria-current={active === "design-system" ? "page" : undefined} onClick={() => setMoreOpen(false)}>Design system</a>}
         </nav>
       </Dialog>

@@ -1278,6 +1278,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             <div>
               <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAppSettingsOpen(true); }}>App settings</button>
               <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); updateLayout(resetLayout()); }}>Reset layout</button>
+              <a href={signInHref}>{ownerSession.state === "signed-in" ? "Owner account" : "Owner sign-in"}</a>
               <button className="is-danger" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setResetOpen(true); }}><RotateCcw size={15} /> Reset project data…</button>
             </div>
           </details>
@@ -1450,7 +1451,7 @@ function describeDelete(project: MiniAppProject, path: string | null): string {
 function AccountChip({ session, href }: { session: OwnerSession; href: string }) {
   const initials = ownerInitials(session);
   const label = session.state === "signed-in"
-    ? `Signed in${session.email ? ` as ${session.email}` : ""}. Open owner sign-in`
+    ? `Signed in${session.email ? ` as ${session.email}` : ""}. Open owner account`
     : "Owner sign-in";
   return (
     <a className={`avatar account-chip is-${session.state}`} href={href} aria-label={label} title={label}>

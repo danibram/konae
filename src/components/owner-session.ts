@@ -82,9 +82,13 @@ export function useOwnerSession(): [OwnerSession, () => void] {
   return [session, refresh];
 }
 
-/** The in-app Platform access page, with a way back to where the owner came from. */
+/**
+ * The owner page the server serves, with a way back to where the owner came
+ * from. It sends an installation that signs owners in with Clerk on to the
+ * editor's /platform-access, so the editor links straight to it.
+ */
 export function platformAccessHref(returnTo?: string): string {
-  return returnTo ? `/platform-access?returnTo=${encodeURIComponent(returnTo)}` : "/platform-access";
+  return returnTo ? `/_konae/owner/login?returnTo=${encodeURIComponent(returnTo)}` : "/_konae/owner/login";
 }
 
 export function ownerInitials(session: OwnerSession): string | null {

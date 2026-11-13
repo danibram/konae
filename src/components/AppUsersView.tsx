@@ -1,3 +1,4 @@
+import { platformAccessHref } from "./owner-session";
 import { MailWarning, RefreshCw, Send, TriangleAlert, Users } from "lucide-react";
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
@@ -30,7 +31,9 @@ type Props = {
 const PAGE = 25;
 
 
-const SIGNED_OUT = <p className="access-note">Sign in with <a href="/_konae/owner/login">owner sign-in</a> to manage this app's accounts.</p>;
+function SignedOut() {
+  return <p className="access-note">Sign in with <a href={platformAccessHref(window.location.pathname)}>owner sign-in</a> to manage this app's accounts.</p>;
+}
 
 /** App accounts, invitations and who may join, for the published app. Owners only. */
 export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, fileAccess, onSetFileAccess }: Props) {
@@ -71,7 +74,7 @@ export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibil
           </Select>
         </Field>
         {deploymentId
-          ? ownerSignedOut ? SIGNED_OUT : <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
+          ? ownerSignedOut ? <SignedOut /> : <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
           : <p className="access-note">You choose who can create an app account when you deploy. Invitation only is the choice for a private app.</p>}
       </Card>
       {deploymentId && projectId && !ownerSignedOut && <GoogleSignIn projectId={projectId} deploymentId={deploymentId} onSignedOut={onSignedOut} />}

@@ -6,6 +6,19 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-13
+
+### Changed
+
+- The editor and the server share one owner page, `/_konae/owner/login`. The editor links there with the page the owner came from, and the owner page returns there after sign-in or offers "Back to your project". `/platform-access` keeps only the Clerk sign-in, and sends a signed-in owner on to the owner page.
+- A project's More menu opens the owner account, so an owner no longer has to leave the project to reach it.
+- `GET /_konae/owner/config` answers `defaultSetupKey` on a local installation that still runs with the development key, so the owner page fills it in as the editor did.
+
+### Fixed
+
+- The project's More menu was dark grey on dark under the dark theme.
+- An owner who created an account from a link to another owner's project landed on "Project not found". A new account lands on the project list.
+
 ## [0.4.1] - 2026-11-13
 
 ### Fixed

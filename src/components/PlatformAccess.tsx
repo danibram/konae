@@ -1,206 +1,65 @@
-import { ArrowLeft, Box, KeyRound, LogOut } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { platformMcp } from "../mcp/client";
-import { rememberOwnerEmail, useOwnerSession, type OwnerSession } from "./owner-session";
-import { useLoadingHold } from "./loading-hold";
+import { Box } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOwnerSession } from "./owner-session";
 import { safeReturnPath } from "./return-path";
-import { Badge, Button, Card, Field, Input, LoadingBlock, Select, Skeleton, Textarea } from "./ui";
+import { Card, LoadingBlock, Skeleton } from "./ui";
 
-type Credential = { tokenId: string; scopes: string; expiresAt: number };
 type ClerkBrowser = { load: (options: object) => Promise<void>; session: { getToken: () => Promise<string | null> } | null; mountSignIn: (element: HTMLElement) => void; unmountSignIn: (element: HTMLElement) => void; addListener: (listener: () => void) => () => void; signOut: () => Promise<void> };
 declare global { interface Window { Clerk?: ClerkBrowser; __internal_ClerkUICtor?: unknown } }
 
+/** The owner page the server serves, for sign-in, the account and agent tokens. */
+export function ownerPageHref(returnTo: string | null): string {
+  return returnTo ? `/_konae/owner/login?returnTo=${encodeURIComponent(returnTo)}` : "/_konae/owner/login";
+}
+
 /**
- * Owner sign-in for this installation, inside the editor so it looks like the
- * rest of the workspace and can send the owner back to the project they came
- * from. Agent tokens are managed here too.
+ * The editor's door to owner sign-in. The server's owner page at
+ * `/_konae/owner/login` does sign-in, account creation, password links and
+ * agent tokens for both the editor and an installation without it, so this
+ * page sends the owner there. It only keeps the Clerk widget, which signs an
+ * owner in on an installation that uses Clerk; once signed in, the owner is
+ * sent on as well.
  */
 export function PlatformAccess() {
-  const returnTo = useMemo(() => safeReturnPath(new URLSearchParams(window.location.search).get("returnTo")), []);
-  const [liveSession, refresh] = useOwnerSession();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [setupKey, setSetupKey] = useState("local-development-key");
-  const [code, setCode] = useState("");
-  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
-  const [creatingAccount, setCreatingAccount] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const returnTo = useMemo(() => safeReturnPath(params.get("returnTo")), [params]);
+  const signOut = params.has("signout");
+  const [session] = useOwnerSession();
+  const [config, setConfig] = useState<{ mode: "local" | "clerk"; publishableKey?: string | null } | null>(null);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [config, setConfig] = useState<{ mode: "local" | "clerk"; publishableKey?: string | null; admission?: "setup-key" | "code" } | null>(null);
-  // The setup key creates only an installation's first owner. Every other
-  // account needs an invitation code, so the form asks for one unless the
-  // Kernel says the key still applies.
-  const usesSetupKey = config?.admission === "setup-key";
-  // A check that took long enough to show its skeleton keeps it for a moment, so the card never flashes.
-  const waiting = useLoadingHold(liveSession.state === "checking" || (liveSession.state === "signed-out" && !config && !error), { sinceNavigation: true });
-  const session: OwnerSession = waiting && liveSession.state !== "checking" ? { state: "checking" } : liveSession;
   useEffect(() => { void fetch("/_konae/owner/config").then(async (response) => {
     if (!response.ok) throw new Error("Could not load sign-in settings.");
     setConfig(await response.json());
   }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, []);
 
-  // A refusal belongs to the form that produced it; carrying it into the other mode tells the owner their new action failed.
-  const switchMode = (creating: boolean) => { setCreatingAccount(creating); setError(""); setNotice(""); };
+  const toOwnerPage = config?.mode === "local" || (config?.mode === "clerk" && session.state === "signed-in" && !signOut);
+  useEffect(() => { if (toOwnerPage) window.location.replace(ownerPageHref(returnTo)); }, [toOwnerPage, returnTo]);
+  const finish = useCallback(() => window.location.replace(ownerPageHref(returnTo)), [returnTo]);
 
-  const backHref = returnTo && !returnTo.startsWith("/oauth/") ? returnTo : "/";
-  const backLabel = backHref.startsWith("/app/") ? "Back to project" : "Back to projects";
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const action = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === "signup" ? "signup" : "login";
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const response = await fetch(`/_konae/owner/${action}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(action === "signup"
-          ? { email, password, ...(usesSetupKey ? { setupKey } : { code }), ...(returnTo?.startsWith("/oauth/authorize?") ? { returnTo } : {}) }
-          : { email, password }),
-      });
-      const body = await response.json().catch(() => ({})) as { error?: string; user?: { name?: string }; result?: { message?: string } };
-      if (!response.ok) throw new Error(body.error || (action === "signup" ? "Could not create the owner account." : "Sign in failed."));
-      // An installation that verifies email answers a signup with 202 and a
-      // link sent to the address; the account is not active yet.
-      if (response.status === 202) {
-        setPendingEmail(email.trim());
-        setPassword("");
-        setCode("");
-        return;
-      }
-      rememberOwnerEmail(body.user?.name ?? email);
-      setPassword("");
-      setSetupKey("");
-      setCode("");
-      if (returnTo) {
-        window.location.assign(returnTo);
-        return;
-      }
-      refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // A pending account asks for its link again through recovery, which sends
-  // a new verification link and invalidates the earlier one.
-  const resend = async () => {
-    if (!pendingEmail) return;
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch("/_konae/owner/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pendingEmail }) });
-      const body = await response.json().catch(() => ({})) as { error?: string; result?: { message?: string } };
-      if (!response.ok) throw new Error(body.error || "Could not send the link.");
-      setNotice("We sent a new link. Only the newest link works.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const signOut = async () => {
-    await fetch("/_konae/owner/logout", { method: "POST" }).catch(() => undefined);
-    if (config?.mode === "clerk") await window.Clerk?.signOut().catch(() => undefined);
-    rememberOwnerEmail(null);
-    refresh();
-  };
-
+  const clerk = config?.mode === "clerk" && (session.state === "signed-out" || signOut);
   return (
     <div className="platform-page">
       <header className="platform-header">
         <a className="platform-brand" href="/"><span><Box size={16} /></span>konae</a>
-        {/* Signed out, every address redirects back here, so a link out would only loop. */}
-        {session.state === "signed-in" && <a className="ui-button ui-button-sm platform-back" href={backHref}><ArrowLeft size={14} /> {backLabel}</a>}
       </header>
       <main className="platform-main">
         <Card className="platform-card">
-          <h1>{session.state === "signed-in" ? "Owner account" : pendingEmail ? "Check your email" : creatingAccount ? "Create the owner account" : "Owner sign-in"}</h1>
-          <p className="platform-lead">Owners deploy apps and manage their data. People who use your apps sign in inside each app instead.</p>
-
-          {(session.state === "checking" || (session.state === "signed-out" && !config && !error)) && <LoadingBlock label="Checking your session" className="platform-form" sinceNavigation>
+          <h1>Owner sign-in</h1>
+          <p className="platform-lead">Owners publish apps and manage their data. People who use your apps sign in inside each app, not here.</p>
+          {error && <p className="platform-error" role="alert">Could not reach the platform: {error}</p>}
+          {!error && session.state === "unavailable" && <p className="platform-error" role="alert">Could not reach the platform: {session.message}</p>}
+          {!error && !clerk && session.state !== "unavailable" && <LoadingBlock label="Opening owner sign-in" className="platform-form" sinceNavigation>
             <Skeleton width={48} height={12} /><Skeleton height={36} />
             <Skeleton width={64} height={12} /><Skeleton height={36} />
-            <div className="platform-actions"><Skeleton width={96} height={42} /><Skeleton width={160} height={42} /></div>
           </LoadingBlock>}
-          {session.state === "unavailable" && <p className="platform-error" role="alert">Could not reach the platform: {session.message}</p>}
-
-          {session.state === "signed-out" && config?.mode === "clerk" && <ClerkSignIn publishableKey={config.publishableKey} returnTo={returnTo} onError={setError} onComplete={refresh} />}
-          {session.state === "signed-out" && config?.mode === "local" && pendingEmail && (
-            <div className="platform-form">
-              <p className="platform-note">We sent a link to <strong>{pendingEmail}</strong>. Open it to confirm the address and choose your password. The link works for 24 hours.</p>
-              {error && <p className="platform-error" role="alert">{error}</p>}
-              {notice && <p role="status">{notice}</p>}
-              <div className="platform-actions">
-                <Button onClick={() => void resend()} loading={busy}>Send the link again</Button>
-                <Button onClick={() => { setPendingEmail(null); setNotice(""); setError(""); }} disabled={busy}>Use another email</Button>
-              </div>
-            </div>
-          )}
-          {session.state === "signed-out" && config?.mode === "local" && !pendingEmail && (
-            <form className="platform-form" noValidate onSubmit={(event) => {
-              event.preventDefault();
-              if (!email.trim()) { setError("Add an email."); return; }
-              if (password.length < 8) { setError("Use at least 8 characters."); return; }
-              void submit(event);
-            }}>
-              <Field label="Email" help={error === "Add an email." ? error : undefined}><Input type="email" autoComplete="email" aria-invalid={error === "Add an email." || undefined} value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-              <Field label="Password" help={error === "Use at least 8 characters." ? error : undefined}><Input type="password" autoComplete="current-password" aria-invalid={error === "Use at least 8 characters." || undefined} value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-              {creatingAccount && usesSetupKey && (
-                <Field label="This computer's setup key" help="Creates the first owner. Filled in for this computer; a hosted install prints its own key where Konae starts.">
-                  <Input type="password" autoComplete="off" required value={setupKey} onChange={(event) => setSetupKey(event.target.value)} />
-                </Field>
-              )}
-              {creatingAccount && !usesSetupKey && (
-                <Field label="Invitation code" help="The operator of this installation gives you one. It works once.">
-                  <Input autoComplete="off" spellCheck={false} required value={code} onChange={(event) => setCode(event.target.value)} />
-                </Field>
-              )}
-              {error && error !== "Add an email." && error !== "Use at least 8 characters." && <p className="platform-error" role="alert">{error}</p>}
-              {notice && <p role="status">{notice}</p>}
-              <div className="platform-actions">
-                {creatingAccount ? (
-                  <>
-                    <Button type="submit" variant="primary" value="signup" loading={busy}>Create owner account</Button>
-                    <Button type="button" onClick={() => switchMode(false)} disabled={busy}>Back to sign in</Button>
-                  </>
-                ) : (
-                  <>
-                    <Button type="submit" variant="primary" value="login" loading={busy}>Sign in</Button>
-                    <Button type="button" onClick={() => switchMode(true)} disabled={busy}>Create owner account</Button>
-                  </>
-                )}
-              </div>
-            </form>
-          )}
-          {session.state === "signed-out" && error && config?.mode !== "local" && <p className="platform-error" role="alert">{error}</p>}
-
-          {session.state === "signed-in" && (
-            <div className="platform-signed-in">
-              <div className="platform-account">
-                <span className="platform-avatar" aria-hidden="true"><KeyRound size={15} /></span>
-                <div><strong>{session.email ?? "Signed in"}</strong><small>Owner session active in this browser</small></div>
-                <Badge tone="success">Signed in</Badge>
-              </div>
-              <div className="platform-actions">
-                <a className="ui-button ui-button-primary" href={backHref}><ArrowLeft size={14} /> {backLabel}</a>
-                <Button onClick={() => void signOut()}><LogOut size={14} /> Sign out</Button>
-              </div>
-              <AgentTokens />
-            </div>
-          )}
+          {!error && clerk && <ClerkSignIn publishableKey={config?.publishableKey} signOut={signOut} onError={setError} onComplete={finish} />}
         </Card>
       </main>
     </div>
   );
 }
 
-function ClerkSignIn({ publishableKey, returnTo, onError, onComplete }: { publishableKey?: string | null; returnTo: string | null; onError: (error: string) => void; onComplete: () => void }) {
+function ClerkSignIn({ publishableKey, signOut, onError, onComplete }: { publishableKey?: string | null; signOut: boolean; onError: (error: string) => void; onComplete: () => void }) {
   const element = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let active = true;
@@ -225,6 +84,9 @@ function ClerkSignIn({ publishableKey, returnTo, onError, onComplete }: { publis
       if (!clerk) throw new Error("Could not start Google sign-in.");
       await clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor } });
       if (!active) return;
+      // The owner page signed out of Konae; end the Clerk session too, or the
+      // widget would sign the owner straight back in.
+      if (signOut && clerk.session) await clerk.signOut();
       const exchange = async () => {
         if (!active || !clerk.session || exchanging) return;
         exchanging = true;
@@ -234,8 +96,7 @@ function ClerkSignIn({ publishableKey, returnTo, onError, onComplete }: { publis
           const response = await fetch("/_konae/owner/clerk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
           const body = await response.json().catch(() => ({})) as { error?: string };
           if (!response.ok) throw new Error(body.error ?? "Sign-in failed.");
-          if (!active) return;
-          if (returnTo) window.location.assign(returnTo); else onComplete();
+          if (active) onComplete();
         } catch (cause) { if (active) onError(cause instanceof Error ? cause.message : String(cause)); }
         finally { exchanging = false; }
       };
@@ -244,100 +105,6 @@ function ClerkSignIn({ publishableKey, returnTo, onError, onComplete }: { publis
     };
     void start().catch((cause) => { if (active) onError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { active = false; unsubscribe?.(); if (element.current && window.Clerk) window.Clerk.unmountSignIn(element.current); };
-  }, [publishableKey, returnTo, onError, onComplete]);
+  }, [publishableKey, signOut, onError, onComplete]);
   return <div ref={element} />;
-}
-
-function AgentTokens() {
-  const [credentials, setCredentials] = useState<Credential[]>([]);
-  const [projects, setProjects] = useState("");
-  const [scopes, setScopes] = useState("read");
-  const [created, setCreated] = useState<{ token: string; tokenId: string } | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const load = async () => {
-    try {
-      const result = await platformMcp.call<{ credentials: Credential[] }>("tokens_list");
-      setCredentials(result.credentials);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-
-  useEffect(() => { void load(); }, []);
-
-  const create = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await platformMcp.call<{ token: string; tokenId: string }>("token_create", {
-        scopes: scopes.split(","),
-        projectIds: projects.split(",").map((id) => id.trim()).filter(Boolean),
-        ttlSeconds: 86_400,
-      });
-      setCreated(result);
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const revoke = async (tokenId: string) => {
-    setError("");
-    try {
-      await platformMcp.call("token_revoke", { tokenId });
-      if (created?.tokenId === tokenId) setCreated(null);
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-
-  return (
-    <section className="platform-tokens" aria-label="Agent access">
-      <h2>Agent access</h2>
-      <p className="platform-note">Give an MCP client a 24-hour token. Configure it with this installation's <code>/mcp</code> URL and an <code>Authorization: Bearer</code> header. Keep tokens out of app source.</p>
-      <div className="platform-token-form">
-        <Field label="Project IDs" help="Comma-separated. Leave empty for all your projects.">
-          <Input value={projects} onChange={(event) => setProjects(event.target.value)} />
-        </Field>
-        <Field label="Permissions">
-          <Select value={scopes} onChange={(event) => setScopes(event.target.value)}>
-            <option value="read">Read only</option>
-            <option value="read,write,publish">Read, edit and publish</option>
-          </Select>
-        </Field>
-        <Button onClick={() => void create()} loading={busy}>Create 24-hour token</Button>
-      </div>
-      {created && (
-        <Field label="New token, shown once">
-          <Textarea readOnly rows={3} value={created.token} onFocus={(event) => event.currentTarget.select()} />
-        </Field>
-      )}
-      {error && <p className="platform-error" role="alert">{error}</p>}
-      <h3>Active credentials</h3>
-      {credentials.length === 0 ? <p className="platform-note">No agent tokens yet.</p> : (
-        <ul className="platform-credentials">
-          {credentials.map((credential) => (
-            <li key={credential.tokenId}>
-              <span>{readScopes(credential.scopes)} · expires {new Date(credential.expiresAt).toLocaleString()}</span>
-              <Button size="sm" variant="danger" onClick={() => void revoke(credential.tokenId)}>Revoke</Button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function readScopes(raw: string): string {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.join(", ") : String(raw);
-  } catch {
-    return raw;
-  }
 }

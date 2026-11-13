@@ -6,7 +6,7 @@ This page states each tool's arguments, answers and refusals. [MCP tools and gui
 
 ## Credentials
 
-Run `bun run dev:local`, open `http://localhost:4173/platform-access` and sign in on the owner sign-in page. The first owner of an installation uses "Create owner account" with the field "This computer's setup key", which a local install fills in. Every later owner needs an invitation code from the operator, as [Operate an installation](./operate.md#creator-admission) describes.
+Run `bun run dev:local`, open `http://localhost:4173/_konae/owner/login` and sign in on the owner sign-in page. The editor's `/platform-access` opens the same page. The first owner of an installation follows "Create an owner account" and gives the "Installation setup key", which a local install fills in. Every later owner needs an invitation code from the operator, as [Operate an installation](./operate.md#creator-admission) describes.
 
 | Credential | Permissions it can hold | Lifetime |
 | --- | --- | --- |
@@ -128,7 +128,7 @@ The runtime tools `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset` 
 
 ## Owner signup
 
-`POST /_konae/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode, or `"setupKey"` instead of the code for the first owner. One transaction consumes the code and creates the account, which is pending with a verification link in required mode and active with a session in local mode. A code for an email whose account is active or suspended is consumed, creates nothing and gets the same 202. When both `code` and `setupKey` arrive, the code decides. `GET /_konae/owner/config` answers `"admission": "setup-key"` while the key can still create an account and `"code"` otherwise. It also answers `"editor": true` when this server serves the editor from `KONAE_EDITOR_DIR`, so the owner page links to the project list only where one exists, and `"mailToFile": true` under `KONAE_MAIL_TRANSPORT=development`, so the page says a link was written to the mailbox file instead of sent.
+`POST /_konae/owner/signup` takes `{ "email", "code" }`, plus `"password"` in local mode, or `"setupKey"` instead of the code for the first owner. One transaction consumes the code and creates the account, which is pending with a verification link in required mode and active with a session in local mode. A code for an email whose account is active or suspended is consumed, creates nothing and gets the same 202. When both `code` and `setupKey` arrive, the code decides. `GET /_konae/owner/config` answers `"admission": "setup-key"` while the key can still create an account and `"code"` otherwise. It also answers `"editor": true` when this server serves the editor from `KONAE_EDITOR_DIR`, so the owner page links to the project list only where one exists, and `"mailToFile": true` under `KONAE_MAIL_TRANSPORT=development`, so the page says a link was written to the mailbox file instead of sent. On a local installation that still runs with the development key, `"defaultSetupKey"` holds that key so the page can fill it in; everywhere else it is `null`.
 
 | Request | Status | Message |
 | --- | --- | --- |

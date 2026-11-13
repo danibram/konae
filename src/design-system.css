@@ -626,7 +626,7 @@ a.confirm-publish { text-decoration: none; }
 .platform-card h1 { margin: 0 0 8px; font: 700 24px/1.2 var(--ds-font); letter-spacing: -.04em; }
 .platform-lead, .platform-note { margin: 0 0 20px; color: var(--ds-muted); font-size: 13px; line-height: 1.6; }
 .platform-note code { font: 12px var(--ds-mono); }
-.platform-form, .platform-token-form { display: grid; gap: 16px; }
+.platform-form { display: grid; gap: 16px; }
 .platform-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .platform-actions .ui-button { min-height: 42px; padding: 0 16px; font: 650 15px/1.2 var(--ds-font); letter-spacing: 0; text-decoration: none; }
 .platform-actions a { text-decoration: none; }
@@ -639,43 +639,6 @@ a.confirm-publish { text-decoration: none; }
   color: var(--ds-danger);
   font-size: 13px;
 }
-.platform-signed-in { display: grid; gap: 20px; }
-.platform-account {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--ds-stroke);
-  background: var(--ds-canvas);
-}
-.platform-account strong, .platform-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.platform-account small { color: var(--ds-muted); font-size: 12px; overflow: visible; text-overflow: clip; white-space: normal; }
-.platform-avatar {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--ds-stroke);
-  background: var(--ds-accent);
-  color: var(--ds-on-accent);
-  font-weight: 800;
-}
-.platform-tokens { display: grid; gap: 14px; padding-top: 20px; border-top: 1px solid var(--ds-stroke); }
-.platform-tokens h2 { margin: 0; font: 700 16px var(--ds-font); }
-.platform-tokens h3 { margin: 4px 0 0; font: 700 13px var(--ds-font); }
-.platform-tokens .platform-note { margin: 0; }
-.platform-credentials { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.platform-credentials li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  border: 1px solid var(--ds-border);
-  font-size: 12px;
-}
-
 .explorer-create { grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; }
 .explorer-create input { grid-column: 1 / -1; min-height: 28px; }
 .database-studio { display: flex; flex-direction: column; }

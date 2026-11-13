@@ -24,14 +24,16 @@ test("platform pages require an owner session and return to the requested page a
   // The component gallery is public (0b179e2), so only the workspace pages ask for sign-in.
   for (const path of ["/", projectPath]) {
     await page.goto(path);
-    await expect(page).toHaveURL(/\/platform-access\?returnTo=/);
+    await expect(page).toHaveURL(/\/_konae\/owner\/login\?returnTo=/);
     await expect(page.getByRole("heading", { name: "Owner sign-in" })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Workspace sections" })).toHaveCount(0);
   }
 
   await page.goto(projectPath);
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  // The owner page also holds the hidden reset and new-password forms.
+  const signIn = page.locator("form#auth");
+  await signIn.getByLabel("Email").fill(email);
+  await signIn.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${projectPath}$`));
   await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
