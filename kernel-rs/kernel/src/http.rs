@@ -437,7 +437,11 @@ pub struct ApiKey {
 /// owner revoked has no reason.
 pub const REVOKED_AT_IMPORT: &str = "import";
 
-fn keys_table(db: &Connection) -> rusqlite::Result<()> {
+/// The columns of `api_keys`, as `keys_table` and `add_revoked_reason` write
+/// them. An import copies only these names, so none from a file reaches SQL.
+pub(crate) const API_KEY_COLUMNS: [&str; 8] = ["id", "token_hash", "name", "actions", "files", "created_at", "revoked_at", "revoked_reason"];
+
+pub(crate) fn keys_table(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS api_keys(
            id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
