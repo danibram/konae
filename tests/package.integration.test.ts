@@ -7,6 +7,7 @@ import { McpClient, checksum, encodeBase64, type Transfer } from "../src/mcp/cli
 import { readTar } from "../src/lib/tar";
 import { downloadToFile } from "../scripts/package-files";
 import type { PackageManifest } from "../src/lib/portable-package";
+import type { UsageSummary } from "../src/lib/usage";
 
 // The chunked package of ADR-0008 and every refusal its import checks.
 // tests/smoke/package-quota.ts exports a 256 MiB app with its data and runs
@@ -180,13 +181,20 @@ describe("chunked package", () => {
       { kind: "signup", name: "", count: 1 }, { kind: "action", name: "notes.create", count: 1 }, { kind: "upload", name: "", count: 1 },
     ]));
 
-    const monitor = await owner.call<{ metrics: { name: string; origin: string; count: number }[]; coverage: { startedAt: number } }>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    const monitor = await owner.call<UsageSummary>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
     expect(monitor.coverage.startedAt).toBeNumber();
     expect(monitor.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ name: "notes.create", origin: "runtime", count: 1 })]));
+    expect(monitor.accounts).toMatchObject({ active: 1, opens: 0, actions: 1, top: [
+      { email: "writer@pkg_source.test", actions: 1 },
+    ] });
+    expect(monitor.storage?.files).toBe(1);
 
     const moved = runtime(first.receipt.hostname, await account(first.receipt.hostname, "login", "writer@pkg_source.test"));
     expect(await moved.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Moved with the package" }]);
-    const continued = await owner.call<{ metrics: { name: string; origin: string; count: number }[] }>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    const continued = await owner.call<UsageSummary>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    expect(continued.accounts).toMatchObject({ active: 1, actions: 2, top: [
+      { account: monitor.accounts!.top[0].account, email: "writer@pkg_source.test", actions: 2 },
+    ] });
     expect(continued.metrics).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "notes.create", origin: "runtime", count: 1 }),
       expect.objectContaining({ name: "notes.list", origin: "runtime", count: 1 }),

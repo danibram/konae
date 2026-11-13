@@ -266,4 +266,43 @@ describe("Usage and Signals", () => {
     await expect(release("usage_app", { "schema.sql": schema, "actions.json": JSON.stringify(refused) }))
       .rejects.toThrow("Action page.like names signal property visitor, which is not one of its input bindings.");
   });
+
+  test("account activity includes successful actions and queued calls, excludes refusals, and keeps emails out of the overview", async () => {
+    await release("usage_app", { "schema.sql": schema, "actions.json": JSON.stringify({ ...actions, actions: {
+      ...actions.actions,
+      "notes.absent": { kind: "mutation", access: "authenticated", statement: "DELETE FROM notes WHERE id = -1", bindings: [], guard: "This note no longer exists." },
+      "hook.send": { kind: "call", access: "authenticated", method: "POST", url: "https://hooks.invalid/send", bindings: [] },
+    } }) });
+    const login = await post("/_konae/auth/login", { email: "ana@usage.test", password });
+    expect(login.status).toBe(200);
+    const ana = runtime(login.headers.get("set-cookie")!.split(";")[0]);
+    const session = await ana.call<{ userId: string }>("auth_session");
+    await ana.call("actions_invoke", { name: "notes.list" });
+    await ana.call("actions_invoke", { name: "page.like", input: { page: "/accounts" } });
+    expect(await ana.call("actions_invoke", { name: "hook.send" })).toMatchObject({ queued: true });
+    await expect(ana.call("actions_invoke", { name: "notes.absent" })).rejects.toThrow("This note no longer exists.");
+    await expect(ana.call("actions_invoke", { name: "notes.add", input: { topic: "x", body: "y".repeat(150) } })).rejects.toThrow("CHECK");
+
+    const signup = await post("/_konae/auth/signup", { email: "bea@usage.test", password });
+    expect(signup.status).toBe(200);
+    const bea = runtime(signup.headers.get("set-cookie")!.split(";")[0]);
+    await bea.call("auth_session");
+    await bea.call("auth_session");
+    await bea.call("actions_invoke", { name: "notes.list" });
+    await runtime().call("auth_session");
+    await runtime().call("actions_invoke", { name: "notes.list" });
+
+    const summary = await owner.call<UsageSummary>("usage_summary", { deploymentId, from: today(), to: today() });
+    expect(summary.accounts).toMatchObject({ active: 2, opens: 3, actions: 4, days: [{ day: today(), active: 2 }] });
+    expect(summary.accounts?.top).toEqual([
+      expect.objectContaining({ account: session.userId, email: "ana@usage.test", opens: 1, actions: 3, activeDays: 1 }),
+      expect.objectContaining({ email: "bea@usage.test", opens: 2, actions: 1, activeDays: 1 }),
+    ]);
+    expect(summary.storage?.files).toBe(1);
+    expect(summary.storage?.total).toBeGreaterThan(0);
+    const overview = await owner.call<UsageOverview>("usage_overview", { from: today(), to: today() });
+    const accounts = overview.apps.find((app) => app.projectId === "usage_app")?.summary?.accounts;
+    expect(accounts).toMatchObject({ active: 2, opens: 3, actions: 4, days: [], top: [] });
+    expect(JSON.stringify(accounts)).not.toContain("@usage.test");
+  });
 });

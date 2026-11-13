@@ -490,3 +490,58 @@ test("a person who writes code adds a page, a public file and a signed route, an
   expect(missing.status()).toBe(404);
   expect(await missing.text()).toContain("Nothing at this address");
 });
+
+test("usage counts signed-in accounts as people, never a visitor, and shows what each app stores", async ({ page, browser }, testInfo) => {
+  const name = `Usage people ${Date.now()}`;
+  await createProject(page, name);
+  const url = await publish(page);
+  const addTask = async (app: Page, text: string) => {
+    await app.getByPlaceholder(/Add one small thing/).fill(text);
+    await app.getByRole("button", { name: "Add task" }).click();
+    await expect(app.getByText(text)).toBeVisible();
+  };
+  // A visitor without an account runs an action: an operation, never a person.
+  const anonymous = await browser.newContext();
+  const visitor = await anonymous.newPage();
+  await visitor.goto(url);
+  await addTask(visitor, "From a visitor");
+  await anonymous.close();
+  // Two people with accounts, one busier than the other.
+  for (const tasks of [3, 1]) {
+    const context = await browser.newContext();
+    const person = await context.newPage();
+    await person.goto(new URL("/_konae/login", url).href);
+    await signInApp(person);
+    for (let index = 0; index < tasks; index += 1) await addTask(person, `Task ${tasks}-${index}`);
+    await context.close();
+  }
+
+  await page.goto("/usage");
+  await expect(page.getByRole("heading", { name: "All apps" })).toBeVisible();
+  const row = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(name) }) });
+  await expect(row.locator('td[data-label="Active accounts"]')).toHaveText("2");
+  await expect(row.locator('td[data-label="Storage"]')).toHaveText(/KiB|MiB/);
+  await expect(page.getByRole("figure").filter({ hasText: "Storage by app" }).getByRole("link", { name })).toBeVisible();
+  await page.getByRole("region", { name: "All apps" }).screenshot({ path: testInfo.outputPath("usage-overview-light.png") });
+
+  await row.getByRole("link", { name: `View usage for ${name}` }).click();
+  const people = page.getByRole("region", { name: "People" });
+  await expect(people.locator(".ui-stats")).toContainText("Active accounts2");
+  // Actions count every call an account made, the list queries the page runs as well as the adds.
+  const ranked = people.getByRole("figure").filter({ hasText: "Actions by account" });
+  await expect(ranked.locator("tbody tr")).toHaveCount(2);
+  const counts = (await ranked.locator("tbody .ui-barlist-value").allTextContents()).map(Number);
+  expect(counts[0]).toBeGreaterThan(counts[1]);
+  await expect(people.locator(".ui-stats")).toContainText(`Actions${counts[0] + counts[1]}`);
+  await expect(ranked.getByText(/@example\.test/).first()).toBeVisible();
+  await people.getByRole("radio", { name: "App opens" }).click();
+  await expect(people.getByRole("figure").filter({ hasText: "App opens by account" })).toBeVisible();
+  const storage = page.getByRole("region", { name: "Storage" });
+  await expect(storage.getByRole("rowheader", { name: /^Database/ })).toBeVisible();
+  await expect(storage.getByRole("rowheader", { name: /^Published pages/ })).toBeVisible();
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await people.screenshot({ path: testInfo.outputPath(`usage-people-${scheme}.png`), animations: "disabled" });
+    await storage.screenshot({ path: testInfo.outputPath(`usage-storage-${scheme}.png`), animations: "disabled" });
+  }
+});

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { account, appFetch, buildKernel, release, runtime, startKernel, type Kernel } from "./kernel-harness";
+import type { UsageSummary } from "../src/lib/usage";
 
 // An owner enters an app as one of its users through a one-time link
 // (kernel-rs/kernel/src/enter.rs). The owner's audit log records who entered
@@ -38,6 +39,7 @@ test("an owner enters as an app user once per link, and the audit log names both
   const { receipt } = await release(kernel.owner, payload(id), id);
   const cookie = await account(kernel, receipt.hostname, "signup", "ana@enter.test");
   const ana = (await kernel.owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId: receipt.id })).users[0];
+  await runtime(kernel, receipt.hostname, cookie).call("auth_session");
   await runtime(kernel, receipt.hostname, cookie).call("actions_invoke", { name: "notes.add", input: { body: "Ana's own note" } });
 
   const link = await kernel.owner.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { deploymentId: receipt.id, userId: ana.userId });
@@ -64,6 +66,10 @@ test("an owner enters as an app user once per link, and the audit log names both
   expect(total("action", "notes.add")).toBe(1);
   expect(total("action", "notes.mine")).toBe(0);
   expect(total("login", "")).toBe(0);
+  const summary = await kernel.owner.call<UsageSummary>("usage_summary", { deploymentId: receipt.id, from: today, to: today });
+  expect(summary.accounts).toMatchObject({ active: 1, opens: 1, actions: 1, top: [
+    { account: ana.userId, email: ana.email, opens: 1, actions: 1, activeDays: 1 },
+  ] });
   const signals = await kernel.owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { deploymentId: receipt.id, name: "note.added" });
   expect(signals.signals.map((signal) => signal.properties)).toEqual([{ actor: ana.userId }]);
 

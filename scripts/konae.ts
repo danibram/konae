@@ -572,6 +572,9 @@ export type LocalKernel = { binary: string; env: Record<string, string | undefin
  * `data/` where they are. KONAE_KERNEL_BIN names a built `kernel` binary to
  * run instead of compiling one.
  */
+/** 1 TiB: no file or app folder on this machine reaches it, so a local Kernel has no file limit in practice. */
+const LOCAL_FILE_LIMIT = String(1024 ** 4);
+
 export async function localKernel(root: string, settings: AppSettings, options: { port?: string; confirmSchema?: string; build?: boolean } = {}): Promise<LocalKernel> {
   const binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : path.join(toolRoot, "kernel-rs/target/debug/kernel");
   if (!process.env.KONAE_KERNEL_BIN && options.build !== false) {
@@ -591,6 +594,9 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
     // Account links and notices land in a file on this machine, never a provider.
     KONAE_MAIL_TRANSPORT: "development",
+    // A local run takes files of any size unless these name a limit, so uploads can be tried with real files.
+    KONAE_FILES_QUOTA_BYTES: process.env.KONAE_FILES_QUOTA_BYTES || LOCAL_FILE_LIMIT,
+    KONAE_FILE_MAX_BYTES: process.env.KONAE_FILE_MAX_BYTES || LOCAL_FILE_LIMIT,
     // Shortens every schedule so a run can be watched; the Kernel takes it only on loopback.
     ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),
     ...(options.confirmSchema ? { KONAE_CONFIRM_SCHEMA: options.confirmSchema } : {}),

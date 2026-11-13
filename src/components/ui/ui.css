@@ -187,6 +187,19 @@
 .ui-line-cross { stroke: var(--ds-muted); stroke-dasharray: 3 3; }
 .ui-line-dot { stroke: var(--ds-surface); stroke-width: 2; }
 
+.ui-barlist-rows { width: 100%; border-collapse: collapse; table-layout: fixed; font: 13px/1.4 var(--ds-font); }
+.ui-barlist-rows thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ui-barlist-rows tbody tr { border-bottom: 1px solid var(--ds-border); }
+.ui-barlist-rows tbody tr:last-child { border-bottom: 0; }
+.ui-barlist-rows th { width: 40%; padding: 9px 14px 9px 0; text-align: left; font-weight: 500; color: var(--ds-text); overflow-wrap: anywhere; vertical-align: middle; }
+.ui-barlist-rows th small { display: block; margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--ds-muted); }
+.ui-barlist-bar { padding: 9px 0; vertical-align: middle; }
+.ui-barlist-bar > span { display: block; height: 10px; min-width: 2px; border-radius: 0 4px 4px 0; background: var(--ds-s1); }
+.ui-barlist-value { width: 9ch; padding: 9px 0 9px 12px; text-align: right; vertical-align: middle; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ui-barlist-rows tr[data-tone="warning"] .ui-barlist-bar > span { background: var(--ds-warning-fill); }
+.ui-barlist-rows tr[data-tone="danger"] .ui-barlist-bar > span { background: var(--ds-danger); }
+.ui-barlist-rows tr[data-tone] th small { color: var(--ds-text); }
+
 .ui-donut-body { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 24px; align-items: center; }
 .ui-donut svg { width: 176px; height: 176px; }
 .ui-donut-track { fill: none; stroke: var(--ds-subtle); stroke-width: 16; }

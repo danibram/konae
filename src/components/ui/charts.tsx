@@ -238,3 +238,45 @@ export function Sparkline({ values, label }: { values: number[]; label: string }
     <path d={line} />{values.length > 0 && <circle cx={lx} cy={ly} r="2.5" />}
   </svg>;
 }
+
+export type BarRow = {
+  key: string;
+  label: ReactNode;
+  value: number;
+  /** Words after the figure, as a share of a quota. */
+  detail?: ReactNode;
+  /** A row past a limit the reader must notice. The detail says why in words. */
+  tone?: "warning" | "danger";
+};
+
+/**
+ * Ranked horizontal bars on one baseline, largest first, one hue. Every row
+ * prints its figure, so nothing hides behind a hover, and the bars compare
+ * parts more exactly than a donut's slices.
+ */
+export function BarList({ title, rows, format = formatNumber, total, empty, labelHeading = "Name", unit }: {
+  title: string;
+  rows: BarRow[];
+  format?: (value: number) => string;
+  /** The figure the caption shows. The sum of the rows when absent. */
+  total?: number;
+  empty: string;
+  labelHeading?: string;
+  /** What a value counts, for screen readers, as "actions". */
+  unit: string;
+}) {
+  const sorted = [...rows].sort((a, b) => b.value - a.value);
+  const max = Math.max(0, ...sorted.map((row) => row.value));
+  const sum = total ?? sorted.reduce((acc, row) => acc + row.value, 0);
+  return <figure className="ui-chart ui-barlist">
+    <figcaption><span>{title}</span><strong>{format(sum)}</strong></figcaption>
+    {max === 0 ? <p className="ui-chart-empty">{empty}</p> : <table className="ui-barlist-rows">
+      <thead><tr><th scope="col">{labelHeading}</th><td /><th scope="col">{unit[0].toUpperCase() + unit.slice(1)}</th></tr></thead>
+      <tbody>{sorted.map((row) => <tr key={row.key} data-tone={row.tone}>
+        <th scope="row">{row.label}{row.detail && <small>{row.detail}</small>}</th>
+        <td className="ui-barlist-bar" aria-hidden="true">{row.value > 0 && <span style={{ width: `${row.value / max * 100}%` }} />}</td>
+        <td className="ui-barlist-value">{format(row.value)}</td>
+      </tr>)}</tbody>
+    </table>}
+  </figure>;
+}

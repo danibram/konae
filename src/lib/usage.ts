@@ -4,10 +4,19 @@ export type UsageCount = { kind: string; name: string; count: number };
 export type DailyCount = UsageCount & { day: string };
 export type Metric = { day: string; feature: "execution" | "signal"; name: string; origin: string; outcome: string; count: number; lastAt: number };
 export type PublishedAction = { name: string; kind: string; http: { method: string; path: string } | null; signal: { name: string } | null; schedule: unknown; notify: unknown };
+/** One signed-in app account's activity in the period. `email` is null once the account is gone. */
+export type AccountActivity = { account: string; email: string | null; opens: number; actions: number; activeDays: number; lastAt: number };
+export type UsageAccounts = { active: number; opens: number; actions: number; days: { day: string; active: number }[]; top: AccountActivity[]; limit: number; startedAt: number | null };
+export type StoragePart = { part: string; bytes: number; limit: number | null; exported: boolean };
+export type UsageStorage = { total: number; files: number; parts: StoragePart[] };
 export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
   usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[] };
   metrics: Metric[]; actions: PublishedAction[];
+  /** Absent from a Kernel older than per-account Usage. */
+  accounts?: UsageAccounts;
+  /** Absent from a Kernel older than storage in Usage. */
+  storage?: UsageStorage;
   calls: { states: { state: string; count: number }[]; retainedOnly: boolean };
   mail: { states: { state: string; count: number }[]; retainedOnly: boolean };
   coverage: { startedAt: number | null; earliestMetricDay: string | null; prunedThrough: number | null; retentionDays: number; approximate: boolean; previewIncluded: boolean; queueFlushed: boolean; installationDroppedSinceRestart: number; installationWriteErrorsSinceRestart: number };
@@ -143,4 +152,37 @@ export function kindTotal(summary: UsageSummary, kind: string) {
 /** Page views by the file the Kernel served, most viewed first. */
 export function pageViews(summary: UsageSummary) {
   return summary.usage.totals.filter((row) => row.kind === "page_view").map((row) => ({ page: row.name, count: row.count })).sort((a, b) => b.count - a.count || a.page.localeCompare(b.page));
+}
+
+const units = ["KiB", "MiB", "GiB", "TiB"];
+/** Bytes in the binary units the Kernel's limits use: `840 bytes`, `1.4 MiB`. */
+export function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value >= 100 ? Math.round(value) : Number(value.toFixed(1))} ${units[unit]}`;
+}
+
+export const storageParts: Record<string, { name: string; description: string }> = {
+  database: { name: "Database", description: "The app's own tables, database.sqlite." },
+  files: { name: "Uploaded files", description: "Files people uploaded through the app." },
+  accounts: { name: "App accounts", description: "Accounts, sessions and invitations, identity.sqlite." },
+  usage: { name: "Usage history", description: "These counts and the app's Signals, usage.sqlite." },
+  published: { name: "Published pages", description: "The built files the Kernel serves." },
+  sources: { name: "Sources", description: "Pages, actions.json and schema.sql as saved." },
+  backups: { name: "Backups", description: "Copies this installation keeps. An export does not carry them." },
+};
+/** Each part of the app's storage with its share of a limit, largest first. Backups are left out: an export does not carry them. */
+export function storageRows(storage: UsageStorage) {
+  return storage.parts.filter((part) => part.exported).map((part) => {
+    const share = part.limit ? part.bytes / part.limit : null;
+    return { ...part, name: storageParts[part.part]?.name ?? part.part, share, tone: share === null ? undefined : share >= 0.95 ? "danger" as const : share >= 0.8 ? "warning" as const : undefined };
+  }).sort((a, b) => b.bytes - a.bytes);
+}
+
+/** Signed-in accounts active each day of the range, zero on a day with none. */
+export function dailyActiveAccounts(summary: UsageSummary) {
+  const byDay = new Map((summary.accounts?.days ?? []).map((row) => [row.day, row.active]));
+  return rangeDays(summary.usage.from, summary.usage.to).map((day) => ({ day, value: byDay.get(day) ?? 0 }));
 }

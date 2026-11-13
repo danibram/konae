@@ -723,9 +723,12 @@ pub async fn runtime_call(
     match name {
         "auth_session" => {
             let result = response_value(session(State(state.clone()), headers.clone()).await).await;
-            if let (Ok(_), Some(id)) = (&result, app) {
+            if let (Ok(session), Some(id)) = (&result, app) {
                 if counted(state, id, headers).await {
                     super::usage::count(&state.data_root, id, super::usage::Operation::Session);
+                    if let Some(account) = session["userId"].as_str() {
+                        super::usage::count_account(&state.data_root, id, account, super::usage::AccountKind::Open);
+                    }
                 }
             }
             result

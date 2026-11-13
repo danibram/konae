@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { dailyExecutions, dailyUsage, featureRows, noticeOutcomes, outcomeLabel, pageViews, usageRange, type UsageSummary } from "./usage";
+import { dailyActiveAccounts, dailyExecutions, dailyUsage, featureRows, formatBytes, storageRows, noticeOutcomes, outcomeLabel, pageViews, usageRange, type UsageSummary } from "./usage";
 
 test("usage periods include today and use UTC across month and year boundaries", () => {
   expect(usageRange(7, new Date("2026-01-03T00:30:00Z"))).toEqual({ from: "2025-12-28", to: "2026-01-03" });
@@ -67,4 +67,31 @@ test("daily executions keep each result as a part of the day", () => {
   ];
   const day = dailyExecutions(value).find((p) => p.day === "2026-11-03");
   expect(day).toEqual({ day: "2026-11-03", value: 6, parts: { ok: 5, failed: 1 } });
+});
+
+test("bytes read in the binary units the Kernel's limits name", () => {
+  expect(formatBytes(1)).toBe("1 byte");
+  expect(formatBytes(840)).toBe("840 bytes");
+  expect(formatBytes(1536)).toBe("1.5 KiB");
+  expect(formatBytes(20 * 1024 * 1024)).toBe("20 MiB");
+  expect(formatBytes(300 * 1024 * 1024)).toBe("300 MiB");
+});
+
+test("storage leaves backups out, ranks the parts and warns near a limit", () => {
+  const rows = storageRows({ total: 0, files: 2, parts: [
+    { part: "database", bytes: 100, limit: 1000, exported: true },
+    { part: "files", bytes: 900, limit: 1000, exported: true },
+    { part: "published", bytes: 300, limit: null, exported: true },
+    { part: "backups", bytes: 5000, limit: null, exported: false },
+  ] });
+  expect(rows.map((row) => [row.part, row.tone])).toEqual([["files", "warning"], ["published", undefined], ["database", undefined]]);
+});
+
+test("active accounts fill every day of the range, and a Kernel without them reads as zero", () => {
+  const base = summary([]);
+  expect(dailyActiveAccounts(base).every((day) => day.value === 0)).toBe(true);
+  const withAccounts = { ...base, accounts: { active: 2, opens: 3, actions: 4, days: [{ day: "2026-11-03", active: 2 }], top: [], limit: 20, startedAt: null } };
+  const days = dailyActiveAccounts(withAccounts);
+  expect(days).toHaveLength(8);
+  expect(days.find((day) => day.day === "2026-11-03")?.value).toBe(2);
 });

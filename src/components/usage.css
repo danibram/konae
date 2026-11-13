@@ -40,3 +40,7 @@
 @media (max-width: 760px) {
     .usage-app-link > a { max-width: 100%; overflow-wrap: anywhere; }
 }
+.usage-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 16px; margin-bottom: 16px; }
+.usage-chart-card { min-width: 0; padding: 18px; border: var(--ds-bw, 1px) solid var(--line); background: var(--ds-surface); }
+.usage-chart-card .ui-barlist a { color: inherit; text-underline-offset: 3px; }
+.usage-chart-tools { display: flex; margin-bottom: 14px; }

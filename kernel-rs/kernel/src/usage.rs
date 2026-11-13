@@ -44,6 +44,10 @@ pub const MAX_USAGE_ROWS: i64 = 100_000;
 pub const MAX_SIGNALS: i64 = 50_000;
 /// Daily execution and Signal aggregates, bounded independently from operation totals.
 const MAX_METRIC_ROWS: i64 = 100_000;
+/// Daily counts per app account, oldest days dropped first.
+const MAX_ACCOUNT_ROWS: i64 = 100_000;
+/// The accounts `usage_summary` lists, most active first.
+const ACCOUNTS_PAGE: i64 = 20;
 /// Scheduled runs kept, oldest dropped first. A job every 5 minutes makes 288 a day.
 pub const MAX_SCHEDULED_RUNS: i64 = 10_000;
 /// The scheduled runs `usage_read` returns, newest first.
@@ -103,6 +107,7 @@ enum Message {
     Count { folder: PathBuf, at: u64, kind: &'static str, name: String },
     Signal { folder: PathBuf, at: u64, name: String, properties: String },
     Metric { folder: PathBuf, at: u64, feature: String, name: String, origin: String, outcome: String },
+    Account { folder: PathBuf, at: u64, account: String, kind: AccountKind },
     Flush(SyncSender<()>),
 }
 
@@ -168,6 +173,35 @@ pub fn signal(data_root: &Path, deployment_id: &str, action_name: &str, action: 
     });
 }
 
+/// What one app account did, as `account_daily` counts it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccountKind {
+    /// The app opened with this account's session (`auth_session`).
+    Open,
+    /// A Server Action succeeded or a service call entered the queue.
+    Action,
+}
+
+impl AccountKind {
+    fn name(self) -> &'static str {
+        match self {
+            AccountKind::Open => "open",
+            AccountKind::Action => "action",
+        }
+    }
+}
+
+/// Counts one operation of a signed-in app account, by the account's ID.
+/// The Kernel keeps no key for a visitor without an account (ADR-0010).
+/// Call it only after the operation succeeded, and not for a session an
+/// owner entered as this account.
+pub fn count_account(data_root: &Path, deployment_id: &str, account: &str, kind: AccountKind) {
+    if account.is_empty() || account == "anonymous" {
+        return;
+    }
+    enqueue(Message::Account { folder: folder(data_root, deployment_id), at: super::now_ms(), account: account.to_owned(), kind });
+}
+
 /// Records one completed execution without retaining its inputs or error text.
 pub fn execution(data_root: &Path, deployment_id: &str, name: &str, origin: &str, outcome: &str) {
     enqueue(Message::Metric { folder: folder(data_root, deployment_id), at: super::now_ms(),
@@ -221,6 +255,7 @@ struct Batch {
     counts: HashMap<(String, &'static str, String), i64>,
     signals: Vec<(u64, String, String)>,
     metrics: Vec<(u64, String, String, String, String)>,
+    accounts: HashMap<(String, String, AccountKind), (i64, u64)>,
 }
 
 fn writer(receiver: Receiver<Message>) {
@@ -239,6 +274,11 @@ fn writer(receiver: Receiver<Message>) {
                 }
                 Message::Metric { folder, at, feature, name, origin, outcome } => {
                     batches.entry(folder).or_default().metrics.push((at, feature, name, origin, outcome));
+                }
+                Message::Account { folder, at, account, kind } => {
+                    let entry = batches.entry(folder).or_default().accounts.entry((day(at), account, kind)).or_insert((0, 0));
+                    entry.0 += 1;
+                    entry.1 = entry.1.max(at);
                 }
                 Message::Flush(done) => flushes.push(done),
             }
@@ -282,9 +322,13 @@ fn open(path: &Path) -> Result<Connection> {
            day TEXT NOT NULL, feature TEXT NOT NULL, name TEXT NOT NULL, origin TEXT NOT NULL,
            outcome TEXT NOT NULL, count INTEGER NOT NULL, last_at INTEGER NOT NULL,
            PRIMARY KEY(day, feature, name, origin, outcome));
-         CREATE TABLE IF NOT EXISTS metric_meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+         CREATE TABLE IF NOT EXISTS metric_meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS account_daily(
+           day TEXT NOT NULL, account TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL, last_at INTEGER NOT NULL,
+           PRIMARY KEY(day, account, kind));",
     )?;
     connection.execute("INSERT OR IGNORE INTO metric_meta VALUES('started_at', ?1)", [super::now_ms() as i64])?;
+    connection.execute("INSERT OR IGNORE INTO metric_meta VALUES('accounts_started_at', ?1)", [super::now_ms() as i64])?;
     Ok(connection)
 }
 
@@ -373,6 +417,13 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
     for (at, feature, name, origin, outcome) in &batch.metrics {
         metric(&transaction, *at, feature, name, origin, outcome, 1)?;
     }
+    for ((day, account, kind), (count, at)) in &batch.accounts {
+        transaction.execute(
+            "INSERT INTO account_daily(day, account, kind, count, last_at) VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(day, account, kind) DO UPDATE SET count = count + excluded.count, last_at = max(last_at, excluded.last_at)",
+            params![day, account, kind.name(), count, *at as i64],
+        )?;
+    }
     for (at, name, properties) in &batch.signals {
         metric(&transaction, *at, "signal", name, "kernel", "recorded", 1)?;
         transaction.execute(
@@ -401,6 +452,7 @@ fn prune(db: &Connection, now: u64) -> Result<()> {
     let cutoff = day(now.saturating_sub((USAGE_DAYS as u64 - 1) * 86_400_000));
     prune_daily(db, "usage_daily", MAX_USAGE_ROWS, &cutoff)?;
     prune_daily(db, "metric_daily", MAX_METRIC_ROWS, &cutoff)?;
+    prune_daily(db, "account_daily", MAX_ACCOUNT_ROWS, &cutoff)?;
     db.execute(
         "DELETE FROM signals WHERE id <= (SELECT MAX(id) FROM signals) - ?1",
         [MAX_SIGNALS],
@@ -654,7 +706,7 @@ pub fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &
         let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'metric_daily')", [], |r| r.get(0))?;
         if exists {
             started_at = db.query_row("SELECT value FROM metric_meta WHERE key = 'started_at'", [], |r| r.get(0)).ok();
-            pruned_through = db.query_row("SELECT MAX(value) FROM metric_meta WHERE key IN ('usage_daily_pruned_through', 'metric_daily_pruned_through')", [], |r| r.get(0))?;
+            pruned_through = db.query_row("SELECT MAX(value) FROM metric_meta WHERE key IN ('usage_daily_pruned_through', 'metric_daily_pruned_through', 'account_daily_pruned_through')", [], |r| r.get(0))?;
             earliest_day = db.query_row("SELECT MIN(day) FROM metric_daily", [], |r| r.get(0))?;
             let mut q = db.prepare("SELECT day, feature, name, origin, outcome, count, last_at FROM metric_daily WHERE day BETWEEN ?1 AND ?2 ORDER BY day, feature, name, origin, outcome")?;
             metrics = q.query_map(params![from, to], |r| Ok(json!({"day": r.get::<_, String>(0)?, "feature": r.get::<_, String>(1)?,
@@ -670,6 +722,8 @@ pub fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &
     let end = (parse_day(to).unwrap() + 1) * 86_400_000;
     Ok(json!({"deploymentId": deployment.id, "projectId": deployment.project_id, "projectName": deployment.project_name, "url": deployment.url,
         "usage": usage, "metrics": metrics, "actions": actions,
+        "accounts": read_accounts(&path, &crate::layout::identity(data_root, &deployment.id), from, to)?,
+        "storage": storage(data_root, &deployment.id),
         "calls": retained_states(&data_root.join("calls.sqlite"), "calls", "deployment", &deployment.id, start, end)?,
         "mail": retained_states(&data_root.join("mail.sqlite"), "jobs", "scope", &format!("deployment:{}", deployment.id), start, end)?,
         "coverage": {"startedAt": started_at, "earliestMetricDay": earliest_day, "prunedThrough": pruned_through, "retentionDays": USAGE_DAYS,
@@ -678,11 +732,95 @@ pub fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &
             "installationWriteErrorsSinceRestart": WRITE_ERRORS.load(Ordering::Relaxed)}, "updatedAt": super::now_ms()}))
 }
 
+/// What signed-in app accounts did in the period: how many were active, how
+/// many were active each day, and the most active ones with their email,
+/// which comes from `identity.sqlite` at read time so `usage.sqlite` keeps
+/// only the account's ID. A visitor without an account appears nowhere here.
+fn read_accounts(usage: &Path, identity: &Path, from: &str, to: &str) -> Result<Value> {
+    let empty = json!({"active": 0, "opens": 0, "actions": 0, "days": [], "top": [], "limit": ACCOUNTS_PAGE, "startedAt": null});
+    let Some(db) = read_only(usage)? else { return Ok(empty) };
+    let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'account_daily')", [], |r| r.get(0))?;
+    if !exists {
+        return Ok(empty);
+    }
+    let started_at: Option<i64> = db.query_row("SELECT value FROM metric_meta WHERE key = 'accounts_started_at'", [], |r| r.get(0)).ok();
+    let (active, opens, actions): (i64, i64, i64) = db.query_row(
+        "SELECT COUNT(DISTINCT account), COALESCE(SUM(CASE kind WHEN 'open' THEN count END), 0), COALESCE(SUM(CASE kind WHEN 'action' THEN count END), 0)
+         FROM account_daily WHERE day BETWEEN ?1 AND ?2",
+        params![from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let mut q = db.prepare("SELECT day, COUNT(DISTINCT account) FROM account_daily WHERE day BETWEEN ?1 AND ?2 GROUP BY day ORDER BY day")?;
+    let days = q.query_map(params![from, to], |r| Ok(json!({"day": r.get::<_, String>(0)?, "active": r.get::<_, i64>(1)?})))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut q = db.prepare(
+        "SELECT account, COALESCE(SUM(CASE kind WHEN 'open' THEN count END), 0) AS opens,
+                COALESCE(SUM(CASE kind WHEN 'action' THEN count END), 0) AS actions,
+                COUNT(DISTINCT day), MAX(last_at)
+         FROM account_daily WHERE day BETWEEN ?1 AND ?2 GROUP BY account
+         ORDER BY actions + opens DESC, MAX(last_at) DESC, account LIMIT ?3")?;
+    let rows = q.query_map(params![from, to, ACCOUNTS_PAGE], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let identity = read_only(identity)?;
+    let email = |account: &str| -> Option<String> {
+        identity.as_ref()?.query_row("SELECT email FROM app_users WHERE id = ?1", [account], |r| r.get(0)).ok()
+    };
+    let top: Vec<Value> = rows.into_iter().map(|(account, opens, actions, days, last_at)| json!({
+        "account": account, "email": email(&account), "opens": opens, "actions": actions, "activeDays": days, "lastAt": last_at,
+    })).collect();
+    Ok(json!({"active": active, "opens": opens, "actions": actions, "days": days, "top": top, "limit": ACCOUNTS_PAGE, "startedAt": started_at}))
+}
+
+/// The bytes one part of an app takes now: a file, or a folder and all it holds.
+fn bytes_on_disk(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return 0 };
+    if meta.is_file() {
+        return meta.len();
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    std::fs::read_dir(path).map(|entries| entries.flatten().map(|entry| bytes_on_disk(&entry.path())).sum()).unwrap_or(0)
+}
+
+/// A SQLite file with its write-ahead log and shared-memory index.
+fn sqlite_bytes(path: &Path) -> u64 {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    ["", "-wal", "-shm"].iter().map(|suffix| bytes_on_disk(&path.with_file_name(format!("{name}{suffix}")))).sum()
+}
+
+/// What the app takes on this installation now, by part. The uploaded files
+/// count what their index records, so the figure is the same whether the
+/// bytes sit beside the index or in an S3 bucket. Backups stay on this
+/// installation and an export never carries them, so they are listed apart.
+pub fn storage(data_root: &Path, id: &str) -> Value {
+    use crate::layout;
+    let index = layout::files(data_root, id).join("index.json");
+    let files: Vec<Value> = std::fs::read(&index).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    let file_bytes: u64 = files.iter().filter_map(|file| file["size"].as_u64()).sum::<u64>() + bytes_on_disk(&index);
+    let limits = crate::file_store::FileLimits::from_env().unwrap_or_default();
+    let parts = [
+        ("database", sqlite_bytes(&layout::database(data_root, id)), Some(super::MAX_APP_DATABASE_BYTES), true),
+        ("files", file_bytes, Some(limits.quota_bytes), true),
+        ("accounts", sqlite_bytes(&layout::identity(data_root, id)), Some(super::auth::MAX_IDENTITY_DATABASE_BYTES), true),
+        ("usage", sqlite_bytes(&layout::usage(data_root, id)), Some(MAX_USAGE_DATABASE_BYTES), true),
+        ("published", bytes_on_disk(&layout::dist(data_root, id)), None, true),
+        ("sources", bytes_on_disk(&layout::sources(data_root, id)), None, true),
+        ("backups", bytes_on_disk(&layout::backups(data_root, id)), None, false),
+    ];
+    let total: u64 = parts.iter().filter(|part| part.3).map(|part| part.1).sum();
+    json!({
+        "total": total,
+        "files": files.len(),
+        "parts": parts.iter().map(|(name, bytes, limit, exported)| json!({"part": name, "bytes": bytes, "limit": limit, "exported": exported})).collect::<Vec<_>>(),
+    })
+}
+
 /// Keeps account responses bounded by operation and outcome categories, not event volume.
 pub fn compact_overview(mut summary: Value) -> Value {
     let latest = summary["usage"]["days"].as_array().and_then(|days| days.last()).cloned();
     summary["usage"]["days"] = json!(latest.into_iter().collect::<Vec<_>>());
     summary["usage"]["scheduled"] = json!([]);
+    summary["accounts"]["days"] = json!([]);
+    summary["accounts"]["top"] = json!([]);
     // A notice keeps its outcome as "*: <reason>", so the overview can tell a queued notice from one never sent.
     let mut totals: std::collections::BTreeMap<(String, String), i64> = std::collections::BTreeMap::new();
     for row in summary["usage"]["totals"].as_array().into_iter().flatten() {
@@ -801,6 +939,49 @@ mod tests {
             let outcome = names.into_iter().try_for_each(|name| crate::validate_action(name, &program.actions[name]));
             crate::refusal::assert_case(&case, outcome);
         }
+    }
+
+    #[test]
+    fn accounts_count_by_id_and_read_back_with_their_email_and_storage_by_part() {
+        let root = scratch("accounts");
+        let id = "deployment-accounts";
+        let data = crate::layout::data(&root, id);
+        std::fs::create_dir_all(data.join("files")).unwrap();
+        std::fs::write(data.join("files/index.json"), r#"[{"id":"a","size":1000},{"id":"b","size":24}]"#).unwrap();
+        std::fs::create_dir_all(crate::layout::dist(&root, id)).unwrap();
+        std::fs::write(crate::layout::dist(&root, id).join("index.html"), "<p>hi</p>").unwrap();
+        let identity = Connection::open(crate::layout::identity(&root, id)).unwrap();
+        identity.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT); INSERT INTO app_users VALUES('u-ana', 'ana@example.com');").unwrap();
+        drop(identity);
+        for _ in 0..3 {
+            count_account(&root, id, "u-ana", AccountKind::Action);
+        }
+        count_account(&root, id, "u-ana", AccountKind::Open);
+        count_account(&root, id, "u-gone", AccountKind::Open);
+        // A visitor without an account is never a row.
+        count_account(&root, id, "anonymous", AccountKind::Open);
+        count_account(&root, id, "", AccountKind::Action);
+        assert!(flush_status());
+        let today = day(super::super::now_ms());
+        let accounts = read_accounts(&crate::layout::usage(&root, id), &crate::layout::identity(&root, id), &today, &today).unwrap();
+        assert_eq!((accounts["active"].as_i64(), accounts["opens"].as_i64(), accounts["actions"].as_i64()), (Some(2), Some(2), Some(3)));
+        assert_eq!(accounts["days"], json!([{"day": today, "active": 2}]));
+        let top = accounts["top"].as_array().unwrap();
+        assert_eq!((top[0]["account"].as_str(), top[0]["email"].as_str(), top[0]["actions"].as_i64(), top[0]["opens"].as_i64()), (Some("u-ana"), Some("ana@example.com"), Some(3), Some(1)));
+        assert_eq!((top[1]["account"].as_str(), top[1]["email"].clone()), (Some("u-gone"), Value::Null));
+        // A store an older Kernel wrote, with no account table, reads as none.
+        let old = scratch("accounts-old").join(USAGE_DATABASE);
+        Connection::open(&old).unwrap().execute_batch("CREATE TABLE usage_daily(day TEXT, kind TEXT, name TEXT, count INTEGER);").unwrap();
+        assert_eq!(read_accounts(&old, &old, &today, &today).unwrap()["active"], 0);
+
+        let storage = storage(&root, id);
+        let part = |name: &str| storage["parts"].as_array().unwrap().iter().find(|p| p["part"] == name).unwrap().clone();
+        assert_eq!(part("files")["bytes"].as_u64().unwrap(), 1024 + std::fs::metadata(data.join("files/index.json")).unwrap().len());
+        assert_eq!(part("published")["bytes"], 9);
+        assert_eq!(part("backups")["exported"], false);
+        assert_eq!(storage["files"], 2);
+        assert!(part("usage")["bytes"].as_u64().unwrap() > 0 && part("accounts")["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(storage["total"].as_u64().unwrap(), storage["parts"].as_array().unwrap().iter().filter(|p| p["exported"] == true).map(|p| p["bytes"].as_u64().unwrap()).sum::<u64>());
     }
 
     #[test]

@@ -800,7 +800,7 @@ fn usage_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     let date = json!({"type": "string", "minLength": 10, "maxLength": 10});
     vec![
-        tool("usage_summary", "Read a deployment usage monitor with daily execution outcomes, Signal totals, published configuration and coverage. Owner read permission required.", json!({"deploymentId": text, "from": date, "to": date}), &["deploymentId", "from", "to"], true),
+        tool("usage_summary", "Read a deployment usage monitor with daily execution outcomes, Signal totals, activity per signed-in app account, storage by part, published configuration and coverage. Owner read permission required.", json!({"deploymentId": text, "from": date, "to": date}), &["deploymentId", "from", "to"], true),
         tool("usage_overview", "Read usage for this account projects only, including external and unpublished apps, 50 per page. Pass nextCursor back as cursor.", json!({"from": date, "to": date, "cursor": {"type": "string", "maxLength": 100}}), &["from", "to"], true),
         tool(
             "usage_read",

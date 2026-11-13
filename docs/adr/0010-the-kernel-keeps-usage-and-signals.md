@@ -18,6 +18,8 @@ Usage is always on and keeps daily totals by kind and name: `session`, `action`,
 - A session that an owner entered as one of the app's users (ADR-0001) is not counted as that user.
 - A handler puts each count on a queue of 16,384 entries and returns. One writer thread drains it in one transaction per batch. When the queue is full the entry is dropped and counted, so traffic never waits on this store. The reads wait up to five seconds for the queue to drain first.
 - `usage_summary` adds daily outcomes per action and feature, by origin (runtime, HTTP route, schedule, call), and Signal totals per day. A page view is a load, not a person. The Kernel keeps no per-visitor key and counts no unique visitors.
+- A signed-in app account is the one person Usage counts. The Kernel already holds its ID, so `account_daily` keeps app opens and successful actions per account and day, by that ID only. The summary joins the email from `identity.sqlite` when it is read, so the store never copies an address. An owner who entered as the account counts nothing, the same rule as every other count.
+- `usage_summary` also reports the bytes the app takes now, by part, with backups apart because an export does not carry them.
 - The store keeps 400 days and bounded row counts, dropping the oldest first.
 
 ### A Signal is declared on a Server Action
@@ -36,7 +38,7 @@ A mutation may declare `"guard": "<message>"`. When its statement changes no row
 - **Insert into the app's database.** The database is the app's, and who may read a row is the app's decision.
 - **A browser `track` call with a free payload.** The bundle is inspectable and replayable, the same reason SQL stays off the client (ADR-0002).
 - **A second statement that decides a refusal.** It would run outside the first statement's view of the rows and could disagree with it. The guard keeps the rule in one statement.
-- **Count unique visitors with a cookie or a hashed address.** The Kernel would keep a per-visitor key it has no other use for.
+- **Count unique visitors with a cookie or a hashed address.** The Kernel would keep a per-visitor key it has no other use for. Counting signed-in accounts adds no key: the account ID exists already.
 
 ## Consequences
 

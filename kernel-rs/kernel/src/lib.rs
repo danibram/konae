@@ -1292,7 +1292,13 @@ pub async fn invoke_action(
     };
     // A call is queued for the Kernel's worker and answered with its ID.
     if action.kind == "call" {
-        return calls::enqueue(&state, &deployment, &name, &input).await;
+        let response = calls::enqueue(&state, &deployment, &name, &input).await;
+        if response.status().is_success() && !enter::entered(actor.as_ref()) {
+            if let Some(user) = actor.as_ref() {
+                usage::count_account(&state.data_root, &deployment.id, &user.user_id, usage::AccountKind::Action);
+            }
+        }
+        return response;
     }
     let db_path = crate::layout::database(&state
         .data_root, &deployment.id);
@@ -1320,6 +1326,9 @@ pub async fn invoke_action(
                 if counted {
                     usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
                     usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                    if let Some(account) = actor_id {
+                        usage::count_account(&state.data_root, &deployment.id, account, usage::AccountKind::Action);
+                    }
                 }
                 if matches!(changed, guard::Outcome::Changed) {
                     if counted {
