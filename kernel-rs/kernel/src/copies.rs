@@ -52,6 +52,10 @@ const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "
 const MANIFEST: &str = "manifest.json";
 /// The only cipher a copy names in its manifest.
 const ENCRYPTION: &str = "AES-256-GCM";
+/// The largest manifest.json restore reads.
+const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+/// Copies the default choice passes over before it gives up.
+const MAX_SKIPPED_COPIES: usize = 50;
 const KEEP_RECENT: usize = 24;
 const KEEP_DAILY_DAYS: u64 = 30;
 const DAY_MS: u64 = 86_400_000;
@@ -966,6 +970,36 @@ impl Source {
         }
     }
 
+    /// A copy's manifest bytes. `Ok(None)` when the manifest is over
+    /// `MAX_MANIFEST_BYTES`, checked on the object's length before the body is
+    /// read and again while reading.
+    async fn read_manifest_bytes(&self, copy: &str) -> Result<Option<Vec<u8>>> {
+        match self {
+            Source::Directory(root) => {
+                let path = root.join(copy).join(MANIFEST);
+                if tokio::fs::metadata(&path).await?.len() > MAX_MANIFEST_BYTES {
+                    return Ok(None);
+                }
+                Ok(Some(tokio::fs::read(path).await?))
+            }
+            Source::S3 { client, bucket, prefix } => {
+                let object = client.get_object().bucket(bucket).key(format!("{prefix}{copy}/{MANIFEST}")).send().await?;
+                if object.content_length().is_some_and(|length| length > MAX_MANIFEST_BYTES as i64) {
+                    return Ok(None);
+                }
+                let mut body = object.body;
+                let mut bytes = Vec::new();
+                while let Some(chunk) = body.try_next().await? {
+                    bytes.extend_from_slice(&chunk);
+                    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+                        return Ok(None);
+                    }
+                }
+                Ok(Some(bytes))
+            }
+        }
+    }
+
     /// The revocation record's entries. `None` when `started.json` is
     /// missing: the source never kept a record, so it cannot prove none.
     /// With a key, each entry on S3 must carry a valid MAC for its file name,
@@ -1022,15 +1056,22 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
-/// Reads and parses a copy's manifest.
-async fn read_manifest(source: &Source, copy: &str) -> Result<Manifest> {
-    let manifest_bytes = source
-        .read(copy, MANIFEST)
-        .await
-        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
-    ensure!(manifest.version == 1, "The copy's manifest version is not supported.");
-    Ok(manifest)
+/// What a manifest is worth once read. The outer error is a failure to read
+/// it (transport, throttling, permission), which says nothing about the copy.
+/// The inner error is a verdict on the bytes: too large, unparsable, or a
+/// version this Kernel does not read.
+async fn read_manifest(source: &Source, copy: &str) -> Result<std::result::Result<Manifest, String>> {
+    let Some(bytes) = source.read_manifest_bytes(copy).await? else {
+        return Ok(Err(format!("The manifest of copy {copy} is larger than 4 MiB.")));
+    };
+    let manifest: Manifest = match serde_json::from_slice(&bytes) {
+        Ok(manifest) => manifest,
+        Err(_) => return Ok(Err(format!("The manifest of copy {copy} is invalid."))),
+    };
+    if manifest.version != 1 {
+        return Ok(Err(format!("The manifest version of copy {copy} is not supported.")));
+    }
+    Ok(Ok(manifest))
 }
 
 fn not_encrypted(copy: &str) -> String {
@@ -1038,12 +1079,13 @@ fn not_encrypted(copy: &str) -> String {
 }
 
 /// Checks an encrypted copy's manifest against the secret. Returns true when
-/// the manifest carries no MAC and `accept_unsigned` let it pass.
-fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>, accept_unsigned: bool) -> Result<bool> {
+/// the manifest carries no MAC and `accept_unsigned` let it pass. The default
+/// choice passes `automatic` and never accepts a missing MAC.
+fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>, accept_unsigned: bool, automatic: bool) -> Result<bool> {
     let Some(encryption) = &manifest.encryption else {
         return Ok(false);
     };
-    ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
+    ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {:?}, which this Kernel cannot open.", encryption.algorithm);
     let key = key.with_context(|| {
         format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
     })?;
@@ -1059,32 +1101,46 @@ fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>, accept_u
             );
             Ok(false)
         }
-        None if accept_unsigned => Ok(true),
+        None if accept_unsigned && !automatic => Ok(true),
+        None if automatic => bail!(
+            "Copy {copy} has no manifest MAC, so it is not chosen automatically. A copy an older Kernel made before signing can be named with --copy together with KONAE_COPY_ACCEPT_UNSIGNED=1, which accepts a sealed copy whose file list is not authenticated. Nothing was installed."
+        ),
         None => bail!(
-            "Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to restore it anyway. Nothing was installed."
+            "Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to restore it anyway, which accepts a sealed copy whose file list is not authenticated. Nothing was installed."
         ),
     }
 }
 
-/// The newest copy on S3 whose manifest is encrypted and signed under the
-/// secret. Each copy passed over is named with its reason, so a planted copy
-/// is seen and does not hide the genuine ones.
-async fn newest_authentic_copy(source: &Source, key: &CopyKey, accept_unsigned: bool) -> Result<String> {
+/// The newest copy on S3 whose manifest is encrypted and carries a MAC that
+/// verifies under the secret. `KONAE_COPY_ACCEPT_UNSIGNED` does not apply here:
+/// a manifest without a MAC can be planted or cut down by anyone who can write
+/// to the bucket. Each copy passed over is reported with its reason, so a
+/// planted copy is seen and does not hide the genuine ones. Only a verdict on
+/// the copy itself passes it over; a failure to read it stops the restore.
+async fn newest_authentic_copy(source: &Source, key: &CopyKey, report: &mut dyn FnMut(String)) -> Result<String> {
     let copies = source.complete_copies().await?;
     ensure!(!copies.is_empty(), "No complete copy found. A complete copy has a manifest.json.");
     let mut skipped = 0;
     let mut newest_reason = String::new();
     for copy in copies.iter().rev() {
-        let verdict = match read_manifest(source, copy).await {
-            Ok(manifest) if manifest.encryption.is_none() => Err(not_encrypted(copy)),
-            Ok(manifest) => check_sealed(copy, &manifest, Some(key), accept_unsigned).map(|_| ()).map_err(|error| error.to_string()),
-            Err(error) => Err(error.to_string()),
-        };
+        ensure!(
+            skipped < MAX_SKIPPED_COPIES,
+            "Stopped after {MAX_SKIPPED_COPIES} skipped copies without finding one that could be authenticated. The newest: {newest_reason} Nothing was installed."
+        );
+        let manifest = read_manifest(source, copy)
+            .await
+            .map_err(|error| anyhow::anyhow!("Could not read the manifest of copy {copy}: {error:#}. Nothing was installed."))?;
+        let verdict = manifest.and_then(|manifest| {
+            if manifest.encryption.is_none() {
+                return Err(not_encrypted(copy));
+            }
+            check_sealed(copy, &manifest, Some(key), false, true).map(|_| ()).map_err(|error| format!("{error:#}"))
+        });
         match verdict {
             Ok(()) => return Ok(copy.clone()),
             Err(reason) => {
                 let reason = reason.trim_end_matches(" Nothing was installed.").to_owned();
-                println!("Skipped copy {copy}: {reason}");
+                report(format!("Skipped copy {copy}: {reason}"));
                 if skipped == 0 {
                     newest_reason = reason;
                 }
@@ -1093,7 +1149,7 @@ async fn newest_authentic_copy(source: &Source, key: &CopyKey, accept_unsigned: 
         }
     }
     bail!(
-        "No copy in the source could be authenticated, {skipped} skipped. The newest: {newest_reason} While KONAE_COPY_SECRET is set, only a copy encrypted and signed with it is restored, and a copy that is not encrypted never is. Nothing was installed."
+        "No copy in the source could be authenticated, {skipped} skipped. The newest: {newest_reason} While KONAE_COPY_SECRET is set, only a copy encrypted and signed with it is chosen automatically, and a copy that is not encrypted never is. Nothing was installed."
     )
 }
 
@@ -1118,7 +1174,7 @@ async fn restore(
         (source, Some(copy)) => (source, copy.to_owned()),
         (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
             let key = key.expect("checked by the guard");
-            (source, newest_authentic_copy(source, key, accept_unsigned).await?)
+            (source, newest_authentic_copy(source, key, &mut |line| println!("{line}")).await?)
         }
         (source, None) => {
             let latest = source.complete_copies().await?.pop();
@@ -1129,7 +1185,10 @@ async fn restore(
         !copy.is_empty() && !copy.contains('/') && copy != "." && copy != "..",
         "The copy ID is invalid."
     );
-    let manifest = read_manifest(source, &copy).await?;
+    let manifest = read_manifest(source, &copy)
+        .await
+        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?
+        .map_err(|reason| anyhow::anyhow!("{reason} Nothing was installed."))?;
     // Copies on S3 are sealed whenever a secret is set. A plain manifest there
     // is not one this installation made, so the secret is not set aside for it.
     ensure!(
@@ -1138,7 +1197,7 @@ async fn restore(
         not_encrypted(&copy),
         crate::program()
     );
-    if check_sealed(&copy, &manifest, key, accept_unsigned)? {
+    if check_sealed(&copy, &manifest, key, accept_unsigned, false)? {
         println!("KONAE_COPY_ACCEPT_UNSIGNED is set: restoring copy {copy} without checking its manifest, which carries no MAC.");
     }
     for file in &manifest.files {
@@ -1793,6 +1852,30 @@ mod tests {
         assert_eq!(summary.copy_id, older);
         assert!(crate::layout::folder(&root, &deployment.id).join("dist/index.html").is_file(), "the whole copy is installed");
         for path in [source, copies, root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn each_copy_the_default_choice_passes_over_is_reported_with_its_reason() {
+        let (source, copies, older, _) = plain_copy("skip-lines").await;
+        let newer = second_copy(&source, &copies).await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&older), &older, Some(&key)).await;
+        send_genuine(&client, &copies.join(&newer), &newer, Some(&key)).await;
+        let mut subset: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{newer}/{MANIFEST}")).await.unwrap()).unwrap();
+        subset.mac = None;
+        put_manifest(&client, &newer, &subset).await;
+        upload_plain(&client, &copies.join(&older), LATER_ID).await;
+        let mut lines = Vec::new();
+        let chosen = newest_authentic_copy(&s3_source(&client), &key, &mut |line| lines.push(line)).await.unwrap();
+        assert_eq!(chosen, older);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with(&format!("Skipped copy {LATER_ID}: ")) && lines[0].contains("is not encrypted"), "{lines:?}");
+        assert!(lines[1].starts_with(&format!("Skipped copy {newer}: ")) && lines[1].contains("not chosen automatically") && lines[1].contains("--copy"), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("restore it anyway")), "{lines:?}");
+        for path in [source, copies] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
