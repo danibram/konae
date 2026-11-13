@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "konae": {
+      "type": "http",
+      "url": "https://app.konae.es/mcp"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request an invitation · Konae</title>
+<meta name="description" content="Ask for an invitation code to make apps on this Konae installation.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="invitation.css">
+<script type="module" src="invitation.js"></script>
+</head>
+<body>
+<a class="ui-skip" href="#main" data-t="skip">Skip to content</a>
+<header class="ui-bar ui-page-wide">
+  <a href="./" data-link="home">Konae</a>
+  <nav aria-label="Site">
+    <a href="./" data-link="docs" data-t="docs">Docs</a>
+    <a href="https://github.com/danibram/konae">GitHub</a>
+    <button class="lang" type="button" data-lang hidden>Español</button>
+  </nav>
+</header>
+
+<main id="main" class="ui-page ui-page-wide ask" tabindex="-1">
+  <section class="ask-copy">
+    <h1 class="ui-title" data-t="title">Request an invitation</h1>
+    <p class="ui-lede" data-t="lede">Making apps on this site is by invitation while it is small. Leave your email and whoever runs the site sends you a code. You use it once, to create your account.</p>
+    <ul class="ask-points" role="list">
+      <li data-t="p1">Your email is used to send the code and for nothing else.</li>
+      <li data-t="p2">You will also need an AI key from Anthropic, OpenAI or OpenRouter. The assistant runs on your own account with them.</li>
+      <li data-t="p3">Rather not wait? Konae is open source, and <a href="https://github.com/danibram/konae">you can run it on your own server</a> with Docker.</li>
+    </ul>
+  </section>
+
+  <section class="ask-form" aria-labelledby="form-title">
+    <h2 id="form-title" class="sr-only" data-t="title">Request an invitation</h2>
+    <form data-form>
+      <label class="ui-field"><span data-t="email">Email</span>
+        <input class="ui-input" type="email" name="email" maxlength="254" autocomplete="email" required placeholder="you@example.com">
+      </label>
+      <label class="ui-field"><span data-t="building">What would you build? <i>(optional)</i></span>
+        <textarea class="ui-textarea" name="building" maxlength="500" rows="4"></textarea>
+      </label>
+      <button class="ui-button ui-button-primary" type="submit" data-t="send">Ask for a code</button>
+      <p class="ask-status" data-status role="status" aria-live="polite"></p>
+    </form>
+    <div class="ask-done" data-done hidden>
+      <h2 data-t="done.title">Your request is in</h2>
+      <p data-t="done.text">The code arrives by email once whoever runs this site sends it. Meanwhile, the first-app guide shows what you will do with it.</p>
+      <div class="ui-actions"><a class="ui-button" href="./" data-link="first-app" data-t="done.guide">Read the first-app guide</a><a class="ui-button" href="./" data-link="home" data-t="done.home">Back to the home</a></div>
+    </div>
+    <details class="ask-how">
+      <summary data-t="how.title">This form is a Konae app</summary>
+      <p data-t="how.text">It has one table and one Server Action. Any visitor may run the action, the app refuses an address that already asked, and each new row sends an email to the app's owner.</p>
+      <figure class="ui-pre"><figcaption>actions.json</figcaption><pre><code>"requests.create": {
+  "kind": "mutation",
+  "access": "anonymous",
+  "guard": "That address has already asked…",
+  "statement": "INSERT INTO requests(…) … ON CONFLICT(email) DO NOTHING",
+  "notify": { "to": "owner", … }
+}</code></pre></figure>
+    </details>
+  </section>
+</main>
+
+<footer class="ask-foot ui-page ui-page-wide">
+  <a href="./" data-link="privacy" data-legal hidden data-t="privacy">Privacy policy</a>
+  <a href="./" data-link="terms" data-legal hidden data-t="terms">Terms</a>
+</footer>
+</body>
+</html>
