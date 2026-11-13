@@ -48,7 +48,7 @@
   "connects.origin-invalid": { "fix": "capsule", "remedy": "Write the origin as https://host or https://host:port with no path." },
   "connects.origin-twice": { "fix": "capsule", "remedy": "List each origin in connects once." },
 
-  "domain.app-suffix": { "fix": "owner", "remedy": "Name a hostname outside the installation's app suffix.", "tool": "domain_set" },
+  "domain.app-suffix": { "fix": "owner", "remedy": "Move the generated hostname with hostname_set, or name a hostname outside the installation's app suffix.", "tool": "domain_set" },
   "domain.installation-host": { "fix": "owner", "remedy": "Name a hostname no Konae host uses.", "tool": "domain_set" },
   "domain.ip": { "fix": "owner", "remedy": "Name a hostname under a domain you control, not an IP address.", "tool": "domain_set" },
   "domain.local": { "fix": "owner", "remedy": "Name a hostname under a domain you control, not a local name.", "tool": "domain_set" },

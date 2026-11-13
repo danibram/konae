@@ -148,6 +148,9 @@ export    --dir <folder> --out <empty folder> [--with-data]
 domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
           Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
           control the hostname; run it again once the record is at your DNS provider.
+hostname  --deployment <id> [--set <name>] [--url <Kernel URL>]
+          Shows the generated address Konae gave the app, or moves it to <name>.<app suffix>. The old
+          name redirects to the new one and stays the app's.
 
 init, build, contract, dev, and sql and events without --prod need no credential. Every other command but login reads it from
 <folder>/.konae/credentials.json or KONAE_MCP_TOKEN.`;
@@ -377,7 +380,9 @@ export async function publishLocal(root: string, config: Config, token: string, 
   let transfer: Transfer | undefined;
   try {
     transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
-    const released = await release<{ id: string; url: string }>(client, transfer.transferId, confirm);
+    const released = await release<{ id: string; url: string }>(client, transfer.transferId, confirm, (plan) => {
+      if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url));
+    });
     await mkdir(path.join(root, ".konae"), { recursive: true });
     await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(released.plan, null, 2));
     receipt = released.receipt;
@@ -392,6 +397,25 @@ export async function publishLocal(root: string, config: Config, token: string, 
     if (warning) warn(warning);
   }
   return Object.assign(receipt, { first });
+}
+
+/** What a first publish prints before the release fixes the app's generated address. */
+export const firstReleaseAddress = (url: string) =>
+  `This first release names the app ${url}, and every later release keeps that name. To use another name under the same suffix, run konae hostname --set <name> before you register Google sign-in or share links.`;
+
+/** hostname_set, or project_inspect without `set`. The Kernel checks the name, and its refusal reaches the caller unchanged. Returns the lines to print. */
+export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentId: string, set?: string): Promise<string[]> {
+  if (set === undefined) {
+    const { deployment } = await client.call<{ deployment?: { url: string } | null }>("project_inspect", { projectId: deploymentId });
+    if (!deployment) throw Error("This app is not published yet. Its first publish names it.");
+    return [`This app answers at ${deployment.url}.`];
+  }
+  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { deploymentId, name: set });
+  if (!moved.changed) return [`This app already answers at ${moved.url}.`];
+  return [
+    `This app now answers at ${moved.url}. ${moved.previousHostnames.at(-1)} redirects there with a 308 and stays this app's.`,
+    `App users sign in again on the new name. If the app offers Google sign-in, add ${moved.googleCallback} to its Google client's redirect URIs. Give the new address to any service that calls the app's HTTP routes.`,
+  ];
 }
 
 /** Keeps the data, so a schema change that loses some is not applied. */
@@ -710,7 +734,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain", "hostname"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -750,12 +774,14 @@ async function main() {
     process.exitCode = await conformFromCli(args);
     return;
   }
-  if (command === "domain") {
+  if (command === "domain" || command === "hostname") {
     const deploymentId = option("deployment");
     if (!deploymentId) throw Error("Name the Deployment with --deployment <id>. project_inspect shows its ID.");
     const saved = process.env.KONAE_MCP_TOKEN ? undefined : await json<{ url: string; token: string }>(path.join(root, ".konae/credentials.json"));
     const url = option("url", saved?.url ?? process.env.KONAE_URL ?? "http://localhost:4173")!;
-    for (const line of await domainLocal(new McpClient(endpoint(url), { token: process.env.KONAE_MCP_TOKEN ?? saved!.token }), deploymentId, { set: option("set"), clear: args.includes("--clear") })) console.log(line);
+    const client = new McpClient(endpoint(url), { token: process.env.KONAE_MCP_TOKEN ?? saved!.token });
+    const lines = command === "hostname" ? await hostnameLocal(client, deploymentId, option("set")) : await domainLocal(client, deploymentId, { set: option("set"), clear: args.includes("--clear") });
+    for (const line of lines) console.log(line);
     return;
   }
   const config = configOf(await readSettings(root));

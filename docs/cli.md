@@ -89,7 +89,7 @@ Writes `action-contract.json`, its schema, `action-contract.md` and `actions.d.t
 bun run konae -- publish --dir ./my-app [--url <Kernel URL>] [--confirm-schema <confirmation>]
 ```
 
-Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with `secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`.
+Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with `secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`, and prints the generated address the release fixes, from `release_plan`, before it applies.
 
 The Kernel changes the published database to what `schema.sql` states. A new table, column or index applies. When the change drops a table or a column, or changes a column's type, `publish` prints what it loses, the statements and the plan's confirmation, then asks. Without a terminal it publishes nothing; run it again with `--confirm-schema` and that confirmation. A confirmation fits only the plan it was printed for. `.konae/release-plan.json` keeps the last plan.
 
@@ -115,7 +115,15 @@ Writes the app folder into an empty folder: `konae.json`, `app/`, a fresh `dist/
 bun run konae -- domain --dir <folder> --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
 ```
 
-Shows, sets or clears the app's custom domain. It reads the token from `<folder>/.konae/credentials.json`, or from `KONAE_MCP_TOKEN` when that is set. `--set` prints the TXT record that proves you control the hostname. Run it again once the record is at your DNS provider.
+Shows, sets or clears the app's custom domain. It reads the token from `<folder>/.konae/credentials.json`, or from `KONAE_MCP_TOKEN` when that is set. `--set` prints the TXT record that proves you control the hostname. Run it again once the record is at your DNS provider. A hostname under the installation's app suffix is refused. Move the generated hostname with `hostname` instead.
+
+## hostname
+
+```sh
+bun run konae -- hostname --dir <folder> --deployment <id> [--set <name>] [--url <Kernel URL>]
+```
+
+Prints the generated address Konae gave the app, or with `--set` moves it to `<name>.<app suffix>` through `hostname_set`. The old name redirects to the new one and stays the app's. The command prints the Google callback to register and the Kernel's refusal as it comes. [Give the app an address](./guides/give-the-app-an-address.md#move-the-generated-hostname) has the rules.
 
 ## Read next
 

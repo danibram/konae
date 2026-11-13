@@ -206,7 +206,7 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
       if (!alive.current) return;
       if (readBack.generatedUrl !== moved.url) throw new Error("The address does not show the change yet. Reload the app settings and check it again.");
       setConfirming(false);
-      setNotice(`This app now answers at ${moved.url}. ${url} redirects there.`);
+      setNotice(`This app now answers at ${moved.url}. ${url} redirects there. If the app offers Google sign-in, add ${moved.googleCallback} to its Google client's redirect URIs.`);
       onMoved(moved.url);
     } catch (cause) {
       if (!alive.current) return;

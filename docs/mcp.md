@@ -774,7 +774,7 @@ A Deployment can answer on one hostname its owner controls, such as `notes.examp
 | --- | --- |
 | A name that is not a DNS name, such as a URL, a port, `_` or `*` | `<name> is not a valid DNS name. Use labels of letters, digits and hyphens, 1 to 63 characters each, that do not start or end with a hyphen.` |
 | One label, an IP address, a local name | `<name> needs at least two labels, such as notes.example.org.` / `<name> is an IP address. Name a hostname under a domain you control.` / `<name> is a local name. …` |
-| A name under the installation's suffix | `<name> is under this installation's app suffix <suffix>, where Konae names apps itself. Name a hostname outside it.` |
+| A name under the installation's suffix | `<name> is under this installation's app suffix <suffix>, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.` |
 | The editor's or the MCP host | `<name> is this installation's own host. Name a hostname no Konae host uses.` |
 | A TXT record that holds another value | `The TXT record at _konae.<name> holds "<value>", not this Deployment's token. Set it to <token> and call domain_set again.` |
 | A name another Deployment serves | `<name> already serves another Deployment on this installation. Clear it there with domain_clear first.` |
@@ -783,7 +783,7 @@ An export carries the hostname without its token. The import creates a pending c
 
 ## Generated hostname
 
-The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
+The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` with a code from the app's ID when another app holds the slug, and later releases keep that name. `release_plan` answers the name as `hostname` and `url`, with `firstRelease` true before the first release; both are null in the rare case that the slug and its coded name are taken, and the release then picks a random code. The name belongs to the installation and does not travel in an export. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
 
 ```json
 { "deploymentId": "…", "hostname": "notes.apps.example.com", "url": "https://notes.apps.example.com", "changed": true,
@@ -791,7 +791,7 @@ The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffi
   "googleCallback": "https://notes.apps.example.com/_konae/auth/google/callback" }
 ```
 
-The names the Deployment held before answer every request with a 308 redirect to the same path and query on the new name, and no other app can take them. Email links already sent and bookmarks keep working, because the browser keeps the fragment through the redirect. The new name is a new origin. App users sign in again there, and an app with Google sign-in needs `googleCallback` registered in its Google client before the button works on the new name. A service that calls the app's HTTP routes, an API key client or an MCP client may not follow the redirect, so give it the new address. A custom domain and a path address do not change. `project_inspect` shows the new `url`. Moving back to a previous name takes it off the redirect list, and deleting the app frees its previous names.
+The names the Deployment held before answer every request with a 308 redirect to the same path and query on the new name, and no other app can take them. Email links already sent and bookmarks keep working, because the browser keeps the fragment through the redirect. The new name is a new origin. App users sign in again there, and an app with Google sign-in needs `googleCallback` registered in its Google client before the button works on the new name. A service that calls the app's HTTP routes, an API key client or an MCP client may not follow the redirect, so give it the new address. A custom domain and a path address do not change. `project_inspect` shows the new `url`. Moving back to a previous name takes it off the redirect list, and deleting the app frees its previous names. A first publish holds the name it chose until it serves on it, so a move to that name meanwhile is refused as another app's, and a first publish never takes the installation's own host. `bun run konae -- hostname --deployment <id> --set <name>` runs the same call and prints the Kernel's refusal as it comes.
 
 | Refusal | Message |
 | --- | --- |
