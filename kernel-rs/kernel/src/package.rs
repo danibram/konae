@@ -1156,4 +1156,47 @@ mod tests {
         assert!(error.to_string().contains("usage component holds CREATE VIEW seen"), "{error}");
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn a_password_hash_column_is_checked_whatever_its_case() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let (salt, hash) = ("00".repeat(16), "00".repeat(32));
+        for (table, column) in [("app_users", "PASSWORD_HASH"), ("APP_USERS", "PASSWORD_HASH"), ("APP_USERS", "password_hash")] {
+            let identity = root.join("upper.sqlite");
+            let db = Connection::open(&identity).unwrap();
+            db.execute_batch(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, email TEXT NOT NULL, {column} TEXT NOT NULL, created_at INTEGER NOT NULL)")).unwrap();
+            db.execute("INSERT INTO app_users (id, email, password_hash, created_at) VALUES ('u1', 'a@example.test', ?1, 0)", [format!("pbkdf2-sha256$4294967295${salt}${hash}")]).unwrap();
+            drop(db);
+            let error = check_components(&components(&root, database.clone(), Some(identity.clone()), None), &Default::default()).unwrap_err();
+            assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.", "{table} {column}");
+            std::fs::remove_file(identity).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_component_is_refused_when_it_holds_a_virtual_table_and_a_kernel_file_still_imports() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let identity = root.join("identity.sqlite");
+        AuthService::open(&identity).unwrap();
+        let usage = file_with(&root, "usage.sqlite", "CREATE TABLE u(v)", None);
+        check_components(&components(&root, plain.clone(), Some(identity.clone()), Some(usage.clone())), &Default::default()).unwrap();
+
+        let fts = file_with(&root, "fts.sqlite", "CREATE TABLE t(v); CREATE VIRTUAL TABLE notes USING fts5(body)", None);
+        let error = check_components(&components(&root, fts, None, None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The database holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing.");
+
+        Connection::open(&identity).unwrap().execute_batch("CREATE VIRTUAL TABLE places USING rtree(id, x0, x1)").unwrap();
+        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The accounts component holds CREATE VIRTUAL TABLE places, and Konae runs no virtual tables. Drop it before importing.");
+
+        Connection::open(&usage).unwrap().execute_batch("CREATE VIRTUAL TABLE seen USING fts5(body)").unwrap();
+        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The usage component holds CREATE VIRTUAL TABLE seen, and Konae runs no virtual tables. Drop it before importing.");
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
