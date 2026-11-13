@@ -635,7 +635,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState, extra: Ro
 /// cover every response, the redirects included.
 /// `extra` holds the routes of whoever starts the Kernel; they answer
 /// before the Kernel's catch-all and inside the same layers.
-pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneService<Request, axum::response::Response, std::convert::Infallible> {
+pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneSyncService<Request, axum::response::Response, std::convert::Infallible> {
     let routes = Router::new()
         .route("/_konae/health", get(health))
         .route("/_konae/auth/signup", post(signup))
@@ -658,7 +658,7 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
         .layer(axum::middleware::from_fn_with_state(state, path::route))
         .service(routes);
-    tower::util::BoxCloneService::new(service)
+    tower::util::BoxCloneSyncService::new(service)
 }
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {

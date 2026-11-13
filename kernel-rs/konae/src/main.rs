@@ -29,6 +29,7 @@ use kernel::limits::Guards;
 
 mod admission;
 mod clerk;
+mod editor;
 mod guide;
 mod mcp;
 mod oauth;
@@ -63,7 +64,15 @@ async fn main() -> Result<()> {
     // Apply the verification mode to creator accounts before serving, so a
     // switch to required revokes unverified sessions at startup.
     owners::creator_store(&konae)?;
-    kernel::listen(&startup, running.state.clone(), owner_routes(konae), "Konae").await
+    let editor = editor::Editor::from_env(&running.state.public_origin, security::https(&running.state))?;
+    let listener = tokio::net::TcpListener::bind((startup.bind.as_str(), startup.port)).await?;
+    println!("Konae listening on {}", startup.port);
+    if editor.is_some() {
+        println!("Serving the editor at {}", running.state.public_origin);
+    }
+    let service = with_editor(kernel::stack(running.state.clone(), owner_routes(konae)), editor);
+    axum::serve(listener, axum::ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(service)).await?;
+    Ok(())
 }
 
 /// Konae's routes: the owner's MCP, OAuth and owner sign-in.
@@ -73,6 +82,21 @@ fn owner_routes(konae: Konae) -> Router<AppState> {
         .merge(oauth::routes())
         .merge(owners::routes())
         .with_state(konae)
+}
+
+type Stack = tower::util::BoxCloneSyncService<Request, Response, std::convert::Infallible>;
+
+/// The Kernel's stack, with the editor in front of it on the editor host
+/// when `KONAE_EDITOR_DIR` names one.
+fn with_editor(stack: Stack, editor: Option<editor::Editor>) -> Stack {
+    match editor {
+        Some(editor) => Stack::new(
+            tower::ServiceBuilder::new()
+                .layer(axum::middleware::from_fn_with_state(Arc::new(editor), editor::serve))
+                .service(stack),
+        ),
+        None => stack,
+    }
 }
 
 /// `KONAE_MCP_ORIGIN`, or with `KONAE_DOMAIN` the public origin. `None` keeps
