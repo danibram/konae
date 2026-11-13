@@ -1,3 +1,13 @@
+# The editor: `bun run build` writes it into dist/, and Konae serves that
+# folder on the editor host (KONAE_EDITOR_DIR below).
+FROM oven/bun:1.3.11 AS editor
+
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY . .
+RUN bun run build
+
 FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
@@ -23,10 +33,12 @@ RUN apt-get update \
   && chown konae:konae /data \
   && chmod 0700 /data
 COPY --from=build /src/target/release/konae /usr/local/bin/konae
+COPY --from=editor /app/dist /usr/local/share/konae/editor
 COPY ops/konae-entrypoint.sh /usr/local/bin/konae-entrypoint
 RUN chmod 755 /usr/local/bin/konae-entrypoint
 # The Kernel binds all interfaces here, so it refuses the local development
 # key unless the compose file opts in.
-ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data
+# An empty KONAE_EDITOR_DIR serves no editor.
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_EDITOR_DIR=/usr/local/share/konae/editor
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/konae-entrypoint"]
