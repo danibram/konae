@@ -170,7 +170,7 @@ The SDK calls `/_konae/mcp` on the app's host with the app session. [The miniapp
 
 On a public app a visitor may call actions declared `anonymous` and read files uploaded as `public`. Uploads, private files and `authenticated` actions need a session. On a private app nothing loads or runs without one.
 
-A signed-out visitor may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each app user 120 times per 10 seconds. Past that the call answers `rate-limited` with `Retry-After`. The Kernel counts the socket's peer address and reads `X-Forwarded-For` only from peers in `KONAE_TRUSTED_PROXIES`.
+A signed-out visitor may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each app user 120 times per 10 seconds. Past that the call answers `rate-limited` with `Retry-After`, and so does a call that finds four statements of its Deployment already running and no slot free within 2 seconds. The Kernel counts the socket's peer address and reads `X-Forwarded-For` only from peers in `KONAE_TRUSTED_PROXIES`.
 
 Set `manifest.fileAccess` to `"app-users"` to require an app session for every file, including existing uploads. The uploader keeps deletion rights. Removing the policy restores each original file visibility. Files uploaded under the policy then become private to the uploader.
 

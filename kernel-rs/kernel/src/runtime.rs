@@ -201,12 +201,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                     state.guards.signed_in_actions.check(&principal)
                 };
                 if let Err(wait) = limited {
-                    let mut response = Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"rate-limited"}],"isError":true}})).into_response();
-                    response.headers_mut().insert(
-                        header::RETRY_AFTER,
-                        HeaderValue::from(wait.as_secs().max(1)),
-                    );
-                    return response;
+                    return rate_limited_tool(&id, wait);
                 }
             }
             let result = if name == "transfer_read" && anonymous && fixed_file_access {
@@ -225,6 +220,10 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
             } else {
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
             };
+            // No statement slot freed in time: the answer the address limit gives.
+            if let Some(limits::Busy(wait)) = result.as_ref().err().and_then(|e| e.downcast_ref::<limits::Busy>()) {
+                return rate_limited_tool(&id, *wait);
+            }
             // The session row is gone; the browser must drop its cookie too.
             if name == "auth_logout" && result.is_ok() {
                 clear_cookie = true;
@@ -242,6 +241,13 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
     if let Some(cookie) = session_cookie {
         response.headers_mut().insert(header::SET_COOKIE, cookie);
     }
+    response
+}
+
+/// The `rate-limited` tool error, with how long to wait before the next call.
+fn rate_limited_tool(id: &Value, wait: std::time::Duration) -> Response {
+    let mut response = Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"rate-limited"}],"isError":true}})).into_response();
+    response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
     response
 }
 
@@ -700,16 +706,19 @@ pub async fn runtime_call(
         }
         "auth_logout" => response_value(logout(State(state.clone()), headers.clone()).await).await,
         "actions_invoke" => {
-            response_value(
-                invoke_action(
-                    State(state.clone()),
-                    AxumPath(a["name"].as_str().unwrap().to_owned()),
-                    headers.clone(),
-                    Json(a.get("input").cloned().unwrap_or(json!({}))),
-                )
-                .await,
+            let response = invoke_action(
+                State(state.clone()),
+                AxumPath(a["name"].as_str().unwrap().to_owned()),
+                headers.clone(),
+                Json(a.get("input").cloned().unwrap_or(json!({}))),
             )
-            .await
+            .await;
+            // Only a statement slot that did not free in time answers 429 here.
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                let wait = response.headers().get(header::RETRY_AFTER).and_then(|value| value.to_str().ok()).and_then(|value| value.parse().ok()).unwrap_or(1);
+                return Err(limits::Busy(std::time::Duration::from_secs(wait)).into());
+            }
+            response_value(response).await
         }
         "files_list" => {
             let mut files =

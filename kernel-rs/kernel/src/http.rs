@@ -653,7 +653,7 @@ fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap
     }
 }
 
-fn rate_limited(wait: std::time::Duration) -> Response {
+pub(crate) fn rate_limited(wait: std::time::Duration) -> Response {
     let mut response = refusal(StatusCode::TOO_MANY_REQUESTS, "rate-limited");
     response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
     response
@@ -1136,7 +1136,10 @@ async fn run_verified(
     };
     let db_path = database_path(state, &deployment.id);
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
-    let result = run_action(db_path, action, params).await;
+    let result = match state.guards.statement_permit(&deployment.id).await {
+        Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+        Err(wait) => return rate_limited(wait),
+    };
     // A notice below writes mail.sqlite; the app's other calls need not wait for it.
     drop(_guard);
     // Usage and Signals do not count what someone who entered as an account does.
