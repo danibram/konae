@@ -260,4 +260,47 @@ mod tests {
             crate::refusal::assert_case(&case, outcome);
         }
     }
+
+    fn hand_edited(rows: &str, sql: &str, rootpage: i64) -> rusqlite::Connection {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(&format!("CREATE VIRTUAL TABLE {rows} USING fts5(body)")).unwrap();
+        db.execute_batch("PRAGMA writable_schema=ON").unwrap();
+        db.execute("UPDATE sqlite_master SET sql = ?1, rootpage = ?2 WHERE name = ?3", rusqlite::params![sql, rootpage, rows]).unwrap();
+        db
+    }
+
+    #[test]
+    fn a_table_row_is_accepted_only_when_it_reads_as_an_ordinary_table() {
+        for sql in [
+            "CREATE \u{FEFF}VIRTUAL TABLE notes USING fts5(body)",
+            "CREATE /*x*/ VIRTUAL TABLE notes USING fts5(body)",
+            "CREATE\u{a0}VIRTUAL TABLE notes USING fts5(body)",
+            "\u{FEFF}CREATE VIRTUAL TABLE notes USING fts5(body)",
+            "CREATE VIRTUAL TABLE notes USING fts5(body)",
+        ] {
+            let db = hand_edited("notes", sql, 2);
+            let refusal = stored_virtual_table(&db, "accounts component").unwrap().unwrap_or_else(|| panic!("{sql:?} was accepted"));
+            assert!(refusal.contains("notes") && refusal.contains("Drop it before importing."), "{refusal}");
+        }
+        let db = hand_edited("notes", "CREATE TABLE notes(body)", 0);
+        assert!(stored_virtual_table(&db, "usage component").unwrap().is_some(), "a table row with no b-tree of its own is virtual");
+    }
+
+    #[test]
+    fn the_tables_sqlite_and_the_kernel_write_are_accepted() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS a(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+             INSERT INTO a(v) VALUES('x');
+             create table \"b c\"(k TEXT PRIMARY KEY, v) WITHOUT ROWID;
+             CREATE TABLE s(k INTEGER PRIMARY KEY, v TEXT) STRICT;
+             CREATE TABLE IF NOT EXISTS main.q(k, v);
+             CREATE INDEX a_v ON a(v);
+             ANALYZE;",
+        )
+        .unwrap();
+        let names: i64 = db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('sqlite_sequence', 'sqlite_stat1')", [], |row| row.get(0)).unwrap();
+        assert_eq!(names, 2, "the internal tables are in the file the test checks");
+        assert_eq!(stored_virtual_table(&db, "database").unwrap(), None);
+    }
 }
