@@ -100,7 +100,7 @@ login     --dir <folder> --url <Kernel URL> [--browser [--no-open]] [--manage-us
           [--verify-from <mailbox.jsonl>]
           --browser prints an address and opens it, unless --no-open. Open it in a browser on this
           machine, sign in as the owner and allow access within 5 minutes. No password reaches the
-          terminal, and the token is the same 24-hour one.
+          terminal, and the token is the same 24-hour one (1 hour on an installation that signs owners in with Clerk).
           Without --browser, reads KONAE_EMAIL and KONAE_PASSWORD, plus KONAE_INVITATION_CODE to create the
           account with an operator's invitation code, or KONAE_SETUP_KEY for the first owner.
           Saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json.
@@ -154,10 +154,10 @@ export    --dir <folder> --out <empty folder> [--with-data]
           Writes the app folder: konae.json, app/, a fresh dist/ and the files every app folder
           carries. --with-data adds the published app's data/ and needs a credential from
           login --export-data. Secrets never go with it.
-domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
+domain    --dir <folder> --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
           Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
           control the hostname; run it again once the record is at your DNS provider.
-hostname  --deployment <id> [--set <name>] [--url <Kernel URL>]
+hostname  --dir <folder> --deployment <id> [--set <name>] [--url <Kernel URL>]
           Shows the generated address Konae gave the app, or moves it to <name>.<app suffix>. The old
           name redirects to the new one and stays the app's.
 secret    set <name> --dir <folder> [--use route|call|google] [--url <Kernel URL>]
@@ -166,7 +166,8 @@ secret    set <name> --dir <folder> [--use route|call|google] [--url <Kernel URL
           the name back with secrets_list. google_client_id and google_client_secret take use google.
           secret list --dir <folder> lists each secret's name and use, never its value.
 
-init, build, contract, dev, and sql and events without --prod need no credential. Every other command but login reads it from
+init, build, contract and dev need no credential, nor do sql and events without --prod or export without --with-data.
+conform takes the app's own credentials as flags. Every other command but login reads it from
 <folder>/.konae/credentials.json or KONAE_MCP_TOKEN.`;
 
 function endpoint(url: string) { return new URL("/mcp", url).href; }

@@ -122,7 +122,8 @@ async fn creator_recover(State(state): State<Konae>, request: Request) -> Respon
         let _guard = database_lock(&state, "owner-auth").await;
         let auth = creator_store(&state)?;
         let email = input.email.clone();
-        let delivery = creator_delivery(&email, client, &origin);
+        // The owner sign-in page reads #recovery=; the editor at / does not.
+        let delivery = creator_delivery(&email, client, &format!("{origin}/_konae/owner/login"));
         issue_and_send(mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
         Ok::<(), AuthError>(())
     }
@@ -319,6 +320,9 @@ mod tests {
         assert_eq!((unknown, known), (StatusCode::ACCEPTED, StatusCode::ACCEPTED));
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Recovery);
+        // The link opens the owner sign-in page, the one page that reads #recovery=.
+        let url = fixture.last_url();
+        assert!(url.split_once('#').unwrap().0.ends_with("/_konae/owner/login") && url.contains("#recovery="), "{url}");
         assert_eq!(owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await.status(), StatusCode::GONE);
         assert_eq!(owner(&fixture, "/_konae/owner/reset", json!({"token": token, "password": "a new password"})).await.status(), StatusCode::OK);
         assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&first), None)).unwrap().is_none());

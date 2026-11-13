@@ -956,7 +956,8 @@ describe("app accounts under required verification", () => {
 
   test("a sign-in before the link hints only in the browser that asked for it", async () => {
     const plain = "Email or password is incorrect.";
-    const hint = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
+    // The test Kernel uses the development transport, which emails nothing, so the hint names the mailbox file.
+    const hint = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.";
     const started = await appPost("/_konae/auth/signup", { email: "ana@strict.test" });
     expect(started.status).toBe(202);
     const browser = setCookie(started)!;

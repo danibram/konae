@@ -249,7 +249,7 @@ describe("the CLI and the editor build the same artifact", () => {
         expect(editor.files[file]).toBe(cli.files[file]);
       }
       expect(cli.files["index.html"]).toContain(`<head>${runtimeLoaderScript()}`);
-      expect(cli.files["app.js"]).toContain("document.title = greeting");
+      expect(cli.files["app.js"]).toContain("document.title=");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -271,7 +271,7 @@ describe("the CLI and the editor build the same artifact", () => {
       expect(one).not.toContain(path.basename(second));
       for (const comment of ["// app.js", "// lib/greet.js", "/* lib/card.css */"]) expect(one).not.toContain(comment);
       expect(one).toContain("Kept: a legal comment.");
-      expect(one).toContain(".card {");
+      expect(one).toContain(".card{");
       // The editor names modules with its own namespace; its page carries the same script and styles.
       const editor = await buildProjectInBrowser(project(modular));
       expect(editor.files["index.html"]).toBe(JSON.parse(one).files["index.html"]);
@@ -310,8 +310,8 @@ describe("the CLI and the editor build the same artifact", () => {
     try {
       const cli = (await buildLocal(root)).artifact;
       const editor = await buildProjectInBrowser(project(typed));
-      expect(cli.files["index.html"]).toContain("document.title = String(count)");
-      expect(editor.files["index.html"]).toContain("document.title = String(count)");
+      expect(cli.files["index.html"]).toContain("document.title=String(");
+      expect(editor.files["index.html"]).toContain("document.title=String(");
     } finally { await rm(root, { recursive: true, force: true }); }
 
     const blank = { ...typed, "index.html": page("App", '<div id="root"></div>') };

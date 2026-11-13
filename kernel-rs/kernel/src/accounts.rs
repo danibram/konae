@@ -739,6 +739,11 @@ pub mod tests {
             (message.purpose, token)
         }
 
+        /// The whole link of the last message, page and fragment.
+        pub fn last_url(&self) -> String {
+            self.mailbox.0.lock().unwrap().last().expect("a message was sent").link.clone()
+        }
+
         pub fn sent(&self) -> usize {
             self.mailbox.0.lock().unwrap().len()
         }

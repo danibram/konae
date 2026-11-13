@@ -458,9 +458,9 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
         && manifest["runtime"]["database"]["mode"] == "declared-actions"
         && ["optional", "required"].contains(&manifest["runtime"]["auth"]["mode"].as_str().unwrap_or(""))
         && manifest["runtime"]["files"]["access"] == "deployment"
-        && actions.is_some_and(|list| list.len() <= 50 && list.iter().all(|action|
+        && actions.is_some_and(|list| list.len() <= kernel::action_shape::MAX_ACTIONS && list.iter().all(|action|
             string(&action["name"], 120) && ["query", "mutation", "signal", "call"].contains(&action["kind"].as_str().unwrap_or(""))
-            && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest. Send {{ version: 1, visibility, runtime: {{ database: {{ mode: \"declared-actions\", actions: [{{ name, kind, access }}] }}, auth: {{ mode: \"optional\" or \"required\" }}, files: {{ access: \"deployment\" }} }} }} with up to 50 actions.");
+            && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest. Send {{ version: 1, visibility, runtime: {{ database: {{ mode: \"declared-actions\", actions: [{{ name, kind, access }}] }}, auth: {{ mode: \"optional\" or \"required\" }}, files: {{ access: \"deployment\" }} }} }} with up to {} actions.", kernel::action_shape::MAX_ACTIONS);
     let mut names = std::collections::HashSet::new();
     for action in actions.unwrap() {
         let name = action["name"].as_str().unwrap();
@@ -518,7 +518,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "platform_guide",
-            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (which Capsule declaration to use). Also credentials, development, actions, sdk, publishing, users and portability.",
+            "Read a guide topic. Start with rules (yardstick, first run, read-back, divergences), then pieces (which Capsule declaration to use). Also credentials, development, actions, sdk, publishing, users, portability and refusals.",
             json!({"topic":{"type":"string","enum":super::guide::TOPICS}}),
             &["topic"],
             true,

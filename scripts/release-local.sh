@@ -226,7 +226,7 @@ build() {
     "$context"
 }
 
-build konae Dockerfile.konae "Konae: Kernel with owner accounts, MCP and the project list"
+build konae Dockerfile.konae "Konae: Kernel with the editor, owner accounts, MCP and the project list"
 build konae-kernel Dockerfile.kernel "Kernel alone: serves app folders without Konae"
 
 # --- Result -----------------------------------------------------------------
