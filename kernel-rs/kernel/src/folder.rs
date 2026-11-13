@@ -138,13 +138,20 @@ fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::Action
 }
 
 /// Hostname for a first publish or a bare-folder open: `<slug>.<suffix>` when
-/// free, otherwise `<slug>-<code>.<suffix>`. A republish keeps the address it
+/// `hostname_set` would allow it, otherwise `<slug>-<code>.<suffix>`. A republish keeps the address it
 /// already has; this only runs when none is stored yet.
 pub async fn free_hostname(state: &AppState, slug: &str) -> String {
     let slug = Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into());
     let wanted = format!("{slug}.{}", state.host_suffix);
-    // A name another app held before it moved still redirects to that app.
-    if !state.deployments.read().await.contains_key(&wanted) && crate::hostname::held_by(state, &wanted).is_none() {
+    // The same rule `hostname_set` applies. A name another app held before it
+    // moved still redirects to that app, and the installation's own hosts
+    // and the path host are never an app's.
+    let mut reserved = crate::domain::Rules::of(state).installation_hosts;
+    reserved.extend(crate::path::path_host(state));
+    let taken = state.deployments.read().await.contains_key(&wanted)
+        || crate::hostname::held_by(state, &wanted).is_some()
+        || crate::domain::claimed(state, &wanted);
+    if crate::hostname::check_free(&wanted, &reserved, taken).is_ok() {
         return wanted;
     }
     let short_id = Uuid::new_v4().simple().to_string().chars().take(6).collect::<String>();

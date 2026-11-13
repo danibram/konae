@@ -179,13 +179,15 @@ pub async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(host) = url::Url::parse(origin).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase)) else {
         return false;
     };
-    if state.deployments.read().await.contains_key(&host) || super::domain::claimed(state, &host) {
-        return true;
-    }
     let configured = |value: &str| url::Url::parse(value).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase));
     let public = configured(&state.public_origin);
     let own = state.own_origins.iter().filter_map(|origin| configured(origin)).any(|own| own == host);
-    if public.as_deref() == Some(host.as_str()) || own {
+    // A stored record on an installation host does not make that host an app.
+    let installation = public.as_deref() == Some(host.as_str()) || own;
+    if (!installation && state.deployments.read().await.contains_key(&host)) || super::domain::claimed(state, &host) {
+        return true;
+    }
+    if installation {
         return false;
     }
     // The path host is `<domain>`, which holds the path addresses and the home.
