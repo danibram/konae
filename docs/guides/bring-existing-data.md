@@ -38,6 +38,8 @@ bun run konae -- sql --dir ./my-app --file ./import.sql
 
 Keep to the tables and columns of `app/schema.sql`. When the published schema lacks a column that `data/` holds, the import would drop it, and `push` stops with the plan until you confirm it.
 
+A local `identity.sqlite` replaces every published account, even when it holds none, and a fresh `dev` writes one with no accounts. To keep the published accounts, move `identity.sqlite` out of `data/` before you push; without it the published accounts stay. Without `identity.sqlite`, no file in `data/files/index.json` may carry an `ownerId`, because the import checks each owner against the accounts it receives.
+
 Accounts come from the app, not from a table you write. Create them on `konae dev` through sign-up or `kernel invite`, or start from a `konae pull` of the published app, so their ids are the Kernel's own. A row that names its owner keeps that account's id, the value the `actor` binding gives a Server Action.
 
 ## 3. Add the files

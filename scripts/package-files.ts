@@ -56,8 +56,9 @@ export async function checksumFile(file: string) {
  * transfer_begin answers, and completes it. `component` names the part of
  * an export it carries. A failed upload is cancelled.
  */
-export async function uploadFromFile(client: McpClient, file: string, sized: { size: number; sha256: string }, args: { projectId: string; component: string }): Promise<Transfer> {
+export async function uploadFromFile(client: McpClient, file: string, sized: { size: number; sha256: string }, args: { projectId: string; component: string }, begun?: (transfer: Transfer) => void): Promise<Transfer> {
   const transfer = await client.call<Transfer>("transfer_begin", { size: sized.size, sha256: sized.sha256, ...args });
+  begun?.(transfer);
   try {
     if (!Number.isSafeInteger(transfer.chunkBytes) || transfer.chunkBytes <= 0) throw new McpError("transfer_begin answered no valid chunkBytes.");
     const input = await open(file, "r");

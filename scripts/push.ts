@@ -83,7 +83,10 @@ export async function checkFiles(directory: string, limits: FileLimits, accounts
     const owner = entry.ownerId;
     if (owner !== undefined && owner !== null) {
       if (typeof owner !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(owner)) throw Error(`${where} gives file ${id} an invalid ownerId. ${NOTHING_SENT}`);
-      if (!accounts?.has(owner)) throw Error(`File ${id} belongs to account ${owner}, which ${path.join(DATA_FOLDER, "identity.sqlite")} does not hold. Add the account, or remove ownerId from the file. ${NOTHING_SENT}`);
+      if (!accounts?.has(owner)) {
+        const where = accounts ? `${path.join(DATA_FOLDER, "identity.sqlite")} does not hold` : `is in no ${path.join(DATA_FOLDER, "identity.sqlite")}, and the import checks owners against the accounts it receives`;
+        throw Error(`File ${id} belongs to account ${owner}, which ${where}. Add the account, or remove ownerId from the file. ${NOTHING_SENT}`);
+      }
     }
     files.push({ id, name: typeof entry.name === "string" ? entry.name : "file", size: size as number, blob });
   }
@@ -144,7 +147,8 @@ export async function stageData(root: string, scratch: string, limits: FileLimit
   const components: Staged[] = [];
   const add = async (name: PackageComponentName, file: string) => {
     const sized = await checksumFile(file);
-    const limit = packageComponentLimits[name];
+    // The files archive is bounded by the installation's quota, which checkFiles applies.
+    const limit = name === "files" ? Infinity : packageComponentLimits[name];
     if (sized.size > limit) throw Error(`The ${name} component is ${bytes(sized.size)}; the Kernel takes at most ${bytes(limit)}. ${NOTHING_SENT}`);
     components.push({ name, file, ...sized });
   };
@@ -231,7 +235,9 @@ export async function pushData(root: string, client: McpClient, project: { id: s
     const sent = local.components.map((component) => component.name);
     log(`push replaces the data of ${project.name} at ${deployment.url ?? deployment.id} with ${path.join(root, DATA_FOLDER)}. Rows are never merged.`);
     for (const line of rowsTable(local.tables, before, ["here", "published"])) log(line);
-    log(`  accounts: ${local.accounts === undefined ? "no identity.sqlite here, so the published accounts stay" : `${local.accounts} here replace the published ones`}`);
+    log(`  accounts: ${local.accounts === undefined ? "no identity.sqlite here, so the published accounts stay"
+      : local.accounts === 0 ? "identity.sqlite here holds none, so every published account goes. Move identity.sqlite out of data/ to keep them"
+      : `${local.accounts} here replace the published ones`}`);
     log(`  files: ${local.files ? `${local.files.count} here (${bytes(local.files.bytes)}) replace the published ones` : "no data/files here, so the published files stay"}`);
     log(`  usage: ${sent.includes("usage") ? "usage.sqlite here replaces the published Usage and Signals" : "no usage.sqlite here, so the published Usage and Signals are removed"}`);
     log(`It sends ${local.components.map((component) => `${component.name} ${bytes(component.size)}`).join(", ")}. The app keeps its sessions, API keys, Signup Policy, sign-in methods, secrets and address.`);
@@ -240,21 +246,26 @@ export async function pushData(root: string, client: McpClient, project: { id: s
     const paused = (await client.call<{ maintenance?: boolean }>("maintenance_read", { deploymentId: deployment.id })).maintenance === true;
     let backupId: string | undefined;
     let failure: unknown;
-    // An interrupt would skip the finally below, so it takes the app out of maintenance itself.
+    // True once push itself put the app in maintenance, so only push's own pause is lifted.
+    let pausedHere = false;
+    // An interrupt would skip the finally below, so it releases the uploads and lifts the pause itself.
     const interrupted = () => {
-      log("Interrupted. Taking the app out of maintenance.");
-      void client.call("maintenance_set", { deploymentId: deployment.id, on: false }).catch(() => {}).finally(() => process.exit(130));
+      log(pausedHere ? "Interrupted. Taking the app out of maintenance." : "Interrupted.");
+      void Promise.all(transfers.map((transfer) => client.cancel(transfer.transferId).catch(() => {})))
+        .then(() => pausedHere ? client.call("maintenance_set", { deploymentId: deployment.id, on: false }) : undefined)
+        .catch(() => {}).finally(() => process.exit(130));
     };
-    if (!paused) process.once("SIGINT", interrupted);
+    process.once("SIGINT", interrupted);
     try {
       if (!paused) {
         await client.call("maintenance_set", { deploymentId: deployment.id, on: true });
-        log("Put the app in maintenance: it serves a maintenance page and refuses writes until the import ends.");
+        pausedHere = true;
+        log("Put the app in maintenance. It serves a maintenance page and refuses writes until the import ends.");
       }
       const components: Record<string, string> = {};
       for (const component of local.components) {
-        const transfer = await uploadFromFile(client, component.file, component, { projectId: project.id, component: component.name });
-        transfers.push(transfer);
+        // Recorded as soon as it begins, so an interrupt mid-upload releases it too.
+        const transfer = await uploadFromFile(client, component.file, component, { projectId: project.id, component: component.name }, (begun) => transfers.push(begun));
         components[component.name] = transfer.transferId;
         log(`Uploaded ${component.name} (${bytes(component.size)}).`);
       }
@@ -268,11 +279,11 @@ export async function pushData(root: string, client: McpClient, project: { id: s
         const change = answer.schema!;
         const [, ...plan] = describeSchemaChange(change);
         for (const line of ["Bringing data/ to the published schema loses data:", ...plan]) log(line);
-        throw Error(`Nothing changed: the published schema would drop what data/ holds. To apply this plan, run push again with --yes --confirm-schema ${change.confirmation}.`);
+        throw Error(`Nothing changed, because the published schema would drop what data/ holds. To apply this plan, run push again with --yes --confirm-schema ${change.confirmation}.`);
       }
       backupId = answer.backup!.id;
       log(`Imported. Backup ${backupId} holds the published data as it was before.`);
-      // Read back through the same door: the backup is listed, and the published rows are the ones sent.
+      // Read back through the same door. The backup is listed, and the published rows are the ones sent.
       const backups = await client.call<{ id: string }[] | { result: { id: string }[] }>("database_execute", { deploymentId: deployment.id, operation: "list-backups" });
       if (!(Array.isArray(backups) ? backups : backups.result).some((backup) => backup.id === backupId)) throw Error(`The import answered backup ${backupId}, but list-backups does not show it.`);
       const after = await remoteRows(client, deployment.id);
@@ -284,7 +295,7 @@ export async function pushData(root: string, client: McpClient, project: { id: s
     } finally {
       process.off("SIGINT", interrupted);
       for (const transfer of transfers) await client.cancel(transfer.transferId).catch(() => {});
-      if (!paused) {
+      if (pausedHere) {
         const lifted = await client.call("maintenance_set", { deploymentId: deployment.id, on: false })
           .then(() => client.call<{ maintenance?: boolean }>("maintenance_read", { deploymentId: deployment.id }))
           .then((read) => read.maintenance === false, () => false);
