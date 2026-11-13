@@ -2461,16 +2461,33 @@ pub fn browse_table(path: &Path, body: &Value) -> Result<Value> {
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
+    let mut budget = ResultBudget::default();
+    let metadata_bytes = columns.iter().fold(128usize, |bytes, column| {
+        bytes.saturating_add(browse_column_json_cost(column))
+    });
+    anyhow::ensure!(budget.reserve(metadata_bytes), "{QUERY_RESULT_TOO_LARGE}");
     let rows = bounded_rows(statement
         .query_map([page_size, page.saturating_mul(page_size)], |row| {
             let mut values = serde_json::Map::new();
             let mut row_id = Value::Null;
+            let mut first_value = true;
+            if !budget.begin_row(22) {
+                return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)));
+            }
             for (i, name) in col_names.iter().enumerate() {
-                let value = sql_json(row.get_ref(i)?);
                 if name == "__konae_rowid" {
-                    row_id = value;
+                    let value = row.get_ref(i)?;
+                    if !budget.spend_value(value) {
+                        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)));
+                    }
+                    row_id = sql_json(value);
                 } else {
-                    values.insert(name.clone(), value);
+                    let value = row.get_ref(i)?;
+                    if !budget.spend_column(name, value, first_value) {
+                        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)));
+                    }
+                    first_value = false;
+                    values.insert(name.clone(), sql_json(value));
                 }
             }
             Ok(json!({"rowId": row_id, "values": values}))
@@ -2796,18 +2813,33 @@ pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue
     // clause the Kernel appends; the author's statement cannot hold one.
     let columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
     let mut rows = Vec::new();
+    let mut budget = ResultBudget::default();
     let changes = if columns.is_empty() {
         transaction.prepare_cached(&action.statement)?.execute(params_from_iter(params))? as u64
     } else {
         let mut statement = transaction.prepare_cached(&notify::with_returning(&action.statement, &columns))?;
         let mut cursor = statement.query(params_from_iter(params))?;
+        let mut serialized_bytes = 2usize;
         // SQLite makes every change on the first step, so the rows past the
         // cap are skipped, not left unchanged.
         while let Some(row) = cursor.next()? {
             if rows.len() < notify::MAX_RETURNED_ROWS {
                 let mut object = serde_json::Map::new();
+                if !budget.begin_row(2) {
+                    anyhow::bail!("{QUERY_RESULT_TOO_LARGE}");
+                }
                 for (index, column) in columns.iter().enumerate() {
-                    object.insert(column.clone(), sql_json(row.get_ref(index)?));
+                    let value = row.get_ref(index)?;
+                    if !budget.spend_column(column, value, index == 0) {
+                        anyhow::bail!("{QUERY_RESULT_TOO_LARGE}");
+                    }
+                    object.insert(column.clone(), sql_json(value));
+                }
+                serialized_bytes = serialized_bytes
+                    .saturating_add(usize::from(!rows.is_empty()))
+                    .saturating_add(serde_json::to_vec(&object)?.len());
+                if serialized_bytes > 2 * 1024 * 1024 {
+                    anyhow::bail!("{QUERY_RESULT_TOO_LARGE}");
                 }
                 rows.push(object);
             }
@@ -3609,27 +3641,105 @@ impl std::fmt::Display for ResultTooLarge {
 impl std::error::Error for ResultTooLarge {}
 
 /// What a result has cost as JSON so far, counted as its columns are read.
-#[derive(Default)]
 pub struct ResultBudget {
     bytes: usize,
+    rows: usize,
 }
 
 impl ResultBudget {
-    /// Adds what `value` will cost as JSON: a blob costs twice its length as
-    /// hex. False once the whole result passes 2 MiB. Text counts without its
-    /// escapes, so `bounded_rows` still measures the finished row.
-    pub fn spend(&mut self, value: rusqlite::types::ValueRef<'_>) -> bool {
-        use rusqlite::types::ValueRef;
-        let cost = match value {
-            ValueRef::Null => 4,
-            ValueRef::Integer(_) => 20,
-            ValueRef::Real(_) => 24,
-            ValueRef::Text(text) => text.len() + 2,
-            ValueRef::Blob(blob) => blob.len() * 2 + 2,
-        };
-        self.bytes = self.bytes.saturating_add(cost);
+    fn reserve(&mut self, bytes: usize) -> bool {
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.within_limit()
+    }
+
+    fn begin_row(&mut self, row_overhead: usize) -> bool {
+        self.bytes = self.bytes
+            .saturating_add(usize::from(self.rows > 0))
+            .saturating_add(row_overhead);
+        self.rows = self.rows.saturating_add(1);
+        self.within_limit()
+    }
+
+    fn spend_column(&mut self, name: &str, value: rusqlite::types::ValueRef<'_>, first: bool) -> bool {
+        self.bytes = self.bytes
+            .saturating_add(usize::from(!first))
+            .saturating_add(json_string_cost(name.as_bytes()))
+            .saturating_add(1)
+            .saturating_add(sql_json_cost(value));
+        self.within_limit()
+    }
+
+    fn spend_value(&mut self, value: rusqlite::types::ValueRef<'_>) -> bool {
+        self.bytes = self.bytes.saturating_add(sql_json_cost(value));
+        self.within_limit()
+    }
+
+    fn within_limit(&self) -> bool {
         self.bytes <= 2 * 1024 * 1024
     }
+
+    /// Adds the serialized cost of a value without an object key.
+    pub fn spend(&mut self, value: rusqlite::types::ValueRef<'_>) -> bool {
+        self.spend_value(value)
+    }
+}
+
+fn json_string_cost(bytes: &[u8]) -> usize {
+    let mut cost = 2usize;
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                cost = cost.saturating_add(valid.chars().map(json_char_cost).sum::<usize>());
+                break;
+            }
+            Err(error_value) => {
+                let valid = &remaining[..error_value.valid_up_to()];
+                cost = cost.saturating_add(
+                    std::str::from_utf8(valid)
+                        .expect("Utf8Error marks the prefix as valid")
+                        .chars()
+                        .map(json_char_cost)
+                        .sum::<usize>(),
+                );
+                remaining = &remaining[error_value.valid_up_to()..];
+                let invalid_bytes = error_value.error_len().unwrap_or(remaining.len()).max(1);
+                cost = cost.saturating_add(invalid_bytes.saturating_mul(3));
+                remaining = &remaining[invalid_bytes..];
+            }
+        }
+    }
+    cost
+}
+
+fn json_char_cost(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+        '\u{0}'..='\u{1f}' => 6,
+        _ => character.len_utf8(),
+    }
+}
+
+fn sql_json_cost(value: rusqlite::types::ValueRef<'_>) -> usize {
+    use rusqlite::types::ValueRef;
+    match value {
+        ValueRef::Null => 4,
+        ValueRef::Integer(value) => value.to_string().len(),
+        ValueRef::Real(value) => serde_json::Number::from_f64(value)
+            .map(|number| number.to_string().len())
+            .unwrap_or(4),
+        ValueRef::Text(text) => json_string_cost(text),
+        ValueRef::Blob(blob) => blob.len().saturating_mul(2).saturating_add(2),
+    }
+}
+
+fn browse_column_json_cost(column: &Value) -> usize {
+    let name = column["name"].as_str().unwrap_or_default();
+    let column_type = column["type"].as_str().unwrap_or_default();
+    json_string_cost(name.as_bytes())
+        .saturating_add(json_string_cost(column_type.as_bytes()))
+        .saturating_add(column["defaultValue"].as_str().map(|value| json_string_cost(value.as_bytes())).unwrap_or(4))
+        .saturating_add(69)
 }
 
 /// A row as a JSON object, or `None` once `budget` is spent. The columns
@@ -3637,14 +3747,23 @@ impl ResultBudget {
 /// only when its column is read.
 pub fn bounded_row(row: &rusqlite::Row<'_>, names: &[String], budget: &mut ResultBudget) -> rusqlite::Result<Option<Value>> {
     let mut object = serde_json::Map::new();
+    if !budget.begin_row(2) {
+        return Ok(None);
+    }
     for (index, name) in names.iter().enumerate() {
         let value = row.get_ref(index)?;
-        if !budget.spend(value) {
+        if !budget.spend_column(name, value, index == 0) {
             return Ok(None);
         }
         object.insert(name.clone(), sql_json(value));
     }
     Ok(Some(Value::Object(object)))
+}
+
+impl Default for ResultBudget {
+    fn default() -> Self {
+        Self { bytes: 2, rows: 0 }
+    }
 }
 
 pub fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<Vec<Value>> {
@@ -5195,6 +5314,82 @@ pub mod tests {
         let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(THREE_BLOBS), Vec::new()));
         assert_eq!(outcome.unwrap_err().to_string(), "Query result exceeds 2 MiB or 1000 rows.");
         assert_eq!(converted, 1, "the column that passes the cap is the last one read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn browse_refuses_an_oversized_row_before_converting_its_values() {
+        let root = std::env::temp_dir().join(format!("konae-browse-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE items(payload BLOB); INSERT INTO items VALUES (zeroblob(1100000));",
+        ).unwrap();
+        let (outcome, converted) = converted_after(|| browse_table(&path, &json!({"tableName": "items"})));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 1, "the row id is accounted before the oversized payload is read");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn browse_keeps_its_row_shape_for_ordinary_values() {
+        let root = std::env::temp_dir().join(format!("konae-browse-row-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE items(name TEXT, done INTEGER); INSERT INTO items VALUES ('task', 1);",
+        ).unwrap();
+        let (outcome, _) = converted_after(|| browse_table(&path, &json!({"tableName": "items"})));
+        let result = outcome.unwrap();
+        assert_eq!(result["totalRows"], 1);
+        assert_eq!(result["rows"], json!([{"rowId": 1, "values": {"name": "task", "done": 1}}]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn action_result_budget_counts_column_names_before_converting_values() {
+        let root = std::env::temp_dir().join(format!("konae-column-name-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let alias = "a".repeat(16_000);
+        let statement = format!("WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM rows WHERE n < 140) SELECT NULL AS \"{alias}\" FROM rows");
+        let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(&statement), Vec::new()));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 130, "the oversized repeated column name is refused before value conversion");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn action_result_budget_counts_controls_in_lossy_text_before_conversion() {
+        let root = std::env::temp_dir().join(format!("konae-invalid-text-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap();
+        let statement = "SELECT CAST(zeroblob(350000) || x'ff' AS TEXT) AS payload";
+        let (outcome, converted) = converted_after(|| run_query(&path, &query_definition(statement), Vec::new()));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 0, "the NUL escapes pass the byte cap before lossy text conversion");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn notify_refuses_an_oversized_returning_row_and_rolls_back() {
+        let root = std::env::temp_dir().join(format!("konae-notify-row-cap-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE items(payload BLOB);").unwrap();
+        let definition: ActionDefinition = serde_json::from_value(json!({
+            "kind": "mutation", "access": "anonymous",
+            "statement": "INSERT INTO items(payload) VALUES (zeroblob(1100000))",
+            "bindings": [],
+            "notify": {"to": "owner", "changes": ["payload"], "subject": "Changed", "body": "{changes}"}
+        })).unwrap();
+        let (outcome, converted) = converted_after(|| run_mutation(&path, &definition, Vec::new()));
+        assert_eq!(outcome.err().unwrap().to_string(), QUERY_RESULT_TOO_LARGE);
+        assert_eq!(converted, 0, "the oversized returned payload is rejected before conversion");
+        let count: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM items", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0, "the mutation rolls back when its notice result exceeds the budget");
         let _ = std::fs::remove_dir_all(root);
     }
 
