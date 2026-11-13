@@ -1,6 +1,6 @@
 # The home
 
-The page an installation answers on its bare domain. It says what Konae does, shows an example app moving between two servers, runs the editor's row-limit check on a statement the visitor can edit, and links to the editor on `app.<domain>` and to the docs on `<domain>/p/docs/`. It is a public Konae app with no tables, no Server Actions and no accounts. Everything it shows runs in the browser.
+The page an installation answers on its bare domain. It says what Konae does and what every app has, shows an example app being described, used and moved between two servers, runs the editor's row-limit check on a statement the visitor can edit, and links to the editor on `app.<domain>` and to the docs on `<domain>/p/docs/`. It is a public Konae app with no tables, no Server Actions and no accounts. Everything it shows runs in the browser.
 
 ## How the Kernel finds it
 
@@ -14,6 +14,8 @@ The Deployment whose path address holds the name `konae-home` answers `<domain>/
 | `styles.css` | The design system in the editor's variant, written by `bun run ui:render`. Do not edit it. |
 | `home.css` | The few rules of this page, on the same tokens. |
 | `home.js` | Points the editor, MCP and docs links at this installation from `location`, because the page answers on `<domain>/`, `<domain>/p/konae-home/` and its own hostname. On a custom domain it cannot tell the installation's domain and treats the custom domain as one. |
+| `?v=` on `home.css` and `home.js` | A proxy in front of the installation may let browsers keep CSS and JavaScript for hours, while the Kernel serves the page itself with `no-cache`. Raise the number in `index.html` when either file changes, so a returning visitor does not get the new page with the old files. |
+| `i18n.js` | The page's Spanish text, keyed by each element's `data-t`, and the text the script writes in both languages. The English text is the markup. `?lang=es` or `?lang=en` picks a language, then the visitor's last choice, then the browser's. |
 | `query-bound.ts`, `sql-tokens.ts` | Copies of `src/lib/query-bound.ts` and `src/lib/sql-tokens.ts`, so the row-limit box runs the editor's own check. `bun run ui:render` writes them, and `src/lib/templates/app-ui.test.ts` fails when they drift. |
 
 ## Publish it

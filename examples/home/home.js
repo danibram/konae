@@ -1,5 +1,6 @@
 import { limitIndex, unboundedQueryReason } from "./query-bound.ts";
 import { sqlTokens } from "./sql-tokens.ts";
+import { es, words } from "./i18n.js";
 
 // Points the links at this installation. The page answers on <domain>/,
 // on <domain>/p/<name>/ and on its own <slug>-<6 hex>.<domain>, and only the
@@ -25,9 +26,47 @@ const links = {
   cli: docs("guides/edit-files-with-the-cli"),
   operate: docs("operate"),
   "mcp-guide": docs("mcp-guide"),
+  pieces: docs("pieces"),
+  examples: docs("examples"),
 };
-for (const element of document.querySelectorAll("[data-link]")) element.href = links[element.dataset.link];
+const point = () => {
+  for (const element of document.querySelectorAll("[data-link]")) element.href = links[element.dataset.link];
+};
+point();
 for (const element of document.querySelectorAll("[data-text]")) element.textContent = links[element.dataset.text];
+
+// The page is written in English and carries its Spanish text in i18n.js.
+// ?lang= wins, then the visitor's last choice, then the browser's language.
+// Each part of the page that writes text registers a function in `redraw`,
+// which runs again when the language changes.
+const marked = [...document.querySelectorAll("[data-t]")];
+const english = new Map(marked.map((element) => [element, element.innerHTML]));
+const stored = (() => { try { return localStorage.getItem("konae-home-lang"); } catch { return null; } })();
+const asked = new URLSearchParams(location.search).get("lang");
+let lang = [asked, stored, navigator.language?.slice(0, 2)].find((value) => value === "en" || value === "es") ?? "en";
+let w = words[lang];
+const redraw = [];
+const speak = () => {
+  w = words[lang];
+  document.documentElement.lang = lang;
+  document.title = w.title;
+  document.querySelector('meta[name="description"]').content = w.description;
+  for (const element of marked) element.innerHTML = lang === "es" && es[element.dataset.t] ? es[element.dataset.t] : english.get(element);
+  for (const element of document.querySelectorAll("[data-t-label]")) element.setAttribute("aria-label", w[element.dataset.tLabel.split(".")[1]]);
+  point();
+  for (const draw of redraw) draw();
+};
+const switcher = document.querySelector("[data-lang]");
+redraw.push(() => { switcher.textContent = w.other; switcher.lang = lang === "es" ? "en" : "es"; });
+switcher.hidden = false;
+switcher.addEventListener("click", () => {
+  lang = lang === "es" ? "en" : "es";
+  try { localStorage.setItem("konae-home-lang", lang); } catch {}
+  const here = new URL(location.href);
+  here.searchParams.set("lang", lang);
+  history.replaceState(null, "", here);
+  speak();
+});
 
 // Every code block copies its own text. Without clipboard access it selects the text instead.
 for (const button of document.querySelectorAll("[data-copy]")) {
@@ -41,24 +80,34 @@ for (const button of document.querySelectorAll("[data-copy]")) {
   button.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(pre.dataset.text);
-      button.textContent = "Copied";
+      button.dataset.state = "copied";
     } catch {
       const range = document.createRange();
       range.selectNodeContents(pre);
       getSelection().removeAllRanges();
       getSelection().addRange(range);
-      button.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "Press ⌘C" : "Press Ctrl+C";
+      button.dataset.state = "press";
     }
-    setTimeout(() => { button.textContent = "Copy"; }, 2400);
+    label();
+    setTimeout(() => { button.dataset.state = ""; label(); }, 2400);
   });
+  const label = () => {
+    const state = button.dataset.state;
+    button.textContent = state === "copied" ? w.copied : state === "press" ? w.press(/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘C" : "Ctrl+C") : w.copy;
+  };
+  redraw.push(label);
 }
 
 // In the ways band, pointing at "14 rows" lights "LIMIT 14" too, and back.
-const marks = [...document.querySelectorAll(".doors mark")];
-for (const mark of marks) {
-  mark.addEventListener("mouseenter", () => marks.forEach((other) => other.classList.add("linked")));
-  mark.addEventListener("mouseleave", () => marks.forEach((other) => other.classList.remove("linked")));
-}
+// A change of language writes the first mark again, so the marks are found
+// each time.
+const doors = document.querySelector(".doors");
+const light = (on) => (event) => {
+  if (!event.target.closest?.("mark")) return;
+  for (const mark of doors.querySelectorAll("mark")) mark.classList.toggle("linked", on);
+};
+doors.addEventListener("mouseover", light(true));
+doors.addEventListener("mouseout", light(false));
 
 // The statement box runs the row-limit check the editor's Validation Gate
 // runs (query-bound.ts is a copy of src/lib/query-bound.ts), with the sentence
@@ -78,11 +127,11 @@ if (check) {
     const at = limitIndex(top);
     if (at !== -1) {
       const count = top[at + 1]?.text;
-      if (!/^\d+$/.test(count ?? "")) return "It names a LIMIT. Both accept it.";
-      return `It reads at most ${count} ${count === "1" ? "row" : "rows"}. The number is yours to choose. Both accept it.`;
+      if (!/^\d+$/.test(count ?? "")) return w.namesLimit;
+      return w.readsAtMost(count);
     }
-    if (!top.some((token) => token.kind === "word" && token.text.toUpperCase() === "FROM")) return "The statement reads no table, so the row limit does not apply.";
-    return "A total with no GROUP BY returns one row, so both accept it.";
+    if (!top.some((token) => token.kind === "word" && token.text.toUpperCase() === "FROM")) return w.noTable;
+    return w.oneRow;
   };
   const judge = () => {
     const sql = input.value.trim();
@@ -90,20 +139,21 @@ if (check) {
     const reason = select ? unboundedQueryReason(sql) : null;
     check.classList.toggle("dropped", Boolean(reason));
     check.classList.toggle("idle", !select);
-    verdict.textContent = !select ? "Not checked here" : reason ? "Refused" : "Accepted";
-    who.textContent = reason ? "By the editor and by the server, word for word" : !select ? "Row-limit check" : "By the editor and by the server";
+    verdict.textContent = !select ? w.notChecked : reason ? w.refused : w.accepted;
+    who.textContent = reason ? w.byBothExact : !select ? w.rowCheck : w.byBoth;
+    input.placeholder = w.placeholder;
     answer.textContent = !sql
-      ? "Write a SELECT to check it."
+      ? w.writeSelect
       : !select
-      ? "Write a SELECT. The editor checks writes with other rules."
+      ? w.onlySelect
       : reason
         ? `Action players.list ${reason} Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.`
         : accepted(sql);
 
     const limited = select && !reason && limitIndex(sqlTokens(sql).filter((token) => token.depth === 0)) !== -1;
     toggle.style.visibility = "visible";
-    toggle.textContent = reason ? "Add the LIMIT" : "Remove the LIMIT";
-    foot.textContent = "Edit the statement, or";
+    toggle.textContent = reason ? w.addLimit : w.removeLimit;
+    foot.textContent = w.editOr;
     foot.parentElement.hidden = !(reason || limited);
   };
   check.querySelector("[data-static]").hidden = true;
@@ -118,16 +168,16 @@ if (check) {
     input.value = [bare === statement ? `${statement} LIMIT 14` : bare, ...comment].join(" ");
     judge();
   });
-  judge();
+  redraw.push(judge);
 }
 
-// The example app moves once when the other server comes into view: someone
-// signs up on this site, then a package carries the app to the other server,
-// where it answers at a new address with the same rows. Afterwards the visitor
-// can add players where the app lives and move it on purpose. The slot holding
-// the app is as tall as the app and the empty one folds to one line; both
-// change together while a small copy of the card flies between them, so the
-// stage keeps its height.
+// The example app plays once when the stage comes into view: the description
+// types itself, the app appears at its address, someone signs up, then a
+// package carries the app to the other server, where it answers at a new
+// address with the same rows. Afterwards the visitor can add players where the
+// app lives and move it on purpose. The slot holding the app is as tall as the
+// app and the empty one folds to one line; both change together while a small
+// copy of the card flies between them, so the stage keeps its height.
 const stage = document.querySelector(".stage");
 if (stage) {
   const app = stage.querySelector("[data-app]");
@@ -148,13 +198,25 @@ if (stage) {
   const formNote = form.querySelector("[data-join-note]");
   const mover = stage.querySelector("[data-move]");
   const announce = stage.querySelector("[data-announce]");
+  const typed = stage.querySelector("[data-typed]");
+  const status = stage.querySelector("[data-status]");
+  const prompts = { en: typed.textContent, es: es["stage.prompt"] };
   const hosts = ["konae.example.com", "apps.example.net"];
-  const addresses = ["football-3f9a2c.konae.example.com", "football-71c0e4.apps.example.net"];
+  const addresses = ["football.konae.example.com", "football.apps.example.net"];
   const places = 14;
   let names = [];
   let at = 0;
   let busy = false;
   let moving = false;
+  // What the stage last showed, kept as names of states so a change of
+  // language can write the same moment again.
+  let letters = Infinity;
+  let phase = "";
+  let rowState = "joining";
+  let newestState = "joined";
+  let pending = "";
+  let arrived = false;
+  let formSays = "";
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const total = () => 9 + names.length;
 
@@ -165,38 +227,39 @@ if (stage) {
   // Dana keeps her row; the newest player after her gets the next one, and
   // anyone in between is named in the "more" line.
   const short = (name) => (name.length > 14 ? `${name.slice(0, 14).replace(/\s+\S*$/, "")}…` : name);
-  const render = (state, newestState = "signed up") => {
+  const render = () => {
     const [first, ...rest] = names;
     const latest = rest[rest.length - 1];
     const between = rest[rest.length - 2];
+    typed.textContent = prompts[lang].slice(0, letters);
+    status.textContent = phase ? w[phase] : "";
     who.textContent = short(first ?? "Dana");
     row.classList.toggle("in", Boolean(first));
-    note.textContent = first ? (latest ? newestNote(state) : state) : "signing up…";
-    newest.classList.toggle("in", Boolean(latest));
-    newest.querySelector("b").textContent = latest ? short(latest) : "";
-    newest.querySelector("span").textContent = latest ? newestState : "";
+    note.textContent = first ? w[latest && rowState !== "still" ? "joined" : rowState] : w.joining;
+    newest.classList.toggle("in", Boolean(latest || pending));
+    newest.querySelector("b").textContent = pending ? short(pending) : latest ? short(latest) : "";
+    newest.querySelector("span").textContent = pending ? w.joining : latest ? w[newestState] : "";
     const shown = 2 + (first ? 1 : 0) + (latest ? 1 : 0);
-    more.textContent = `and ${total() - shown} more${between ? `, including ${short(between)}` : ""}`;
-    meta.textContent = `${total()} of ${places} places taken`;
+    more.textContent = w.more(total() - shown, between ? short(between) : "");
+    meta.textContent = w.places(total(), places);
     const full = total() >= places;
     field.disabled = full;
-    if (full) formNote.textContent = "The list is full.";
+    field.placeholder = w.yourName;
+    formNote.textContent = full ? w.full : formSays ? w[formSays] : "";
     meter.style.width = `${(total() / places) * 100}%`;
+    chip.textContent = arrived ? w.arrived : w.package;
+    for (const [i, slot] of slots.entries()) slot.querySelector(".slot-empty").textContent = visited.has(i) ? w.emptyNow : w.emptyYet;
+    mover.textContent = moving ? w.moving : w.moveTo(hosts[1 - at]);
+    if (busy) mover.setAttribute("aria-disabled", "true"); else mover.removeAttribute("aria-disabled");
+    add.textContent = full ? w.startOver : w.add;
   };
-  const newestNote = (state) => (state === "still here" ? "still here" : "signed up");
   const place = (index) => {
     at = index;
     slots[index].prepend(app);
     url.textContent = addresses[index];
     for (const [i, slot] of slots.entries()) slot.classList.toggle("empty", i !== index);
     visited.add(index);
-    for (const [i, slot] of slots.entries()) slot.querySelector(".slot-empty").textContent = visited.has(i) ? "Nothing here now" : "Nothing here yet";
     stage.classList.toggle("moved", index === 1);
-  };
-  const controls = () => {
-    mover.textContent = moving ? "Moving…" : `Move to ${hosts[1 - at]}`;
-    if (busy) mover.setAttribute("aria-disabled", "true"); else mover.removeAttribute("aria-disabled");
-    add.textContent = total() >= places ? "Start over" : "Add";
   };
   // The slots swap height with a transition while a half-size copy of the card
   // flies straight down (or up) the connector, behind the package chip.
@@ -242,81 +305,113 @@ if (stage) {
     if (busy) return;
     busy = true;
     moving = true;
-    controls();
-    const next = 1 - at;
-    chip.textContent = "Package: accounts, data, files, rules";
+    arrived = false;
     stage.classList.remove("arrived");
+    render();
+    const next = 1 - at;
     await carry(next);
-    chip.textContent = "Same accounts, data, files, rules.";
+    arrived = true;
     stage.classList.add("arrived");
-    if (names.length) render("still here", "still here");
-    announce.textContent = `The app moved to ${hosts[next]} with the same accounts, data, files and rules.${names.length ? ` ${names.join(", ")} ${names.length === 1 ? "is" : "are"} still on the list.` : ""}`;
+    if (names.length) { rowState = "still"; newestState = "still"; }
+    announce.textContent = w.saidMoved(hosts[next], names);
     busy = false;
     moving = false;
-    controls();
+    render();
   };
   const join = async (name) => {
-    if (names.length) {
-      newest.classList.add("in");
-      newest.querySelector("b").textContent = short(name);
-      newest.querySelector("span").textContent = "signing up…";
-    }
+    if (names.length) { pending = name; render(); }
     if (!reduced) await wait(500);
+    pending = "";
     names.push(name);
-    render("signed up");
-    announce.textContent = `${name} signed up on ${hosts[at]}.`;
-    controls();
+    rowState = "joined";
+    newestState = "joined";
+    render();
+    announce.textContent = w.saidJoined(name, hosts[at]);
+  };
+  // The description types itself, then the app appears where it was hidden.
+  const describe = async () => {
+    for (letters = 0; letters < prompts[lang].length; letters += 1) { render(); await wait(26); }
+    letters = Infinity;
+    phase = "writing";
+    render();
+    await wait(900);
+    stage.classList.remove("building");
+    phase = "published";
+    render();
+    url.classList.add("fresh");
+    setTimeout(() => url.classList.remove("fresh"), 1200);
   };
 
   reserve();
   addEventListener("resize", reserve);
   place(0);
   // Without motion nothing plays, so Dana is already on the list.
-  if (reduced) names.push("Dana");
-  render(reduced ? "signed up" : "signing up…");
+  if (reduced) { names.push("Dana"); rowState = "joined"; phase = "published"; }
   form.hidden = false;
   mover.hidden = false;
-  controls();
+  redraw.push(() => { render(); reserve(); });
   mover.addEventListener("click", move);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
-    formNote.textContent = "";
+    formSays = "";
     if (total() >= places) {
       names = ["Dana"];
       visited.clear();
       if (at === 1) { stage.classList.add("instant"); place(0); void stage.offsetHeight; stage.classList.remove("instant"); } else place(0);
-      chip.textContent = "Package: accounts, data, files, rules";
+      arrived = false;
+      rowState = "joined";
       stage.classList.remove("arrived");
       field.value = "";
-      render("signed up");
-      formNote.textContent = "";
-      announce.textContent = "The list starts over on konae.example.com with Dana.";
-      controls();
+      render();
+      announce.textContent = w.saidReset;
       field.focus();
       return;
     }
     const name = field.value.trim().slice(0, 16);
-    if (!name) { formNote.textContent = "Type a name first."; field.focus(); return; }
+    if (!name) { formSays = "typeName"; render(); field.focus(); return; }
     field.value = "";
     busy = true;
     await join(name);
     busy = false;
-    controls();
+    render();
   });
   if (!reduced && "IntersectionObserver" in window) {
+    letters = 0;
+    busy = true;
+    stage.classList.add("building");
     const seen = new IntersectionObserver(async (entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
       seen.disconnect();
-      await wait(1500);
-      if (at !== 0 || busy || names.length) return;
-      busy = true;
+      await wait(700);
+      await describe();
+      await wait(1300);
       await join("Dana");
-      await wait(1200);
+      await wait(1400);
       busy = false;
       await move();
-    }, { threshold: 0.6 });
-    seen.observe(slots[1].closest(".server"));
+    }, { threshold: 0.3 });
+    seen.observe(stage);
+  }
+}
+
+// Bands and cards rise into place the first time they come into view, each a
+// little after the one before it in the same row. Without the observer, or
+// with reduced motion, nothing is hidden.
+const rising = [...document.querySelectorAll("[data-reveal]")];
+if (!reduced && "IntersectionObserver" in window) {
+  document.documentElement.classList.add("anim");
+  const rise = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      entry.target.classList.add("seen");
+      rise.unobserve(entry.target);
+    }
+  }, { rootMargin: "0px 0px -8% 0px" });
+  for (const element of rising) {
+    const row = [...element.parentElement.children].filter((child) => child.hasAttribute("data-reveal"));
+    element.style.setProperty("--i", String(row.indexOf(element) % 4));
+    rise.observe(element);
   }
 }
 
@@ -326,3 +421,5 @@ const barCta = document.querySelector(".bar-cta");
 if (heroCta && barCta && "IntersectionObserver" in window) {
   new IntersectionObserver((entries) => barCta.classList.toggle("quiet", entries.some((entry) => entry.isIntersecting))).observe(heroCta);
 }
+
+speak();

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "actions": {
+    "requests.create": {
+      "kind": "mutation",
+      "access": "anonymous",
+      "guard": "That address has already asked, or it is not an email address.",
+      "statement": "INSERT INTO requests(email, building, lang, created_at) SELECT lower(trim(?1)), ?2, ?3, ?4 WHERE ?1 LIKE '%_@_%._%' ON CONFLICT(email) DO NOTHING",
+      "bindings": [
+        { "source": "input", "key": "email", "type": "string", "maxLength": 254 },
+        { "source": "input", "key": "building", "type": "string", "maxLength": 500 },
+        { "source": "input", "key": "lang", "type": "string", "maxLength": 2 },
+        { "source": "kernel", "field": "now" }
+      ],
+      "notify": {
+        "to": "owner",
+        "subject": "Invitation request from {input.email}",
+        "body": "{input.email} asked for an invitation code.\nThey want to build: {input.building}"
+      }
+    }
+  }
+}
