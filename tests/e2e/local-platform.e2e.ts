@@ -241,8 +241,8 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await app.goto(new URL("/_konae/login", url!).href);
   await signInApp(app);
   await expect(app.getByText("Survives a new release")).toBeVisible();
-  // The app's CSP keeps connect-src to its own origin, so the SDK's blob URL cannot be fetched.
-  // The Kernel's file path on the same origin must hand the HTML back as a download, never a page.
+  // The SDK hands out the Kernel's file path on the app's own origin, which connect-src allows.
+  // That path must hand the HTML back as a download, never a page.
   const attachment = await app.evaluate(async () => {
     const sdk = (window as unknown as { miniapp: { files: { upload(file: File): Promise<{ id: string }> } } }).miniapp;
     const stored = await sdk.files.upload(new File(['<script>document.body.dataset.executed="yes"</script>'], "untrusted.html", { type: "text/html" }));

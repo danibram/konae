@@ -887,8 +887,8 @@ fn reconcile_usage() -> String {
     format!("Usage: {} files-reconcile [--dry-run]", crate::program())
 }
 
-/// `files-migrate` and `files-reconcile`. Both read `KONAE_DATA_DIR`
-/// and the `KONAE_FILES_S3_` settings.
+/// `files-migrate` and `files-reconcile`. Both read `KONAE_DATA_DIR` and
+/// the file store settings, `KONAE_S3_BUCKET` or the older `KONAE_FILES_S3_*`.
 pub async fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let data_root = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
