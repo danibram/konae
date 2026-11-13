@@ -463,6 +463,17 @@ async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Rec
 }
 
 /**
+ * Runs an npm command in the app folder and shows its output only when it
+ * fails, so a command's answer, such as the published URL, is all it prints.
+ */
+async function quietly(command: string[], cwd: string) {
+  const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  if (code !== 0) process.stderr.write(stdout + stderr);
+  return code === 0;
+}
+
+/**
  * Builds `app/` into `dist/` by the static publishing contract in
  * src/lib/static-artifact.js, the rules the editor's build runs too.
  * When the folder has package.json with a build script (from init), that
@@ -477,8 +488,12 @@ export async function buildLocal(root: string, options: { development?: boolean 
     if (neverRuns) throw Error(neverRuns);
     // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
     await refreshActionTypes(root);
-    const build = Bun.spawn(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], { cwd: root, stdout: "inherit", stderr: "inherit" });
-    if ((await build.exited) !== 0) throw Error("npm run build failed.");
+    // A folder fresh from init or export has package.json but no node_modules; its build needs esbuild.
+    if (!existsSync(path.join(root, "node_modules"))) {
+      console.error("Installing the folder's build dependencies with npm install, once.");
+      if (!(await quietly(["npm", "install", "--no-audit", "--no-fund"], root))) throw Error("npm install failed in the app folder. Run it there yourself, then build again.");
+    }
+    if (!(await quietly(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], root))) throw Error("npm run build failed.");
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
     const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };

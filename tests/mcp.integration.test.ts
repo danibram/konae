@@ -365,7 +365,7 @@ describe("authenticated MCP", () => {
     };
     expect(await run("init", ["--name", "External proof"])).toContain("Created External proof");
     expect(await run("build")).toContain("dist");
-    expect(await run("publish", ["--url", url])).toContain("http://external-proof-");
+    expect(await run("publish", ["--url", url])).toContain("http://external-proof.");
     const settings = await Bun.file(path.join(directory, "konae.json")).json();
     const config = { project: settings };
     // init made the ID without a Kernel, and the first publish registered the project.

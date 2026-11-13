@@ -319,7 +319,8 @@ describe("the MCP walkthrough", () => {
     expect((await run(["publish", "--dir", app()])).code).toBe(0);
     const receipt = JSON.parse(await readFile(path.join(app(), ".konae/published.json"), "utf8"));
     Object.assign(s, { deploymentId: receipt.id, hostname: receipt.hostname });
-    r.name(receipt.hostname.split(".")[0], "orders-<suffix>");
+    // A free slug is the hostname itself; only a taken one gets a code to name.
+    if (receipt.hostname.split(".")[0] !== "orders") r.name(receipt.hostname.split(".")[0], "orders-<suffix>");
     const policy = await tool("signup_policy_read", { deploymentId: s.deploymentId });
     expect((policy.result as any).mode).toBe("invitation");
     await http("GET", a, "/about", { host: s.hostname });
@@ -499,7 +500,7 @@ describe("the MCP walkthrough", () => {
     r.name((plan.result as any).planId, "<plan id>");
     const applied = await tool("release_apply", { planId: (plan.result as any).planId }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, hostname: value.hostname, url: value.url, signupPolicy: value.signupPolicy }) });
     Object.assign(s, { deploymentB: (applied.result as any).id, hostnameB: (applied.result as any).hostname });
-    r.name(s.hostnameB.split(".")[0], "orders-<destination suffix>");
+    if (s.hostnameB.split(".")[0] !== "orders") r.name(s.hostnameB.split(".")[0], "orders-<destination suffix>");
     for (const id of [...Object.values(uploads), release.transferId]) await client.cancel(id).catch(() => {});
 
     r.step("import-check");

@@ -329,6 +329,7 @@ compose.yaml
 konae.json
 package.json
 scripts
+tsconfig.json
 
 actions.json
 app.js
@@ -590,7 +591,8 @@ bun run konae -- publish --dir /tmp/orders
 ```
 
 ```text
-http://orders-<suffix>.localhost:4173
+http://orders.localhost:4173
+This first release names the app http://orders.localhost:4173, and every later release keeps that name. To use another name under the same suffix, run konae hostname --deployment <project id> --set <name> before you register Google sign-in or share links.
 ```
 
 ```json
@@ -614,7 +616,7 @@ http://orders-<suffix>.localhost:4173
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/about'
+curl -i 'http://orders.localhost:4173/about'
 ```
 
 ```text
@@ -695,11 +697,13 @@ Check that the installation sends email, then invite. Call `app_invitations_crea
     "policy": "invitation",
     "results": [
       {
+        "acceptUrl": "http://orders.localhost:4173/_konae/invitation#invitation=<invitation token>",
         "acceptable": true,
-        "delivery": "queued",
+        "delivery": "local-mailbox",
         "email": "member@walkthrough.test",
         "expiresAt": <unix seconds>,
         "invitationId": "<invitation id>",
+        "note": "No email left this server. The development mail transport writes the invitation to mailbox.jsonl in the Kernel's data directory instead of sending it. Send acceptUrl to the person yourself; it works once.",
         "status": "invited"
       }
     ]
@@ -716,11 +720,11 @@ tail -n 1 /tmp/kernel-a/mailbox.jsonl
 ```
 
 ```json
-{"to":"member@walkthrough.test","purpose":"invitation","scope":"deployment:<project id>","link":"http://orders-<suffix>.localhost:4173/_konae/invitation#invitation=<invitation token>","expiresAt": <unix seconds>}
+{"to":"member@walkthrough.test","purpose":"invitation","scope":"deployment:<project id>","link":"http://orders.localhost:4173/_konae/invitation#invitation=<invitation token>","expiresAt": <unix seconds>}
 ```
 
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/_konae/auth/invitation' -H 'content-type: application/json' --data '{"token":"<invitation token>"}'
+curl -i -X POST 'http://orders.localhost:4173/_konae/auth/invitation' -H 'content-type: application/json' --data '{"token":"<invitation token>"}'
 ```
 
 ```text
@@ -731,7 +735,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/_konae/auth/accept' -H 'content-type: application/json' --data '{"token":"<invitation token>","password":"walkthrough-member-password"}'
+curl -i -X POST 'http://orders.localhost:4173/_konae/auth/accept' -H 'content-type: application/json' --data '{"token":"<invitation token>","password":"walkthrough-member-password"}'
 ```
 
 ```text
@@ -784,7 +788,7 @@ The app user's calls go to the app's runtime endpoint, `/_konae/mcp` on the app'
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/about' -H 'cookie: konae_app_session=<app session>'
+curl -i 'http://orders.localhost:4173/about' -H 'cookie: konae_app_session=<app session>'
 ```
 
 ```text
@@ -793,7 +797,7 @@ content-type: text/html; charset=utf-8
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/missing' -H 'cookie: konae_app_session=<app session>'
+curl -i 'http://orders.localhost:4173/missing' -H 'cookie: konae_app_session=<app session>'
 ```
 
 ```text
@@ -806,7 +810,7 @@ The shop signs each webhook with the secret over the timestamp, a fresh nonce, t
 
 <!-- walkthrough:signed-route -->
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/hooks/orders' -H 'content-type: application/json' -H 'x-signature: t=<unix seconds>,n=walkthrough-nonce-1,v1=<hmac>' --data '{"id":"A-1","total":12}'
+curl -i -X POST 'http://orders.localhost:4173/hooks/orders' -H 'content-type: application/json' -H 'x-signature: t=<unix seconds>,n=walkthrough-nonce-1,v1=<hmac>' --data '{"id":"A-1","total":12}'
 ```
 
 ```text
@@ -817,7 +821,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/hooks/orders' -H 'content-type: application/json' -H 'x-signature: t=<unix seconds>,n=walkthrough-nonce-1,v1=<hmac>' --data '{"id":"A-1","total":12}'
+curl -i -X POST 'http://orders.localhost:4173/hooks/orders' -H 'content-type: application/json' -H 'x-signature: t=<unix seconds>,n=walkthrough-nonce-1,v1=<hmac>' --data '{"id":"A-1","total":12}'
 ```
 
 ```text
@@ -828,7 +832,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i -X POST 'http://orders-<suffix>.localhost:4173/hooks/orders' -H 'content-type: application/json' --data '{"id":"A-1","total":12}'
+curl -i -X POST 'http://orders.localhost:4173/hooks/orders' -H 'content-type: application/json' --data '{"id":"A-1","total":12}'
 ```
 
 ```text
@@ -971,7 +975,7 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/_konae/files/<file id>' -H 'cookie: konae_app_session=<app session>'
+curl -i 'http://orders.localhost:4173/_konae/files/<file id>' -H 'cookie: konae_app_session=<app session>'
 ```
 
 ```text
@@ -980,7 +984,7 @@ content-type: text/plain
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/_konae/files/<file id>'
+curl -i 'http://orders.localhost:4173/_konae/files/<file id>'
 ```
 
 ```text
@@ -1027,7 +1031,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/api/orders' -H 'authorization: Bearer <api key>'
+curl -i 'http://orders.localhost:4173/api/orders' -H 'authorization: Bearer <api key>'
 ```
 
 ```text
@@ -1038,7 +1042,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/api/orders'
+curl -i 'http://orders.localhost:4173/api/orders'
 ```
 
 ```text
@@ -1049,7 +1053,7 @@ content-type: application/json
 ```
 
 ```sh
-curl -i 'http://orders-<suffix>.localhost:4173/_konae/files/<file id>' -H 'authorization: Bearer <api key>'
+curl -i 'http://orders.localhost:4173/_konae/files/<file id>' -H 'authorization: Bearer <api key>'
 ```
 
 ```text
@@ -1066,7 +1070,7 @@ content-type: application/json
 
 <!-- walkthrough:conform -->
 ```sh
-bun run konae -- conform --url http://orders-<suffix>.localhost:4173 --contract /tmp/orders/action-contract.json --token <app session> --key <api key> --secret orders_webhook=<secret>
+bun run konae -- conform --url http://orders.localhost:4173 --contract /tmp/orders/action-contract.json --token <app session> --key <api key> --secret orders_webhook=<secret>
 ```
 
 ```text
@@ -1545,6 +1549,8 @@ Built /tmp/orders/dist
     "artifactSha256": "<sha256>",
     "expectedRevision": 0,
     "expiresAt": <time ms>,
+    "firstRelease": true,
+    "hostname": "orders.localhost",
     "planId": "<plan id>",
     "projectId": "<project id>",
     "schema": {
@@ -1552,6 +1558,7 @@ Built /tmp/orders/dist
       "losses": [],
       "statements": []
     },
+    "url": "http://orders.localhost:4174",
     "visibility": "private"
   }
 }
@@ -1570,8 +1577,8 @@ Built /tmp/orders/dist
 {
   "result": {
     "id": "<project id>",
-    "hostname": "orders-<destination suffix>.localhost",
-    "url": "http://orders-<destination suffix>.localhost:4174",
+    "hostname": "orders.localhost",
+    "url": "http://orders.localhost:4174",
     "signupPolicy": {
       "allowlist": [],
       "mode": "invitation"
@@ -1585,7 +1592,7 @@ Sessions and email links stay behind, so the app user signs in again with the sa
 
 <!-- walkthrough:import-check -->
 ```sh
-curl -i -X POST 'http://orders-<destination suffix>.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
+curl -i -X POST 'http://orders.localhost:4174/_konae/auth/login' -H 'content-type: application/json' --data '{"email":"member@walkthrough.test","password":"walkthrough-member-password"}'
 ```
 
 ```text
