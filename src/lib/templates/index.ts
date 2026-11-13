@@ -14,15 +14,18 @@ export type { TemplateSource } from "./types";
 /** "tasks" is Tiny Tasks in src/lib/starter.ts and "notes" is src/lib/private-notes.ts. */
 export type TemplateId = "tasks" | "notes" | "members" | "form" | "webhook" | "digest" | "gallery";
 
-export type TemplateChoice = { id: TemplateId; name: string; sentence: string };
+export type TemplateChoice = { id: TemplateId; name: string; sentence: string; visibility: "public" | "private" };
+
+/** The template a person gets without choosing: each one signs in and sees only their own rows. */
+export const defaultTemplate: TemplateId = "notes";
 
 const sources = [membersTemplate, formTemplate, webhookTemplate, digestTemplate, galleryTemplate] as const;
 
 /** The list the new-project dialog offers, in its order. The build agent's prompt names the same ids. */
 export const templateChoices: readonly TemplateChoice[] = [
-  { id: "tasks", name: "Shared list", sentence: "Anyone with the link adds and ticks off rows." },
-  { id: "notes", name: "Private notes", sentence: "Each person signs in and sees only their own." },
-  ...sources.map(({ id, name, sentence }) => ({ id: id as TemplateId, name, sentence })),
+  { id: "tasks", name: "Shared list", sentence: "Anyone with the link adds and ticks off rows.", visibility: "public" },
+  { id: "notes", name: "Private notes", sentence: "Each person signs in and sees only their own.", visibility: "private" },
+  ...sources.map(({ id, name, sentence, visibility }) => ({ id: id as TemplateId, name, sentence, visibility })),
 ];
 
 export function templateSource(id: TemplateId): TemplateSource | undefined {

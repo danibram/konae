@@ -46,7 +46,7 @@ describe("a project born from a template", () => {
     expect(templates.defaultTemplate).toBe(DEFAULT_TEMPLATE);
     const created = applyTemplate({ ...cloneStarter(), id: "app_default", name: "Default", slug: "default" }, templates.defaultTemplate);
     expect(created.manifest.visibility).toBe("private");
-    expect(created.manifest.runtime.auth.mode).toBe("optional");
+    expect(created.manifest.runtime.auth.mode).toBe("required");
     const dashboard = readFileSync(path.join(import.meta.dir, "../../components/ProjectDashboard.tsx"), "utf8");
     expect(dashboard).toContain("useState<TemplateId>(defaultTemplate)");
     expect(dashboard).not.toContain('useState<TemplateId>("tasks")');

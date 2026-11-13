@@ -1,7 +1,7 @@
-import { Download, FolderOpen, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
+import { Download, FolderOpen, Globe2, LockKeyhole, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { readOwnerProjectCount } from "../lib/project-sources";
-import { templateChoices, type TemplateId } from "../lib/templates";
+import { defaultTemplate, templateChoices, type TemplateId } from "../lib/templates";
 import type { OwnerSession } from "./owner-session";
 import { WorkspaceNav } from "./WorkspaceNav";
 import { Actions, Steps, Alert, Avatar, Composer, Identity, Lede, List, ListItem, Page, PageHeader, SectionHead, Tick, Tile, Tiles, Badge, BarChart, Breadcrumb, Button, Card, Checkbox, ChartLegend, Dialog, DonutChart, EmptyState, Field, IconButton, Input, Kbd, LineChart, LoadingBlock, Menu, Progress, Radio, Segmented, Select, Skeleton, Sparkline, StatStrip, Switch, Table, Tabs, Textarea, Tooltip, ToastRegion, type ToastItem } from "./ui";
@@ -72,7 +72,7 @@ function ToastDemo() {
 
 export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [sampleTemplate, setSampleTemplate] = useState<TemplateId>("tasks");
+  const [sampleTemplate, setSampleTemplate] = useState<TemplateId>(defaultTemplate);
   const nameRef = useRef<HTMLInputElement>(null);
   const [projectCount, setProjectCount] = useState<number | undefined>();
   const [variant, setVariant] = useState<"brutal" | "clean">(() => {
@@ -209,7 +209,7 @@ export function DesignSystem({ ownerSession }: { ownerSession: OwnerSession }) {
             {templateChoices.map((choice) => (
               <label key={choice.id} className={sampleTemplate === choice.id ? "selected" : ""}>
                 <input type="radio" name="sample-template" value={choice.id} checked={sampleTemplate === choice.id} onChange={() => setSampleTemplate(choice.id)} />
-                <strong>{choice.name}</strong>
+                <span className="start-title"><strong>{choice.name}</strong><Badge tone={choice.visibility === "public" ? "success" : "accent"}>{choice.visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{choice.visibility === "public" ? "Public" : "Private"}</Badge></span>
                 <small>{choice.sentence}</small>
               </label>
             ))}
