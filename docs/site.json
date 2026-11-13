@@ -17,7 +17,8 @@
       "guides/upload-files.md",
       "guides/invite-people.md",
       "guides/give-the-app-an-address.md",
-      "guides/take-the-app-elsewhere.md"
+      "guides/take-the-app-elsewhere.md",
+      "guides/bring-existing-data.md"
     ] },
     { "section": "Reference", "pages": [
       "cli.md",

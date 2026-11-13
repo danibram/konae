@@ -49,7 +49,29 @@ Builds `dist/`, compiles the `kernel` binary, and runs it on the folder. The Ker
 bun run konae -- pull --dir ./my-app [--url <Kernel URL>]
 ```
 
-Exports the published app's data, its database, accounts, files and Usage, into `.konae/pull/data`, laid out as an export lays out `data/`. Needs a credential from `login --export-data`. `dev --reset` imports it. Nothing travels back to the published app.
+Exports the published app's data, its database, accounts, files and Usage, into `.konae/pull/data`, laid out as an export lays out `data/`. Needs a credential from `login --export-data`. `dev --reset` imports it. `pull` changes nothing on the published app; `push` sends data back.
+
+## push
+
+```sh
+bun run konae -- push --dir ./my-app [--url <Kernel URL>] [--yes] [--confirm-schema <confirmation>]
+```
+
+Replaces the published app's data with the folder's `data/`, through `project_import` with `replace` set to `data`. It is the same import `kernel import` runs on a folder, aimed at the app's own Deployment. Rows are never merged. It needs `publish`.
+
+It sends `database.sqlite`, `identity.sqlite` when present, `data/files` when that folder exists, and `usage.sqlite` when present. It never sends `secrets.sqlite`. Without `identity.sqlite` the published accounts stay, and without `data/files` the published files stay. Without `usage.sqlite` the published Usage and Signals are removed, as any import does.
+
+Before it sends anything, `push` reads the installation's file limits from `platform_describe` and checks `data/files/index.json` against them: every listed file needs its `<id>.blob` beside the index at the indexed size, no file may pass the per-file limit (2 MiB unless the operator raised `KONAE_FILE_MAX_BYTES`), and all files together may not pass the quota (20 MiB unless the operator raised `KONAE_FILES_QUOTA_BYTES`). A refusal names the largest offending file and the totals. A file with an `ownerId` must name an account in `identity.sqlite`. It copies each SQLite file with `VACUUM INTO`, so rows a running `dev` still holds in the write-ahead log go too, and builds the files archive itself with `index.json` first and each blob in index order. Nothing else in `data/files`, such as a `._index.json` that macOS leaves, goes with it.
+
+Without `--yes` it prints the rows of each table here against the published rows, what happens to accounts, files and Usage, and sends nothing. With `--yes` it:
+
+1. puts the app in maintenance, unless it already was;
+2. uploads each part in the block size `transfer_begin` answers;
+3. runs `project_import`, which backs up the published data first;
+4. reads back the backup with `list-backups` and the published row counts with `database_execute` `inspect`;
+5. takes the app out of maintenance, also when a step fails or you press Ctrl-C.
+
+It prints the backup's id. `database_execute` with `operation` `restore-backup` and that `backupId` brings the published data back. When the published schema would drop a column or a table that `data/` holds, nothing changes: `push` prints the plan and its confirmation, and `--confirm-schema` with that confirmation applies it. [Bring existing data](./guides/bring-existing-data.md) says how to write `data/` from another source.
 
 ## sql
 
