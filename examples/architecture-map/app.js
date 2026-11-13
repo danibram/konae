@@ -7,7 +7,7 @@ const policy = {
   private: {
     title: 'Private deployment',
     note: '<strong>A signed-in person can open it.</strong><br>Without a session the page, the actions, and the files stay closed.',
-    shell: '<span class="no" id="shell-access">needs a grant</span>'
+    shell: '<span class="no" id="shell-access">needs sign-in</span>'
   }
 };
 

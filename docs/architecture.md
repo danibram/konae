@@ -6,6 +6,33 @@ A new app creates no process, VM or container. It is one app folder: a static Bu
 
 The Kernel decides who an actor is, whether a Deployment is public or private, and which action that actor may call. A proxy, an S3 store or a mail provider stores or carries bytes and makes no access decision.
 
+## One installation
+
+```mermaid
+flowchart TB
+  OWN["Owners<br/>in the editor, the konae CLI<br/>or an agent's MCP client"]
+  RUN["Visitors, app users<br/>and other services"]
+  subgraph process["One process, the konae binary"]
+    KO["Konae<br/>owner's MCP on /mcp, OAuth,<br/>owner accounts, project list"]
+    KE["Kernel<br/>Server Actions, app accounts, files,<br/>schedules, notices, routes, calls, Usage"]
+  end
+  OWN -->|"the editor host"| KO
+  RUN -->|"each app's own host"| KE
+  KO -->|"calls the library"| KE
+  subgraph data["One data directory"]
+    OWNERS[("owners.sqlite<br/>mcp.sqlite")]
+    APPS[("apps/#lt;id#gt;/<br/>one app folder per app")]
+    QUEUES[("mail.sqlite<br/>calls.sqlite")]
+  end
+  KO --> OWNERS
+  KE --> APPS
+  KE --> QUEUES
+  KE -.->|"optional"| BUCKET[("One private bucket<br/>files/ and copies/")]
+  QUEUES -.-> OUT["Mail provider<br/>and other services"]
+```
+
+An installation is one process and one data directory. Owners reach Konae on the editor host, through the editor, the CLI or an agent's MCP client. Visitors, app users and other services reach the Kernel on each app's own host. Konae keeps owners and the project list in its two stores, and the Kernel keeps one app folder per app and the queues for email and calls. The `kernel` binary is the Kernel alone, with no Konae in front.
+
 ## Two crates
 
 `kernel-rs` is a Cargo workspace of two crates ([ADR-0001](./adr/0001-an-app-is-one-folder-that-the-kernel-serves-with-or-without-konae.md)).
@@ -16,9 +43,9 @@ kernel-rs/
 └── konae/    Konae: the `konae` binary, which links the library
 ```
 
-`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, applies the schema change `app/schema.sql` asks of `data/database.sqlite`, and serves it with every primitive: Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate`, `files-reconcile`, `storage-migrate` and `artifacts-recover`.
+`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, applies the schema change `app/schema.sql` asks of `data/database.sqlite`, and serves it with every primitive: Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
 
-`konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics and the project list. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
+`konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
 
 The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the owner's MCP. `konae dev` talks to neither: it builds the folder and runs the `kernel` binary on it.
 
@@ -52,7 +79,6 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `calls.rs` | Call actions, their queue and worker, the address rules and `then` mutations |
 | `usage.rs` | Usage and Signals |
 | `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the S3 settings, the quotas, `files-migrate` and `files-reconcile` |
-| `storage_migration.rs` | `storage-migrate` and `artifacts-recover`, which move an installation from the older S3 settings to one bucket |
 | `files.rs` | Changing a file's visibility and deleting it |
 | `transfers.rs` | Chunked transfers in 64 KiB blocks, an app user's upload body in one request, and file upload receipts |
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
@@ -61,6 +87,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `sources.rs` | The editor's saved sources as the files of `app/` |
 | `maintenance.rs` | The maintenance state and its guard |
 | `hosts.rs` | The hosts an installation answers on |
+| `hostname.rs` | Moving a Deployment to another generated hostname, and the redirect from the names it held |
 | `domain.rs` | Custom domains and their TXT proof |
 | `path.rs`, `path_name.rs` | Path addresses and their names |
 | `security.rs` | The response headers of every host |
@@ -68,6 +95,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `installation.rs` | The stores at the data root that a copy carries |
 | `copies.rs` | Scheduled copies and `restore` |
 | `recovery.rs` | The revocation record and `reconcile` |
+| `heap.rs` | The ceiling on the memory SQLite may hold across every app |
 | `sqlite_bench.rs` | What a Server Action costs on its database |
 
 ### Modules of `konae`
@@ -80,6 +108,8 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `owners.rs` | Owner signup, verification, recovery and suspension |
 | `admission.rs` | Invitation codes and the setup key's one use |
 | `clerk.rs` | Optional hosted owner sign-in |
+| `owner_page.rs` | The look of owner sign-in on `/_konae/owner/login` and of OAuth consent |
+| `editor.rs` | The built editor on the editor host, when `KONAE_EDITOR_DIR` names it |
 | `guide.rs` | What `platform_guide` answers |
 | `state.rs` | Konae's state beside the Kernel's: the setup key, the MCP origin and the owner verification mode |
 
@@ -103,6 +133,7 @@ apps/<id>/
     ├── deployment.json # hostname, release and the published actions.json
     ├── sources.json    # the editor's name, manifest and folders of app/
     ├── backups/        # snapshots before an import or on request
+    ├── hostname.json   # the generated hostnames the app held before, which redirect
     ├── domain.json     # the custom domain and its proof
     ├── path.json       # the path address
     └── maintenance.json # only while the app is in maintenance
@@ -150,12 +181,12 @@ An artifact holds pages and the files they load. `src/lib/static-artifact.js` de
 ## The editor preview
 
 ```mermaid
-flowchart LR
-  E["editor and build agent"] --> P["sandboxed iframe"]
-  P -->|"private MessageChannel"| H["preview host in the editor"]
-  H --> D["SQLite WASM"]
-  H --> A["preview session: Guest, Alice, Bob"]
-  H --> F["preview file store"]
+flowchart TB
+  E["Editor and build agent"] -->|"draws the Capsule in"| P["Sandboxed iframe<br/>scripts and forms, no same-origin access"]
+  P -->|"one private MessageChannel,<br/>the same runtime tools a published app calls"| H["Preview host in the editor"]
+  H --> D[("SQLite WASM<br/>the preview's own test rows")]
+  H --> A["Preview session<br/>Guest, Alice or Bob"]
+  H --> F[("Preview file store<br/>in the browser")]
 ```
 
 The preview iframe has `allow-scripts` and `allow-forms` but no same-origin access, so generated code cannot read the editor's storage or credentials. Each preview gets one private MessageChannel and calls the same runtime tools a published app calls. The build agent edits a scratch copy of the Capsule, and its changes reach the project only through the Validation Gate and the owner's Apply ([ADR-0007](./adr/0007-the-build-agent-edits-a-scratch-copy-and-operates-through-the-owners-mcp.md)).
@@ -165,18 +196,19 @@ The preview is a development boundary, not a sandbox for hostile code. It applie
 ## A published app
 
 ```mermaid
-flowchart LR
-  V["visitor or app user"] --> K["Kernel: the app's host"]
-  SV["another service"] -->|"HTTP route: signature or API key"| K
-  K -->|"public: serve dist/"| B["page in the browser"]
-  K -->|"private: app sign-in first"| B
-  B -->|"named Server Actions on /_konae/mcp"| K
-  K --> AF["apps/<id>/"]
-  K --> MQ["mail.sqlite"] -.-> MP["Resend, SMTP or development mailbox"]
-  K --> CQ["calls.sqlite"] -.-> OS["another app's route or an https service"]
-  K -.->|"scheduled copy and revocation record"| CP["another disk or an S3 prefix"]
-  O["owner or agent"] --> E["editor, CLI or MCP client"] -->|"owner's MCP on /mcp"| KO["Konae"] --> K
+flowchart TB
+  V["Visitor or app user<br/>in a browser"]
+  SV["Another service, or a program<br/>with an API key"]
+  K["Kernel, on the app's own host"]
+  V -->|"opens a page, after app sign-in<br/>when the app is private"| K
+  V -->|"the page calls named Server Actions<br/>on /_konae/mcp"| K
+  SV -->|"an HTTP route, proved by<br/>a signature or an API key"| K
+  K --> AF[("apps/#lt;id#gt;/<br/>dist/ and data/")]
+  K -.->|"queued email"| MP["Resend, SMTP or the<br/>development mailbox"]
+  K -.->|"queued calls"| OS["Another app's route<br/>or an https service"]
 ```
+
+Every request to an app arrives at the Kernel on that app's host. A browser loads the pages and then calls named Server Actions, and another service calls an HTTP route with its proof. The Kernel answers from the app folder, and email and calls leave later from its queues. The owner never comes in this way. The editor, the CLI and an agent reach the same app through the owner's MCP on Konae, as [One installation](#one-installation) shows.
 
 Visibility and data authorization are independent.
 
@@ -195,7 +227,7 @@ On a public Deployment a visitor may call actions declared `anonymous`, and may 
 
 The browser never receives a database credential, the SQLite file, a generic SQL endpoint or an owner capability. A page calls named Server Actions, and the Kernel resolves the Deployment and the actor from the host and the session or key, validates the input, applies the action's access and the quotas, then runs its prepared statement. Developer tools can replay any browser request, so security never depends on hiding an SDK method or a button.
 
-The owner side is a different trust domain. SQL on the live database, backups, export and import go through the owner's MCP, with the owner's permissions and Konae's audit log. An app session never authorizes an owner tool, and the old operation routes under `/_konae/` answer 410, except `GET /_konae/files/<id>`.
+The owner side is a different trust domain. SQL on the live database, backups, export and import go through the owner's MCP, with the owner's permissions and Konae's audit log. An app session never authorizes an owner tool. A path under `/_konae/` that names no route of the Kernel answers 410 and points to the owner's MCP.
 
 An upload is private to the app user who uploaded it unless the upload sets it public. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in app user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. Only the uploader changes a file's visibility or deletes it. Nothing is served from the bucket, and no bucket URL reaches the browser.
 
@@ -228,7 +260,7 @@ A fragment page in a Build Artifact inlines the runtime and the compiled module.
 
 Every host sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. Konae's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes, and its JSON and errors get `default-src 'none'`. When `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. A custom domain gets `max-age=31536000` alone, because the names under the owner's domain are not the installation's.
 
-Neither binary serves the editor. Vite serves it in development and in the Docker stack, and a gateway that serves the built editor must send `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The editor has no script policy yet, because its preview is a `srcdoc` iframe that inherits the editor's policy, and esbuild, sql.js and the model providers the agent calls need more than `'self'`.
+`konae` serves the built editor on the editor host when `KONAE_EDITOR_DIR` names it, as the `konae` image does, and the `kernel` binary never serves it. Vite serves it in development and in the Docker stack. The editor's policy stops at `frame-ancestors 'none'`, because its preview is a `srcdoc` iframe that inherits the editor's policy, and esbuild, sql.js and the model providers the agent calls need more than `'self'`.
 
 Under HTTPS the owner cookie is `__Host-konae_owner_session` and the app cookie `__Host-konae_app_session`, both `Secure`, `Path=/` and without `Domain`. The Kernel ignores unprefixed names under HTTPS, so an app cannot plant a cookie for another. The app cookie is `SameSite=Lax` and the owner cookie `SameSite=Strict`. Over plain HTTP, as in the local stack, the cookies keep unprefixed names and no HSTS is sent.
 

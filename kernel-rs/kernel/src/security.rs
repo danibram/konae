@@ -32,8 +32,8 @@ const MAX_HASHED_HTML: usize = 32 * 1024 * 1024;
 /// through `innerHTML` and inline a `<style>` block; a hash cannot cover a
 /// generated attribute. The starter templates load their fonts from Google
 /// Fonts, so those two hosts are the only foreign origins. Images and media
-/// accept `blob:` and `data:` because the SDK hands files to the app as Blob
-/// URLs and apps keep small inline copies of images. `connects` are the
+/// accept `blob:` and `data:` so a page can show bytes it built itself, such
+/// as a preview before upload, and apps keep small inline copies of images. `connects` are the
 /// origins the manifest's `connects` adds to connect-src (ADR-0013).
 pub fn app_policy(script_hashes: &[String], connects: &[String]) -> String {
     let mut script = String::from("'self'");

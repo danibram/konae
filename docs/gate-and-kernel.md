@@ -2,6 +2,24 @@
 
 A Capsule meets two checks. The Validation Gate runs in the editor before Apply. The Kernel runs the same checks again at every release, and when the `kernel` binary starts an app folder, such as an export on another machine.
 
+```mermaid
+flowchart TB
+  CAP["Capsule<br/>schema.sql and actions.json"]
+  CASES[/"Shared case files,<br/>one per rule"/]
+  subgraph editor["In the editor"]
+    GATE{{"Validation Gate<br/>before Apply"}}
+  end
+  subgraph anykernel["On any Kernel"]
+    PLAN{{"release_plan<br/>at every publish"}}
+    START{{"kernel binary<br/>starting an app folder"}}
+  end
+  CAP --> GATE & PLAN & START
+  CASES -.->|"tested on both sides"| GATE & PLAN
+  GATE & PLAN & START -->|"a rule is broken"| REF["Refusal<br/>code, message and hint,<br/>the same at every door"]
+```
+
+The same Capsule meets a door in three places: the Gate in the editor, `release_plan` on the Kernel that publishes it, and the `kernel` binary that starts the folder on another machine. One case file per rule feeds the tests of both sides, so a declaration one door refuses is refused by the others with the same code and sentence.
+
 ## Why two doors
 
 The app has to leave with its rules unchanged. If the editor accepted a statement that the Kernel on another machine refused, the app could not move. So both doors refuse a declaration with the same words, and each rule has one case file that both test suites run.

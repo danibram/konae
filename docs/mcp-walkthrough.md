@@ -2,7 +2,7 @@
 
 This page takes one app through every operation an outside agent performs on Konae: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a Signup Policy, invite an app user, check it against its Action Contract, read its Usage and Signals, export it and import it on a second installation.
 
-`tests/mcp-walkthrough.integration.test.ts` recorded every command and every answer below from two running installations of the `konae` binary, and it fails when this page differs from what they answer. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. The first installation answers on `http://localhost:4173`, the second on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>-<suffix>.localhost` on its installation's port. The commands call that address the `<Kernel URL>`.
+`tests/mcp-walkthrough.integration.test.ts` recorded every command and every answer below from two running installations of the `konae` binary, and it fails when this page differs from what they answer. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. The first installation answers on `http://localhost:4173`, the second on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>.localhost` on its installation's port. The commands call that address the `<Kernel URL>`.
 
 A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [The MCP guide](mcp.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
 
@@ -159,8 +159,8 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "permissions": {
       "export_data": "project_export",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
-      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, project_import, and initialSignupPolicy on a first release",
-      "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
+      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
+      "read": "projects_list, project_inspect, project_sources_read, signup_policy_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_read, signals_read, usage_summary, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
     "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
@@ -316,7 +316,7 @@ cat /tmp/orders/konae.json
   "signInMethods": [
     "password"
   ],
-  "kernel": "0.1.0",
+  "kernel": "<Kernel version>",
   "manifest": {
     "version": 1
   }
@@ -889,7 +889,7 @@ The app user claims order 1. The second claim changes no row, so the Kernel answ
 ```
 <!-- /walkthrough:guard -->
 
-An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. The file is private to the app user who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which that app user reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
+An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. In a page, `miniapp.files.upload` sends the bytes in one `PUT /_konae/transfers/<id>` in place of the `transfer_write` blocks shown here. The file is private to the app user who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which that app user reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
 
 <!-- walkthrough:file -->
 ```json
@@ -1294,7 +1294,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "chunkBytes": 65536,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
-      "size": 27648,
+      "size": 26112,
       "transferId": "<folder download>"
     },
     "manifest": {

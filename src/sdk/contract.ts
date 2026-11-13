@@ -86,18 +86,9 @@ export type SdkContract = {
   modules: SdkModule[];
 };
 
-const download: SdkError[] = [
-  { message: "File not found.", when: "the file was removed or the actor may not read it", source: "kernel", preview: null },
+const uploadTransfer: SdkError[] = [
   { message: "Too many active transfers. Cancel completed transfers before starting another.", when: "the actor already holds 2 transfers, or the Deployment holds 32", source: "kernel", preview: null },
   { message: "Transfer not found or expired.", when: "a transfer outlived its 10 minutes", source: "kernel", preview: null },
-  { message: "Invalid file size.", when: "the Kernel announced a size other than the size files.list gave for the file", source: "sdk", preview: null },
-  { message: "Invalid file block.", when: "a downloaded block does not continue at the expected offset or exceeds 64 KiB", source: "sdk", preview: null },
-  { message: "File checksum mismatch.", when: "the downloaded bytes do not match the SHA-256 the Kernel announced", source: "sdk", preview: null },
-];
-
-const uploadTransfer: SdkError[] = [
-  download[1],
-  download[2],
   { message: "Upload size or SHA-256 mismatch.", when: "the bytes the Kernel received differ from the file's size or SHA-256", source: "kernel", preview: null },
   { message: "File upload failed.", when: "the Kernel refused the bytes without saying why", source: "sdk", preview: null },
 ];
@@ -187,7 +178,7 @@ export const sdkContract = {
         {
           name: "signOut",
           signature: "miniapp.auth.signOut()",
-          summary: "Revoke this app session, clear its cookie and release the file URLs the SDK created.",
+          summary: "Revoke this app session and clear its cookie.",
           signedOut: false,
           tools: ["auth_logout"],
           args: [],
@@ -292,7 +283,7 @@ export const sdkContract = {
             { message: "Action <name> declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead.", when: "any action has a subscribe key", source: "kernel" },
           ],
           limits: [
-            "every runs from 5 minutes to 24 hours; periods count from 00:00 UTC, so every 15m runs at :00, :15, :30 and :45",
+            "every runs from 5 minutes to 24 hours; periods count from 1970-01-01 00:00 UTC, so a period that divides the day, such as every 15m, runs at :00, :15, :30 and :45",
             "one run per period: a Kernel that was down for several periods runs the action once when it is back, and a restart does not run it again in the same period",
             "publishing never runs it; the first run is at the next period",
             "a run takes the app's data lock and has the 2-second statement budget",
@@ -326,7 +317,7 @@ export const sdkContract = {
           errors: [
             { message: "Server action not declared.", when: "actions.json declares no action with that name", source: "kernel" },
             { message: "authentication-required", when: "the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to the login page under the base path", source: "kernel" },
-            { message: "rate-limited", when: "more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user", source: "kernel", preview: null },
+            { message: "rate-limited", when: "more than 30 calls in 10 seconds from one signed-out client address on one Deployment, 120 from one signed-in user, or four statements of the Deployment already running and no slot free within 2 seconds", source: "kernel", preview: null },
             { message: "Arguments must be an object.", when: "input is not an object, e.g. null", source: "kernel" },
             { message: "Expected a string.", when: "name is not a string", source: "kernel" },
             { message: "Unexpected action input: <key>", when: "input has a key no input binding declares", source: "kernel" },
@@ -344,6 +335,7 @@ export const sdkContract = {
           ],
           limits: [
             "30 calls per 10 seconds per signed-out client address and Deployment; 120 per 10 seconds per signed-in user",
+            "4 action statements at once per Deployment; a call waits up to 2 seconds for a slot",
             "1000 rows and 2 MiB per query result",
             "2 seconds per statement; SQLite's own error text is returned when a statement fails or runs out of time",
             "string inputs default to a maxLength of 10,000 UTF-16 code units",
@@ -389,7 +381,7 @@ export const sdkContract = {
           signature: "miniapp.files.upload(file, options)",
           summary: "Store a File or Blob for the signed-in user and return it as files.list would.",
           signedOut: false,
-          tools: ["transfer_begin", "transfer_write", "transfer_complete", "files_upload", "transfer_cancel"],
+          tools: ["transfer_begin", "files_upload", "transfer_cancel"],
           args: [
             { name: "file", type: "File | Blob", required: true, description: "The bytes to store, with its name and type" },
             { name: "options.visibility", type: "\"private\" | \"public\" | \"app-users\"", required: false, description: "Omit to use the app policy. Without fileAccess, the default is private to the uploader and public allows sharing. When fileAccess is app-users, only that visibility is accepted" },
@@ -407,7 +399,7 @@ export const sdkContract = {
             "1 byte up to the installation's per-file limit",
             "the installation's file quota for all files of the Deployment together",
             "2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes",
-            "the bytes go in one PUT to <base>/_konae/transfers/<transferId>; a Kernel without that path answers 404, 405 or 410, and the SDK sends 64 KiB blocks over MCP instead",
+            "the bytes go in one PUT to <base>/_konae/transfers/<transferId>",
             "the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream",
           ],
           examples: [

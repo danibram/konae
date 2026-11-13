@@ -1,6 +1,7 @@
 {
   "private": true,
   "dependencies": {
+    "@mermaid-js/tiny": "12.3.0",
     "marked": "18.2.0"
   }
 }

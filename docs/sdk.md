@@ -92,7 +92,7 @@ Editor preview: Refuses with "The editor preview has no Google sign-in." Try it 
 
 ### miniapp.auth.signOut()
 
-Revoke this app session, clear its cookie and release the file URLs the SDK created.
+Revoke this app session and clear its cookie.
 
 Signed-out visitors on a public Deployment: refused.
 
@@ -200,7 +200,7 @@ Declared with `schedule` in `actions.json`. "schedule": { "every": "15m" } or { 
 
 Limits:
 
-- every runs from 5 minutes to 24 hours; periods count from 00:00 UTC, so every 15m runs at :00, :15, :30 and :45
+- every runs from 5 minutes to 24 hours; periods count from 1970-01-01 00:00 UTC, so a period that divides the day, such as every 15m, runs at :00, :15, :30 and :45
 - one run per period: a Kernel that was down for several periods runs the action once when it is back, and a restart does not run it again in the same period
 - publishing never runs it; the first run is at the next period
 - a run takes the app's data lock and has the 2-second statement budget
@@ -227,7 +227,7 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 | --- | --- | --- | --- |
 | `Server action not declared.` | actions.json declares no action with that name | Kernel | Same |
 | `authentication-required` | the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to the login page under the base path | Kernel | Same |
-| `rate-limited` | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user | Kernel | Never refuses |
+| `rate-limited` | more than 30 calls in 10 seconds from one signed-out client address on one Deployment, 120 from one signed-in user, or four statements of the Deployment already running and no slot free within 2 seconds | Kernel | Never refuses |
 | `Arguments must be an object.` | input is not an object, e.g. null | Kernel | Same |
 | `Expected a string.` | name is not a string | Kernel | Same |
 | `Unexpected action input: <key>` | input has a key no input binding declares | Kernel | Same |
@@ -246,6 +246,7 @@ Returns an array of row objects for a query action, { changes, lastInsertId } fo
 Limits:
 
 - 30 calls per 10 seconds per signed-out client address and Deployment; 120 per 10 seconds per signed-in user
+- 4 action statements at once per Deployment; a call waits up to 2 seconds for a slot
 - 1000 rows and 2 MiB per query result
 - 2 seconds per statement; SQLite's own error text is returned when a statement fails or runs out of time
 - string inputs default to a maxLength of 10,000 UTF-16 code units
@@ -284,7 +285,7 @@ Store a File or Blob for the signed-in user and return it as files.list would.
 
 Signed-out visitors on a public Deployment: refused.
 
-Runtime MCP tools: `transfer_begin`, `transfer_write`, `transfer_complete`, `files_upload`, `transfer_cancel`.
+Runtime MCP tools: `transfer_begin`, `files_upload`, `transfer_cancel`.
 
 | Argument | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -310,7 +311,7 @@ Limits:
 - 1 byte up to the installation's per-file limit
 - the installation's file quota for all files of the Deployment together
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
-- the bytes go in one PUT to <base>/_konae/transfers/<transferId>; a Kernel without that path answers 404, 405 or 410, and the SDK sends 64 KiB blocks over MCP instead
+- the bytes go in one PUT to <base>/_konae/transfers/<transferId>
 - the name is cut to 180 characters with / and \ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 
 Editor preview: Stores the file in browser storage as a data URL.

@@ -62,8 +62,8 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 
 | Limit | Value |
 | --- | --- |
-| One file | 2 MiB, or `KONAE_FILE_MAX_BYTES` |
-| Deployment file quota | 20 MiB, the sum of the files it holds, or `KONAE_FILES_QUOTA_BYTES` |
+| One file | 2 MiB, or `KONAE_FILE_MAX_BYTES`. `konae dev` allows 1 TiB unless that names a lower limit |
+| Deployment file quota | 20 MiB, the sum of the files it holds, or `KONAE_FILES_QUOTA_BYTES`. `konae dev` allows 1 TiB unless that names a lower limit |
 | Files per Deployment | 10,000 |
 | File name | First 180 characters kept |
 

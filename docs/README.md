@@ -6,6 +6,29 @@ You describe an app in the editor, or write its files in a folder. The editor ch
 
 ## What Konae is made of
 
+```mermaid
+flowchart TB
+  NC["A person who does not write code<br/>describes the app"]
+  CO["A person who writes code<br/>edits the app's files"]
+  subgraph konae["Konae, the platform"]
+    ED["Editor and build agent"]
+    GATE{{"Validation Gate"}}
+    CLI["konae CLI on a folder"]
+    MCP["Owner's MCP on /mcp"]
+  end
+  subgraph kernel["Kernel, the server that runs apps"]
+    CHECK{{"The same checks,<br/>refused with the same words"}}
+    APP[("App folder<br/>konae.json, app/, dist/, data/")]
+  end
+  NC --> ED --> GATE --> MCP
+  CO --> CLI --> MCP
+  MCP --> CHECK --> APP
+  APP -->|"pages and Server Actions"| USERS["Visitors and app users"]
+  APP -->|"export"| ELSE["Another machine<br/>the kernel binary alone, or another Konae"]
+```
+
+Both people end at the same app folder. The editor's Validation Gate checks a change before Apply, and the Kernel checks the app again at every publish and wherever a `kernel` binary starts the folder. An export hands the folder over with its accounts, its data and its rules.
+
 - Konae is the platform: the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list.
 - The Kernel runs apps. It is a library inside Konae and the `kernel` binary, which serves app folders on its own.
 - An [app folder](./architecture.md#the-app-folder) is the app: `konae.json`, the sources in `app/`, the built pages in `dist/` and its database, accounts and files in `data/`. It looks the same on a laptop, inside the Kernel and in an export.

@@ -86,12 +86,134 @@ function tableOfContents() {
   headings.forEach((h) => spy.observe(h));
 }
 
+/** One script tag for the diagram renderer, which the build publishes as it is under vendor/. */
+let renderer;
+const loadRenderer = () => (renderer ??= new Promise((resolve, reject) => {
+  const script = document.createElement("script");
+  script.src = `${root}vendor/mermaid.js`;
+  script.onload = () => resolve(globalThis.mermaid);
+  script.onerror = () => reject(Error("The diagram renderer did not load."));
+  document.head.append(script);
+}));
+
+/** The diagram colours are the design system's tokens as the page resolves them now, in light or dark. */
+function diagramTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+  const text = token("--ds-text", "#24251f");
+  const surface = token("--ds-surface", "#f1efe7");
+  const line = token("--ds-muted", "#62665a");
+  return {
+    darkMode: matchMedia("(prefers-color-scheme: dark)").matches,
+    background: token("--ds-canvas", "#dedbd0"),
+    fontFamily: style.getPropertyValue("--ds-font").trim() || "system-ui, sans-serif",
+    fontSize: "14px",
+    primaryColor: surface, primaryTextColor: text, primaryBorderColor: text,
+    secondaryColor: token("--ds-subtle", "#e8e5db"), secondaryTextColor: text, secondaryBorderColor: line,
+    tertiaryColor: token("--ds-canvas", "#dedbd0"), tertiaryTextColor: text, tertiaryBorderColor: line,
+    lineColor: line, textColor: text, mainBkg: surface, nodeBorder: text,
+    clusterBkg: token("--ds-subtle", "#e8e5db"), clusterBorder: line, titleColor: text,
+    edgeLabelBackground: token("--ds-canvas", "#dedbd0"),
+    actorBkg: surface, actorBorder: text, actorTextColor: text, actorLineColor: line,
+    signalColor: text, signalTextColor: text, labelBoxBkgColor: surface, labelBoxBorderColor: line, labelTextColor: text,
+    loopTextColor: text, noteBkgColor: token("--ds-accent-soft", "#e4f6a8"), noteTextColor: text, noteBorderColor: line,
+    activationBkgColor: token("--ds-accent-soft", "#e4f6a8"), activationBorderColor: text, sequenceNumberColor: surface,
+  };
+}
+
+/**
+ * Draws each mermaid block of the page in place. A page without one loads no
+ * renderer. A block that does not parse stays as its source with the reason.
+ */
+async function diagrams() {
+  const blocks = [...content.querySelectorAll("pre > code.language-mermaid")];
+  if (!blocks.length) return;
+  const figures = blocks.map((code) => {
+    const figure = document.createElement("figure");
+    figure.className = "diagram";
+    figure.dataset.source = code.textContent;
+    figure.setAttribute("role", "img");
+    // The paragraph under a diagram says what it shows, so it names the figure for a screen reader.
+    const caption = code.parentElement.nextElementSibling;
+    if (caption?.tagName === "P") { caption.id ||= `diagram-${blocks.indexOf(code) + 1}-text`; figure.setAttribute("aria-labelledby", caption.id); }
+    code.parentElement.replaceWith(figure);
+    return figure;
+  });
+  let mermaid;
+  // The renderer measures each label in the page's typeface, so the typeface loads first.
+  try { [mermaid] = await Promise.all([loadRenderer(), document.fonts?.ready]); }
+  catch (error) { for (const figure of figures) showSource(figure, error.message); return; }
+  let drawn = 0;
+  const draw = async () => {
+    mermaid.initialize({
+      startOnLoad: false, securityLevel: "strict", theme: "base", themeVariables: diagramTheme(),
+      flowchart: { htmlLabels: true, curve: "basis", padding: 14, nodeSpacing: 28, rankSpacing: 44, wrappingWidth: 280, useMaxWidth: true },
+      sequence: { useMaxWidth: true, mirrorActors: false, messageMargin: 28, boxMargin: 8, actorMargin: 30, wrap: true, width: 200 },
+    });
+    for (const figure of figures) {
+      try {
+        const { svg } = await mermaid.render(`diagram-${++drawn}`, figure.dataset.source);
+        figure.innerHTML = svg;
+        const enlarge = document.createElement("button");
+        enlarge.type = "button";
+        enlarge.className = "enlarge";
+        enlarge.textContent = "Enlarge";
+        enlarge.addEventListener("click", () => zoom(figure));
+        figure.append(enlarge);
+      } catch (error) {
+        showSource(figure, `This diagram did not draw: ${error?.message ?? error}`);
+      }
+    }
+  };
+  await draw();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+}
+
+/**
+ * Opens a diagram over the page at the size it was drawn for, so a narrow
+ * column or a phone can read it. The drawing itself moves into the dialog and
+ * back, because its styles hang on its id.
+ */
+function zoom(figure) {
+  const drawing = figure.querySelector("svg");
+  const dialog = document.createElement("dialog");
+  dialog.className = "diagram-zoom";
+  const shown = { maxWidth: drawing.style.maxWidth, width: drawing.style.width };
+  figure.style.minHeight = `${figure.offsetHeight}px`;
+  drawing.style.maxWidth = "none";
+  drawing.style.width = `${Math.round(drawing.viewBox.baseVal.width * 1.25)}px`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "enlarge";
+  close.textContent = "Close";
+  close.addEventListener("click", () => dialog.close());
+  dialog.append(close, drawing);
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+  dialog.addEventListener("close", () => {
+    Object.assign(drawing.style, shown);
+    figure.prepend(drawing);
+    figure.style.minHeight = "";
+    dialog.remove();
+  });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+function showSource(figure, reason) {
+  const pre = document.createElement("pre");
+  pre.textContent = figure.dataset.source;
+  const note = document.createElement("figcaption");
+  note.textContent = reason;
+  figure.replaceChildren(pre, note);
+}
+
 async function render() {
   const [site, page] = await Promise.all([fetch(`${root}content/site.json`), fetch(`${root}content/${route}.md`)]);
   if (!site.ok || !page.ok) throw Error(`This page's markdown did not load (HTTP ${page.ok ? site.status : page.status}).`);
   content.innerHTML = marked.parse(await page.text(), { gfm: true });
   decorate(await site.json());
   tableOfContents();
+  diagrams();
   content.removeAttribute("aria-busy");
   // The browser looked for the anchor before the headings existed.
   if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();

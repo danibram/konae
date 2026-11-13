@@ -7,7 +7,7 @@ bun run konae -- <command> [options]
 bun run konae -- help
 ```
 
-`init`, `dev`, `build` and `contract` need no credential. Every other command except `login` reads its credential from `<folder>/.konae/credentials.json` or from `KONAE_MCP_TOKEN`. Never put a token in app source.
+`init`, `dev`, `build`, `contract`, `conform`, `export` without `--with-data`, and `sql` and `events` without `--prod` need no owner credential. `publish`, `pull`, `domain`, `export --with-data`, and `sql` and `events` with `--prod` read it from `<folder>/.konae/credentials.json` or from `KONAE_MCP_TOKEN`. Never put a token in app source.
 
 ## login
 
@@ -33,7 +33,7 @@ A delegated token cannot widen itself later, so the flags are the only way the C
 bun run konae -- init --dir ./my-app [--name 'My app'] [--template <id>]
 ```
 
-Writes an app folder into an empty folder, without a credential or a Kernel: `konae.json`, the template in `app/`, `AGENTS.md` for a coding agent, `action-contract.md`, `compose.yaml`, `.env.example`, and a `package.json` whose `npm run build` writes `dist/`. `.gitignore` keeps `data/`, `.env` and `.konae/` out of Git. The templates are the editor's: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`. Its first `publish` registers the project on the installation.
+Writes an app folder into an empty folder, without a credential or a Kernel: `konae.json`, the template in `app/`, `AGENTS.md` for a coding agent, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example`, and a `package.json` whose `npm run build` writes `dist/` with the scripts in `scripts/`. `.gitignore` keeps `data/`, `.env` and `.konae/` out of Git. The templates are the editor's: `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` and `gallery`. Its first `publish` registers the project on the installation.
 
 ## dev
 
@@ -73,7 +73,7 @@ Lists what the app did besides answer its page: email, calls to other services, 
 bun run konae -- build --dir ./my-app
 ```
 
-Builds `app/` into `dist/` by the same rules as the editor's Publish and the folder's `npm run build`.
+Builds `app/` into `dist/` by the same rules as the editor's Publish and the folder's `npm run build`. A folder fresh from `init` has no `node_modules`, and `build`, `dev` and `publish` then use the CLI's own bundler, so the first run needs no `npm install`. Once `node_modules` exists they run the folder's `npm run build`. An app that imports an npm package needs `npm install` first.
 
 ## contract
 

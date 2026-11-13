@@ -4,7 +4,26 @@ Use `miniapp.files` for the bytes and a mutation for the row that remembers the 
 
 ## How it works
 
-The Kernel stores small files for one Deployment, in its file store. A file is private to the person who uploaded it unless the upload asks for `"public"`. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
+The Kernel stores small files for one Deployment, in its file store. A file is private to the person who uploaded it unless the upload asks for `"public"`. An app that sets `manifest.fileAccess` to `"app-users"` shares every file with its signed-in users instead. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
+
+```mermaid
+sequenceDiagram
+  participant P as Page in the browser
+  participant K as Kernel on the app's host
+  participant S as File store
+  P->>K: miniapp.files.upload(file) sends the whole file in one request
+  K->>K: Check the app session, the size, the SHA-256 and the quota
+  K->>S: Write the bytes
+  Note over K,S: data/files/index.json in the app folder records the file and who may read it.
+  K-->>P: id, name, size and url
+  P->>K: miniapp.actions.call("attachments.add", { fileId })
+  P->>K: GET the url, /_konae/files/#lt;id#gt;
+  K->>K: May this caller read the file?
+  K->>S: Read the bytes, unless the browser already holds them
+  K-->>P: The bytes with an ETag, or 304
+```
+
+The page never talks to the file store. The Kernel takes the upload, checks it, and writes the bytes to the store the installation uses, the app folder or a bucket. A read comes back through the Kernel too, which checks the caller on every request, so no bucket address reaches the browser.
 
 - 1 byte to 2 MiB per file, and 20 MiB of files per Deployment. An operator can change both with `KONAE_FILE_MAX_BYTES` and `KONAE_FILES_QUOTA_BYTES`, and each refusal names the number in force.
 - An upload needs an app session. A signed-out visitor on a public Deployment can list and read public files only.
@@ -88,7 +107,7 @@ The Kernel stores small files for one Deployment, in its file store. A file is p
 - Open the `files.url` path in the app and check the file loads. A visitor without a session on a private Deployment gets 401 `authentication-required`. Anyone else who may not read the file gets 404 `File not found.`
 - Query the row from step 2 to confirm the ID was stored.
 
-The editor preview keeps files in browser storage, refuses a file over 2 MiB and never reaches the 20 MiB quota. A published app sends files to the Kernel in chunked, checksummed transfers, so try a real upload on `konae dev` or a Deployment. An export carries the files when the app moves.
+The editor preview keeps files in browser storage, refuses a file over 2 MiB and never reaches the 20 MiB quota. A published app sends each file to the Kernel in one request with its SHA-256, so try a real upload on `konae dev` or a Deployment. `konae dev` allows 1 TiB per file and per app unless `KONAE_FILE_MAX_BYTES` or `KONAE_FILES_QUOTA_BYTES` names a lower limit, so try the size refusal on a Deployment. An export carries the files when the app moves.
 
 ## Read next
 

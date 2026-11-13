@@ -2,7 +2,7 @@
 
 Status: accepted.
 
-A person who does not write code and a person who does make the same app, and either of them must be able to take it to another machine with its accounts, its data and its rules. Earlier shapes split that work into two kinds of project, an Eject, a live migration and five export formats. Each one was a way out that the others did not share. This record keeps one shape and one way in and out.
+A person who does not write code and a person who does make the same app, and either of them must be able to take it to another machine with its accounts, its data and its rules. Two kinds of project, or more than one export format, would each be a way out that the others do not share. This record keeps one shape and one way in and out.
 
 ## The words
 
@@ -30,6 +30,8 @@ my-app/
   .env.example    the installation settings the Kernel reads
   AGENTS.md       for a coding agent who opens the folder cold
   action-contract.md
+  package.json    npm run build writes dist/ from app/
+  scripts/        the build the package runs
 ```
 
 `konae init` writes it, `konae dev` serves it on the `kernel` binary, an export downloads it, and the Kernel keeps each app in it under `apps/<id>/`. Inside the Kernel the folder also holds `.konae/`, which keeps what the installation knows about the app, such as its record, backups, maintenance state, custom domain and path address. An export never hands `.konae/` over.
@@ -57,7 +59,7 @@ Secrets live in `data/secrets.sqlite`, because each secret has a use (`route`, `
 
 ## Consequences
 
-- No app ran on any installation when this shape was adopted, so no older format is kept alive.
+- The Kernel reads one app folder format and no other.
 - An app built outside the editor arrives with its own `dist/`. When the editor's browser build can build `app/`, the app is edited in the web. When it cannot, Konae serves the `dist/` that came with it and the editor says the app is built on its owner's machine.
 - The Kernel image is built with `Dockerfile.kernel`. Releases publish it as `ghcr.io/danibram/konae-kernel:<version>` for `linux/amd64`; see [Releasing](../releasing.md).
 - This record leaves open an MCP endpoint per app for a user's agent, a plain HTTP runtime endpoint, and merging Konae's two databases.

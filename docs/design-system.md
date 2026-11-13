@@ -74,7 +74,7 @@ A published app gets the design system as one stylesheet, with the components as
 
 The project list, the deploy dialog, the build agent's message box and the Data panel use the shared buttons, inputs, selects, badges, cards, dialogs, empty states and loading blocks. Auth > Users and Auth > Integrations use cards, fields, selects, badges, buttons and confirmation dialogs from the same set. Their layout rules live in `src/components/app-access.css` and use only `--ds-*` tokens, so the system theme carries light and dark.
 
-Older panels keep their own layout selectors with token-based rules in `src/design-system.css`. New controls use the shared components.
+The other panels keep their own layout selectors with token-based rules in `src/design-system.css`. New controls use the shared components.
 
 ## Loading
 

@@ -20,6 +20,7 @@ examples/architecture-map/konae.json
 examples/docs-site/index.html
 examples/docs-site/pages/
 examples/docs-site/public/content/
+examples/docs-site/public/vendor/
 examples/docs-site/public/llms.txt
 examples/docs-site/seed.sql
 examples/docs-site/konae.json

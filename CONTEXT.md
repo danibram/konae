@@ -127,7 +127,7 @@ A named occurrence a Server Action declares, with properties from its input bind
 _Avoid_: event, track, custom metric
 
 **Usage**:
-The Kernel's daily totals for one Deployment: sessions, page views, actions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
+The Kernel's daily totals for one Deployment: sessions, page views, actions, routes, uploads, file reads, signups, logins, refusals, notices, calls and scheduled runs, with the activity of each signed-in app account and what the app stores. It lives in `data/usage.sqlite`, and only the owner reads it (ADR-0010).
 _Avoid_: analytics, telemetry, audit, metric
 
 **Invitation**:
@@ -207,7 +207,7 @@ The person who runs an installation: its settings, its copies, its file store an
 _Avoid_: owner, admin
 
 **Kernel Commands**:
-What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate`, `files-reconcile`, `storage-migrate` and `artifacts-recover`. The `konae` binary runs the installation commands and adds `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend`, `creator-account-resume` and, with Clerk, `creator-suspend`. Under Konae the owner tools do what the commands on one app do.
+What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs the installation commands and adds `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend`, `creator-account-resume` and, with Clerk, `creator-suspend`. Under Konae the owner tools do what the commands on one app do.
 _Avoid_: admin page, CLI (that is `konae`)
 
 **Runtime Endpoint**:

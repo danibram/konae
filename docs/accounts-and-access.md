@@ -2,6 +2,22 @@
 
 Three questions stay separate: who edits the app, who may open it and who may read a row. Each has its own mechanism, and the app decides the last two, never the host.
 
+```mermaid
+flowchart TB
+  OWNER["Owner<br/>a Konae account"] -->|"edits and manages, in the editor or over /mcp"| DEP["The app's Deployment"]
+  VIS["Anyone with the address"] --> OPEN{"Public or private<br/>Deployment?"}
+  OPEN -->|"public"| PAGE["The pages load"]
+  OPEN -->|"private"| SIGNIN["App sign-in"]
+  POLICY["Signup Policy<br/>open, allowlist, invitation or closed"] -.->|"who may create an app account"| SIGNIN
+  SIGNIN -->|"an active app account"| PAGE
+  PAGE --> ACCESS{"The Server Action's<br/>access"}
+  ACCESS -->|"anonymous"| RUN["The statement runs"]
+  ACCESS -->|"authenticated, with an app session"| RUN
+  RUN -->|"bound to the actor's ID"| ROWS["Only the rows the statement names"]
+```
+
+The owner manages the Deployment and never opens a row as a Runtime Actor. Visibility decides who may load the pages, the Signup Policy decides who may hold an app account, and each Server Action decides what its caller reads or writes, in its `access` and in the statement that binds the actor's ID.
+
 ## Who is who
 
 | Role | What it is |

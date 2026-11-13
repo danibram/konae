@@ -12,16 +12,25 @@ The Kernel runs apps. It answers Server Actions, keeps each app's accounts, file
 
 Owners exist only in Konae. App users exist only in their app's folder, so an exported app carries its accounts and leaves its owner behind.
 
-```text
-editor in the browser           konae CLI on a folder
-  build agent -> Validation Gate   init, dev, publish, export
-            \                       /
-             owner's MCP on /mcp (Konae)
-                        |
-                     Kernel
-       apps/<id>/: konae.json, app/, dist/, data/
-                        |
-         visitors and app users, over HTTP
+```mermaid
+flowchart TB
+  NC["A person who does not write code<br/>describes the app"]
+  CO["A person who writes code<br/>edits the app's files"]
+  subgraph konae["Konae, the platform"]
+    ED["Editor and build agent"]
+    GATE{{"Validation Gate"}}
+    CLI["konae CLI on a folder"]
+    MCP["Owner's MCP on /mcp"]
+  end
+  subgraph kernel["Kernel, the server that runs apps"]
+    CHECK{{"The same checks,<br/>refused with the same words"}}
+    APP[("App folder<br/>konae.json, app/, dist/, data/")]
+  end
+  NC --> ED --> GATE --> MCP
+  CO --> CLI --> MCP
+  MCP --> CHECK --> APP
+  APP -->|"pages and Server Actions"| USERS["Visitors and app users"]
+  APP -->|"export"| ELSE["Another machine<br/>the kernel binary alone, or another Konae"]
 ```
 
 [The architecture](./docs/architecture.md) describes both crates, the app folder and which store each part owns. [Concepts](./docs/concepts.md) defines the words.
@@ -61,7 +70,7 @@ bun run konae -- init --dir /tmp/my-list --name "My list" --template tasks
 bun run konae -- dev --dir /tmp/my-list
 ```
 
-`init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `dev` builds `dist/` and runs the `kernel` binary on the folder at `http://my-list.localhost:8796`, with the folder's own `data/`, and restarts it when a file in `app/` changes.
+`init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `dev` builds `dist/`, with no `npm install` for a template, and runs the `kernel` binary on the folder at `http://my-list.localhost:8796`, with the folder's own `data/`, and restarts it when a file in `app/` changes.
 
 The `tasks` template is a public list that anyone with the link can use. The default template, `notes`, is private and takes accounts by invitation only, and `dev` prints the `kernel invite` command that creates a test account.
 
@@ -153,7 +162,7 @@ Some integration tests copy to an S3 store. They read `KONAE_TEST_S3_ENDPOINT`, 
 
 ## Status
 
-Konae runs as a self-hosted installation. Version tags publish `ghcr.io/danibram/konae` and `ghcr.io/danibram/konae-kernel`; [Releasing](./docs/releasing.md) is the cut process, and [CHANGELOG.md](./CHANGELOG.md) holds the history. These are still missing:
+Konae runs as a self-hosted installation. A version tag publishes `ghcr.io/danibram/konae` and `ghcr.io/danibram/konae-kernel`. [Releasing](./docs/releasing.md) is the cut process, and [CHANGELOG.md](./CHANGELOG.md) lists what each release holds. These are still missing:
 
 - A production recipe. The repository ships a local stack, and [Operate an installation](./docs/operate.md#before-a-kernel-is-reachable) lists what an operator sets, but TLS and the proxy are the operator's own.
 - Teams. A project has one owner.

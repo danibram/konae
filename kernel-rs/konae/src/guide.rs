@@ -107,7 +107,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "divergences": [
                 {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
                 {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on bun run konae -- dev or on a published Deployment."},
-                {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number."},
+                {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number. konae dev allows 1 TiB per file and per app unless KONAE_FILE_MAX_BYTES or KONAE_FILES_QUOTA_BYTES names a lower limit."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
                 {"where": "editor build vs konae build", "fact": "The editor's build reads npm packages from esm.sh; konae build and an app folder's npm run build read them from node_modules. Both use the exact versions in package.json, but the bundles are not byte-identical."},
                 {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."},
@@ -141,9 +141,9 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
             "permissions": {
-                "read": "projects_list, project_inspect, signup_policy_read, sign_in_methods_read, maintenance_read, secrets_list, api_keys_list, usage_read, signals_read, calls_read, notices_read",
+                "read": "projects_list, project_inspect, project_sources_read, signup_policy_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_read, signals_read, usage_summary, usage_overview, calls_read, notices_read and database_execute reads",
                 "write": "project_create, project_sources_save, project_delete and database_execute changes",
-                "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, maintenance_set, project_import, and initialSignupPolicy on a first release",
+                "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
                 "export_data": "project_export"
             },
@@ -353,7 +353,7 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let prefixes = ["platform_", "project_", "projects_", "database_", "storage_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "mail_", "session_", "domain_", "path_"];
+        let prefixes = ["platform_", "project_", "projects_", "database_", "release_", "signup_policy_", "sign_in_methods_", "secret_", "secrets_", "api_keys_", "usage_", "signals_", "calls_", "notices_", "contact_email_", "hostname_", "maintenance_", "app_user", "app_invitation", "transfer_", "token_", "tokens_", "auth_", "actions_", "files_", "mail_", "session_", "domain_", "path_"];
         for name in TOPICS {
             let text = topic(name).unwrap().to_string();
             for word in text.split(|c: char| !(c.is_ascii_lowercase() || c == '_')) {

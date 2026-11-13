@@ -39,6 +39,8 @@ export class Recorder {
     return text
       .replace(/\b(?:lb|lbk)_[A-Za-z0-9_]{20,}/g, (token) => token.startsWith("lbk_") ? "<api key>" : "<token>")
       .replace(/\b[0-9a-f]{64}\b/g, "<sha256>")
+      // konae.json names the Kernel that wrote it, which changes with every release.
+      .replace(/"kernel":\s*"\d+\.\d+\.\d+"/g, '"kernel": "<Kernel version>"')
       .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<time>")
       .replace(/\b1\d{12}\b/g, "<time ms>")
       .replace(/\bt=\d{10}\b/g, "t=<unix seconds>")

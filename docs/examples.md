@@ -1,6 +1,6 @@
 # Example apps
 
-The repository holds three sets of example apps, the docs site, the installation home and an architecture map. The Kernel is tested against them, so each one also shows a rule the Kernel enforces.
+The repository holds three sets of example apps, the docs site, the installation home with its invitation form and legal pages, and an architecture map. The Kernel is tested against them, so each one also shows a rule the Kernel enforces.
 
 ## Showcase
 
@@ -56,7 +56,7 @@ bun run examples/probes/replay-all.ts
 
 ## The home and the architecture map
 
-`examples/home/` is the page an installation answers on its bare domain once an app's path address holds the name `konae-home`. `examples/invitation/` is the form the home sends a visitor to for an invitation code, with one table, one anonymous action, a guard and a notice to the owner. `examples/architecture-map/` is a static map of the system. Each has a `README.md` with the commands to publish it.
+`examples/home/` is the page an installation answers on its bare domain once an app's path address holds the name `konae-home`. `examples/invitation/` is the form the home sends a visitor to for an invitation code, with one table, one anonymous action, a guard and a notice to the owner. `examples/politica-de-privacidad/` and `examples/terminos-y-condiciones/` are the installation's legal pages, in Spanish, at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`. `examples/architecture-map/` is a static map of the system. Each has a `README.md` with the commands to publish it.
 
 ## Read next
 

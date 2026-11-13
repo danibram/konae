@@ -9,6 +9,7 @@ The Konae docs, published as a Konae app. The markdown under `docs/` is the only
 | Static files published as they are | `public/content/*.md`, `public/llms.txt` |
 | One page per address under `pages/` | Each page is the same shell with a different `data-route` |
 | An npm package in the bundle | `shell.js` imports `marked`, pinned in `package.json` |
+| A large script a page loads only when it needs it | `public/vendor/mermaid.js`, which draws the diagrams, loaded by the pages that hold one |
 | An anonymous Server Action | `docs.search` in `actions.json`, a query with a `LIMIT` over the `sections` table |
 | A public app with no accounts | `visibility: "public"` and signup `closed` in `konae.json` |
 | Relative links only | The app works on its hostname and on a path address |
@@ -18,12 +19,12 @@ The Konae docs, published as a Konae app. The markdown under `docs/` is the only
 | File | Role |
 | --- | --- |
 | `page.template` | The shell of every page: header, navigation, search box and an empty article. |
-| `shell.js` | Fetches `content/<route>.md`, renders it with `marked`, gives headings the ids GitHub gives them, points `.md` links at pages, builds the table of contents and runs the search. |
+| `shell.js` | Fetches `content/<route>.md`, renders it with `marked`, gives headings the ids GitHub gives them, points `.md` links at pages, draws each `mermaid` block as a diagram, builds the table of contents and runs the search. |
 | `slug.js` | The heading id rule, shared with the generator. |
 | `site.css` | Styles. |
 | `schema.sql`, `actions.json` | The `sections` table and the search action. |
 
-`bun run docs:site` writes the rest from `docs/` and `docs/site.json`, and git ignores all of it: `index.html`, `pages/`, `public/content/`, `public/llms.txt` and `seed.sql`.
+`bun run docs:site` writes the rest from `docs/` and `docs/site.json`, and git ignores all of it: `index.html`, `pages/`, `public/content/`, `public/vendor/`, `public/llms.txt` and `seed.sql`.
 
 ## Publish it
 
@@ -48,12 +49,10 @@ bun run docs:site --seed /tmp/konae-docs
 
 ## Add or change a page
 
-Edit the markdown under `docs/`. A new page also needs an entry in `docs/site.json`, which holds the navigation. Write links to other pages as relative `.md` paths, such as `./capsule.md#layout`, so they work in the repository and on the site. A link to a file outside the site opens the repository when `repository` in `docs/site.json` holds its URL, and shows as plain text when it is empty.
+Edit the markdown under `docs/`. A new page also needs an entry in `docs/site.json`, which holds the navigation. Write links to other pages as relative `.md` paths, such as `./capsule.md#layout`, so they work in the repository and on the site. Write a diagram as a `mermaid` code block and say the same in the paragraph under it, because an agent reads the markdown and search skips the block. Keep a diagram to a few nodes a row, top to bottom, so it stays readable in the page's column. `bun run docs:site` copies `@mermaid-js/tiny` from `node_modules` into `public/vendor/`, about 2.9 MB that only a page with a diagram loads. A link to a file outside the site opens the repository when `repository` in `docs/site.json` holds its URL, and shows as plain text when it is empty.
 
 `scripts/docs-site.test.ts` fails when a page in the navigation is missing, when a relative link names a file or a heading that does not exist, or when the MCP reference misses a tool the Kernel registers.
 
 ## Limits of this example
 
 A page cannot live at `/mcp`, because every Deployment answers that path with its runtime endpoint. The MCP guide is therefore at `/mcp-guide`.
-
-Mermaid diagrams in the markdown show as code.

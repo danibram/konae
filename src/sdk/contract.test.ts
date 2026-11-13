@@ -248,12 +248,10 @@ describe("files.upload sends the file's bytes in one request", () => {
     expect(tools).toEqual(["transfer_begin", "files_upload", "transfer_cancel"]);
   });
 
-  test("a Kernel without the transfer path gets 64 KiB blocks over MCP", async () => {
-    for (const status of [404, 405, 410]) {
-      const { stored, tools } = await uploadOn("/", status);
-      expect(stored).toEqual({ id: "file-1", name: "a.txt", url: "/_konae/files/file-1" });
-      expect(tools).toEqual(["transfer_begin", "transfer_write", "transfer_complete", "files_upload", "transfer_cancel"]);
-    }
+  test("a transfer path that answers 404 fails the upload and cancels the transfer", async () => {
+    const { stored, tools } = await uploadOn("/", 404, "Not found.");
+    expect((stored as Error).message).toBe("Not found.");
+    expect(tools).toEqual(["transfer_begin", "transfer_cancel"]);
   });
 
   test("a refusal of the bytes fails the upload with the Kernel's words and cancels the transfer", async () => {

@@ -2,6 +2,28 @@
 
 A Server Action is a named operation declared in `actions.json`. It is the deployed app's only database interface. The browser sends the action name and its input. The SQL and the typed bindings stay on the Kernel.
 
+## What happens on a call
+
+```mermaid
+sequenceDiagram
+  participant P as Page in the browser
+  participant K as Kernel on the app's host
+  participant D as The app's database
+  P->>K: miniapp.actions.call("items.create", { title })
+  Note over P,K: The host names the Deployment.<br/>The session cookie or API key names the Runtime Actor.
+  K->>K: Check the input types, the action's access and the rate limits
+  alt a check fails
+    K-->>P: Refusal with a code and a sentence
+  else every check passes
+    K->>D: Run the action's one prepared statement with its bindings
+    D-->>K: Rows, or changes and lastInsertId
+    Note over P,D: A mutation that changed a row queues its notice and records its Signal.<br/>A mutation that changed no row answers its guard as a refusal.
+    K-->>P: The result
+  end
+```
+
+The page sends a name and an input, never SQL. The Kernel decides which app and which actor from the request itself, checks the input against the bindings and the actor against the action's access, and only then runs the statement `actions.json` declares. What a mutation declares besides its statement, `guard`, `notify` and `signal`, runs on the Kernel after the statement.
+
 ## Shape
 
 This is the `actions` topic of `platform_guide`, as a file.

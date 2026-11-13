@@ -2,7 +2,7 @@
 
 Konae can let owners sign in through Clerk with Google instead of with an email and a password. It is optional. Without it, owners sign in with the accounts, verification and invitation codes [Operate an installation](./operate.md#creator-admission) describes. `kernel-rs/konae/src/clerk.rs` holds the code. The `kernel` binary has no owners and reads none of this.
 
-Setting any `KONAE_CLERK_*` variable turns Clerk sign-in on for the whole installation. Konae then refuses owner sign-in and signup with a password, and the owner sign-in page shows Clerk's sign-in instead. A missing or invalid required setting stops sign-in with a configuration error and never falls back to passwords. App users keep their own accounts in each app.
+Setting any `KONAE_CLERK_*` variable turns Clerk sign-in on for the whole installation. Konae then refuses owner sign-in and signup with a password, and the owner sign-in page at `/_konae/owner/login` sends the browser to the editor's `/platform-access`, which holds Clerk's sign-in. A missing or invalid required setting stops sign-in with a configuration error and never falls back to passwords. App users keep their own accounts in each app.
 
 ## Configure it
 

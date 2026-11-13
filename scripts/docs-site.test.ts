@@ -82,4 +82,21 @@ describe("the docs site", () => {
     expect(sections(capsule).map((row) => row.path)).toContain("capsule#layout");
     for (const statement of seedStatements(site)) expect(Buffer.byteLength(statement)).toBeLessThan(100_000);
   });
+
+  test("a diagram is a mermaid block with a paragraph under it, and search reads the paragraph only", () => {
+    const withDiagrams = site.pages.filter((page) => page.markdown.includes("```mermaid"));
+    expect(withDiagrams.length).toBeGreaterThan(5);
+    for (const page of withDiagrams) {
+      // An agent reads the markdown and a screen reader the paragraph, so each block is followed by words.
+      for (const after of page.markdown.split(/^```mermaid\n[\s\S]*?^```\n/m).slice(1)) {
+        expect(after.trimStart(), `docs/${page.source} has a diagram with no paragraph under it`).toMatch(/^[A-Z`]/);
+      }
+      // The site draws an escaped <id> from #lt;id#gt;. A bare tag in a label is dropped.
+      for (const block of page.markdown.match(/^```mermaid\n[\s\S]*?^```\n/gm) ?? []) {
+        expect(block.replace(/<br\/>/g, ""), `docs/${page.source}`).not.toMatch(/<[a-z]/i);
+      }
+      const text = sections(page).map((row) => row.body).join(" ");
+      expect(text, `docs/${page.source}`).not.toMatch(/flowchart (TB|LR)|sequenceDiagram|participant \w+ as/);
+    }
+  });
 });

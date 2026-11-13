@@ -6,7 +6,7 @@ This page states each tool's arguments, answers and refusals. [MCP tools and gui
 
 ## Credentials
 
-Run `bun run dev:local`, open `http://localhost:4173/_konae/owner/login` and sign in on the owner sign-in page. The editor's `/platform-access` opens the same page. The first owner of an installation follows "Create an owner account" and gives the "Installation setup key", which a local install fills in. Every later owner needs an invitation code from the operator, as [Operate an installation](./operate.md#creator-admission) describes.
+Run `bun run dev:local`, open `http://localhost:4173/_konae/owner/login` and sign in on the owner sign-in page. The editor's `/platform-access` opens the same page, and on an installation with Clerk it holds Clerk's sign-in. The first owner of an installation follows "Create an owner account" and gives the "Installation setup key", which a local install fills in. Every later owner needs an invitation code from the operator, as [Operate an installation](./operate.md#creator-admission) describes.
 
 | Credential | Permissions it can hold | Lifetime |
 | --- | --- | --- |
@@ -316,7 +316,7 @@ body='{"id":"A-1","total":12}'
 t=$(date +%s)
 n=$(openssl rand -hex 12)
 sig=$(printf '%s\n%s\n%s\n%s\n%s\n%s' "$t" "$n" POST /hooks/orders "" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
-curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
+curl -X POST "https://orders.example.net/hooks/orders" \
   -H 'Content-Type: application/json' -H "X-Signature: t=$t,n=$n,v1=$sig" --data-binary "$body"
 ```
 
@@ -400,7 +400,7 @@ An action of `"kind": "call"` sends one HTTP request to another app or an outsid
   "kind": "call",
   "access": "authenticated",
   "method": "POST",
-  "url": "https://desk-4f2a9c.apps.example.org/hooks/tickets",
+  "url": "https://desk.apps.example.org/hooks/tickets",
   "bindings": [
     { "source": "input", "key": "taskId", "type": "number" },
     { "source": "input", "key": "title", "type": "string", "maxLength": 200 }
@@ -456,7 +456,7 @@ A pointer that finds nothing leaves its input out, so it binds NULL when the inp
 
 ### A page that reads another app
 
-`connects` in the project manifest, `manifest.connects` in `konae.json`, such as `["https://desk-4f2a9c.apps.example.org"]`, adds those origins to the page's `connect-src`, so its `fetch` may read another app's public route. A `GET` route that answers anyone answers with `Access-Control-Allow-Origin: *`. A route that takes a key, a session or a signature sends no CORS header, and a request that needs a key is a call action. `connects` lists at most 10 origins, each exactly `https://host` or `https://host:port`, and `http` only under `localhost`.
+`connects` in the project manifest, `manifest.connects` in `konae.json`, such as `["https://desk.apps.example.org"]`, adds those origins to the page's `connect-src`, so its `fetch` may read another app's public route. A `GET` route that answers anyone answers with `Access-Control-Allow-Origin: *`. A route that takes a key, a session or a signature sends no CORS header, and a request that needs a key is a call action. `connects` lists at most 10 origins, each exactly `https://host` or `https://host:port`, and `http` only under `localhost`.
 
 | Declaration | Message |
 | --- | --- |
@@ -601,7 +601,7 @@ A mutation that takes no input may declare when the Kernel's own timer runs it (
 }
 ```
 
-`"every"` takes whole minutes or hours from `"5m"` to `"24h"`, counted from 00:00 UTC, so `"15m"` runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens. `kernel.now` is the time of the run and an `actor` binding is null. `actions_invoke` and the editor preview refuse a scheduled action with `Action <name> runs only on its schedule.` A scheduled mutation that also declares an `http` route answers there as its callers say.
+`"every"` takes whole minutes or hours from `"5m"` to `"24h"`, counted from 1970-01-01 00:00 UTC, so a period that divides the day, such as `"15m"`, runs at :00, :15, :30 and :45. `"daily": "HH:MM"` runs once a day at that UTC time. The Kernel looks once a minute and runs an action at the first look after its period opens. `kernel.now` is the time of the run and an `actor` binding is null. `actions_invoke` and the editor preview refuse a scheduled action with `Action <name> runs only on its schedule.` A scheduled mutation that also declares an `http` route answers there as its callers say.
 
 | Rule | What the Kernel does |
 | --- | --- |
@@ -697,11 +697,31 @@ bun run konae -- build --dir /tmp/my-app
 bun run konae -- publish --dir /tmp/my-app
 ```
 
+```mermaid
+sequenceDiagram
+  participant C as Editor or konae publish
+  participant M as Owner's MCP on Konae
+  participant K as Kernel
+  C->>C: Build dist/ from app/
+  C->>M: transfer_begin, transfer_write, transfer_complete
+  C->>M: release_plan with the transferId
+  M->>K: Check the release and derive the schema change
+  K-->>C: planId, and schema with statements, losses and confirmation
+  opt the schema change loses data
+    C->>C: The owner reads each loss and agrees
+  end
+  C->>M: release_apply with the planId, and confirmSchema when asked
+  M->>K: Apply the schema change and replace dist/
+  Note over M,K: The Deployment keeps its hostname and its data.
+  C->>M: project_inspect
+  M-->>C: The Deployment and its URL
+```
+
 `publish` sends `dist/` and the text files of `app/` over MCP. It uploads a transfer, calls `release_plan`, which checks the release against the project's revision, then `release_apply`, and saves the plan and the receipt in `.konae/`. A stale plan is refused, and repeating an applied plan returns its receipt. A republish keeps the address and the database and stops serving files the new artifact lacks. [The CLI](./cli.md#publish) has the flags, and the `publishing` topic of `platform_guide` the same steps as tool calls.
 
 A published app runs under the Kernel's Content Security Policy ([the architecture](./architecture.md#isolation-of-hosted-code)). The inline scripts of each HTML page run because the Kernel allows each by its hash. Inline event handler attributes, scripts from other origins and requests to other origins do not.
 
-`signupPolicy` in `konae.json` names who may create an app account when the first release goes out, and `publish` sends it as `initialSignupPolicy`. `init` writes `"visibility": "private"` and `{ "mode": "invitation" }`. On a later release `publish` sends no policy; when the app's policy differs from the file, it prints one warning and still publishes, such as `konae.json asks for signup Open, but this app has Invitation only. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.`
+`signupPolicy` in `konae.json` names who may create an app account when the first release goes out, and `publish` sends it as `initialSignupPolicy`. `init` writes the template's visibility, which is private except for `tasks`, `form` and `gallery`, and `{ "mode": "invitation" }`. On a later release `publish` sends no policy; when the app's policy differs from the file, it prints one warning and still publishes, such as `konae.json asks for signup Open, but this app has Invitation only. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.`
 
 ### The schema change
 
@@ -765,7 +785,7 @@ A Deployment can answer on one hostname its owner controls, such as `notes.examp
 
    ```json
    { "deploymentId": "…", "hostname": "notes.example.org", "status": "pending",
-     "url": "https://notes.example.org", "generatedUrl": "https://notes-1a2b3c.apps.example.com",
+     "url": "https://notes.example.org", "generatedUrl": "https://notes.apps.example.com",
      "record": { "type": "TXT", "name": "_konae.notes.example.org", "value": "konae-verify-3f0c…" },
      "dns": "No TXT record at _konae.notes.example.org yet.",
      "next": "Add a TXT record _konae.notes.example.org holding konae-verify-3f0c…, then call domain_set again with notes.example.org." }
@@ -823,7 +843,7 @@ The app whose path holds the name `konae-home` also answers `<domain>/`. An omit
 
 ```sh
 bun run konae -- contract --dir /tmp/my-app
-bun run konae -- conform --url http://my-app-ab12.localhost:8796 --contract /tmp/my-app/action-contract.json --token <app session token>
+bun run konae -- conform --url http://my-app.localhost:8796 --contract /tmp/my-app/action-contract.json --token <app session token>
 ```
 
 `contract` reads `app/actions.json` and `app/schema.sql` and writes `action-contract.json`, its JSON Schema, `action-contract.md` and `actions.d.ts` beside `konae.json`, or into `--out`. `dev` writes `actions.d.ts` on every start and change, and the editor shows `action-contract.md` in Files, read-only. `actions.d.ts` types `miniapp.actions.call` by action name, input and returned columns, and leaves out actions a page cannot call: scheduled mutations, `then` mutations and actions whose route is their only door.

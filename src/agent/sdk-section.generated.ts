@@ -44,7 +44,7 @@ Limits:
 - Shares the sign-in rate limit of the Deployment.
 Editor preview: Refuses with "The editor preview has no Google sign-in." Try it on a published Deployment.
 
-miniapp.auth.signOut(): Revoke this app session, clear its cookie and release the file URLs the SDK created. Returns { ok: true }.
+miniapp.auth.signOut(): Revoke this app session and clear its cookie. Returns { ok: true }.
 Needs a signed-in user.
 Refusals:
 - "authentication-required" when no one is signed in
@@ -87,7 +87,7 @@ Limits:
 
 Declared with "schedule" in actions.json: "schedule": { "every": "15m" } or { "every": "6h" } or { "daily": "02:00" } on a mutation that takes no input. The Kernel's own timer runs it once in each period, or once a day at that UTC time, with no caller: an actor binding is null, kernel.now is the time of the run, and literals bind as written. Use it for work that must happen when nobody asks, such as releasing a hold that lapsed or closing a day. A run that changes no row had nothing to do, so the guard does not apply; a run that changed a row records the action's Signal with actor null. A changed run also processes notify through the notice queue. Use to owner, or to { column } to reach the accounts the changed rows name; to actor records no-account because the timer has no caller. A run queues one notice per recipient, and {changes} lists the rows it changed, so a digest can say what is due. The owner reads each run, with its outcome and changes, under scheduled with usage_read. Only the timer runs it: a call through miniapp.actions.call or actions_invoke is refused with "Action <name> runs only on its schedule.", unless the action also declares an http route, which answers as its callers say. The Validation Gate and the Kernel refuse the same declarations with the same messages. The editor preview runs no schedule; konae dev and a Deployment do.
 Limits:
-- every runs from 5 minutes to 24 hours; periods count from 00:00 UTC, so every 15m runs at :00, :15, :30 and :45
+- every runs from 5 minutes to 24 hours; periods count from 1970-01-01 00:00 UTC, so a period that divides the day, such as every 15m, runs at :00, :15, :30 and :45
 - one run per period: a Kernel that was down for several periods runs the action once when it is back, and a restart does not run it again in the same period
 - publishing never runs it; the first run is at the next period
 - a run takes the app's data lock and has the 2-second statement budget
@@ -99,7 +99,7 @@ miniapp.actions.call(name, input = {}): Invoke one declared Server Action as the
 Refusals:
 - "Server action not declared." when actions.json declares no action with that name
 - "authentication-required" when the action is not declared anonymous and no one is signed in; the published SDK also sends the browser to the login page under the base path
-- "rate-limited" when more than 30 calls in 10 seconds from one signed-out client address on one Deployment, or 120 from one signed-in user
+- "rate-limited" when more than 30 calls in 10 seconds from one signed-out client address on one Deployment, 120 from one signed-in user, or four statements of the Deployment already running and no slot free within 2 seconds
 - "Arguments must be an object." when input is not an object, e.g. null
 - "Expected a string." when name is not a string
 - "Unexpected action input: <key>" when input has a key no input binding declares
@@ -116,6 +116,7 @@ Refusals:
 - "Action <name> runs only on its schedule." when the action is a mutation with a schedule and no http route, which only the Kernel's timer runs
 Limits:
 - 30 calls per 10 seconds per signed-out client address and Deployment; 120 per 10 seconds per signed-in user
+- 4 action statements at once per Deployment; a call waits up to 2 seconds for a slot
 - 1000 rows and 2 MiB per query result
 - 2 seconds per statement; SQLite's own error text is returned when a statement fails or runs out of time
 - string inputs default to a maxLength of 10,000 UTF-16 code units
@@ -153,7 +154,7 @@ Limits:
 - 1 byte up to the installation's per-file limit
 - the installation's file quota for all files of the Deployment together
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
-- the bytes go in one PUT to <base>/_konae/transfers/<transferId>; a Kernel without that path answers 404, 405 or 410, and the SDK sends 64 KiB blocks over MCP instead
+- the bytes go in one PUT to <base>/_konae/transfers/<transferId>
 - the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 Editor preview: Stores the file in browser storage as a data URL.
 

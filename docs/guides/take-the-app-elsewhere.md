@@ -9,6 +9,21 @@ Export the app folder to move one app's accounts, data and rules to another mach
 | A copy of one app on another machine | Export and import of the app folder | It moves one Deployment's settings, sources, built files, database, accounts, files and, when present, Usage and Signals. |
 | To move a whole installation | Copy | A copy moves an installation, not one app. It is operator work, not an app feature. |
 
+```mermaid
+flowchart TB
+  subgraph here["This installation"]
+    ONE[("apps/#lt;id#gt;/<br/>one app")]
+    ALL[("The whole data directory")]
+  end
+  ONE -->|"export"| FOLDER["App folder<br/>konae.json, app/, dist/, data/"]
+  FOLDER -->|"the kernel binary serves it"| ALONE["A Kernel alone,<br/>on a laptop or a server"]
+  FOLDER -->|"import"| OTHER["Another Konae,<br/>maybe another owner"]
+  ALL -->|"scheduled copy"| COPY[("A copy on another disk<br/>or under copies/ in the bucket")]
+  COPY -->|"restore into an empty data directory"| SAME["The same installation<br/>on a new machine"]
+```
+
+An export moves one app, and the folder runs on a Kernel alone or enters another Konae by import. A copy moves every app of an installation with its owners, and only a restore reads it.
+
 An export never moves sessions, email links, live API keys or signing secrets. People sign in again with their passwords, each API key arrives revoked so you issue new ones, and you set each secret again on the destination.
 
 ## What the folder holds
@@ -20,9 +35,9 @@ my-app/
   dist/           the built files the Kernel serves
   data/           database.sqlite, identity.sqlite, usage.sqlite, files/
   AGENTS.md       what a coding agent needs to work on the folder
-  action-contract.md
+  action-contract.md, actions.d.ts
   compose.yaml, .env.example
-  package.json    npm run build writes dist/ from app/
+  package.json, scripts/    npm run build writes dist/ from app/
 ```
 
 `data/` holds password hashes and uploaded files, so keep an export with data private. The folder's `.gitignore` keeps `data/` and `.env` out of Git.
@@ -67,10 +82,10 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
 1. Pick a Kernel image. A release publishes `ghcr.io/danibram/konae-kernel:<version>`. To build from a checkout instead:
 
     ```sh
-    docker build -f Dockerfile.kernel -t ghcr.io/danibram/konae-kernel:0.1.0 .
+    docker build -f Dockerfile.kernel -t konae-kernel:local .
     ```
 
-2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image (for example `ghcr.io/danibram/konae-kernel:0.1.0`), and a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start.
+2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image, such as `ghcr.io/danibram/konae-kernel:<version>` or `konae-kernel:local`, and a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start.
 3. Start it, and read the address it prints.
 
     ```sh

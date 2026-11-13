@@ -8,7 +8,7 @@ A schedule fits work such as releasing a hold that lapsed or closing a day. The 
 
 ## Steps
 
-1. Pick the timing. `{ "every": "15m" }` runs on a period from `5m` to `24h`, counted from 00:00 UTC, so `15m` runs at :00, :15, :30 and :45. `{ "daily": "02:00" }` runs once a day at that UTC time. A cron string such as `"0 8 * * *"` is refused.
+1. Pick the timing. `{ "every": "15m" }` runs on a period from `5m` to `24h`, counted from 1970-01-01 00:00 UTC, so a period that divides the day, such as `15m`, runs at :00, :15, :30 and :45. `{ "daily": "02:00" }` runs once a day at that UTC time. A cron string such as `"0 8 * * *"` is refused.
 2. Write a mutation that binds only `kernel`, `actor` or literal values. An input binding is refused, because no caller can supply it. This one, from the habits app, closes each day at 00:05 UTC.
 
     ```json

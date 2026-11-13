@@ -4,11 +4,14 @@
   "workspaces": {
     "": {
       "dependencies": {
+        "@mermaid-js/tiny": "12.3.0",
         "marked": "18.2.0",
       },
     },
   },
   "packages": {
+    "@mermaid-js/tiny": ["@mermaid-js/tiny@12.3.0", "", {}, "sha512-90BO2kQvmQWj9YjBX2IsLHCw61rN69dPTn5wFfDu+b9aT7qtzfzTA3wpKWeaRAKK85refSo9How5EOeY39DWfA=="],
+
     "marked": ["marked@18.2.0", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-KaeL+tAbtvI930q7HE2PN5lYXYdT8EiSmxHlN6F3rsfb57wd5mp5W5TLazpdj4inTQBJdgjYwbs40W/0VUGU+Q=="],
   }
 }

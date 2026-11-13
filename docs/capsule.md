@@ -50,7 +50,7 @@ The Gate checks the schema and `actions.json`. A page that names a missing file 
 
 ## What the published page may do
 
-A published app runs under the Kernel's Content Security Policy. Its own inline scripts and same-origin files load. Inline event handler attributes such as `onclick="..."` and other origins do not. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin. The editor preview applies no such policy, so code that works there can still fail once published.
+A published app runs under the Kernel's Content Security Policy. Its own inline scripts and same-origin files load. Inline event handler attributes such as `onclick="..."` and other origins do not. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin, except the origins `manifest.connects` lists, which a page may fetch. The editor preview applies no such policy, so code that works there can still fail once published.
 
 ## Where the sources live
 

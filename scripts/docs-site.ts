@@ -7,7 +7,7 @@
 //   bun run docs:site          writes the files
 //   bun run docs:site --seed   also loads the search rows into the published app
 //   --dir <folder>             writes into a copy of the app instead of examples/docs-site
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { slug } from "../examples/docs-site/slug.js";
 import { McpClient } from "../src/mcp/client";
@@ -106,10 +106,13 @@ export function sections(page: Page) {
   const rows: { path: string; page: string; title: string; body: string }[] = [];
   const seen = new Map<string, number>();
   let fenced = false;
+  let diagram = false;
   let current = { path: page.route, title: page.title, lines: [] as string[] };
   const close = () => { const body = plain(current.lines.join("\n")); if (body) rows.push({ path: current.path, page: page.title, title: current.title, body }); };
   for (const line of page.markdown.split("\n")) {
-    if (line.trimStart().startsWith("```")) fenced = !fenced;
+    if (line.trimStart().startsWith("```")) { fenced = !fenced; diagram = fenced && line.trim() === "```mermaid"; }
+    // A diagram's source is drawn, not read, so search skips it. The paragraph under it says the same in words.
+    if (diagram) continue;
     const heading = fenced ? null : /^(#{1,6}) (.+)$/.exec(line);
     if (heading) {
       const id = slug(heading[2].replace(/[`*]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1"), seen);
@@ -163,7 +166,7 @@ function llms(site: Site) {
 
 export async function writeSite(site: Site) {
   const template = await readFile(path.join(appRoot, "page.template"), "utf8");
-  for (const generated of ["pages", "public/content", "index.html", "public/llms.txt", "seed.sql"]) await rm(path.join(appRoot, generated), { recursive: true, force: true });
+  for (const generated of ["pages", "public/content", "public/vendor", "index.html", "public/llms.txt", "seed.sql"]) await rm(path.join(appRoot, generated), { recursive: true, force: true });
   const write = async (relative: string, contents: string) => {
     await mkdir(path.dirname(path.join(appRoot, relative)), { recursive: true });
     await writeFile(path.join(appRoot, relative), contents);
@@ -178,6 +181,14 @@ export async function writeSite(site: Site) {
     routes: Object.fromEntries(site.pages.map((page) => [page.source, page.route])),
   }, null, 2));
   await write("public/llms.txt", llms(site));
+  // shell.js draws a page's mermaid blocks with this file and loads it only on a page that has one.
+  if (site.pages.some((page) => /^```mermaid$/m.test(page.markdown))) {
+    const renderer = path.join(appRoot, "node_modules/@mermaid-js/tiny/dist/mermaid.tiny.js");
+    await mkdir(path.join(appRoot, "public/vendor"), { recursive: true });
+    await copyFile(renderer, path.join(appRoot, "public/vendor/mermaid.js")).catch(() => {
+      throw Error(`The docs hold a diagram and ${path.relative(repo, renderer)} is missing. Run bun install in examples/docs-site.`);
+    });
+  }
   await write("seed.sql", `-- The search rows, one per section. bun run docs:site --seed loads them.\n${seedStatements(site).join(";\n")};\n`);
 }
 

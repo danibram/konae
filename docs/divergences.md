@@ -23,7 +23,7 @@ The preview has no HTTP routes, schedule timer, notice email, Usage store or cal
 
 ## File size
 
-The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number. `konae dev` starts its Kernel with no file limit in practice (1 TiB per file and per app) unless `KONAE_FILE_MAX_BYTES` or `KONAE_FILES_QUOTA_BYTES` names one, so a file that uploads on `konae dev` can still be refused on a published Deployment.
+The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number. `konae dev` allows 1 TiB per file and per app unless `KONAE_FILE_MAX_BYTES` or `KONAE_FILES_QUOTA_BYTES` names a lower limit, so a file that uploads on `konae dev` can still be refused on a published Deployment.
 
 ## Google sign-in
 

@@ -54,7 +54,7 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
     t=$(date +%s)
     n=$(openssl rand -hex 12)
     sig=$(printf '%s\n%s\n%s\n%s\n%s\n%s' "$t" "$n" POST /hooks/orders "" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
-    curl -X POST "https://orders-1a2b3c.example.net/hooks/orders" \
+    curl -X POST "https://orders.example.net/hooks/orders" \
       -H 'Content-Type: application/json' -H "X-Signature: t=$t,n=$n,v1=$sig" --data-binary "$body"
     ```
 
