@@ -976,6 +976,34 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn revoking_access_finds_tables_and_columns_whatever_their_case() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("identity.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE app_users(id TEXT PRIMARY KEY, state TEXT); INSERT INTO app_users VALUES('u1', 'active');
+             CREATE TABLE APP_SESSIONS(token_hash TEXT); INSERT INTO APP_SESSIONS VALUES('secret-session-hash');
+             CREATE TABLE Account_Challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('secret-link-hash');
+             CREATE TABLE ENTRY_LINKS(token_hash TEXT); INSERT INTO entry_links VALUES('secret-entry-hash');
+             CREATE TABLE API_KEYS(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+               actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER, REVOKED_REASON TEXT);
+             INSERT INTO api_keys VALUES('key-live', 'live-key-hash', 'Mirror', '[]', '[\"public\"]', 1, NULL, NULL);",
+        )
+        .unwrap();
+        drop(db);
+        assert_eq!(revoke_access(&path).unwrap(), 4, "a session, two links and the live key");
+        let db = Connection::open(&path).unwrap();
+        for table in ["app_sessions", "account_challenges", "entry_links"] {
+            let rows: i64 = db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(rows, 0, "{table} still holds rows");
+        }
+        let live: i64 = db.query_row("SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(live, 0, "the key is still live");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Writes a Deployment's files into an archive from one store and unpacks
     /// it into another, on a blocking thread as the capture and the import do.
     async fn round_trip(source: Arc<dyn file_store::FileStore>, target: Arc<dyn file_store::FileStore>, root: &Path) {
