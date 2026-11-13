@@ -7,6 +7,7 @@ import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
 import { ProjectSources } from "../src/lib/project-sources";
 import { createWorkspaceProject } from "../src/lib/workspace";
 import { signupModes } from "../src/deployments/client";
+import { provideLocalAppDependencies } from "./local-app-deps";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -364,8 +365,10 @@ describe("authenticated MCP", () => {
       return output;
     };
     expect(await run("init", ["--name", "External proof"])).toContain("Created External proof");
+    await provideLocalAppDependencies(directory);
     expect(await run("build")).toContain("dist");
-    expect(await run("publish", ["--url", url])).toContain("http://external-proof-");
+    const published = await run("publish", ["--url", url]);
+    expect(published.trimEnd().split(/\r?\n/).filter((line) => line.trim()).at(-1)).toBe(`http://external-proof.localhost:${new URL(url).port}`);
     const settings = await Bun.file(path.join(directory, "konae.json")).json();
     const config = { project: settings };
     // init made the ID without a Kernel, and the first publish registered the project.
