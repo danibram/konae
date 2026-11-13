@@ -4,7 +4,7 @@ An agent operates Konae through the owner's MCP on `/mcp`. The editor calls the 
 
 ## Connect
 
-Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256, and the token lasts one hour with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/platform-access`, or from `token_create`.
+Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256. The token lasts 24 hours when the client redirects to `127.0.0.1` or `localhost`, one hour otherwise, with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/platform-access`, or from `token_create`.
 
 ```text
 Authorization: Bearer YOUR_TOKEN

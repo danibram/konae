@@ -13,12 +13,15 @@ bun run konae -- help
 
 ```sh
 bun run konae -- login --dir ./my-app --url http://localhost:4173 \
+  [--browser [--no-open]] \
   [--manage-users] \
   [--export-data] \
   [--verify-from <mailbox.jsonl>]
 ```
 
-Reads `KONAE_EMAIL` and `KONAE_PASSWORD`. Add `KONAE_INVITATION_CODE`, the code the operator issued, to create the account, or `KONAE_SETUP_KEY` for an installation's first owner. It saves a 24-hour token with `read`, `write` and `publish`.
+With `--browser`, login prints an address and opens it in the system browser, unless `--no-open`. The owner opens it in a browser on the same machine, signs in and allows access within 5 minutes. The browser hands the code to a port on `127.0.0.1` that login listens on, and login trades it for the token with PKCE. Neither the password nor the token passes through the terminal, so an agent can run login and hand the address to the owner. It saves the same 24-hour token as a password login, one hour on an installation that signs owners in through Clerk.
+
+Without `--browser`, login reads `KONAE_EMAIL` and `KONAE_PASSWORD`. Add `KONAE_INVITATION_CODE`, the code the operator issued, to create the account, or `KONAE_SETUP_KEY` for an installation's first owner. It saves a 24-hour token with `read`, `write` and `publish`.
 
 | Flag | Adds | For |
 | --- | --- | --- |
@@ -89,7 +92,7 @@ Writes `action-contract.json`, its schema, `action-contract.md` and `actions.d.t
 bun run konae -- publish --dir ./my-app [--url <Kernel URL>] [--confirm-schema <confirmation>]
 ```
 
-Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with `secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`.
+Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with [`secret set`](#secret) first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`.
 
 The Kernel changes the published database to what `schema.sql` states. A new table, column or index applies. When the change drops a table or a column, or changes a column's type, `publish` prints what it loses, the statements and the plan's confirmation, then asks. Without a terminal it publishes nothing; run it again with `--confirm-schema` and that confirmation. A confirmation fits only the plan it was printed for. `.konae/release-plan.json` keeps the last plan.
 
@@ -116,6 +119,15 @@ bun run konae -- domain --dir <folder> --deployment <id> [--set <hostname> | --c
 ```
 
 Shows, sets or clears the app's custom domain. It reads the token from `<folder>/.konae/credentials.json`, or from `KONAE_MCP_TOKEN` when that is set. `--set` prints the TXT record that proves you control the hostname. Run it again once the record is at your DNS provider.
+
+## secret
+
+```sh
+openssl rand -hex 32 | bun run konae -- secret set <name> --dir <folder> [--use route|call|google] [--url <Kernel URL>]
+bun run konae -- secret list --dir <folder> [--url <Kernel URL>]
+```
+
+`secret set` sets one of the project's secrets through `secret_set` and reads the value from stdin, without the final line break. On a terminal it asks for the value and does not show it. An empty value sets nothing. The value never sits in argv, shell history or an agent's transcript. After the write it reads the name back with `secrets_list` and prints its use and time. `google_client_id` and `google_client_secret` take use `google`, which is their default; any other name defaults to `route`. `secret list` prints each name and use, never a value.
 
 ## Read next
 
