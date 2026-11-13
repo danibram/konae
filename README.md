@@ -72,7 +72,7 @@ KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp
 bun run konae -- publish --dir /tmp/my-list
 ```
 
-An app published from a folder appears on the editor's project list under **Apps without editor files**. Its files stay in the folder, and you publish its changes from there.
+An app published from a folder appears on the editor's project list under **Apps without editor files**. Its files stay in the folder, and you publish its changes from there. **Open data and users** on its card opens its database, its app accounts and what it did.
 
 To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Nothing travels back:
 

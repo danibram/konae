@@ -17,7 +17,7 @@ An invitation is the owner's offer of an account in one app to one email, sent a
 
 ## Over MCP
 
-A project published from a folder with the CLI shows on the project list under "Apps without editor files" and cannot open in the editor. Its owner invites people over MCP.
+A project published from a folder with the CLI shows on the project list under "Apps without editor files". **Open data and users** on its card opens the same Users view, without the app's files, and its owner can also invite people over MCP.
 
 1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `signup_policy_read` needs only `read`.
 

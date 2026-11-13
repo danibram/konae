@@ -15,7 +15,7 @@ The app sends no code itself. The operator reads the requests and issues each co
 
 ## Read the requests
 
-In the editor, open the project's database view. From a folder with a credential:
+In the editor, the app is on the project list under **Apps without editor files**, and **Open data and users** on its card shows the `requests` table. From a folder with a credential:
 
 ```sh
 bun run konae -- sql --dir /tmp/konae-invitation --prod "SELECT email, building, lang, created_at FROM requests ORDER BY created_at DESC LIMIT 50"

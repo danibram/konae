@@ -1,0 +1,15 @@
+/* A published app with no editor files: its data, accounts and activity under the account shell. */
+.published-app .account-main { display: flex; flex-direction: column; min-height: 100vh; min-width: 0; }
+.published-app-head { padding: 20px 24px 0; border-bottom: 1px solid var(--ds-border); }
+.published-app-back { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--ds-muted); font: 600 12px/1.4 var(--ds-font); cursor: pointer; }
+.published-app-back:hover { color: var(--ds-text); }
+.published-app-title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0 6px; }
+.published-app-title h1 { margin: 0; font: 800 24px/1.2 var(--ds-font); letter-spacing: -.02em; }
+.published-app-head > p { max-width: 80ch; margin: 0 0 14px; color: var(--ds-muted); font-size: 13px; line-height: 1.5; }
+.published-app-tabs { display: flex; flex-wrap: wrap; gap: var(--ds-space-1); }
+.published-app-tabs button, .published-app-tabs a { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border: 1px solid transparent; border-bottom: 0; background: transparent; color: var(--ds-muted); font: 600 12px/1 var(--ds-font); text-decoration: none; cursor: pointer; }
+.published-app-tabs button:hover, .published-app-tabs a:hover { color: var(--ds-text); }
+.published-app-tabs button.active { border-color: var(--ds-border); background: var(--ds-surface); color: var(--ds-text); margin-bottom: -1px; }
+.published-app-tabs a:last-child { margin-left: auto; }
+.published-app-body { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--ds-surface); }
+.published-app-body > * { flex: 1; min-height: 480px; }

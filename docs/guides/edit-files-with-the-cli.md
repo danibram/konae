@@ -36,7 +36,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     bun run konae -- login --dir /tmp/my-app --url http://localhost:4173
     ```
 
-6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL. The project appears on the editor's project list under **Apps without editor files**, because its files live in this folder.
+6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL. The project appears on the editor's project list under **Apps without editor files**, because its files live in this folder. **Open data and users** on its card opens its database, its app accounts and what it did.
 
     ```sh
     bun run konae -- publish --dir /tmp/my-app

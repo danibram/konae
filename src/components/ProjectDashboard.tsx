@@ -27,10 +27,12 @@ type Props = {
   onDismissDraft: (index: number) => void;
   onDeleteMissing: (project: ProjectMetadata, name: string) => Promise<void>;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
+  /** Opens the data, accounts and activity of a published app that has no editor files. */
+  onOpenPublished: (projectId: string) => void;
   onCreateProject: (name: string, template: TemplateId | "scratch") => void;
 };
 
-export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onOpenProject, onCreateProject }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onOpenProject, onOpenPublished, onCreateProject }: Props) {
   const interrupted = missing.filter((item) => !projects.some((project) => project.id === item.id));
   const projectCount = projects.length + interrupted.length;
   const [deleting, setDeleting] = useState<ProjectMetadata | null>(null);
@@ -100,7 +102,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
           })}
           {interrupted.length > 0 && <section className="dashboard-app-group dashboard-recovery" aria-label="Apps without editor files">
             <h2>Apps without editor files <small>{interrupted.length}</small></h2>
-            <p>Your account has these apps, but no files were saved for the editor, so they cannot open here. An app made and published from a folder with the Konae command line looks like this. A published app keeps running and keeps its data.</p>
+            <p>Your account has these apps, but no files were saved for the editor, so their files cannot open here. An app made and published from a folder with the Konae command line or over MCP looks like this. A published one opens on its data, its accounts and what it did.</p>
             <div className="project-grid">
             {interrupted.map((item) => {
               const draftIndex = drafts.findIndex((draft) => draft.id === item.id);
@@ -110,9 +112,10 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
                   <div className="project-card-title"><h2>{item.name}</h2><Badge tone="neutral">No editor files</Badge></div>
                   {draftIndex >= 0
                     ? <p>This browser holds a copy of its files. Restore it to edit the app here.</p>
-                    : <p>Its files live in the folder it was published from. Publish changes from there with the Konae command line, or delete the app if you do not need it.</p>}
+                    : <p>Its files live in the folder it was published from. Publish changes from there with the Konae command line.</p>}
                   <footer>
                     {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Restore editor files</Button>}
+                    {deployment && <Button size="sm" variant="secondary" onClick={() => onOpenPublished(item.id)}>Open data and users</Button>}
                     {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
                     <Button size="sm" variant="ghost" onClick={() => setDeleting(item)}>Delete app…</Button>
                   </footer>

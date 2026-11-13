@@ -1155,6 +1155,25 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .sql-result-tabs > small { color: #c7cbbd; }
   .database-tabs button.active { background: #262a34; }
   .data-browser, .data-table-sidebar, .table-toolbar, .editable-table { background: #1c1f28; color: #f4f2ea; border-color: #343846; }
+  /* The data browser's cells, table list and buttons carry their own light surfaces, so each gets a dark one. */
+  .editable-grid th { background: #262a34; color: #f4f2ea; border-right-color: #343846; border-bottom-color: #4a5060; }
+  .editable-grid th > button { color: inherit; }
+  .editable-grid th > button:hover { background: #303542; }
+  .editable-grid td { background: #1c1f28; color: #f4f2ea; border-color: #343846; }
+  .editable-grid tbody tr:hover td { background: #232732; }
+  .editable-grid .grid-row-number { background: #171a22; color: #8d93a3; }
+  .editable-grid td.editing { background: #14161c; }
+  .cell-value, .cell-editor input { color: inherit; }
+  .cell-value.is-null { color: #8d93a3; }
+  .data-sidebar-label span:last-child, .data-sidebar-list em { background: #343846; color: #f4f2ea; }
+  .data-sidebar-list > button { color: #f4f2ea; }
+  .data-sidebar-list > button:hover { background: #262a34; }
+  .data-sidebar-list > button.active { border-color: #f4f2ea; background: #262a34; box-shadow: 2px 2px 0 #0a0c10; }
+  .table-toolbar-actions button, .insert-actions button, .table-pagination button, .studio-document-view header button { background: #1c1f28; color: #f4f2ea; border-color: #4a5060; }
+  .table-toolbar-actions button:hover, .table-pagination button:hover:not(:disabled), .studio-document-view header button:hover { border-color: #f4f2ea; }
+  .insert-actions .primary { background: var(--acid); color: #171910; }
+  .insert-row-form, .table-pagination { background: #171a22; color: #c7cbbd; box-shadow: none; }
+  .insert-fields input { background: #1c1f28; color: #f4f2ea; border-color: #4a5060; }
   .gate-refusal { background: #3a221c; color: #f5d9d0; border-bottom-color: #ad4937; }
   .prompt-box, .prompt-box textarea, .ui-input, .ui-textarea, .ui-select { background: #1c1f28; color: #f4f2ea; }
   .visibility-explainer, .publish-signin, .publish-dialog .publish-actions { background: #1c1f28; color: #f4f2ea; border-color: #343846; }
