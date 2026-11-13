@@ -1,6 +1,7 @@
 import { Check, Copy, ExternalLink, Globe2 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { clearDomain, domainTrafficTarget, readDomain, setDomain, type DomainView } from "../deployments/domains";
+import { hostnameLabel, setHostname } from "../deployments/hostnames";
 import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, setPath, type PathChange, type PathView } from "../deployments/paths";
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
@@ -19,10 +20,12 @@ type Props = {
   onClose: () => void;
   onDeploy: () => void;
   onSignedOut: () => void;
+  /** The generated address moved; the editor shows the new url everywhere. */
+  onAddressMoved?: (url: string) => void;
   signInHref: string;
 };
 
-export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onDeploy, onSignedOut, signInHref }: Props) {
+export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onDeploy, onSignedOut, onAddressMoved, signInHref }: Props) {
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
   const [loading, setLoading] = useState(Boolean(deploymentId));
@@ -125,6 +128,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
             <h4>Generated address</h4>
             <a className="domain-address" href={view.generatedUrl} target="_blank" rel="noreferrer">{view.generatedUrl}<ExternalLink size={14} /></a>
             <p>Always on. Sessions on this address stay on this app's own origin.</p>
+            <GeneratedAddressName key={deploymentId} deploymentId={deploymentId} url={view.generatedUrl} disabled={busy || signedOut} onSignedOut={() => { setSignedOut(true); onSignedOut(); }} onMoved={(url) => { setView((current) => current && { ...current, generatedUrl: url }); onAddressMoved?.(url); }} />
           </section>
           <section className="domain-step" aria-label="Custom domain">
             <h4>Custom domain</h4>
@@ -172,6 +176,64 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       </>}
     </div>
   </Dialog>;
+}
+
+/** Moves the generated address to another name. The Kernel checks the name and its refusal is shown as it comes; the change counts once domain_read shows the new address. */
+function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOut }: { deploymentId: string; url: string; disabled: boolean; onMoved: (url: string) => void; onSignedOut: () => void }) {
+  const current = hostnameLabel(url);
+  const [name, setName] = useState(current);
+  useEffect(() => { setName(current); }, [current]);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const confirmationRef = useRef<HTMLElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => { if (confirming) confirmationRef.current?.focus(); }, [confirming]);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+  const wanted = name.trim().toLowerCase();
+  const ready = Boolean(wanted) && wanted !== current;
+
+  const move = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const moved = await setHostname(deploymentId, wanted);
+      const readBack = await readDomain(deploymentId);
+      if (!alive.current) return;
+      if (readBack.generatedUrl !== moved.url) throw new Error("The address does not show the change yet. Reload the app settings and check it again.");
+      setConfirming(false);
+      setNotice(`This app now answers at ${moved.url}. ${url} redirects there.`);
+      onMoved(moved.url);
+    } catch (cause) {
+      if (!alive.current) return;
+      setConfirming(false);
+      setError(cause instanceof Error ? cause.message : String(cause));
+      if (isSignedOutError(cause)) onSignedOut();
+    } finally { if (alive.current) setBusy(false); }
+  };
+
+  return <>
+    <form className="domain-form" onSubmit={(event) => { event.preventDefault(); if (ready) { setError(""); setNotice(""); setConfirming(true); } }}>
+      <Field label="Name" help="Letters, digits and hyphens, such as notes. Another app's name, now or before, is refused.">
+        <Input value={name} onChange={(event) => { setName(event.target.value); setConfirming(false); setError(""); }} autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off" placeholder="notes" disabled={disabled || busy} />
+      </Field>
+      <Button type="submit" disabled={disabled || busy || confirming || !ready}>Change address</Button>
+    </form>
+    {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
+    {notice && <p className="domain-notice" role="status">{notice}</p>}
+    {confirming && <section className="domain-confirm" aria-label="Confirm address change" tabIndex={-1} ref={confirmationRef}>
+      <h4>Move this app to {wanted}?</h4>
+      <p>{`${url} will redirect to the new address, and no other app can take it. People signed in to the app sign in again there. If the app offers Google sign-in, add the new address's callback to its Google client. A service that calls the app's HTTP routes needs the new address.`}</p>
+      <div className="domain-actions">
+        <Button onClick={() => setConfirming(false)} disabled={busy}>Cancel</Button>
+        <Button variant="primary" loading={busy} onClick={() => void move()}>Move address</Button>
+      </div>
+    </section>}
+  </>;
 }
 
 type PathConfirmation = { kind: "accept"; change: PathChange; message: string } | { kind: "remove-name" };

@@ -6,11 +6,15 @@ A Deployment always answers on the hostname the Kernel generated for it. It can 
 
 | Address | Looks like | Needs |
 | --- | --- | --- |
-| Generated hostname | `notes.apps.example.com` (or `notes-1a2b3c.…` if that slug is taken) | Nothing. Every Deployment has one, and republishing keeps it. |
+| Generated hostname | `notes.apps.example.com` (or `notes-1a2b3c.…` if that slug is taken) | Nothing. Every Deployment has one, and republishing keeps it. `hostname_set` moves it to another free name. |
 | Custom domain | `notes.example.org` | DNS you control, and a proxy that terminates TLS for the name. |
 | Path address | `example.com/p/notes` | An installation with `KONAE_DOMAIN` set. No DNS of your own. |
 
 The generated hostname keeps answering when you add either of the others.
+
+## Move the generated hostname
+
+Call `hostname_set` with the `deploymentId` and the new `name`, one label such as `notes`. The app answers on `notes.<suffix>` at once, and its old name redirects there, so links already sent keep working. App users sign in again on the new name. If the app offers Google sign-in, register the `googleCallback` from the answer in its Google client first. A service that calls the app's HTTP routes may not follow the redirect, so give it the new address. A name another app holds, or held before, is refused. For a hostname outside the installation's suffix, add a custom domain instead.
 
 ## Add a custom domain
 

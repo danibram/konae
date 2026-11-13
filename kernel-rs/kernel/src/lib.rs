@@ -39,6 +39,7 @@ pub mod files;
 pub mod folder;
 pub mod google;
 pub mod guard;
+pub mod hostname;
 pub mod hosts;
 pub mod import;
 pub mod installation;
@@ -656,6 +657,7 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .with_state(state.clone());
     let service = ServiceBuilder::new()
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), hostname::redirect))
         .layer(axum::middleware::from_fn_with_state(state, path::route))
         .service(routes);
     tower::util::BoxCloneSyncService::new(service)

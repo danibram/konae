@@ -60,6 +60,12 @@
   "guard.invalid": { "fix": "capsule", "remedy": "Give guard a message of 1 to 200 characters on one line." },
   "guard.not-mutation": { "fix": "capsule", "remedy": "Move the guard to a mutation." },
 
+  "hostname.installation-host": { "fix": "owner", "remedy": "Choose a name no Konae host uses.", "tool": "hostname_set" },
+  "hostname.missing": { "fix": "owner", "remedy": "Name the new hostname, one label under the app suffix.", "tool": "hostname_set" },
+  "hostname.name-invalid": { "fix": "owner", "remedy": "Use letters, digits and hyphens, 1 to 63 characters.", "tool": "hostname_set" },
+  "hostname.outside-suffix": { "fix": "owner", "remedy": "Name one label under the app suffix, or use domain_set for a hostname outside it.", "tool": "hostname_set" },
+  "hostname.taken": { "fix": "owner", "remedy": "Choose a name no other app on this installation holds or held.", "tool": "hostname_set" },
+
   "mutation.returning": { "fix": "capsule", "remedy": "Remove RETURNING and read the rows with a query." },
   "mutation.start": { "fix": "capsule", "remedy": "Start a mutation with INSERT, UPDATE, DELETE or REPLACE. Tables and indexes belong in schema.sql." },
 

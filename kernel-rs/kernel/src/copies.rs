@@ -496,7 +496,7 @@ fn copy_private(source: &Path, target: &Path) -> Result<()> {
         let name = entry.file_name();
         let (from, to) = (entry.path(), target.join(&name));
         match &*name.to_string_lossy() {
-            "deployment.json" | crate::layout::SOURCES_METADATA | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE if kind.is_file() => {
+            "deployment.json" | crate::layout::SOURCES_METADATA | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             "backups" if kind.is_dir() => {
@@ -1134,7 +1134,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-copy-domain-{}", uuid::Uuid::new_v4()));
         let (source, target) = (root.join("source"), root.join("target"));
         std::fs::create_dir_all(source.join(".konae")).unwrap();
-        for name in ["deployment.json", crate::maintenance::MARKER_FILE, crate::domain::RECORD_FILE, crate::path::RECORD_FILE, "stray.tmp"] {
+        for name in ["deployment.json", crate::maintenance::MARKER_FILE, crate::domain::RECORD_FILE, crate::path::RECORD_FILE, crate::hostname::RECORD_FILE, "stray.tmp"] {
             std::fs::write(source.join(".konae").join(name), "{}").unwrap();
         }
         let target = target.join(".konae");
@@ -1142,6 +1142,7 @@ mod tests {
         assert!(target.join("deployment.json").exists());
         assert!(target.join(crate::domain::RECORD_FILE).exists());
         assert!(target.join(crate::path::RECORD_FILE).exists());
+        assert!(target.join(crate::hostname::RECORD_FILE).exists());
         assert!(target.join(crate::maintenance::MARKER_FILE).exists());
         assert!(!target.join("stray.tmp").exists());
         let _ = std::fs::remove_dir_all(root);

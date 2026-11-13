@@ -333,6 +333,7 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
         let _identity = database_lock(state, &format!("identity:{deployment}")).await;
         super::domain::forget(state, deployment).await?;
         super::path::forget(state, deployment).await?;
+        super::hostname::forget(state, deployment).await?;
         park(&folder, &trash, deployment).await?;
         // The folder held the index, so no file of this Deployment is readable
         // any more; a failure here leaves objects for files-reconcile.
@@ -670,6 +671,13 @@ fn domain_tools() -> Vec<Value> {
             "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
             json!({"deploymentId":{"type":"string","minLength":1}}),
             &["deploymentId"],
+            false,
+        ),
+        tool(
+            "hostname_set",
+            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Requires publish.",
+            json!({"deploymentId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260}}),
+            &["deploymentId", "name"],
             false,
         ),
     ]
@@ -1574,11 +1582,13 @@ async fn admin_call(
             let inviter = super::invitations::Inviter { id: owner.id.clone(), email: inviter_email(state, &owner.id) };
             super::invitations::run(state, &deployment, &inviter, name, &a).await
         }
-        name if name.starts_with("domain_") || name.starts_with("path_") => {
+        name if name.starts_with("domain_") || name.starts_with("path_") || name.starts_with("hostname_") => {
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
             let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), scope).await?;
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
+            } else if name.starts_with("hostname_") {
+                super::hostname::admin_call(state, &deployment, name, &a).await
             } else {
                 super::path::admin_call(state, &deployment, name, &a).await
             }
@@ -2048,10 +2058,18 @@ mod tests {
         for name in ["domain_read", "path_read"] {
             admin_call(&state, &reader, "owner:o", name, json!({"deploymentId": id})).await.unwrap();
         }
-        for (name, arguments) in [("domain_set", json!({"deploymentId": id, "hostname": "scope.example.org"})), ("path_set", json!({"deploymentId": id, "enabled": true}))] {
+        for (name, arguments) in [("domain_set", json!({"deploymentId": id, "hostname": "scope.example.org"})), ("path_set", json!({"deploymentId": id, "enabled": true})), ("hostname_set", json!({"deploymentId": id, "name": "scope-two"}))] {
             let refused = admin_call(&state, &reader, "owner:o", name, arguments).await.unwrap_err().to_string();
             assert_eq!(refused, "Permission denied for publish.", "{name}");
         }
+        // A publisher moves the generated hostname, and project_inspect reads the new url back.
+        let publisher = Owner { id: "o".into(), display: None, scopes: vec!["read".into(), "publish".into()], projects: vec![], session: false };
+        let moved = admin_call(&state, &publisher, "owner:o", "hostname_set", json!({"deploymentId": id, "name": "scope-two"})).await.unwrap();
+        assert_eq!(moved["changed"], true);
+        let inspected = admin_call(&state, &publisher, "owner:o", "project_inspect", json!({"projectId": "app_scope"})).await.unwrap();
+        assert_eq!(inspected["deployment"]["hostname"], moved["hostname"]);
+        assert_eq!(inspected["deployment"]["url"], moved["url"]);
+        assert!(moved["hostname"].as_str().unwrap().starts_with("scope-two."), "{moved}");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

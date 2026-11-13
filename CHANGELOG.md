@@ -9,6 +9,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 ### Added
 
 - The `konae` image serves the editor on the editor host, such as `app.<domain>`, next to the owner's MCP and the apps. `KONAE_EDITOR_DIR` names the built editor, and an empty value turns it off.
+- `hostname_set` moves a Deployment to another generated hostname under the installation's suffix, such as `kamynando2.konae.es` to `kamynando.konae.es`. The old name answers with a 308 redirect to the same path on the new one and stays reserved for the app, so email links and bookmarks keep working.
 
 ## [0.1.6] - 2026-11-12
 

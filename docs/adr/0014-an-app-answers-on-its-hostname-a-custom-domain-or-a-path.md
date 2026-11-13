@@ -62,6 +62,7 @@ So `path_set` refuses an app that has accounts, or a private app, without `accep
 
 - An app may have three kinds of address at once. App settings lists them, built from the domain the Kernel reports.
 - A person signed in on the generated hostname signs in again on the alias.
+- `hostname_set` moves the generated hostname to another label under the suffix. The names it held before answer with a 308 to the same path on the new one and stay reserved for that app until it is deleted.
 - A name stays verified until the owner clears it, even after its TXT record is removed.
 - An app with a Google client registers one callback per address (ADR-0003).
 - [The architecture](../architecture.md#isolation-of-hosted-code) records that the isolation it describes holds for generated hostnames and aliases only.
