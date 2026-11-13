@@ -36,7 +36,8 @@ type SortState = { column: string; direction: "ASC" | "DESC" } | null;
 
 type Props = {
   host: DatabaseAdminHost;
-  onEditSchema: () => void;
+  /** Opens schema.sql in the editor. Absent where the app's files are not in the editor. */
+  onEditSchema?: () => void;
   onExportDatabase: () => void;
   target?: "local" | "deployed";
   deployedLabel?: string;
@@ -429,7 +430,7 @@ function QueryHistory({ history, onSelect }: { history: Array<{ sql: string; ela
  * it, so a new table or index arrives, and a changed column needs the owner's
  * ALTER TABLE in the SQL view.
  */
-function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit: () => void }) {
+function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit?: () => void }) {
   return (
     <div className="studio-document-view schema-model-view">
       <header>
@@ -440,7 +441,9 @@ function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit: () =>
           <li key={table.name}><strong>{table.name}</strong><span>{table.columns.join(", ")}</span></li>
         ))}
       </ul>
-      <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit schema.sql</button></div>
+      {onEdit
+        ? <div className="schema-actions"><button onClick={onEdit}><Pencil size={12} /> Edit schema.sql</button></div>
+        : <p className="schema-rule">This app's schema.sql is in the folder it was published from. Edit it there and publish.</p>}
       <p className="schema-rule">A publish runs schema.sql, so a new table or index arrives with it. A changed or removed column does not arrive, so change it with ALTER TABLE in SQL, here and on the published app.</p>
     </div>
   );

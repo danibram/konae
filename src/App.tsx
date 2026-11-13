@@ -63,6 +63,7 @@ import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/ma
 import { parseServerActionSource } from "./kernel/actions";
 import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
+import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
@@ -176,19 +177,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [route, setRoute] = useState(() => {
     const requested = parseRoute(window.location.pathname);
     if (requested.screen !== "editor" || loaded.projects.some((item) => item.id === requested.projectId)) return requested;
-    // An app with no editor files in this account is on the list below; any other id has no page.
-    return loaded.missing.some((item) => item.id === requested.projectId) ? { screen: "projects" as const } : { screen: "not-found" as const, what: "project" as const, path: window.location.pathname };
+    // A published app with no editor files opens on its data. An unpublished one is on the list below; any other id has no page.
+    if (loaded.missing.some((item) => item.id === requested.projectId)) return loaded.deployments[requested.projectId] ? requested : { screen: "projects" as const };
+    return { screen: "not-found" as const, what: "project" as const, path: window.location.pathname };
   });
   const screen = route.screen;
-  // A link to an app this account holds without editor files says so, and the address bar stops naming it.
+  // A link to an unpublished app this account holds without editor files says so, and the address bar stops naming it.
   const [routeNotice, setRouteNotice] = useState("");
   const explainMissingRoute = () => {
     window.history.replaceState({}, "", "/");
-    setRouteNotice("That app has no editor files in this account. See Apps without editor files below.");
+    setRouteNotice("That app has no editor files in this account and is not published. See Apps without editor files below.");
   };
   useEffect(() => {
     const requested = parseRoute(window.location.pathname);
-    if (requested.screen === "editor" && loaded.missing.some((item) => item.id === requested.projectId)) explainMissingRoute();
+    if (requested.screen === "editor" && loaded.missing.some((item) => item.id === requested.projectId) && !loaded.deployments[requested.projectId]) explainMissingRoute();
   }, []);
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
   const [selectedPath, setSelectedPath] = useState("app.js");
@@ -666,6 +668,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
       if (missing.some((item) => item.id === route.projectId)) {
+        // A published app with no editor files has its own page, which this route already names.
+        if (deployments[route.projectId]) return;
         setRoute({ screen: "projects" });
         explainMissingRoute();
       } else {
@@ -685,7 +689,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const arrival = useRef<PanelId>("preview");
   const seenProject = useRef<string | null>(null);
   useEffect(() => {
-    if (route.screen !== "editor" || !("projectId" in route)) {
+    if (route.screen !== "editor" || !("projectId" in route) || !projects.some((item) => item.id === route.projectId)) {
       seenProject.current = null;
       return;
     }
@@ -939,7 +943,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onOpenProject={openProject} onCreateProject={createProject} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} />;
+  }
+
+  // A published app with no editor files opens on its data, accounts and activity.
+  const published = missing.find((item) => item.id === route.projectId);
+  if (published && deployments[published.id]) {
+    return <PublishedAppView app={published} deployment={deployments[published.id]} ownerSession={ownerSession} projectCount={projects.length + missing.length} onBack={goToProjects} />;
   }
 
   const signInHref = platformAccessHref(window.location.pathname);

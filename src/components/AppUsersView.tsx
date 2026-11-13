@@ -58,14 +58,14 @@ export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibil
     <section className="access-view" aria-label="App users">
       <Card className="access-card" role="group" aria-label="Who can open and join">
         <h3>Who can open and join</h3>
-        <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} It applies when you deploy.`}>
-          <Select value={visibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
+        <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} ${onSetVisibility ? "It applies when you deploy." : "It changes in the app's folder, with a publish."}`}>
+          <Select value={visibility} disabled={!onSetVisibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
             <option value="public">Anyone with the link</option>
             <option value="private">People with an app account</option>
           </Select>
         </Field>
-        <Field label="Who can read uploaded files" help="Deploy to apply this to existing and new files. Choosing per-file access restores earlier visibility settings. Only the uploader can delete a file.">
-          <Select value={fileAccess ?? "per-file"} onChange={(event) => onSetFileAccess?.(event.target.value === "app-users")}>
+        <Field label="Who can read uploaded files" help={onSetFileAccess ? "Deploy to apply this to existing and new files. Choosing per-file access restores earlier visibility settings. Only the uploader can delete a file." : "It changes in the app's folder, with a publish. Only the uploader can delete a file."}>
+          <Select value={fileAccess ?? "per-file"} disabled={!onSetFileAccess} onChange={(event) => onSetFileAccess?.(event.target.value === "app-users")}>
             <option value="per-file">Each file's visibility</option>
             <option value="app-users">All signed-in app users</option>
           </Select>
