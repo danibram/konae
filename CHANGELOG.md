@@ -6,6 +6,21 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Security
+
+- When an import carries API keys forward, the Kernel uses its own table definitions and a fixed column list. The Kernel rejects triggers and views in every imported SQLite component, regardless of the letter case of their stored type.
+- New deployments avoid the installation's editor and MCP hosts. Legacy deployment records, custom domain aliases and previous hostnames cannot take over those hosts or redirect owner requests to an app.
+- Queries, owner SQL, table browsing and notice rows enforce the 2 MiB result budget as columns are read, including column names, JSON escapes and hexadecimal blobs. An oversized notice result rolls back its mutation.
+- SQLite has a process-wide memory ceiling, set with `KONAE_SQLITE_HEAP_BYTES`. The default is half the available memory, including visible Linux cgroup limits, or 256 MiB when the memory size is unknown.
+- Each Deployment runs at most four visitor action statements at once. A call that waits two seconds without a slot answers `rate-limited` with `Retry-After`. A slow SQLite function can still exceed the statement deadline within one call.
+- Password verification accepts only the 600,000-iteration hashes the Kernel writes and bounds their encoded size before decoding. Imports reject unsupported hashes; malformed stored hashes run the same bounded check and return the same credential error as an unknown email.
+- With `KONAE_COPY_SECRET` set, S3 copy manifests and revocation entries carry authentication signatures. Restore refuses unencrypted S3 copies and manifests with missing or invalid signatures. An unsigned or altered revocation entry keeps the restored installation in maintenance. Set `KONAE_COPY_ACCEPT_UNSIGNED=1` for one restore or reconciliation of older encrypted copies or entries without signatures. Invalid signatures still fail, and directory copies remain unsigned.
+- New template apps escape both quote characters in text and attributes, including row IDs, member roles and file URLs. The build agent and exported app instructions require escaping untrusted output. Existing app files keep their own code.
+
+### Changed
+
+- The editor's new-project dialog selects Private notes by default and labels every template Public or Private. Choosing Shared list still creates a public app with anonymous writes.
+
 ## [0.4.2] - 2026-11-13
 
 ### Changed
