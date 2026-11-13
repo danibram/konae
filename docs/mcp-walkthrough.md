@@ -125,9 +125,9 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "a credential: platform_guide topic credentials",
       "project_create",
       "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-      "build locally",
-      "transfer_begin/write/complete",
-      "release_plan",
+      "build locally, or write the release JSON of the publishing topic",
+      "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
+      "release_plan once",
       "release_apply",
       "project_inspect"
     ],

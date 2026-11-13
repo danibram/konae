@@ -953,7 +953,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             match export_transfer.as_ref().filter(|_| name == "transfer_read") {
                 // One row per component download, written at its first
                 // block or on a refusal, so a 256 MiB database read in
-                // 64 KiB blocks does not push the rest out of the log.
+                // 64 blocks does not push the rest out of the log.
                 Some(t) if arguments["offset"] == 0 || result.is_err() => {
                     let target = json!({"deploymentId":t["deploymentId"],"component":t["component"]});
                     audit(&state, &principal, "package_download", &target, None, &result);
@@ -1114,9 +1114,9 @@ async fn admin_call(
                     "a credential: platform_guide topic credentials",
                     "project_create",
                     "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-                    "build locally",
-                    "transfer_begin/write/complete",
-                    "release_plan",
+                    "build locally, or write the release JSON of the publishing topic",
+                    "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
+                    "release_plan once",
                     "release_apply",
                     "project_inspect"
                 ],

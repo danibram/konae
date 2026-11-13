@@ -72,6 +72,10 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("actions_invoke", "actions_invoke"),
 ];
 
+/// The tag `konae build` puts in a whole-document page's head to load the
+/// SDK, as `runtimeLoaderScript` in src/lib/static-artifact.js writes it.
+const SDK_LOADER: &str = r#"<script>(function(){var m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);document.write('<script src="'+(m?'/p/'+m[1]:'')+'/runtime.js"><\/script>')})();</script>"#;
+
 /// Writes whose own answer is the observation, so a second call would only
 /// repeat it. Each entry says what in the answer to read.
 pub(super) const READ_BACK_IN_ANSWER: &[(&str, &str)] = &[
@@ -207,7 +211,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "optional": "initialSignupPolicy {mode, allowlist} on the first release only; contactEmail, the address notify to owner reaches; initialPackage on a first release that imports an export.",
                 "limit": "The JSON is at most 26 MB."
             },
-            "sdk": "The Kernel does not add the SDK; the artifact carries it. konae build inlines Konae's src/mcp/runtime.js in a script tag with the data-konae-runtime attribute on a fragment page, and a whole-document page loads /runtime.js, an artifact file with the same source. Without a shell, put that file at runtime.js in artifact.files and load it with <script src=\"/runtime.js\"></script> before the page's own scripts. Take it from the Konae version the installation runs.",
+            "sdk": format!("The Kernel does not add the SDK; the artifact carries it. konae build inlines Konae's src/mcp/runtime.js in a script tag with the data-konae-runtime attribute on a fragment page, and a whole-document page loads /runtime.js, an artifact file with the same source. Without a shell, put that file at runtime.js in artifact.files, taken from the Konae version the installation runs, and load it in each page's head before the page's own scripts with the loader konae build writes, which finds runtime.js on the app's hostname and on a path address alike: {SDK_LOADER}"),
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
