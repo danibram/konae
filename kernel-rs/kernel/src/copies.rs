@@ -1751,6 +1751,127 @@ mod tests {
         }
     }
 
+    async fn second_copy(source: &Path, copies: &Path) -> String {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        run_copy(&state(source), &[Target::Directory(copies.to_owned())]).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_default_choice_needs_a_mac_even_when_the_override_is_on() {
+        let (source, copies, id, deployment) = plain_copy("override-default").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        // Planted: the genuine manifest, sealed-looking with a copied key check, and no MAC.
+        let mut planted: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap()).unwrap();
+        planted.mac = None;
+        put_manifest(&client, LATER_ID, &planted).await;
+        let root = scratch("override-default-restored");
+        let summary = restore(&s3_source(&client), None, &root, Some(&key), true, &crate::installation::Installation::for_test()).await.expect("the verified copy is chosen");
+        assert_eq!(summary.copy_id, id);
+        assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+        for path in [source, copies, root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_genuine_folder_whose_manifest_was_replaced_by_an_unsigned_subset_is_skipped() {
+        let (source, copies, older, deployment) = plain_copy("override-subset").await;
+        let newer = second_copy(&source, &copies).await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&older), &older, Some(&key)).await;
+        send_genuine(&client, &copies.join(&newer), &newer, Some(&key)).await;
+        let mut subset: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{newer}/{MANIFEST}")).await.unwrap()).unwrap();
+        subset.mac = None;
+        let artifact = format!("apps/{}/dist/index.html", deployment.id);
+        subset.files.retain(|file| file.path != artifact);
+        put_manifest(&client, &newer, &subset).await;
+        let root = scratch("override-subset-restored");
+        let summary = restore(&s3_source(&client), None, &root, Some(&key), true, &crate::installation::Installation::for_test()).await.expect("the older verified copy is installed");
+        assert_eq!(summary.copy_id, older);
+        assert!(crate::layout::folder(&root, &deployment.id).join("dist/index.html").is_file(), "the whole copy is installed");
+        for path in [source, copies, root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// An S3 endpoint that lists two copies and refuses to read the newest manifest.
+    async fn s3_that_refuses_the_newest_manifest(newest: &str, older: &str) -> S3Client {
+        use axum::{Router, extract::Path as UrlPath, http::StatusCode, response::IntoResponse, routing::get};
+        let listing = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>data</Name><Prefix>copies/</Prefix><KeyCount>2</KeyCount><IsTruncated>false</IsTruncated>\
+             <Contents><Key>copies/{older}/{MANIFEST}</Key><Size>1</Size></Contents><Contents><Key>copies/{newest}/{MANIFEST}</Key><Size>1</Size></Contents></ListBucketResult>"
+        );
+        let app = Router::new()
+            .route("/{bucket}", get(move || { let body = listing.clone(); async move { ([("content-type", "application/xml")], body) } }))
+            .route("/{bucket}/{*key}", get(|UrlPath((_, key)): UrlPath<(String, String)>| async move {
+                assert!(!key.contains("2020"), "the older copy must not be read: {key}");
+                (StatusCode::FORBIDDEN, "<Error><Code>AccessDenied</Code><Message>denied</Message></Error>").into_response()
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let credentials = aws_credential_types::Credentials::new("konae", "konae-secret", None, None, "copies-test");
+        let config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .credentials_provider(credentials)
+            .endpoint_url(format!("http://{address}"))
+            .force_path_style(true)
+            .build();
+        S3Client::from_conf(config)
+    }
+
+    #[tokio::test]
+    async fn a_read_error_on_the_newest_copy_stops_the_restore_instead_of_rolling_back() {
+        let client = s3_that_refuses_the_newest_manifest(LATER_ID, "2020-01-01T00-00-00.000Z").await;
+        let root = scratch("read-error-restored");
+        let key = CopyKey::derive(TEST_SECRET);
+        let refused = restore(&s3_source(&client), None, &root, Some(&key), false, &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
+        assert!(refused.contains(LATER_ID) && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_manifest_over_four_mebibytes_is_refused() {
+        let (source, copies, id, deployment) = plain_copy("big-manifest").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let mut manifest: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap()).unwrap();
+        manifest.files.push(ManifestFile { path: "x".repeat(5 * 1024 * 1024), size: 0, sha256: String::new() });
+        put_manifest(&client, LATER_ID, &manifest).await;
+        let (installed, outcome) = restored_notes(&s3_source(&client), Some(LATER_ID), "big-manifest-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("an oversized manifest is refused").to_string();
+        assert!(refused.contains("4 MiB") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_choice_gives_up_after_fifty_skipped_copies() {
+        let (source, copies, id, deployment) = plain_copy("fifty").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let manifest: Manifest = serde_json::from_slice(&std::fs::read(copies.join(&id).join(MANIFEST)).unwrap()).unwrap();
+        for second in 0..51 {
+            put_manifest(&client, &format!("2099-01-01T00-00-{second:02}.000Z"), &manifest).await;
+        }
+        let (installed, outcome) = restored_notes(&s3_source(&client), None, "fifty-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("the genuine copy is out of reach").to_string();
+        assert!(refused.contains("50 skipped") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
     #[tokio::test]
     async fn a_sealed_copy_with_an_entry_removed_from_its_manifest_is_refused() {
         let (source, copies, id, deployment) = plain_copy("trimmed").await;
@@ -1862,11 +1983,11 @@ mod tests {
         client.put_object().bucket("data").key(format!("copies/{id}/{MANIFEST}")).body(ByteStream::from(serde_json::to_vec_pretty(&manifest).unwrap())).send().await.unwrap();
         let stores = crate::installation::Installation::for_test();
         let refused_root = scratch("unsigned-refused");
-        let refused = restore(&s3_source(&client), None, &refused_root, Some(&key), false, &stores).await.err().expect("no MAC, no restore").to_string();
+        let refused = restore(&s3_source(&client), Some(&id), &refused_root, Some(&key), false, &stores).await.err().expect("no MAC, no restore").to_string();
         assert!(refused.contains("no manifest MAC") && refused.contains("KONAE_COPY_ACCEPT_UNSIGNED=1") && refused.contains("older Kernel"), "{refused}");
         assert_eq!(std::fs::read_dir(&refused_root).map(|entries| entries.count()).unwrap_or(0), 0);
         let restored = scratch("unsigned-restored");
-        restore(&s3_source(&client), None, &restored, Some(&key), true, &stores).await.unwrap();
+        restore(&s3_source(&client), Some(&id), &restored, Some(&key), true, &stores).await.unwrap();
         assert_eq!(count(&crate::layout::folder(&restored, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
         // The override never lets a plain manifest through under a secret.
         let plain_root = scratch("unsigned-plain");
