@@ -84,7 +84,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_MAIL_WORKER_INTERVAL_MS` | `5000` | How often the mail worker looks for due jobs. A new job also wakes it. |
 | `KONAE_CALLS_PER_MINUTE` | `20` | Calls one app's call actions may queue in any 60 seconds, from 1 to 10000. The Kernel sends them from `calls.sqlite`; see [Calls between apps](./mcp.md#calls-between-apps). |
 | `KONAE_FILES_QUOTA_BYTES` | `20971520` (20 MiB) | Bytes the files of one Deployment may hold together. An upload past it is refused with the configured number, and so is an import whose files exceed it. |
-| `KONAE_FILE_MAX_BYTES` | `2097152` (2 MiB) | Bytes one file may hold. It must not exceed `KONAE_FILES_QUOTA_BYTES`, or the Kernel refuses to start. Uploads and reads move in 64 KiB MCP blocks, so a larger file takes more calls. |
+| `KONAE_FILE_MAX_BYTES` | `2097152` (2 MiB) | Bytes one file may hold. It must not exceed `KONAE_FILES_QUOTA_BYTES`, or the Kernel refuses to start. An app user's uploads and reads move in 64 KiB MCP blocks and an owner's in 4 MiB blocks, so a larger file takes more calls. |
 | `KONAE_FILES_S3_BUCKET` | unset | Bucket that holds the bytes of app files, as `<prefix><app id>/<file id>`. Unset keeps them in each app folder's `data/files/`. The index stays in the folder either way. See [File bytes in a bucket](#file-bytes-in-a-bucket). |
 | `KONAE_FILES_S3_ENDPOINT`, `KONAE_FILES_S3_ACCESS_KEY`, `KONAE_FILES_S3_SECRET_KEY` | unset | Required with `KONAE_FILES_S3_BUCKET`. They are separate from `KONAE_S3_*`, so the private file bytes can use another bucket and key than the artifacts and copies. |
 | `KONAE_FILES_S3_REGION` | `us-east-1` | Region of the file bucket. R2 uses `auto`. |

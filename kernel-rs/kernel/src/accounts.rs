@@ -134,6 +134,15 @@ const LINK_SENT: &str = "If this email can use the app, a link is on its way. Op
 /// for the same email on this app. It keeps the 401 and the first sentence.
 pub const SIGNUP_HINT: &str = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
 
+/// [`SIGNUP_HINT`] on an installation whose development transport sends no
+/// email: the link went to the server's mailbox file, so "we emailed" would be false.
+pub const SIGNUP_HINT_LOCAL: &str = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.";
+
+/// The signup hint this installation can truthfully give.
+pub fn signup_hint(state: &AppState) -> &'static str {
+    if state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some()) { SIGNUP_HINT_LOCAL } else { SIGNUP_HINT }
+}
+
 /// Why a pending account may not sign in yet, said to a caller who proved
 /// the password or the identity. With a transport that sends email it stays
 /// the sentence clients know. The development transport sends nothing, so
@@ -943,6 +952,18 @@ pub mod tests {
         let (_, invited) = refused(&fixture).await;
         assert!(invited.starts_with("An invitation to this app is waiting for this email."), "{invited}");
         assert!(invited.contains("mailbox.jsonl"), "{invited}");
+    }
+
+    /// The signup hint says "we emailed" only when the installation sends email.
+    #[tokio::test]
+    async fn the_signup_hint_never_says_we_emailed_when_nothing_was_sent() {
+        let mut fixture = fixture(Verification::Required, true);
+        assert_eq!(signup_hint(&fixture.state), SIGNUP_HINT);
+        let queue = mail::MailQueue::open(&fixture.root, Arc::new(Development), "Konae <konae@localhost>",
+            "a mail secret that is long enough for tests", mail::Limits::default(), std::time::Duration::from_millis(50)).unwrap();
+        fixture.state.accounts.queue = Some(Arc::new(queue));
+        assert_eq!(signup_hint(&fixture.state), SIGNUP_HINT_LOCAL);
+        assert!(!SIGNUP_HINT_LOCAL.contains("we emailed") && SIGNUP_HINT_LOCAL.starts_with("Email or password is incorrect."));
     }
 
     #[tokio::test]

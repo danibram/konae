@@ -1497,7 +1497,7 @@ pub async fn auth_request(
     if !signup && matches!(result, Err(AuthError::InvalidCredentials)) {
         state.guards.auth_failed(&deployment.id, client, &failed_email);
         if accounts::signup_hint_applies(state, &deployment, headers, &failed_email) {
-            return error(StatusCode::UNAUTHORIZED, accounts::SIGNUP_HINT);
+            return error(StatusCode::UNAUTHORIZED, accounts::signup_hint(state));
         }
     }
     match result {

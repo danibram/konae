@@ -102,7 +102,7 @@ function post(base: string, route: string, body: unknown, headers: Record<string
     body: JSON.stringify(body),
   });
 }
-const signupHint = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
+const signupHint = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.";
 const cookieOf = (response: Response) => response.headers.get("set-cookie")?.split(";")[0];
 const tokenOfCookie = (cookie: string) => cookie.split("=").slice(1).join("=");
 

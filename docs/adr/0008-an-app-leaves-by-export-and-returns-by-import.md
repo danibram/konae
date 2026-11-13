@@ -8,7 +8,7 @@ Job 4 asks that either person can take the app to another machine with its accou
 
 ### Export hands over the app folder
 
-`project_export` hands over the app folder of ADR-0001 as transfers in 64 KiB blocks, so no part of it sits whole in memory at either end. The `folder` download holds `konae.json`, `app/` and `dist/`. Each part of `data/` is one component: database, identity, files and usage. The Kernel captures them under the app's locks, as a scheduled copy does. A manifest lists every component with its size and SHA-256 and names the revisions that produced the app.
+`project_export` hands over the app folder of ADR-0001 as transfers in blocks of the `chunkBytes` that `transfer_begin` answers, 4 MiB for an owner, so no part of it sits whole in memory at either end. The `folder` download holds `konae.json`, `app/` and `dist/`. Each part of `data/` is one component: database, identity, files and usage. The Kernel captures them under the app's locks, as a scheduled copy does. A manifest lists every component with its size and SHA-256 and names the revisions that produced the app.
 
 - The export carries everything of the app and nothing of Konae: no owner account, no credential, no project record, no secret and none of the installation's `.konae/`.
 - The identity component leaves without sessions, email links or entry links. Each API key travels with its name, actions, file visibilities and hash, marked revoked with the reason `import`, so the export opens nothing even on a Kernel that would not revoke it. The editor lists such keys under "Revoked at import" with what each could call.

@@ -17,14 +17,14 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 - Owner transfers over MCP move in 4 MiB blocks, so a release takes a few `transfer_write` calls instead of dozens. The proxy in front of `/mcp` must accept bodies of about 5.4 MiB. CLIs from 0.3.0 and earlier refuse download blocks over 64 KiB, so `export` and `pull` against an upgraded installation need this CLI.
 - The `rules` topic no longer asks for `transfer_status` after each block or for a second `release_plan`, and says that "Transfer not found or expired." after `transfer_cancel` means the cancel worked. The `publishing` topic starts with `konae publish` and gives the full release payload.
-- New app folders get a `build.mjs` that minifies with `NODE_ENV` set to production (`--dev` for `konae dev`) and type-checks `app/src/` against `actions.d.ts` with a pinned TypeScript. `src/main.tsx` is an entry in every build.
+- A release build minifies with `NODE_ENV` set to production, from the `build.mjs` new app folders get and from `konae build`'s own bundler alike, so both still build the same bytes; `konae dev` builds readable. The new `build.mjs` also type-checks `app/src/` against `actions.d.ts` with a pinned TypeScript. `src/main.tsx` is an entry in every build.
 - With `KONAE_MAIL_TRANSPORT=development`, invitations answer `delivery: "local-mailbox"` and their `acceptUrl` once. A Kernel serving over https with that transport warns at startup, and health and `mail_status` report it.
 
 ### Fixed
 
 - The owner MCP says when a token expired and how to get a new one, instead of the same answer as no token.
 - `konae build`, `dev` and `publish` run `npm install` once in a folder fresh from `init` or `export`, whose build needs esbuild, and show npm's output only when it fails, so `publish` prints just the address.
-- A pending sign-in no longer says "the link we sent" when the installation sends no email, and names a waiting invitation.
+- A pending sign-in and the signup hint no longer say "the link we sent" or "the link we emailed" when the installation sends no email, and a pending sign-in names a waiting invitation.
 - The build and the Validation Gate refuse an app whose pages are all whole documents that load no script, since its entry would never run.
 - A first publish holds its generated name against a concurrent move and never takes the installation's own host. A call from another app to a moved app's old name still reaches it. The suffix refusal from `domain_set` points at `hostname_set`.
 - The docs say that published apps refuse WebAssembly and `eval`, and explain `manifest.fileAccess: "app-users"`.

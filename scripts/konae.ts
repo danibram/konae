@@ -418,9 +418,13 @@ async function readCapsuleFile(root: string, relative: string): Promise<string |
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return bytes; }
 }
 
-async function bundleModule(root: string, entry: string) {
+async function bundleModule(root: string, entry: string, development = false) {
   // absWorkingDir names each bundled module by its Capsule path, which the build then drops.
-  const result = await build({ entryPoints: [path.join(appDir(root), entry)], absWorkingDir: path.resolve(appDir(root)), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out", jsx: "automatic" });
+  // The same settings as the build.mjs init writes, so a folder with or without package.json builds the same bytes.
+  const result = await build({
+    entryPoints: [path.join(appDir(root), entry)], absWorkingDir: path.resolve(appDir(root)), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out", jsx: "automatic",
+    minify: !development, define: { "process.env.NODE_ENV": JSON.stringify(development ? "development" : "production") },
+  });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (script === undefined) throw Error("The local builder produced no JavaScript.");
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
@@ -506,10 +510,10 @@ export async function buildLocal(root: string, options: { development?: boolean 
     paths: await capsulePaths(root),
     read: (relative) => readCapsuleFile(root, relative),
     compile: async () => {
-      const { script, styles } = await bundleModule(root, entry);
+      const { script, styles } = await bundleModule(root, entry, options.development);
       return { script, styles: [files["styles.css"] ?? "", styles].join("\n") };
     },
-    bundle: (relative) => bundleModule(root, relative),
+    bundle: (relative) => bundleModule(root, relative, options.development),
     runtime: sdk,
     routing: settings?.manifest?.routing as "pages" | "spa" | undefined,
     warn: (message) => console.warn(`Warning: ${message}`),

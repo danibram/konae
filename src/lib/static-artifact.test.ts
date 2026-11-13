@@ -359,6 +359,12 @@ describe("a path address finds its base path, and the SDK loader writes its tag 
     expect(written("/p/notes/guide/install.html")).toEqual(['<script src="/p/notes/runtime.js"></script>']);
   });
 
+  test("the loader platform_guide gives a client without a shell is the one konae build writes", () => {
+    const guide = readFileSync(path.resolve(import.meta.dir, "../../kernel-rs/konae/src/guide.rs"), "utf8");
+    const copy = /const SDK_LOADER: &str = r#"(.*)"#;/.exec(guide)?.[1];
+    expect(copy).toBe(runtimeLoaderScript());
+  });
+
   test("the SDK and every inline page that builds a Kernel URL carry the same prefix rule", () => {
     const root = path.resolve(import.meta.dir, "../..");
     const rule = `/${pathPrefixPattern.source}/`;

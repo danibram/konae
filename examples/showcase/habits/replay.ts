@@ -236,7 +236,7 @@ try {
   const pendingLogin = await appPost("/_konae/auth/login", { email: ana, password: anaPassword }, { cookie: signupHint! });
   const pendingLoginBody = await pendingLogin.text();
   assert.equal(pendingLogin.status, 401, pendingLoginBody);
-  assert.equal(JSON.parse(pendingLoginBody).error, "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.");
+  assert.equal(JSON.parse(pendingLoginBody).error, "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.");
   assert.equal(cookieOf(pendingLogin), undefined);
   const otherBrowserLogin = await appPost("/_konae/auth/login", { email: ana, password: anaPassword });
   assert.deepEqual([otherBrowserLogin.status, await otherBrowserLogin.json()], [401, { error: "Email or password is incorrect." }]);
