@@ -23,6 +23,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 ### Fixed
 
 - The owner MCP says when a token expired and how to get a new one, instead of the same answer as no token.
+- `konae build`, `dev` and `publish` run `npm install` once in a folder fresh from `init` or `export`, whose build needs esbuild, and show npm's output only when it fails, so `publish` prints just the address.
 - A pending sign-in no longer says "the link we sent" when the installation sends no email, and names a waiting invitation.
 - The build and the Validation Gate refuse an app whose pages are all whole documents that load no script, since its entry would never run.
 - A first publish holds its generated name against a concurrent move and never takes the installation's own host. A call from another app to a moved app's old name still reaches it. The suffix refusal from `domain_set` points at `hostname_set`.
