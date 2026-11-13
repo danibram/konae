@@ -127,7 +127,7 @@ async function loadPosts() {
   const staff = me.role !== 'member';
   $('#posts').innerHTML = posts.length ? posts.map(post =>
     '<article class="ui-list-item"><div class="ui-list-main"><p>' + escapeHtml(post.body) + '</p><small>' + escapeHtml(post.author ?? 'Someone') + ' · ' + when(post.created_at) + '</small></div>' +
-    (staff || post.author_id === me.user_id ? '<button class="ui-button ui-button-danger ui-button-sm" data-remove="' + post.id + '">Remove</button>' : '') +
+    (staff || post.author_id === me.user_id ? '<button class="ui-button ui-button-danger ui-button-sm" data-remove="' + escapeHtml(post.id) + '">Remove</button>' : '') +
     '</article>'
   ).join('') : '<p class="ui-list-empty">No posts yet.</p>';
 }

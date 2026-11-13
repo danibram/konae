@@ -1,6 +1,6 @@
 import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
-import { appStyles } from "./templates/shared";
+import { appStyles, escapeHtmlSource } from "./templates/shared";
 
 const privateNotesSchema = `CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,11 +93,7 @@ const status = document.querySelector('#status');
 const landingStatus = document.querySelector('#landing-status');
 const titleInput = document.querySelector('#note-title');
 
-function escapeHtml(value) {
-  const element = document.createElement('span');
-  element.textContent = value;
-  return element.innerHTML;
-}
+${escapeHtmlSource}
 
 function showError(error) {
   const message = error && error.message ? error.message : 'Could not complete that request.';
