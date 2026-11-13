@@ -214,6 +214,29 @@ pub fn stored_trigger_or_view(db: &rusqlite::Connection, what: &str) -> rusqlite
     .optional()
 }
 
+/// The refusal for a database file that arrives holding a virtual table. The
+/// bundled SQLite compiles FTS3, FTS5, RTREE and DBSTAT, the Kernel creates no
+/// virtual table in any of its files, and schema.sql cannot declare one. SQLite
+/// stores a virtual table as a table row with `rootpage` 0, which the sql text
+/// read as tokens confirms, so a comment or spacing in a hand edit does not hide it.
+pub fn stored_virtual_table(db: &rusqlite::Connection, what: &str) -> rusqlite::Result<Option<String>> {
+    let mut statement = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE lower(type) = 'table' ORDER BY name")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let (name, rootpage, sql): (String, Option<i64>, Option<String>) = (row.get(0)?, row.get(1)?, row.get(2)?);
+        let words: Vec<String> = sql_tokens(&sql.unwrap_or_default())
+            .into_iter()
+            .filter(|token| token.kind == SqlTokKind::Word)
+            .take(3)
+            .map(|token| token.text.to_ascii_uppercase())
+            .collect();
+        if rootpage == Some(0) || words == ["CREATE", "VIRTUAL", "TABLE"] {
+            return Ok(Some(format!("The {what} holds CREATE VIRTUAL TABLE {name}, and Konae runs no virtual tables. Drop it before importing.")));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

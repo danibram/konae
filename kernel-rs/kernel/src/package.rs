@@ -736,12 +736,12 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
             no_trigger_or_view(&identity, "accounts component")?;
             let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let has_users: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_users')",
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)='app_users')",
                 [],
                 |r| r.get(0),
             )?;
             ensure!(has_users, "The accounts component has no app_users table.");
-            let has_hashes: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('app_users') WHERE name='password_hash')", [], |r| r.get(0))?;
+            let has_hashes: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('app_users') WHERE lower(name)='password_hash')", [], |r| r.get(0))?;
             if has_hashes {
                 let mut hashes = db.prepare("SELECT password_hash FROM app_users")?;
                 let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
@@ -764,11 +764,15 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     Ok(())
 }
 
-/// Refuses a component that holds a trigger or a view. The Kernel creates
-/// neither in any of its files.
+/// Refuses a component that holds a trigger, a view or a virtual table. The
+/// Kernel creates none of them in any of its files.
 fn no_trigger_or_view(path: &Path, what: &str) -> Result<()> {
-    let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .and_then(|db| super::sql_rules::stored_trigger_or_view(&db, what))?;
+    let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).and_then(|db| {
+        match super::sql_rules::stored_trigger_or_view(&db, what)? {
+            Some(refusal) => Ok(Some(refusal)),
+            None => super::sql_rules::stored_virtual_table(&db, what),
+        }
+    })?;
     match stored {
         Some(refusal) => anyhow::bail!(refusal),
         None => Ok(()),
