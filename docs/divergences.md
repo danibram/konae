@@ -13,6 +13,8 @@ Attach listeners in JavaScript, and keep scripts and fetches on the app's own or
 <button onclick="save()">Save</button>
 ```
 
+The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It names neither `'wasm-unsafe-eval'` nor `'unsafe-eval'`, so a published app and `konae dev` refuse WebAssembly, `eval` and `new Function`. A library that compiles WebAssembly, such as a PDF renderer, works in the preview and then fails in the browser console with `Compiling or instantiating WebAssembly module violates the following Content Security policy directive`. Pick a library that runs without WebAssembly, or do that work outside the app.
+
 ## What the preview lacks
 
 The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.

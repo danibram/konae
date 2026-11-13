@@ -1,15 +1,14 @@
-// Streams the parts of an export between MCP transfers and files in fixed
-// blocks, so a 256 MiB database never sits in memory.
+// Streams the parts of an export between MCP transfers and files in blocks of
+// the transfer's chunkBytes, so a 256 MiB database never sits in memory.
 import { createHash } from "node:crypto";
 import { open, rm } from "node:fs/promises";
-import { decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
+import { blockLimit, decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeArchivePath, tarHeader, tarPadding, type TarEntry } from "../src/lib/tar";
-
-const block = 64 * 1024;
 
 /** Reads a download transfer into `file`, checks size and SHA-256, and releases the transfer. */
 export async function downloadToFile(client: McpClient, transfer: Transfer, file: string) {
   if (!Number.isSafeInteger(transfer.size) || transfer.size < 0) throw new McpError("Invalid MCP download size.");
+  const block = blockLimit(transfer);
   const hash = createHash("sha256");
   const output = await open(file, "wx", 0o600);
   try {

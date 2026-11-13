@@ -106,7 +106,8 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 
 | Limit | Value |
 | --- | --- |
-| Transfer chunk | At most 64 KiB, base64 |
+| Transfer block | At most `chunkBytes`, which `transfer_begin` answers: 4 MiB for an owner, 64 KiB for an app user or visitor, base64 |
+| MCP request | 200,000 bytes, except an owner's `transfer_write` at 5,657,944 bytes |
 | Owner transfers | Expire after one hour, eight at a time per owner, 128 per installation |
 | App user transfers | Expire after 10 minutes, two at a time per app user, 32 per Deployment |
 | Visitor transfers | Two at a time per client address, 16 per public Deployment |

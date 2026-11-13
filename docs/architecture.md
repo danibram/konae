@@ -53,7 +53,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `usage.rs` | Usage and Signals |
 | `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the quotas, `files-migrate` and `files-reconcile` |
 | `files.rs` | Changing a file's visibility and deleting it |
-| `transfers.rs` | Chunked transfers in 64 KiB blocks and file upload receipts |
+| `transfers.rs` | Chunked transfers, in 4 MiB blocks for an owner and 64 KiB for an app user, and file upload receipts |
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
 | `package.rs` | The export of one app and the import of its data |
 | `import.rs` | Import into an existing app, after a backup |

@@ -33,6 +33,7 @@ After any write through MCP or the editor, observe the effect through the same d
 | Another service calls this app | `http` on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | This app calls another host | `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
+| Every signed-in user reads every uploaded file | `manifest.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
@@ -54,7 +55,7 @@ Keep this path short. If it grows, fix the path before adding docs.
 
 These are not bugs to paper over. Say them when they matter.
 
-- The editor preview applies no Content Security Policy. Inline handlers and other-origin fetches can still run there; a published app refuses them.
+- The editor preview applies no Content Security Policy. Inline handlers, other-origin fetches and WebAssembly can still run there; a published app and `konae dev` refuse them. Their `script-src` is `'self'` plus each inline script's hash, with no `'wasm-unsafe-eval'` or `'unsafe-eval'`, so a library that compiles WebAssembly or calls `eval` fails there.
 - The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or a published Deployment.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.

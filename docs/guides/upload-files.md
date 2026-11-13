@@ -4,7 +4,7 @@ Use `miniapp.files` for the bytes and a mutation for the row that remembers the 
 
 ## How it works
 
-The Kernel stores small files for one Deployment, in its file store. A file is private to the person who uploaded it unless the upload asks for `"public"`. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
+The Kernel stores small files for one Deployment, in its file store. Without `manifest.fileAccess`, a file is private to the person who uploaded it unless the upload asks for `"public"`. With `"fileAccess": "app-users"`, every signed-in user of the app reads every file, as [Share every file with the app's users](#share-every-file-with-the-apps-users) describes. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
 
 - 1 byte to 2 MiB per file, and 20 MiB of files per Deployment. An operator can change both with `KONAE_FILE_MAX_BYTES` and `KONAE_FILES_QUOTA_BYTES`, and each refusal names the number in force.
 - An upload needs an app session. A signed-out visitor on a public Deployment can list and read public files only.
@@ -75,12 +75,31 @@ The Kernel stores small files for one Deployment, in its file store. A file is p
     }
     ```
 
+## Share every file with the app's users
+
+`manifest.fileAccess` decides who reads files across the whole app. It has one value, `"app-users"`. Leave it out to keep each file's own visibility. A release with any other value is refused with `manifest.fileAccess must be "app-users" when set.`, in the editor and on the Kernel.
+
+```json
+{ "manifest": { "fileAccess": "app-users" } }
+```
+
+Put it in `konae.json`, or pick "All signed-in app users" under "Who can read uploaded files" in the editor's Users view. It takes effect at the next publish.
+
+- Every person signed in to this app lists and reads every file, including files uploaded before the policy. A signed-out visitor reads none, even on a public app.
+- An API key reads no file of the app.
+- An upload may omit `visibility` or pass `"app-users"`. `"private"` or `"public"` is refused with `File visibility is fixed to app-users by this app.`
+- Only the uploader still deletes a file.
+- Files list with `visibility: "app-users"`. Each file keeps the visibility it was stored with, and a file uploaded under the policy is stored as private. Removing the policy and publishing again gives every file that stored visibility back, so files uploaded under the policy become private to their uploader.
+- An app with this policy has accounts, so its path address needs `acceptSharedOrigin`.
+
 ## Refusals you may meet
 
 - `authentication-required` when nobody is signed in.
 - `Files must be between 1 byte and 2 MiB.` when the file is empty or too large.
 - `This deployment has reached its 20 MiB file quota.`
 - `Only the person who uploaded this file may change or delete it.`
+- `File visibility is fixed to app-users by this app.` when the app sets `fileAccess` and the upload or change asks for `"private"` or `"public"`.
+- `File visibility must be private or public.` when the visibility is unknown, or asks for `"app-users"` in an app without the policy.
 
 ## Check it worked
 

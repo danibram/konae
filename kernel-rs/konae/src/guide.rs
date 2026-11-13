@@ -26,8 +26,9 @@ pub(super) const TOPICS: [&str; 10] = [
 const SCOPES: [&str; 5] = ["read", "write", "publish", "manage_users", "export_data"];
 
 /// How to observe the effect of a write through the same door. A write with
-/// no entry here must be listed in [`READ_BACK_GAPS`]. Staging transfers are
-/// outside the rule until `transfer_complete` or a publish that consumes them.
+/// no entry here must be listed in [`READ_BACK_IN_ANSWER`] or
+/// [`READ_BACK_GAPS`]. Staging transfers are outside the rule until
+/// `transfer_complete` or a publish that consumes them.
 pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("project_create", "project_inspect"),
     ("project_sources_save", "project_sources_read"),
@@ -37,7 +38,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("secret_delete", "secrets_list"),
     ("api_keys_create", "api_keys_list"),
     ("api_keys_revoke", "api_keys_list"),
-    ("release_plan", "release_plan"),
     ("release_apply", "project_inspect"),
     ("signup_policy_set", "signup_policy_read"),
     ("sign_in_methods_set", "sign_in_methods_read"),
@@ -55,7 +55,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("maintenance_set", "maintenance_read"),
     ("contact_email_set", "contact_email_read"),
     ("transfer_begin", "transfer_status"),
-    ("transfer_write", "transfer_status"),
     ("transfer_complete", "transfer_status"),
     ("transfer_cancel", "transfer_status"),
     ("project_export", "transfer_read"),
@@ -71,6 +70,19 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("files_update", "files_list"),
     ("files_delete", "files_list"),
     ("actions_invoke", "actions_invoke"),
+];
+
+/// Writes whose own answer is the observation, so a second call would only
+/// repeat it. Each entry says what in the answer to read.
+pub(super) const READ_BACK_IN_ANSWER: &[(&str, &str)] = &[
+    ("transfer_write", "Its nextOffset is where the next block starts. Write the next block there; call transfer_status only to resume after an interrupted call, and transfer_complete checks the whole upload."),
+    ("release_plan", "It changes nothing live. Its planId, expectedRevision and schema are the plan; pass that planId to release_apply. Calling release_plan again makes another plan with a new planId."),
+];
+
+/// What a read-back answers when the write worked, where that answer looks
+/// like a refusal.
+pub(super) const READ_BACK_EXPECT: &[(&str, &str)] = &[
+    ("transfer_cancel", "transfer_status answers \"Transfer not found or expired.\" That answer is the cancel confirmed: the transfer and its bytes are gone."),
 ];
 
 /// Writes whose effect this door cannot re-read yet. Each entry names what
@@ -98,14 +110,16 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "after": "If the first run grows past these steps, the product got harder. Prefer fixing the path over adding a guide page."
             },
             "readBack": {
-                "rule": "Every tool that writes has a tool that observes its effect through the same door. After a write, call that read-back before retrying or telling the owner it worked. A service_timeout or interrupted call must be verified the same way.",
+                "rule": "Every tool that writes has a way to observe its effect through the same door. map names the tool to call after the write, before retrying or telling the owner it worked; inAnswer names the writes whose own answer is the observation, so no second call follows them. A service_timeout or interrupted call must be verified the same way.",
                 "map": Value::Object(READ_BACK.iter().map(|(write, read)| ((*write).to_owned(), json!(*read))).collect()),
+                "inAnswer": Value::Object(READ_BACK_IN_ANSWER.iter().map(|(write, read)| ((*write).to_owned(), json!(*read))).collect()),
+                "expect": Value::Object(READ_BACK_EXPECT.iter().map(|(write, answer)| ((*write).to_owned(), json!(*answer))).collect()),
                 "gaps": Value::Object(READ_BACK_GAPS.iter().map(|(write, close)| ((*write).to_owned(), json!(*close))).collect()),
-                "staging": "Bytes in an open transfer are not a Deployment. transfer_status is the read-back of staging; project_inspect is the read-back of a release that consumed them."
+                "staging": "Bytes in an open transfer are not a Deployment. An upload is transfer_begin, one transfer_write per block of chunkBytes, then transfer_complete, whose read-back is transfer_status. project_inspect is the read-back of a release that consumed them."
             },
             "capabilities": "session_inspect answers can for the scopes this credential holds, and createTokens when it is the owner's browser session. Decide from can, not from memory of which flag login took.",
             "divergences": [
-                {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
+                {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers, other-origin fetches and WebAssembly can still run there; a published app and bun run konae -- dev refuse them. Its script-src is 'self' plus the hash of each inline script, with no 'wasm-unsafe-eval' and no 'unsafe-eval', so WebAssembly.compile and WebAssembly.instantiate fail with \"Compiling or instantiating WebAssembly module violates the following Content Security policy directive\", and eval and new Function fail too. Attach listeners in JavaScript, keep scripts and fetches on the app's own origin, and pick libraries that run without WebAssembly or eval."},
                 {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on bun run konae -- dev or on a published Deployment."},
                 {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
@@ -127,6 +141,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Another service calls this app", "use": "http on an anonymous action with callers / signature / key", "not": "A call action (that is outbound)"},
                 {"need": "This app calls another host", "use": "kind: call", "not": "fetch of a secret from the browser"},
                 {"need": "Uploaded files", "use": "miniapp.files", "not": "Large bytes in a SQLite column"},
+                {"need": "Every signed-in user reads every uploaded file", "use": "manifest.fileAccess set to app-users", "not": "Each upload as public"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "An administrator inside the app", "use": "A role column in the app's own table, checked in SQL", "not": "An owner account inside the app"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
@@ -175,14 +190,24 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
         "publishing" => json!({
             "steps": [
-                "Create project identity with project_create. Keep its id, slug and manifest locally.",
+                "With a shell, run bun run konae -- publish --dir <folder> in the app folder and stop there. It registers the project, builds app/ into dist/ with the SDK, uploads the release, plans and applies it, and saves the plan and the receipt in .konae/. The steps below are the same work as tool calls, for a client without a shell.",
+                "Create project identity with project_create { projectId, name, slug, manifest }. Keep its id, slug and manifest locally.",
                 "Set every secret an action's http signature names with secret_set { projectId, name, value }. A release that signs with an unset secret is refused and names each one.",
-                "Build static HTML/CSS/JS locally. Inject the SDK using the local builder.",
-                "Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.",
-                "Call release_plan with transferId, inspect its planId, expectedRevision and schema, then call release_apply with planId.",
+                "Write the release JSON that payload describes, with the SDK that sdk describes.",
+                "Upload it: transfer_begin { size, sha256, projectId } with the byte size and SHA-256 of the UTF-8 JSON answers transferId and chunkBytes. Call transfer_write { transferId, offset, data } with base64 blocks of at most chunkBytes, each at the nextOffset the previous write answered, then transfer_complete { transferId }. A release smaller than chunkBytes is one write. Call transfer_status only to resume an interrupted upload.",
+                "Call release_plan { transferId } once, inspect its planId, expectedRevision and schema, then call release_apply { planId }. A second release_plan makes another plan with a new planId; it is not a read-back.",
                 "schema is the change the Kernel derived from schema.sql to the live database, with statements, losses and confirmation. A new table, column or index applies. When losses is not empty (a dropped table, a dropped column, a changed column type), show the owner each loss's sentence and pass confirmation as confirmSchema only after the owner agrees. Without it release_apply refuses with schema.confirmation-required and changes nothing.",
-                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
+                "Save the receipt and transfer_cancel the upload; transfer_status then answers \"Transfer not found or expired.\", which confirms the cancel. Read the live Deployment with project_inspect."
             ],
+            "payload": {
+                "shape": {"project": {"id": "<projectId>", "name": "<name>", "slug": "<slug>", "files": {"actions.json": "<text>", "schema.sql": "<text>", "index.html": "<text>"}, "manifest": {"version": 1, "visibility": "private"}}, "visibility": "private", "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<!doctype html>...", "runtime.js": "<the SDK>", "logo.png": "<base64>"}, "encodings": {"logo.png": "base64"}}, "initialSignupPolicy": {"mode": "invitation", "allowlist": []}},
+                "project": "id, name and slug as project_create answered them. files holds the Capsule's sources, the text files of app/ by their path inside app/ (.html, .css, .js, .jsx, .ts, .tsx, .json and .sql) as UTF-8 text, never base64. actions.json is required, and the Kernel derives the schema change from schema.sql here. manifest is konae.json's manifest without signupPolicy, such as routing, fileAccess and connects.",
+                "visibility": "public or private.",
+                "artifact": "What the Deployment serves, dist/ after a build: version 1, entrypoint index.html, and files by their path inside dist/. index.html is required. A file that is UTF-8 text is its text; any other file, such as an image, is base64 and encodings names it with the value base64, the only encoding. Omit encodings when every file is text. At most 1000 files and 16 MiB once base64 is decoded. A path under _konae/, oauth/ or .well-known/, or the path mcp, is refused.",
+                "optional": "initialSignupPolicy {mode, allowlist} on the first release only; contactEmail, the address notify to owner reaches; initialPackage on a first release that imports an export.",
+                "limit": "The JSON is at most 26 MB."
+            },
+            "sdk": "The Kernel does not add the SDK; the artifact carries it. konae build inlines Konae's src/mcp/runtime.js in a script tag with the data-konae-runtime attribute on a fragment page, and a whole-document page loads /runtime.js, an artifact file with the same source. Without a shell, put that file at runtime.js in artifact.files and load it with <script src=\"/runtime.js\"></script> before the page's own scripts. Take it from the Konae version the installation runs.",
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
@@ -380,9 +405,20 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let mapped: Vec<&str> = READ_BACK.iter().map(|(w, _)| *w).chain(READ_BACK_GAPS.iter().map(|(w, _)| *w)).collect();
+        let mapped: Vec<&str> = READ_BACK
+            .iter()
+            .chain(READ_BACK_IN_ANSWER)
+            .chain(READ_BACK_GAPS)
+            .map(|(w, _)| *w)
+            .collect();
         for write in &writes {
-            assert!(mapped.contains(&write.as_str()), "write tool {write} has no read-back and no gap");
+            assert_eq!(mapped.iter().filter(|w| *w == write).count(), 1, "write tool {write} needs exactly one read-back, answer or gap");
+        }
+        for (write, _) in READ_BACK_IN_ANSWER {
+            assert!(writes.iter().any(|s| s == *write), "inAnswer names {write}, which is not a write tool");
+        }
+        for (write, _) in READ_BACK_EXPECT {
+            assert!(READ_BACK.iter().any(|(w, _)| w == write), "expect names {write}, which has no read-back tool");
         }
         for (write, read) in READ_BACK {
             assert!(served.iter().any(|s| s == *write), "read-back map names {write}, which the Kernel does not serve");
@@ -426,6 +462,13 @@ mod tests {
         assert!(!actions_rules.contains("id'}}"), "{actions_rules}");
         assert_eq!(actions_rules.matches("to answer on that path").count(), 1);
         assert_eq!(rules["readBack"]["map"]["release_apply"], "project_inspect");
+        // A block's answer carries nextOffset and a plan's answer is the plan,
+        // so neither sends the agent to a second call.
+        for write in ["transfer_write", "release_plan"] {
+            assert!(rules["readBack"]["map"].get(write).is_none(), "{write}");
+            assert!(rules["readBack"]["inAnswer"][write].is_string(), "{write}");
+        }
+        assert!(rules["readBack"]["expect"]["transfer_cancel"].as_str().unwrap().contains("Transfer not found or expired."));
         assert!(rules["divergences"].as_array().unwrap().len() >= 3);
         let pieces = topic("pieces").unwrap();
         assert!(pieces["choose"].as_array().unwrap().len() >= 8);

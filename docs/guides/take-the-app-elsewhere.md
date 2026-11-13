@@ -132,6 +132,6 @@ Into a new app over MCP:
 ## Check it worked
 
 - After `project_export`, the read-back is `transfer_read`. Verify the size and SHA-256 of every download.
-- After `transfer_begin`, `transfer_write` or `transfer_complete`, the read-back is `transfer_status`. Bytes in an open transfer are not a Deployment.
+- After `transfer_begin` or `transfer_complete`, the read-back is `transfer_status`. `transfer_write` answers `nextOffset`, the start of the next block, so it needs none. Bytes in an open transfer are not a Deployment.
 - After `release_apply` on the destination, the read-back is `project_inspect`.
 - On the destination, sign in with an existing password and open one row the app owned.

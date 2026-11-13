@@ -1,6 +1,6 @@
-//! Transfers: how bytes travel over MCP in 64 KiB blocks, for an app user's
-//! file and for an administrative upload or download such as a release or an
-//! export. Each transfer is a file under `transfers/` and a row in
+//! Transfers: how bytes travel over MCP in blocks, 64 KiB for an app user's
+//! file and 4 MiB for an administrative upload or download such as a release
+//! or an export. Each transfer is a file under `transfers/` and a row in
 //! `transfers.sqlite`, which also keeps the receipt of each finished file
 //! upload so a retry gets the same answer.
 
@@ -8,7 +8,24 @@ use super::*;
 use rusqlite::params;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
+/// The largest block of an app user's transfer. The runtime endpoint reads a
+/// request of at most 200 KB, and the SDK built into every published app
+/// refuses a larger read block.
 pub const CHUNK: usize = 64 * 1024;
+/// The largest block of an owner's transfer: a 26 MB release in at most seven
+/// writes and a 256 MiB database export in 64 reads. One write holds about
+/// five copies of its block in memory (body, parsed JSON, arguments, decoded
+/// bytes and the check's re-encoding), about 27 MB at this size.
+pub const ADMIN_CHUNK: usize = 4 * 1024 * 1024;
+/// The largest request the owner's MCP reads: one `transfer_write` of
+/// [`ADMIN_CHUNK`] bytes in base64 plus its JSON-RPC envelope.
+pub const ADMIN_MCP_BODY_BYTES: usize = ADMIN_CHUNK.div_ceil(3) * 4 + 64 * 1024;
+
+/// The block size a transfer of `principal` moves in: [`CHUNK`] for an app
+/// user or visitor, [`ADMIN_CHUNK`] for an owner.
+pub fn chunk_bytes(principal: &str) -> usize {
+    if principal.starts_with("runtime:") { CHUNK } else { ADMIN_CHUNK }
+}
 pub const MAX_TRANSFER: usize = 32 * 1024 * 1024;
 /// Active transfers every principal outside the runtime shares.
 pub const MAX_ADMIN_TRANSFERS: usize = 128;
@@ -127,7 +144,7 @@ pub async fn new_transfer(state: &AppState, principal: &str, value: Value) -> Re
         params![id, principal, value.to_string(), expires],
     )?;
     Ok(
-        json!({"transferId":id,"size":value["size"],"sha256":value["sha256"],"chunkBytes":CHUNK,"expiresAt":expires}),
+        json!({"transferId":id,"size":value["size"],"sha256":value["sha256"],"chunkBytes":chunk_bytes(principal),"expiresAt":expires}),
     )
 }
 
@@ -252,7 +269,7 @@ pub async fn transfer_call(
             anyhow::ensure!(offset <= size, "Offset exceeds transfer size.");
             let mut file = tokio::fs::File::open(path).await?;
             file.seek(std::io::SeekFrom::Start(offset)).await?;
-            let mut data = vec![0; CHUNK.min((size - offset) as usize)];
+            let mut data = vec![0; chunk_bytes(principal).min((size - offset) as usize)];
             file.read_exact(&mut data).await?;
             Ok(
                 json!({"data":encode_base64(&data),"offset":offset,"nextOffset":offset+data.len() as u64,"size":size,"sha256":t["sha256"]}),
@@ -266,7 +283,7 @@ pub async fn transfer_call(
             let encoded = a["data"].as_str().unwrap();
             let bytes = decode_base64(encoded)?;
             anyhow::ensure!(
-                !bytes.is_empty() && bytes.len() <= CHUNK && encode_base64(&bytes) == encoded,
+                !bytes.is_empty() && bytes.len() <= chunk_bytes(principal) && encode_base64(&bytes) == encoded,
                 "Invalid base64 block."
             );
             let offset = a["offset"].as_u64().unwrap();
