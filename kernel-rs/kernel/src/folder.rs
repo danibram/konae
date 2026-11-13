@@ -335,4 +335,51 @@ mod tests {
         assert!(!layout::record(&root, "notes_app").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    fn editor_state(root: &Path) -> AppState {
+        AppState {
+            public_origin: "http://app.apps.example.com".into(),
+            host_suffix: "apps.example.com".into(),
+            ..AppState::for_test(root)
+        }
+    }
+
+    fn is_coded(hostname: &str, slug: &str) -> bool {
+        let code = hostname.strip_prefix(&format!("{slug}-")).and_then(|rest| rest.strip_suffix(".apps.example.com"));
+        code.is_some_and(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_hexdigit()))
+    }
+
+    #[tokio::test]
+    async fn a_first_publish_never_takes_the_editor_host() {
+        let root = scratch();
+        let state = editor_state(&root);
+        let hostname = free_hostname(&state, "app").await;
+        assert!(is_coded(&hostname, "app"), "{hostname}");
+        // An empty slug, and one that `safe_slug` empties, fall back to `app`.
+        for slug in ["", "!!!", "日本語"] {
+            let hostname = free_hostname(&state, slug).await;
+            assert!(is_coded(&hostname, "app"), "{slug:?} gave {hostname}");
+        }
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn a_first_publish_never_takes_an_own_origin_or_a_claimed_name() {
+        let root = scratch();
+        let state = AppState { own_origins: vec!["http://mcp.apps.example.com".into()], ..editor_state(&root) };
+        let hostname = free_hostname(&state, "mcp").await;
+        assert!(is_coded(&hostname, "mcp"), "{hostname}");
+        let state = AppState { path_origin: Some("http://paths.apps.example.com".into()), ..editor_state(&root) };
+        let hostname = free_hostname(&state, "paths").await;
+        assert!(is_coded(&hostname, "paths"), "{hostname}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_slug_is_returned_bare() {
+        let root = scratch();
+        let state = editor_state(&root);
+        assert_eq!(free_hostname(&state, "Notes").await, "notes.apps.example.com");
+        std::fs::remove_dir_all(root).ok();
+    }
 }

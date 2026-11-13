@@ -3773,6 +3773,27 @@ pub mod tests {
         assert_eq!(input.initial_signup_policy.unwrap().mode, SignupMode::Closed);
     }
 
+    #[tokio::test]
+    async fn a_stored_deployment_on_the_editor_host_does_not_capture_the_owner_door() {
+        let root = std::env::temp_dir().join(format!("konae-editor-host-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let mut deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        deployment.hostname = "app.apps.example.com".into();
+        let state = AppState {
+            public_origin: "http://app.apps.example.com".into(),
+            host_suffix: "apps.example.com".into(),
+            deployments: Arc::new(RwLock::new(HashMap::from([(deployment.hostname.clone(), deployment)]))),
+            ..state
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("app.apps.example.com"));
+        assert!(deployment_for_host(&state, &headers).await.is_none());
+        assert!(deployment_for(&state, &headers).await.is_none());
+        headers.insert(header::HOST, HeaderValue::from_static("app.apps.example.com:8080"));
+        assert!(deployment_for_host(&state, &headers).await.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     pub async fn login_test_state(root: &Path, visibility: &str) -> (AppState, HeaderMap) {
         let app_id = Uuid::new_v4().to_string();
         let deployment = Deployment {
