@@ -5173,4 +5173,100 @@ pub mod tests {
         assert_eq!(run_admin_sql(&path, sql).unwrap()["rows"], json!([expected]));
         let _ = std::fs::remove_dir_all(root);
     }
+
+    /// K-04. One Deployment may run four statements at once; the others wait
+    /// two seconds and are refused as a client over its rate limit is.
+    async fn statement_cap_state(root: &Path) -> (AppState, HeaderMap, String) {
+        let (mut state, headers) = login_test_state(root, "public").await;
+        let program = json!({"version": 1, "actions": {
+            "items.count": {"kind": "query", "access": "anonymous", "statement": "SELECT 1 AS n", "bindings": []},
+            "items.broken": {"kind": "query", "access": "anonymous", "statement": "SELECT * FROM missing_table", "bindings": []},
+            "items.route": {"kind": "query", "access": "anonymous", "statement": "SELECT 1 AS n LIMIT 1", "bindings": [], "http": {"method": "GET", "path": "/api/count"}}
+        }});
+        let mut id = String::new();
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.actions = program.to_string();
+            deployment.manifest = json!({"visibility": "public"});
+            initialize_database(&database_path(&state, &deployment.id)).unwrap();
+            id = deployment.id.clone();
+        }
+        state.guards = Arc::new(Guards::new(Vec::new()).with_statement_wait(std::time::Duration::from_millis(60)));
+        (state, headers, id)
+    }
+
+    async fn hold_statements(state: &AppState, id: &str, count: usize) -> Vec<tokio::sync::OwnedSemaphorePermit> {
+        let mut held = Vec::new();
+        for _ in 0..count {
+            held.push(state.guards.statement_permit(id).await.unwrap());
+        }
+        held
+    }
+
+    async fn call_action(state: &AppState, headers: &HeaderMap, name: &str) -> Response {
+        invoke_action(State(state.clone()), AxumPath(name.into()), headers.clone(), Json(json!({}))).await
+    }
+
+    #[tokio::test]
+    async fn a_fifth_action_statement_on_one_deployment_is_refused_while_another_is_served() {
+        let root = std::env::temp_dir().join(format!("konae-statement-cap-{}", Uuid::new_v4()));
+        let (state, headers, id) = statement_cap_state(&root).await;
+        let _elsewhere = hold_statements(&state, "another-deployment", 4).await;
+        assert_eq!(call_action(&state, &headers, "items.count").await.status(), StatusCode::OK, "another Deployment's slots do not count");
+        let mut held = hold_statements(&state, &id, 4).await;
+        let refused = call_action(&state, &headers, "items.count").await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.headers().contains_key(header::RETRY_AFTER));
+        let body = axum::body::to_bytes(refused.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "rate-limited");
+        held.pop();
+        assert_eq!(call_action(&state, &headers, "items.count").await.status(), StatusCode::OK, "a freed slot lets the next call run");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn an_action_statement_that_errors_releases_its_permit() {
+        let root = std::env::temp_dir().join(format!("konae-statement-error-{}", Uuid::new_v4()));
+        let (state, headers, id) = statement_cap_state(&root).await;
+        let _held = hold_statements(&state, &id, 3).await;
+        for _ in 0..5 {
+            assert_eq!(call_action(&state, &headers, "items.broken").await.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(call_action(&state, &headers, "items.count").await.status(), StatusCode::OK);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn the_runtime_endpoint_answers_a_refused_statement_with_the_rate_limited_tool_error() {
+        let root = std::env::temp_dir().join(format!("konae-statement-runtime-{}", Uuid::new_v4()));
+        let (state, _, id) = statement_cap_state(&root).await;
+        let _held = hold_statements(&state, &id, 4).await;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/_konae/mcp")
+            .header(header::HOST, "login-test.localhost")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "actions_invoke", "arguments": {"name": "items.count"}}}).to_string()))
+            .unwrap();
+        let response = runtime::runtime(State(state.clone()), request).await;
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!(body["result"]["isError"], true);
+        assert_eq!(body["result"]["content"][0]["text"], "rate-limited");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn an_http_route_answers_a_refused_statement_with_the_rate_limited_response() {
+        let root = std::env::temp_dir().join(format!("konae-statement-route-{}", Uuid::new_v4()));
+        let (state, headers, id) = statement_cap_state(&root).await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let client: std::net::IpAddr = "192.0.2.1".parse().unwrap();
+        let _held = hold_statements(&state, &id, 4).await;
+        let refused = http::call_route(&state, &deployment, "GET", "/api/count", "", b"", &headers, client).await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.headers().contains_key(header::RETRY_AFTER));
+        let body = axum::body::to_bytes(refused.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "rate-limited");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 }

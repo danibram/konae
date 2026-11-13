@@ -15,6 +15,10 @@ pub const ANONYMOUS_ACTIONS_PERIOD: Duration = Duration::from_secs(10);
 /// `actions_invoke` calls allowed per signed-in app user.
 pub const SIGNED_IN_ACTIONS: u32 = 120;
 pub const SIGNED_IN_ACTIONS_PERIOD: Duration = Duration::from_secs(10);
+/// Action statements one Deployment may have running at once.
+pub const STATEMENTS_PER_DEPLOYMENT: usize = 4;
+/// How long a call waits for one of them before it is refused.
+pub const STATEMENT_WAIT: Duration = Duration::from_secs(2);
 /// OAuth client registrations allowed per client address.
 pub const REGISTRATIONS: u32 = 10;
 pub const REGISTRATIONS_PERIOD: Duration = Duration::from_secs(60 * 60);
@@ -147,6 +151,7 @@ pub struct Guards {
     auth_client_email_failures: RateLimiter,
     api_key_failures: RateLimiter,
     trusted_proxies: Vec<IpAddr>,
+    statement_wait: Duration,
 }
 
 impl Guards {
@@ -173,7 +178,22 @@ impl Guards {
             ),
             api_key_failures: RateLimiter::new(API_KEY_FAILURES, API_KEY_FAILURES_PERIOD, MAX_TRACKED_CLIENTS),
             trusted_proxies,
+            statement_wait: STATEMENT_WAIT,
         }
+    }
+
+    /// The same guards with another wait for a statement slot, for tests.
+    pub fn with_statement_wait(mut self, wait: Duration) -> Self {
+        self.statement_wait = wait;
+        self
+    }
+
+    /// One of the Deployment's statement slots, or how long to tell the
+    /// caller to wait when none frees within the wait.
+    pub async fn statement_permit(&self, _deployment: &str) -> Result<tokio::sync::OwnedSemaphorePermit, Duration> {
+        let _ = self.statement_wait;
+        let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(STATEMENTS_PER_DEPLOYMENT));
+        Ok(slots.acquire_owned().await.expect("the semaphore is never closed"))
     }
 
     /// Takes one login or signup attempt for a client address and an email
@@ -460,5 +480,31 @@ mod tests {
         for _ in 0..1000 {
             assert!(guards.key_attempt("app", busy).is_ok(), "presenting a valid key takes nothing");
         }
+    }
+
+    #[tokio::test]
+    async fn a_deployment_runs_four_statements_at_once_and_refuses_a_fifth_after_the_wait() {
+        let guards = Guards::new(Vec::new()).with_statement_wait(Duration::from_millis(60));
+        let mut held = Vec::new();
+        for _ in 0..STATEMENTS_PER_DEPLOYMENT {
+            held.push(guards.statement_permit("app").await.unwrap());
+        }
+        let started = Instant::now();
+        let wait = guards.statement_permit("app").await.unwrap_err();
+        assert!(started.elapsed() >= Duration::from_millis(60), "the call waits before it is refused");
+        assert!(wait > Duration::ZERO);
+        assert!(guards.statement_permit("other-app").await.is_ok(), "each Deployment has its own slots");
+    }
+
+    #[tokio::test]
+    async fn releasing_a_permit_lets_the_next_statement_through() {
+        let guards = Guards::new(Vec::new()).with_statement_wait(Duration::from_millis(60));
+        let mut held = Vec::new();
+        for _ in 0..STATEMENTS_PER_DEPLOYMENT {
+            held.push(guards.statement_permit("app").await.unwrap());
+        }
+        assert!(guards.statement_permit("app").await.is_err());
+        drop(held.pop());
+        assert!(guards.statement_permit("app").await.is_ok());
     }
 }
