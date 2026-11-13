@@ -3686,7 +3686,7 @@ pub fn json_sql(value: &Value) -> std::result::Result<SqlValue, String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 thread_local! {
     /// Columns this thread has turned into JSON, so a test can see where a
     /// result stopped being read.
@@ -3694,7 +3694,7 @@ thread_local! {
 }
 
 pub fn sql_json(value: rusqlite::types::ValueRef<'_>) -> Value {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     COLUMNS_CONVERTED.with(|count| count.set(count.get() + 1));
     match value {
         rusqlite::types::ValueRef::Null => Value::Null,
