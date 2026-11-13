@@ -575,4 +575,81 @@ mod tests {
         assert_eq!(name, "live key");
         let _ = std::fs::remove_dir_all(root);
     }
+
+    const KEY_ROW: &str = "(id, token_hash, name, actions, files, created_at, revoked_at) VALUES";
+
+    fn keys_of(path: &Path) -> Vec<(String, Option<i64>)> {
+        Connection::open(path)
+            .unwrap()
+            .prepare("SELECT id, revoked_at FROM api_keys ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_key_table_in_the_incoming_file_never_survives_when_the_live_file_has_none() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        AuthService::open(root.join("live.sqlite")).unwrap();
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        let incoming = Connection::open(&incoming_path).unwrap();
+        super::super::http::keys_table(&incoming).unwrap();
+        incoming.execute_batch(&format!("INSERT INTO api_keys {KEY_ROW} ('uploader', 'uploader-hash', 'Uploader', '[]', '[]', 1, NULL);")).unwrap();
+        drop(incoming);
+        carry_access(&incoming_path, &root.join("live.sqlite")).unwrap();
+        assert_eq!(keys_of(&incoming_path), Vec::<(String, Option<i64>)>::new(), "the uploader's key does not reach the importer's app");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_revoked_at_column_spelled_in_capitals_does_not_bring_revoked_keys_back() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let live_path = root.join("live.sqlite");
+        AuthService::open(&live_path).unwrap();
+        let live = Connection::open(&live_path).unwrap();
+        super::super::http::keys_table(&live).unwrap();
+        live.execute_batch(&format!(
+            "INSERT INTO api_keys {KEY_ROW} ('k-live', 'h1', 'Live', '[]', '[]', 1, NULL), ('k-revoked', 'h2', 'Revoked', '[]', '[]', 1, 5);"
+        ))
+        .unwrap();
+        drop(live);
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        Connection::open(&incoming_path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE api_keys(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+                   actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, REVOKED_AT INTEGER, revoked_reason TEXT)",
+            )
+            .unwrap();
+        carry_access(&incoming_path, &live_path).unwrap();
+        assert_eq!(keys_of(&incoming_path), [("k-live".to_owned(), None), ("k-revoked".to_owned(), Some(5))]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_live_key_table_spelled_in_capitals_is_carried() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let live_path = root.join("live.sqlite");
+        AuthService::open(&live_path).unwrap();
+        Connection::open(&live_path)
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE API_KEYS(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+                   actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER, revoked_reason TEXT);
+                 INSERT INTO api_keys {KEY_ROW} ('k1', 'h1', 'Live', '[]', '[]', 1, NULL);"
+            ))
+            .unwrap();
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        carry_access(&incoming_path, &live_path).unwrap();
+        assert_eq!(keys_of(&incoming_path), [("k1".to_owned(), None)]);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
