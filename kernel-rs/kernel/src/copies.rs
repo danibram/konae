@@ -1797,17 +1797,28 @@ mod tests {
         }
     }
 
-    /// An S3 endpoint that lists two copies and refuses to read the newest manifest.
-    async fn s3_that_refuses_the_newest_manifest(newest: &str, older: &str) -> S3Client {
+    /// An S3 endpoint that lists two copies and refuses to read the newest
+    /// manifest. The counter holds how many objects of the older copy were asked for.
+    async fn s3_that_refuses_the_newest_manifest(newest: &str, older: &str) -> (S3Client, Arc<std::sync::atomic::AtomicUsize>) {
         use axum::{Router, extract::Path as UrlPath, http::StatusCode, response::IntoResponse, routing::get};
         let listing = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>data</Name><Prefix>copies/</Prefix><KeyCount>2</KeyCount><IsTruncated>false</IsTruncated>\
              <Contents><Key>copies/{older}/{MANIFEST}</Key><Size>1</Size></Contents><Contents><Key>copies/{newest}/{MANIFEST}</Key><Size>1</Size></Contents></ListBucketResult>"
         );
+        let list = move || {
+            let body = listing.clone();
+            async move { ([("content-type", "application/xml")], body) }
+        };
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = asked.clone();
+        let older = older.to_owned();
         let app = Router::new()
-            .route("/{bucket}", get(move || { let body = listing.clone(); async move { ([("content-type", "application/xml")], body) } }))
-            .route("/{bucket}/{*key}", get(|UrlPath((_, key)): UrlPath<(String, String)>| async move {
-                assert!(!key.contains("2020"), "the older copy must not be read: {key}");
+            .route("/{bucket}", get(list.clone()))
+            .route("/{bucket}/", get(list))
+            .route("/{bucket}/{*key}", get(move |UrlPath((_, key)): UrlPath<(String, String)>| async move {
+                if key.contains(&older) {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 (StatusCode::FORBIDDEN, "<Error><Code>AccessDenied</Code><Message>denied</Message></Error>").into_response()
             }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1821,16 +1832,17 @@ mod tests {
             .endpoint_url(format!("http://{address}"))
             .force_path_style(true)
             .build();
-        S3Client::from_conf(config)
+        (S3Client::from_conf(config), asked)
     }
 
     #[tokio::test]
     async fn a_read_error_on_the_newest_copy_stops_the_restore_instead_of_rolling_back() {
-        let client = s3_that_refuses_the_newest_manifest(LATER_ID, "2020-01-01T00-00-00.000Z").await;
+        let (client, older_asked) = s3_that_refuses_the_newest_manifest(LATER_ID, "2020-01-01T00-00-00.000Z").await;
         let root = scratch("read-error-restored");
         let key = CopyKey::derive(TEST_SECRET);
         let refused = restore(&s3_source(&client), None, &root, Some(&key), false, &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
         assert!(refused.contains(LATER_ID) && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(older_asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the restore did not roll back to the older copy");
         assert_eq!(std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0), 0);
         let _ = std::fs::remove_dir_all(root);
     }
