@@ -391,7 +391,7 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
     let mut removed = 0;
     for table in ACCESS_TABLES {
         let exists = connection
-            .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [table], |_| Ok(()))
+            .query_row("SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)=?1", [table], |_| Ok(()))
             .optional()?
             .is_some();
         if exists {

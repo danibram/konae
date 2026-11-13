@@ -2441,7 +2441,7 @@ pub fn table_columns(db: &Connection, table: &str) -> Result<Vec<Value>> {
 pub fn table_exists(db: &Connection, table: &str) -> Result<bool> {
     Ok(db
         .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+            "SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)=lower(?1)",
             [table],
             |_| Ok(()),
         )
