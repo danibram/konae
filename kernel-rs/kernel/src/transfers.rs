@@ -191,6 +191,31 @@ pub async fn download_body(state: &AppState, principal: &str, body: Body) -> Res
 }
 
 
+/// Writes a request body as the whole of an open upload transfer and
+/// completes it. A body longer than the transfer's size stops at the first
+/// byte past it. A retry after a broken request starts over from byte 0.
+pub async fn receive_body(state: &AppState, principal: &str, id: &str, body: Body) -> Result<Value> {
+    use futures_util::StreamExt;
+    let path = transfer_path(state, id)?;
+    {
+        let _guard = database_lock(state, &format!("transfer:{id}")).await;
+        let t = transfer(state, principal, &json!({"transferId": id}))?;
+        anyhow::ensure!(t["direction"] == "upload" && t["complete"] != true, "Transfer is immutable.");
+        let size = t["size"].as_u64().unwrap_or(0);
+        let mut file = tokio::fs::File::create(&path).await?;
+        let mut written = 0u64;
+        let mut stream = body.into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            written += chunk.len() as u64;
+            anyhow::ensure!(written <= size, "Upload size or SHA-256 mismatch.");
+            file.write_all(&chunk).await?;
+        }
+        file.sync_data().await?;
+    }
+    transfer_call(state, principal, "transfer_complete", &json!({"transferId": id}), true).await
+}
+
 pub async fn transfer_call(
     state: &AppState,
     principal: &str,
@@ -320,6 +345,31 @@ pub async fn transfer_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn one_body_completes_an_upload_and_a_wrong_one_leaves_it_open() {
+        let root = std::env::temp_dir().join(format!("konae-transfer-body-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let bytes = vec![7u8; 3 * CHUNK + 5];
+        let sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
+        let alice = "runtime:d1:alice";
+        let begun = transfer_call(&state, alice, "transfer_begin", &json!({"size": bytes.len(), "sha256": sha256}), true).await.unwrap();
+        let id = begun["transferId"].as_str().unwrap();
+        let send = |principal: &'static str, body: Vec<u8>| receive_body(&state, principal, id, Body::from(body));
+        let stranger = send("runtime:d1:bob", bytes.clone()).await.unwrap_err().to_string();
+        assert_eq!(stranger, "Transfer not found or expired.");
+        let longer = send(alice, [bytes.clone(), vec![1]].concat()).await.unwrap_err().to_string();
+        assert_eq!(longer, "Upload size or SHA-256 mismatch.");
+        let mut changed = bytes.clone();
+        changed[CHUNK] = 8;
+        assert_eq!(send(alice, changed).await.unwrap_err().to_string(), "Upload size or SHA-256 mismatch.");
+        // The retry starts over, so the earlier bytes leave nothing behind.
+        let done = send(alice, bytes.clone()).await.unwrap();
+        assert_eq!(done["complete"], true);
+        assert_eq!(tokio::fs::read(transfer_path(&state, id).unwrap()).await.unwrap(), bytes);
+        assert_eq!(send(alice, bytes.clone()).await.unwrap_err().to_string(), "Transfer is immutable.");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     #[tokio::test]
     async fn visitors_cannot_hold_the_transfers_signed_in_users_need() {

@@ -127,7 +127,7 @@ Editor preview: Ignores the Deployment's visibility and rate limits, and keeps i
 Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
 By default, only the uploader can list or read a private file.
 On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
-files.list and files.upload download over MCP, check the SHA-256 and return a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_konae/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.
+files.list downloads over MCP, checks the SHA-256 and returns a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. files.upload sends the file's bytes in one request and returns the file's path as url, without downloading it again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_konae/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.
 The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.
 The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
@@ -147,7 +147,7 @@ Limits:
 - each file up to the installation's per-file limit
 Editor preview: Reads files from browser storage and returns data URLs.
 
-miniapp.files.upload(file, options): Store a File or Blob for the signed-in user and return it as files.list would. Returns { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
+miniapp.files.upload(file, options): Store a File or Blob for the signed-in user and return it as files.list would. Returns { id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file.
 Needs a signed-in user.
 Refusals:
 - "authentication-required" when no one is signed in
@@ -155,16 +155,15 @@ Refusals:
 - "File visibility is fixed to app-users by this app." when the app requires app-users and the caller specifies private or public
 - "Files must be between 1 byte and <limit>." when the file is empty or larger than the installation's per-file limit, which the message names
 - "This deployment has reached its <limit> file quota." when the Deployment's files would exceed the installation's file quota together, which the message names
-- "File not found." when the file was removed or the actor may not read it
 - "Too many active transfers. Cancel completed transfers before starting another." when the actor already holds 2 transfers, or the Deployment holds 32
 - "Transfer not found or expired." when a transfer outlived its 10 minutes
-- "Invalid file size." when the Kernel announced a size other than the size files.list gave for the file
-- "Invalid file block." when a downloaded block does not continue at the expected offset or exceeds 64 KiB
-- "File checksum mismatch." when the downloaded bytes do not match the SHA-256 the Kernel announced
+- "Upload size or SHA-256 mismatch." when the bytes the Kernel received differ from the file's size or SHA-256
+- "File upload failed." when the Kernel refused the bytes without saying why
 Limits:
 - 1 byte up to the installation's per-file limit
 - the installation's file quota for all files of the Deployment together
 - 2 transfers at a time per user and 32 per Deployment; each expires after 10 minutes
+- the bytes go in one PUT to <base>/_konae/transfers/<transferId>; a Kernel without that path answers 404, 405 or 410, and the SDK sends 64 KiB blocks over MCP instead
 - the name is cut to 180 characters with / and \\ replaced by -; a type of 128 characters or more, or with a character other than a letter, a digit or one of !#$&^_.+-/, becomes application/octet-stream
 Editor preview: Stores the file in browser storage as a data URL.
 
@@ -174,7 +173,8 @@ Refusals:
 - "File not found." when reading the path, when the file does not exist, was deleted, or the caller may not read it (404)
 - "authentication-required" when reading the path on a private Deployment without a session (401)
 Limits:
-- the path answers with Cache-Control: private, no-store and Cross-Origin-Resource-Policy: same-origin, so another site cannot embed it
+- the path answers with Cross-Origin-Resource-Policy: same-origin, so another site cannot embed it
+- the bytes answer with an ETag and Cache-Control: private, no-cache. The browser may keep them and asks before each use; the Kernel answers 304 without the bytes while the caller may still read the file, and 404 once the file is deleted or the caller loses access. A refusal answers with private, no-store
 - PNG, JPEG, GIF, WebP and AVIF answer inline; every other type downloads as an attachment
 Editor preview: Returns the file's data URL from browser storage, and refuses at the call with File not found when the preview actor may not read the file.
 

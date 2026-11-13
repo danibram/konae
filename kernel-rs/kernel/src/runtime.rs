@@ -19,7 +19,9 @@ pub const INSTRUCTIONS: &str = "This is one app's runtime endpoint. It acts as t
 pub type AuditSink = Arc<dyn Fn(&str, &str, &str, bool) + Send + Sync>;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/_konae/mcp", post(runtime))
+    Router::new()
+        .route("/_konae/mcp", post(runtime))
+        .route("/_konae/transfers/{id}", axum::routing::put(put_transfer))
 }
 
 /// Reads one JSON-RPC call of at most 200 KB.
@@ -88,61 +90,91 @@ pub fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
     response
 }
 
-pub async fn runtime(State(state): State<AppState>, request: Request) -> Response {
-    let headers = request.headers().clone();
-    let peer = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    let host_known = valid_host(&state, &headers)
-        || super::domain::is_alias_request(&state, &headers)
-        || super::path::on_path_host(&state, &headers);
-    if !same_origin(&headers) || !host_known {
-        return error(
+/// Who a request to an app's runtime doors acts as.
+struct RuntimeCaller {
+    deployment: Deployment,
+    /// The owner of the caller's transfers.
+    principal: String,
+    tools: Vec<Value>,
+    /// A visitor without a session.
+    anonymous: bool,
+    /// A visitor on a private app, who reaches only the account tools.
+    account_only: bool,
+}
+
+/// The checks every runtime door makes before it reads a body: the page's
+/// own origin and a host the Kernel serves, no API key, and a session or a
+/// visitor the app admits.
+async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> Result<RuntimeCaller, Response> {
+    let host_known = valid_host(state, headers)
+        || super::domain::is_alias_request(state, headers)
+        || super::path::on_path_host(state, headers);
+    if !same_origin(headers) || !host_known {
+        return Err(error(
             StatusCode::FORBIDDEN,
             "Cross-origin or unrecognized-host MCP request rejected.",
-        );
+        ));
     }
-    let principal;
-    let tools;
-    let mut anonymous = false;
-    // A visitor on a private app reaches only the account tools.
-    let mut account_only = false;
-    let Some(deployment) = deployment_for(&state, &headers).await else {
-        return error(StatusCode::NOT_FOUND, "Deployment not found.");
+    let Some(deployment) = deployment_for(state, headers).await else {
+        return Err(error(StatusCode::NOT_FOUND, "Deployment not found."));
     };
-    if super::path::foreign_referer(&state, &headers, &deployment.id) {
-        return error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app.");
+    if super::path::foreign_referer(state, headers, &deployment.id) {
+        return Err(error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app."));
     }
     // A key would otherwise read as an unknown session token, and the
     // program would get a visitor's answers without knowing why.
-    if bearer(&headers).is_some_and(|token| token.starts_with("lbk_")) {
-        return error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME);
+    if bearer(headers).is_some_and(|token| token.starts_with("lbk_")) {
+        return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
     }
-    match authenticate_deployment(&state, &deployment, &headers) {
-        Ok(Some(user)) => {
-            principal = format!("runtime:{}:{}", deployment.id, user.user_id);
-            tools = runtime_tools();
-        }
+    let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
+    let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers) {
+        Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
         // A visitor without a session on a public app may read the anonymous
         // session, run actions declared anonymous, and read public files.
         // The transfer principal includes the client address so visitors
         // do not share one quota. Private apps require sign-in for everything.
-        Ok(None) if !is_private(&deployment) => {
-            let client = limits::client_key(state.guards.client_ip(peer, &headers));
-            principal = format!("runtime:{}:anon:{client}", deployment.id);
-            tools = anonymous_runtime_tools();
-            anonymous = true;
-        }
-        Ok(None) => {
-            let client = limits::client_key(state.guards.client_ip(peer, &headers));
-            principal = format!("runtime:{}:anon:{client}", deployment.id);
-            tools = account_tools();
-            anonymous = true;
-            account_only = true;
-        }
-        Err(_) => return unauthorized(&state, &headers),
+        Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
+        Ok(None) => (visitor(), account_tools(), true, true),
+        Err(_) => return Err(unauthorized(state, headers)),
+    };
+    Ok(RuntimeCaller { deployment, principal, tools, anonymous, account_only })
+}
+
+fn peer_of(request: &Request) -> Option<std::net::SocketAddr> {
+    request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0)
+}
+
+/// `PUT /_konae/transfers/<id>` takes the whole body of an upload transfer
+/// the signed-in user opened with `transfer_begin`, checks its size and
+/// SHA-256 and completes it, so a file costs one request instead of one
+/// `transfer_write` per 64 KiB. `files_upload` then stores it as before.
+async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<String>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let caller = match runtime_caller(&state, &headers, peer_of(&request)).await {
+        Ok(caller) => caller,
+        Err(response) => return response,
+    };
+    if caller.anonymous {
+        return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
+    let mut response = match super::transfers::receive_body(&state, &caller.principal, &id, request.into_body()).await {
+        Ok(result) => Json(json!({"result": result})).into_response(),
+        Err(e) => error(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+pub async fn runtime(State(state): State<AppState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let peer = peer_of(&request);
+    let RuntimeCaller { deployment, principal, tools, anonymous, account_only } = match runtime_caller(&state, &headers, peer).await {
+        Ok(caller) => caller,
+        Err(response) => return response,
+    };
     let fixed_file_access = app_user_files(&deployment);
     let app = deployment.id;
     let call = match read_call(request).await {
@@ -725,6 +757,8 @@ pub async fn runtime_call(
             // The whole file goes into the transfer, whatever range the request named.
             let mut whole = headers.clone();
             whole.remove(header::RANGE);
+            // A 304 would leave the transfer without bytes.
+            whole.remove(header::IF_NONE_MATCH);
             let response = serve_file(
                 State(state.clone()),
                 AxumPath(a["fileId"].as_str().unwrap().to_owned()),

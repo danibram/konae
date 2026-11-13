@@ -1216,7 +1216,10 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
     }
     // Only the app's own pages may embed the file; programs are unaffected.
     response.headers_mut().insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    // A refusal is never kept; the bytes carry their own policy.
+    if !response.headers().contains_key(header::ETAG) {
+        response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    }
     response
 }
 

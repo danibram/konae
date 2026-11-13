@@ -465,6 +465,43 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    on_both_stores!(a_browser_that_holds_a_file_revalidates_it_without_the_store);
+    /// A file answers with its tag and `no-cache`; the same tag gets 304 and
+    /// no bytes, and only while the caller may still read the file.
+    async fn a_browser_that_holds_a_file_revalidates_it_without_the_store(s3: bool) {
+        let root = std::env::temp_dir().join(format!("konae-file-etag-{}", Uuid::new_v4()));
+        let (state, visitor) = login_on(&root, "public", s3).await;
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
+        let id = upload(&state, &alice, 1000, Some("public")).await;
+        let read = |headers: HeaderMap| serve_file(State(state.clone()), AxumPath(id.clone()), headers);
+        let first = read(visitor.clone()).await;
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "private, no-cache");
+        let etag = first.headers()[header::ETAG].clone();
+        assert_eq!(etag, format!("\"{id}-1000\""));
+        let asking = |tag: &str| {
+            let mut headers = visitor.clone();
+            headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(tag).unwrap());
+            headers
+        };
+        let tag = etag.to_str().unwrap().to_owned();
+        let kept = read(asking(&tag)).await;
+        assert_eq!(kept.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(kept.headers()[header::ETAG], etag);
+        assert!(axum::body::to_bytes(kept.into_body(), usize::MAX).await.unwrap().is_empty());
+        assert_eq!(read(asking(&format!("\"other\", W/{tag}"))).await.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(read(asking("\"other\"")).await.status(), StatusCode::OK);
+        // The bytes are gone from the store, yet the tag still answers: the
+        // index alone decides, and the store is never asked.
+        state.files.store.delete(&deployment.id, &id).await.unwrap();
+        assert_eq!(read(asking(&tag)).await.status(), StatusCode::NOT_MODIFIED);
+        // A file the caller may no longer read answers 404 whatever the tag.
+        update_file(&state, &alice, &id, Some("private")).await;
+        assert_eq!(read(asking(&tag)).await.status(), StatusCode::NOT_FOUND);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
     on_both_stores!(a_file_without_an_uploader_cannot_be_changed_from_the_app);
     async fn a_file_without_an_uploader_cannot_be_changed_from_the_app(s3: bool) {
         let root = std::env::temp_dir().join(format!("konae-file-legacy-{}", Uuid::new_v4()));

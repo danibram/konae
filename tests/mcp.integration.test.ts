@@ -456,6 +456,39 @@ describe("authenticated MCP", () => {
     await alice.cancel(upload.transferId);
   });
 
+  test("a browser upload sends its bytes in one PUT and a kept file revalidates with 304", async () => {
+    const { receipt } = await release("whole_upload");
+    const signed = await signup(receipt.hostname, "pat@app.test");
+    expect(signed.status).toBe(200);
+    const cookie = signed.headers.get("set-cookie")!.split(";")[0];
+    const user = runtimeClient(receipt.hostname, cookie);
+    const bytes = new Uint8Array(200_000).map((_, index) => index % 251);
+    const transfer = await user.call<{ transferId: string }>("transfer_begin", { size: bytes.length, sha256: await checksum(bytes) });
+    const put = (headers: Record<string, string>, body: Uint8Array = bytes) =>
+      fetch(`${url}/_konae/transfers/${transfer.transferId}`, { method: "PUT", headers: { host: receipt.hostname, "content-type": "application/octet-stream", ...headers }, body });
+    expect((await put({ cookie, origin: "https://elsewhere.test" })).status).toBe(403);
+    expect(await (await put({})).json()).toEqual({ error: "authentication-required" });
+    const short = await put({ cookie }, bytes.subarray(1));
+    expect([short.status, (await short.json()).error]).toEqual([400, "Upload size or SHA-256 mismatch."]);
+    const sent = await put({ cookie, origin: `http://${receipt.hostname}` });
+    expect(sent.headers.get("cache-control")).toBe("no-store");
+    expect(await sent.json()).toEqual({ result: { transferId: transfer.transferId, complete: true, sha256: await checksum(bytes) } });
+    const saved = await user.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "whole.bin", type: "image/png", visibility: "public" });
+    await user.cancel(transfer.transferId);
+    const read = (headers: Record<string, string> = {}) => fetch(`${url}/_konae/files/${saved.id}`, { headers: { host: receipt.hostname, ...headers } });
+    const first = await read();
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(bytes);
+    expect(first.headers.get("cache-control")).toBe("private, no-cache");
+    const etag = first.headers.get("etag")!;
+    expect(etag).toBe(`"${saved.id}-${bytes.length}"`);
+    const kept = await read({ "if-none-match": etag });
+    expect(kept.status).toBe(304);
+    expect(kept.headers.get("etag")).toBe(etag);
+    expect(await user.call("files_update", { fileId: saved.id, visibility: "private" })).toMatchObject({ visibility: "private" });
+    const lost = await read({ "if-none-match": etag });
+    expect([lost.status, lost.headers.get("cache-control")]).toEqual([404, "private, no-store"]);
+  });
+
   test("separates app users, deployments and administrative capabilities", async () => {
     const { receipt } = await release("runtime_proof");
     const user = await appUser(receipt.hostname, "alice@app.test");

@@ -1871,6 +1871,15 @@ pub async fn file_response(state: &AppState, deployment: &str, metadata: &Value,
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
     let Some(id) = metadata["id"].as_str() else { return not_found() };
     let size = metadata["size"].as_u64().unwrap_or(0);
+    // The bytes of a file ID never change, so its tag needs no read of the
+    // store, and a browser that holds them gets 304 without one.
+    let Ok(etag) = HeaderValue::from_str(&format!("\"{id}-{size}\"")) else { return not_found() };
+    if if_none_match(headers, &etag) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response.headers_mut().insert(header::ETAG, etag);
+        response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(FILE_CACHE_CONTROL));
+        return response;
+    }
     let range = match requested_range(headers, size) {
         Ok(range) => range,
         Err(()) => {
@@ -1929,7 +1938,21 @@ pub async fn file_response(state: &AppState, deployment: &str, metadata: &Value,
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'none'; sandbox"),
     );
+    headers.insert(header::ETAG, etag);
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(FILE_CACHE_CONTROL));
     response
+}
+
+/// A browser may keep a file's bytes but asks the Kernel before each use,
+/// so a read still passes the caller's check and a deleted file or a lost
+/// right answers 404 at once. No shared cache keeps them.
+pub const FILE_CACHE_CONTROL: &str = "private, no-cache";
+
+/// Whether `If-None-Match` names `etag`, weakly compared as RFC 9110 asks.
+fn if_none_match(headers: &HeaderMap, etag: &HeaderValue) -> bool {
+    let Some(value) = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok()) else { return false };
+    let Ok(etag) = etag.to_str() else { return false };
+    value.split(',').map(str::trim).any(|tag| tag == "*" || tag.trim_start_matches("W/") == etag)
 }
 
 pub async fn serve_root(State(state): State<AppState>, headers: HeaderMap) -> Response {

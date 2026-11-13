@@ -6,6 +6,12 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `miniapp.files.upload` sends the file in one `PUT /_konae/transfers/<id>` instead of one MCP call per 64 KiB, so a 2 MiB photo takes four requests instead of about seventy. Against an older Kernel it still sends blocks.
+- `miniapp.files.upload` returns the file's path, the one `files.url` gives, as `url`, instead of downloading the file again for a Blob URL.
+- `GET /_konae/files/<id>` answers with an ETag and `Cache-Control: private, no-cache`. A browser that holds the file gets 304 after the Kernel checks the caller, with no read from the bucket.
+
 ## [0.4.2] - 2026-11-13
 
 ### Changed

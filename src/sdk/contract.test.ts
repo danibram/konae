@@ -211,3 +211,54 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
     expect((await sdkOn("/p/")).requested).toEqual(["/_konae/mcp"]);
   });
 });
+
+describe("files.upload sends the file's bytes in one request", () => {
+  /** Runs runtime.js at pathname against a Kernel whose transfer path answers putStatus, and uploads one file. */
+  async function uploadOn(pathname: string, putStatus: number, putError = "Use authenticated MCP for platform operations.") {
+    const requests: string[] = [];
+    const tools: string[] = [];
+    const window: { miniapp?: { files: { upload: (file: File) => Promise<{ id: string; url: string }> } } } = {};
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      requests.push(`${init.method} ${url}`);
+      if (String(url).includes("/_konae/transfers/")) {
+        if (putStatus !== 200) return Response.json({ error: putError }, { status: putStatus });
+        return Response.json({ result: { transferId: "t-1", complete: true } });
+      }
+      const call = JSON.parse(String(init.body));
+      if (!call.id) return new Response(null, { status: 202 });
+      const name = call.params?.name;
+      if (name) tools.push(name);
+      const result = name === "transfer_begin" ? { transferId: "t-1", chunkBytes: 65536 } : name === "files_upload" ? { id: "file-1", name: "a.txt" } : {};
+      return Response.json({ jsonrpc: "2.0", id: call.id, result: call.method === "tools/call" ? { structuredContent: { result }, isError: false } : {} });
+    }) as typeof fetch;
+    try {
+      new Function("window", "location", "addEventListener", publishedSdk)(window, { pathname }, () => {});
+      const stored = await window.miniapp!.files.upload(new File(["hello"], "a.txt", { type: "text/plain" })).catch((error: Error) => error);
+      return { stored, requests, tools };
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  test("one PUT carries the bytes, and upload returns the path files.url gives without reading the file back", async () => {
+    const { stored, requests, tools } = await uploadOn("/p/notes/", 200);
+    expect(stored).toEqual({ id: "file-1", name: "a.txt", url: "/p/notes/_konae/files/file-1" });
+    expect(requests).toContain("PUT /p/notes/_konae/transfers/t-1");
+    expect(tools).toEqual(["transfer_begin", "files_upload", "transfer_cancel"]);
+  });
+
+  test("a Kernel without the transfer path gets 64 KiB blocks over MCP", async () => {
+    for (const status of [404, 405, 410]) {
+      const { stored, tools } = await uploadOn("/", status);
+      expect(stored).toEqual({ id: "file-1", name: "a.txt", url: "/_konae/files/file-1" });
+      expect(tools).toEqual(["transfer_begin", "transfer_write", "transfer_complete", "files_upload", "transfer_cancel"]);
+    }
+  });
+
+  test("a refusal of the bytes fails the upload with the Kernel's words and cancels the transfer", async () => {
+    const { stored, tools } = await uploadOn("/", 400, "Upload size or SHA-256 mismatch.");
+    expect((stored as Error).message).toBe("Upload size or SHA-256 mismatch.");
+    expect(tools).toEqual(["transfer_begin", "transfer_cancel"]);
+  });
+});
