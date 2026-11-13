@@ -3,7 +3,7 @@ import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
 import { normalizeProjectPath } from "../lib/project-files";
 import { hostedRuntime, type BuildArtifact } from "./artifact";
-import { assembleStaticArtifact } from "../lib/static-artifact.js";
+import { appEntry, assembleStaticArtifact } from "../lib/static-artifact.js";
 
 let initialized: Promise<void> | undefined;
 
@@ -25,7 +25,7 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
 }
 
 export async function compileProjectInBrowser(project: MiniAppProject): Promise<{ body: string; styles: string; script: string }> {
-  const entrypoint = project.files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
+  const entrypoint = appEntry(Object.keys(project.files)) ?? "app.js";
   const { script, styles: importedCss } = await bundleInBrowser(project.files, entrypoint);
   return {
     body: project.files["index.html"] ?? "<main id=app></main>",
@@ -62,7 +62,8 @@ function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === "package") return undefined;
-        if (!args.importer) return { path: requireProjectFile(args.path), namespace: "konae" };
+        // esbuild names an entry ./<path> when a file of that name sits in its working directory, as src/main.tsx does in this checkout.
+        if (!args.importer) return { path: requireProjectFile(args.path.replace(/^\.\//, "")), namespace: "konae" };
         if (!args.path.startsWith(".")) return undefined;
         const parent = args.importer.includes("/") ? args.importer.slice(0, args.importer.lastIndexOf("/")) : "";
         const candidate = normalizeRelative(`${parent}/${args.path}`);

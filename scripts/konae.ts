@@ -24,7 +24,7 @@ import {
   type ActionContract,
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
-import { assembleStaticArtifact } from "../src/lib/static-artifact.js";
+import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -467,11 +467,17 @@ async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Rec
  * src/lib/static-artifact.js, the rules the editor's build runs too.
  * When the folder has package.json with a build script (from init), that
  * script writes dist/ and this packs it; otherwise the built-in bundler runs.
+ * `development` asks that script for an unminified build, which `dev` serves.
  */
-export async function buildLocal(root: string) {
+export async function buildLocal(root: string, options: { development?: boolean } = {}) {
   const files = await sources(root);
   if (await hasPackageBuild(root)) {
-    const build = Bun.spawn(["npm", "run", "build"], { cwd: root, stdout: "inherit", stderr: "inherit" });
+    // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
+    const neverRuns = entryNeverRunsMessage(Object.keys(files), files);
+    if (neverRuns) throw Error(neverRuns);
+    // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
+    await refreshActionTypes(root);
+    const build = Bun.spawn(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], { cwd: root, stdout: "inherit", stderr: "inherit" });
     if ((await build.exited) !== 0) throw Error("npm run build failed.");
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
@@ -480,7 +486,7 @@ export async function buildLocal(root: string) {
   }
   const settings = await readSettings(root).catch(() => undefined);
   const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
-  const entry = files["src/main.tsx"] !== undefined ? "src/main.tsx" : files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
+  const entry = appEntry(Object.keys(files)) ?? "app.js";
   const artifact = await assembleStaticArtifact({
     paths: await capsulePaths(root),
     read: (relative) => readCapsuleFile(root, relative),
@@ -1056,7 +1062,7 @@ async function main() {
     const start = async () => {
       for (const line of await setDevSecrets(root, kernel)) console.log(line);
       await refreshActionTypes(root);
-      await buildLocal(root);
+      await buildLocal(root, { development: true });
       if (reset) {
         reset = false;
         await resetData(root, kernel, pulled, option("confirm-schema"));

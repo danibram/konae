@@ -12,7 +12,7 @@ app/
 ├── pages/            # more pages, published without the prefix
 ├── public/           # published as they are
 ├── styles.css
-├── app.js            # or src/main.ts
+├── app.js            # or src/main.ts, src/main.tsx
 ├── src/
 │   └── feature.ts
 ├── package.json      # optional, the npm packages the app imports
@@ -26,7 +26,7 @@ app/
 
 | File | Role |
 | --- | --- |
-| `app.js` or `src/main.ts` | The entrypoint. The build bundles its relative imports and the npm packages it imports by name. |
+| `app.js`, `src/main.ts` or `src/main.tsx` | The entrypoint, the first of `src/main.tsx`, `src/main.ts` and `app.js` held. The build bundles its relative imports and the npm packages it imports by name. |
 | `index.html`, other `.html` | Pages. Every `.html` at the root and under `pages/` is a page. Pages under `pages/` publish without the prefix. |
 | `styles.css` | Styles the pages load. |
 | `schema.sql` | The only model of the database. It states what the database should be. It may only create tables and indexes, and it must be safe to run twice, because the editor preview runs it again each time it opens. At publish, at import and when the `kernel` binary starts the folder, the Kernel compares it with the live database and derives the schema change. A new table, column or index applies. A dropped table, a dropped column or a changed column type shows the owner what it deletes and applies only once the owner confirms. |
