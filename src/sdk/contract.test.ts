@@ -262,3 +262,28 @@ describe("files.upload sends the file's bytes in one request", () => {
     expect(tools).toEqual(["transfer_begin", "transfer_cancel"]);
   });
 });
+
+describe("files.list returns metadata without opening file transfers", () => {
+  test("adds the same-origin URL and calls only files_list", async () => {
+    const calls: string[] = [];
+    const window: { miniapp?: { files: { list: () => Promise<Array<{ id: string; url: string }>> } } } = {};
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      const request = JSON.parse(String(init.body));
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (request.method === "tools/call") {
+        const name = request.params.name;
+        calls.push(name);
+        return Response.json({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: [{ id: "file-1", name: "photo.png", size: 10 }] } } });
+      }
+      return Response.json({ jsonrpc: "2.0", id: request.id, result: {} });
+    }) as typeof fetch;
+    try {
+      new Function("window", "location", "addEventListener", publishedSdk)(window, { pathname: "/p/gallery" }, () => {});
+      await expect(window.miniapp!.files.list()).resolves.toEqual([{ id: "file-1", name: "photo.png", size: 10, url: "/p/gallery/_konae/files/file-1" }]);
+      expect(calls).toEqual(["files_list"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

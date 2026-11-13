@@ -127,25 +127,15 @@ Editor preview: Ignores the Deployment's visibility and rate limits, and keeps i
 Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
 By default, only the uploader can list or read a private file.
 On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
-files.list downloads over MCP, checks the SHA-256 and returns a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. files.upload sends the file's bytes in one request and returns the file's path as url, without downloading it again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_konae/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.
+files.list returns metadata and the same-origin file path without reading file bytes. files.upload sends the file's bytes in one request and returns its path as url. The Kernel checks access on every file request, including conditional requests.
 The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.
 The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
 Declared with "fileAccess" in manifest: Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.
 
-miniapp.files.list(): List and download every file the current actor may read. Returns an array of { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise.
-Refusals:
-- "File not found." when the file was removed or the actor may not read it
-- "Too many active transfers. Cancel completed transfers before starting another." when the actor already holds 2 transfers, or the Deployment holds 32
-- "Transfer not found or expired." when a transfer outlived its 10 minutes
-- "Invalid file size." when the Kernel announced a size other than the size files.list gave for the file
-- "Invalid file block." when a downloaded block does not continue at the expected offset or exceeds 64 KiB
-- "File checksum mismatch." when the downloaded bytes do not match the SHA-256 the Kernel announced
-Limits:
-- every listed file is downloaded, one at a time, on each call
-- each file up to the installation's per-file limit
-Editor preview: Reads files from browser storage and returns data URLs.
+miniapp.files.list(): List metadata and same-origin URLs for files the current actor may read. Returns an array of { id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is the path files.url returns for the file. The Kernel serves JavaScript, HTML, XML and SVG types as application/octet-stream.
+Editor preview: Returns metadata and browser-storage data URLs. The editor preview has no Kernel file route.
 
 miniapp.files.upload(file, options): Store a File or Blob for the signed-in user and return it as files.list would. Returns { id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file.
 Needs a signed-in user.

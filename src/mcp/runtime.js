@@ -3,7 +3,6 @@
   const prefix = /^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);
   const base = prefix ? '/p/' + prefix[1] : '';
   const endpoint = base + '/_konae/mcp';
-  const urls = new Set();
   let connected;
 
   async function rpc(method, params, notification = false) {
@@ -49,28 +48,6 @@
 
   async function checksum(bytes) {
     return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  async function download(file) {
-    const transfer = await call('files_read', { fileId: file.id });
-    try {
-      if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || (Number.isSafeInteger(file.size) && transfer.size !== file.size)) throw Error('Invalid file size.');
-      const bytes = new Uint8Array(transfer.size);
-      let offset = 0;
-      while (offset < bytes.length) {
-        const block = await call('transfer_read', { transferId: transfer.transferId, offset });
-        const data = Uint8Array.from(atob(block.data), c => c.charCodeAt(0));
-        if (block.offset !== offset || !data.length || data.length > 65536 || block.nextOffset !== offset + data.length || block.nextOffset > bytes.length) throw Error('Invalid file block.');
-        bytes.set(data, offset);
-        offset = block.nextOffset;
-      }
-      if (await checksum(bytes) !== transfer.sha256) throw Error('File checksum mismatch.');
-      const inlineTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'];
-      const safeType = inlineTypes.includes(file.type) ? file.type : 'application/octet-stream';
-      const url = URL.createObjectURL(new Blob([bytes], { type: safeType }));
-      urls.add(url);
-      return { ...file, url };
-    } finally { await call('transfer_cancel', { transferId: transfer.transferId }).catch(() => {}); }
   }
 
   function fileId(id) {
@@ -135,15 +112,13 @@
       signOut: async () => {
         const result = await call('auth_logout');
         connected = undefined;
-        for (const url of urls) URL.revokeObjectURL(url);
-        urls.clear();
         return result;
       },
     },
     files: {
       list: async () => {
         const result = [];
-        for (const file of await call('files_list')) result.push(await download(file));
+        for (const file of await call('files_list')) result.push({ ...file, url: fileUrl(file.id) });
         return result;
       },
       upload,
@@ -152,5 +127,4 @@
       delete: async (id) => call('files_delete', { fileId: fileId(id) }),
     },
   };
-  addEventListener('pagehide', () => { for (const url of urls) URL.revokeObjectURL(url); urls.clear(); });
 })();

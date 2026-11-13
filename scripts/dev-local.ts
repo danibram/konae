@@ -64,6 +64,9 @@ delete kernelEnv.KONAE_S3_SECRET_KEY;
 delete kernelEnv.KONAE_S3_REGION;
 delete kernelEnv.KONAE_ARTIFACT_BUCKET;
 delete kernelEnv.KONAE_DATA_BUCKET;
+delete kernelEnv.KONAE_S3_BUCKET;
+delete kernelEnv.KONAE_S3_PATH_STYLE;
+delete kernelEnv.KONAE_COPY_S3;
 const editorEnv = {
   ...process.env,
   KONAE_KERNEL_URL: kernelUrl,

@@ -149,7 +149,7 @@ bun run test:e2e:local
 bun run test:e2e:minio
 ```
 
-Some integration tests copy to an S3 store. They read `KONAE_TEST_S3_ENDPOINT`, `http://127.0.0.1:9000` by default, with the `konae` credentials and the `konae-apps` and `konae-data` buckets that `docker compose up minio minio-init` creates.
+Some integration tests copy to an S3 store. They read `KONAE_TEST_S3_ENDPOINT`, `http://127.0.0.1:9000` by default, with the `konae` credentials and the `konae` bucket that `docker compose up minio minio-init` creates.
 
 ## Status
 

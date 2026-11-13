@@ -11,7 +11,7 @@ const setupKey = "copy-restore-setup-secret";
 const password = "copy-restore-password-2026";
 const attachment = new TextEncoder().encode("Attachment survives the copy");
 const s3Endpoint = process.env.KONAE_TEST_S3_ENDPOINT ?? "http://127.0.0.1:9000";
-const s3Bucket = process.env.KONAE_TEST_S3_BUCKET ?? "konae-data";
+const s3Bucket = process.env.KONAE_TEST_S3_BUCKET ?? "konae";
 const s3Env = {
   KONAE_S3_ENDPOINT: s3Endpoint,
   KONAE_S3_ACCESS_KEY: process.env.KONAE_TEST_S3_ACCESS_KEY ?? "konae",

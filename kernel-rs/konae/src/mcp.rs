@@ -74,7 +74,7 @@ fn remember_import(state: &Konae, package_id: &str, project: &str, plan: &str) -
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 21] = [
+const OPEN_TOOLS: [&str; 20] = [
     "platform_guide",
     "platform_describe",
     "mail_status",
@@ -93,7 +93,6 @@ const OPEN_TOOLS: [&str; 21] = [
     "signals_read",
     "signup_policy_read",
     "sign_in_methods_read",
-    "storage_test",
     "project_export",
     "release_plan",
 ];
@@ -338,12 +337,6 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
         // The folder held the index, so no file of this Deployment is readable
         // any more; a failure here leaves objects for files-reconcile.
         super::file_store::forget_deployment(state.files.store.as_ref(), deployment).await;
-        if let Some(s3) = state.s3.as_ref() {
-            let keys = list_s3_keys(s3, &state.artifact_bucket, &format!("deployments/{deployment}/")).await?;
-            for key in keys {
-                s3.delete_object().bucket(&state.artifact_bucket).key(key).send().await?;
-            }
-        }
     }
     // A project that was never published still has a folder with its sources.
     park(&folder, &trash, id).await?;
@@ -498,13 +491,6 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             json!({"deploymentId":text,"operation":{"type":"string","enum":["inspect","browse","sql","update-cell","insert-row","delete-row","list-backups","create-backup","restore-backup"]},"input":{"type":"object"}}),
             &["deploymentId", "operation"],
             false,
-        ),
-        tool(
-            "storage_test",
-            "Check the configured artifact store.",
-            json!({}),
-            &[],
-            true,
         ),
     ];
     if owner.scopes.iter().any(|s| s == "write") {
@@ -1446,13 +1432,6 @@ async fn admin_call(
             let mode: SignupMode = serde_json::from_value(a["mode"].clone())?;
             let entries: Option<Vec<String>> = a.get("allowlist").map(|list| serde_json::from_value(list.clone())).transpose()?;
             set_signup_policy(state, &deployment.id, mode, entries).await
-        }
-        "storage_test" => {
-            owner.require("read", None)?;
-            response_value(
-                test_storage(state).await,
-            )
-            .await
         }
         "database_execute" => {
             let id = a["deploymentId"].as_str().unwrap();

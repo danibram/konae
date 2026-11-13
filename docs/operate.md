@@ -21,7 +21,7 @@ Open [http://app.localhost:8080](http://app.localhost:8080). Published apps get 
 
 Compose publishes the gateway and the S3 API on `127.0.0.1` only. The Konae container binds `0.0.0.0` inside the Compose network with the development setup key, so the Compose file sets `KONAE_ALLOW_DEFAULT_KEY=1`. Do not copy that setting to a reachable installation.
 
-The S3 store is RustFS, in the Compose service named `minio`. Its API answers at [http://localhost:9000](http://localhost:9000) with the development credentials `konae` and `konae-secret`. The `konae-apps` bucket receives a second copy of each Build Artifact, and `konae-data` receives scheduled copies when `KONAE_COPY_S3_PREFIX` is set. The buckets must exist before the Kernel starts. The Kernel talks to S3 through an endpoint, a region and a key pair, so another S3-compatible service takes the same settings.
+The S3 store is RustFS, in the Compose service named `minio`. Its API answers at [http://localhost:9000](http://localhost:9000) with the development credentials `konae` and `konae-secret`. Compose creates one private `konae` bucket and names it in `KONAE_S3_BUCKET`, so file bytes go under `files/`. Set `KONAE_COPY_S3=1` to send copies under `copies/` as well. The bucket must exist before the Kernel starts. A volume from an earlier version of the stack keeps its files in the data directory, so the Kernel refuses to start on it with this bucket. `docker compose down -v` starts the stack with empty volumes.
 
 The Kernel's volume stays the authority. Every app folder lives there, and mutations run against the live database. A Kernel started on an empty volume serves nothing until `restore` installs a copy. See [Data directory and copies](#data-directory-and-copies).
 
@@ -29,7 +29,7 @@ The Kernel's volume stays the authority. Every app folder lives there, and mutat
 
 `kernel` serves every folder under `<KONAE_DATA_DIR>/apps/<id>/`. At startup it checks each folder as Konae checks a release: `konae.json`, `app/` and `dist/`. It applies the schema change `app/schema.sql` asks of `data/database.sqlite`, writes the folder's `.konae/`, and prints `Serving <name> at <url>`. A folder that fails a check is not served. The Kernel prints why as `Not serving apps/<id>: ...` and serves the others. A schema change that loses data needs `KONAE_CONFIRM_SCHEMA` set to the confirmation it prints. A folder that has no `.konae/` record yet answers at `<slug>.<KONAE_HOST_SUFFIX>`, or at `<slug>-<six random characters>.<KONAE_HOST_SUFFIX>` when another app holds that address. While it serves, the Kernel reads an app's `konae.json` again when the file changes.
 
-`kernel` also runs commands on one app instead of serving: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`. Each calls the function Konae's owner tool calls, refuses with the same words and prints its answer as JSON. Add `--app <id>` when the data directory holds more than one app. All of them work beside a serving Kernel except `import`, which replaces the app's data with the `data/` of an exported folder after a backup and needs the Kernel stopped. `kernel help` lists them with their options, and so does an exported folder's `AGENTS.md`. Both binaries also run the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
+`kernel` also runs commands on one app instead of serving: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`. Each calls the function Konae's owner tool calls, refuses with the same words and prints its answer as JSON. Add `--app <id>` when the data directory holds more than one app. All of them work beside a serving Kernel except `import`, which replaces the app's data with the `data/` of an exported folder after a backup and needs the Kernel stopped. `kernel help` lists them with their options, and so does an exported folder's `AGENTS.md`. Both binaries also run the installation commands `restore`, `reconcile`, `files-migrate`, `files-reconcile`, `storage-migrate` and `artifacts-recover`.
 
 `Dockerfile.kernel` builds an image that holds only `kernel`, with `KONAE_DATA_DIR=/kernel`. An exported folder's `compose.yaml` mounts the folder at `/kernel/apps/<id>` and runs the image that `KONAE_KERNEL_IMAGE` names in the folder's `.env`. The image runs the Kernel and each command as the owner of the app folder, so the files it writes there stay that person's. Each release publishes it as `ghcr.io/danibram/konae-kernel:<version>`, and Konae itself as `ghcr.io/danibram/konae:<version>`. The `konae` image also holds the built editor and serves it on the editor host, so one container answers the editor, the owner's MCP and the apps. [Releasing](./releasing.md) covers the tag and the Changelog. To build locally, `docker build -f Dockerfile.kernel -t <name>:<version> .`. Under Compose, run a command as `docker compose exec kernel kernel <command>`.
 
@@ -44,7 +44,7 @@ The defaults suit one machine. Before another machine can reach the installation
 - Put a proxy in front that terminates TLS for the domain, for `*.<domain>` and for every custom domain, and forwards `Host` unchanged. The Kernel issues no certificate. `ops/nginx.local.conf` is the local stack's proxy, without TLS.
 - List the proxy's address in `KONAE_TRUSTED_PROXIES`, or every visitor shares one rate-limit bucket.
 - Set `KONAE_ACCOUNT_VERIFICATION=required` and a mail transport, so nobody holds an account for an email they did not prove. On `konae`, set `KONAE_MAIL_SECRET` as well.
-- Set `KONAE_COPY_DIR` or `KONAE_COPY_S3_PREFIX`, with `KONAE_COPY_SECRET` for S3. The data directory is the only place the apps live.
+- Set `KONAE_COPY_DIR` or `KONAE_COPY_S3=1`, with `KONAE_COPY_SECRET` for S3. The data directory is the only place the apps live.
 - To serve an app at the domain's root, give its path address the name `konae-home`. Without an app on that name, the root answers not found. [`examples/home`](../examples/home/README.md) is a home ready to publish.
 
 ## Environment variables
@@ -84,13 +84,11 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_MAIL_WORKER_INTERVAL_MS` | `5000` | How often the mail worker looks for due jobs. A new job also wakes it. |
 | `KONAE_CALLS_PER_MINUTE` | `20` | Calls one app's call actions may queue in any 60 seconds, from 1 to 10000. The Kernel sends them from `calls.sqlite`; see [Calls between apps](./mcp.md#calls-between-apps). |
 | `KONAE_FILES_QUOTA_BYTES` | `20971520` (20 MiB) | Bytes the files of one Deployment may hold together. An upload past it is refused with the configured number, and so is an import whose files exceed it. |
-| `KONAE_FILE_MAX_BYTES` | `2097152` (2 MiB) | Bytes one file may hold. It must not exceed `KONAE_FILES_QUOTA_BYTES`, or the Kernel refuses to start. A browser upload sends the file in one request. `files.list`, exports and copies read in 64 KiB MCP blocks, so a larger file takes more calls there. |
+| `KONAE_FILE_MAX_BYTES` | `2097152` (2 MiB) | Bytes one file may hold. It must not exceed `KONAE_FILES_QUOTA_BYTES`, or the Kernel refuses to start. A browser upload sends the file in one request. Exports and copies read in 64 KiB MCP blocks, so a larger file takes more calls there. |
 | `KONAE_SQLITE_HEAP_BYTES` | Half of available memory, including Linux cgroup limits; 256 MiB when unknown | Ceiling on the memory SQLite may hold across every app of the process. A statement that passes it fails with SQLite's out-of-memory error, and the process keeps running. The Kernel refuses to start on a value that is not a whole number of bytes above 0. |
-| `KONAE_FILES_S3_BUCKET` | unset | Bucket that holds the bytes of app files, as `<prefix><app id>/<file id>`. Unset keeps them in each app folder's `data/files/`. The index stays in the folder either way. See [File bytes in a bucket](#file-bytes-in-a-bucket). |
-| `KONAE_FILES_S3_ENDPOINT`, `KONAE_FILES_S3_ACCESS_KEY`, `KONAE_FILES_S3_SECRET_KEY` | unset | Required with `KONAE_FILES_S3_BUCKET`. They are separate from `KONAE_S3_*`, so the private file bytes can use another bucket and key than the artifacts and copies. |
-| `KONAE_FILES_S3_REGION` | `us-east-1` | Region of the file bucket. R2 uses `auto`. |
-| `KONAE_FILES_S3_PREFIX` | empty | Prefix inside the file bucket, such as `files/`. |
-| `KONAE_FILES_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
+| `KONAE_S3_BUCKET` | unset | The installation's private bucket. File bytes go under `files/` as `files/<app id>/<file id>`, and copies under `copies/` with `KONAE_COPY_S3=1`. Unset keeps file bytes in each app folder's `data/files/`. The index, databases, accounts, sources and `dist/` stay in the data directory either way. Refused beside the older `KONAE_FILES_S3_*`, `KONAE_DATA_BUCKET`, `KONAE_ARTIFACT_BUCKET` and `KONAE_COPY_S3_PREFIX`. See [File bytes in a bucket](#file-bytes-in-a-bucket). |
+| `KONAE_S3_PATH_STYLE` | `1` | `1` addresses the bucket as `<endpoint>/<bucket>`, `0` as `<bucket>.<endpoint host>`. |
+| `KONAE_FILES_S3_BUCKET`, `KONAE_FILES_S3_ENDPOINT`, `KONAE_FILES_S3_ACCESS_KEY`, `KONAE_FILES_S3_SECRET_KEY`, `KONAE_FILES_S3_REGION`, `KONAE_FILES_S3_PREFIX`, `KONAE_FILES_S3_PATH_STYLE` | unset | The older file settings: a separate bucket, key pair and prefix for file bytes. [Moving to one bucket](#moving-to-one-bucket) replaces them with `KONAE_S3_BUCKET`. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are refused. |
 | `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0014). The public origin, and on `konae` the MCP origin, become `<scheme>://app.<domain>`, and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
 | `KONAE_SCHEME` | `http` for `localhost`, `https` otherwise | Scheme of the derived origins, `http` or `https`. Read only with `KONAE_DOMAIN`. Any other value stops the Kernel. |
@@ -99,17 +97,17 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_HOST_SUFFIX` | `localhost`, or `<domain>` with `KONAE_DOMAIN` | Domain appended to new app hostnames, as in `<slug>.localhost`, or `<slug>-a1b2c3.localhost` when the slug is taken. |
 | `KONAE_MCP_ORIGIN` | unset, or the public origin with `KONAE_DOMAIN` | `konae` only. Public origin of the owner's MCP, without a path, when it differs from the hosting origin. OAuth discovery advertises it. |
 | `KONAE_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_konae.<hostname>` (ADR-0014). |
-| `KONAE_S3_ENDPOINT` | unset | S3 endpoint URL. The Kernel always serves artifacts from its data directory. With this set it also uploads each artifact to `KONAE_ARTIFACT_BUCKET` and can send copies to `KONAE_DATA_BUCKET`. Unset, the Kernel ignores the other `KONAE_S3_*` variables. |
+| `KONAE_S3_ENDPOINT` | unset | S3 endpoint URL of `KONAE_S3_BUCKET`, and of copies under the older settings. |
 | `KONAE_S3_REGION` | `us-east-1` | S3 region. |
-| `KONAE_S3_ACCESS_KEY` | `konae` | S3 access key. |
-| `KONAE_S3_SECRET_KEY` | `konae-secret` | S3 secret key. |
-| `KONAE_ARTIFACT_BUCKET` | `konae-apps` | Bucket for Build Artifacts. |
-| `KONAE_DATA_BUCKET` | `konae-data` | Bucket that receives copies when `KONAE_COPY_S3_PREFIX` is set. |
+| `KONAE_S3_ACCESS_KEY`, `KONAE_S3_SECRET_KEY` | required with `KONAE_S3_BUCKET` | The key pair for the bucket. The older settings default them to the development `konae` and `konae-secret`. |
+| `KONAE_ARTIFACT_BUCKET` | unset | The older artifact bucket. The Kernel stores no artifact there and refuses to start with it beside `KONAE_S3_BUCKET`. `artifacts-recover` reads it from the older settings. |
+| `KONAE_DATA_BUCKET` | `konae-data` | The older settings' copy bucket. |
 | `KONAE_COPY_DIR` | unset | Directory, on another disk, that receives scheduled copies of the data directory. It must be outside `KONAE_DATA_DIR`. |
-| `KONAE_COPY_S3_PREFIX` | unset | Prefix in `KONAE_DATA_BUCKET`, such as `copies/`, that receives scheduled copies. Needs `KONAE_S3_ENDPOINT`, and must not start with `deployments/`, where the artifact keys live. |
+| `KONAE_COPY_S3` | unset | `1` sends scheduled copies to `copies/` in `KONAE_S3_BUCKET`. |
+| `KONAE_COPY_S3_PREFIX` | unset | The older settings' prefix in `KONAE_DATA_BUCKET` for scheduled copies. |
 | `KONAE_COPY_INTERVAL_SECONDS` | `3600` | Seconds between copies when a copy target is set. The first copy runs at startup. |
 | `KONAE_COPY_SECRET` | unset | Secret of at least 32 characters that encrypts every file of a copy sent to S3 with AES-256-GCM. `restore` needs the same secret to open such a copy. The secret also signs each copy's manifest and each revocation entry sent to S3, and `restore` from S3 refuses a copy or an entry whose signature is missing or wrong. Directory copies stay unencrypted and unsigned. |
-| `KONAE_COPY_ACCEPT_UNSIGNED` | unset | Set to `1` for one `restore` or `reconcile` to accept a sealed copy or revocation entries that carry no signature because an older Kernel made them. For S3 it never accepts an unsealed copy while `KONAE_COPY_SECRET` is set. Directory copies remain unsigned. |
+| `KONAE_COPY_ACCEPT_UNSIGNED` | unset | Set to `1` for a `restore`, `reconcile` or `storage-migrate` run to accept a sealed copy or revocation entries that carry no signature because an older Kernel made them. For S3 it never accepts an unsealed copy while `KONAE_COPY_SECRET` is set. Directory copies remain unsigned. |
 | `KONAE_SCHEDULE_MIN_SECONDS` | unset | For tests only. Runs every scheduled action once every this many seconds, 1 to 300, instead of at its declared times, so a test can watch a run. The Kernel refuses to start with it unless `KONAE_BIND` is a loopback address. |
 | `KONAE_CLERK_ISSUER`, `KONAE_CLERK_JWKS_FILE`, `KONAE_CLERK_AUTHORIZED_ORIGINS`, `KONAE_CLERK_BETA_SUBJECTS`, `KONAE_CLERK_PUBLISHABLE_KEY` | unset | `konae` only. The optional Clerk sign-in for owners. Unset keeps it off. [Owner sign-in with Clerk](./clerk-creator-access.md) describes each. |
 | `KONAE_GOOGLE_CLIENT_ID`, `KONAE_GOOGLE_CLIENT_SECRET` | unset | Not read. A Kernel that finds either set prints a warning and starts. Each app's owner sets the app's own Google client in Auth > Users or with `secret_set` and `use: "google"`. |
@@ -157,7 +155,7 @@ Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.r
 
 The data root may also hold `mailbox.jsonl` with the development transport, `files-store.json` once the file store is recorded, `kernel.lock` while a Kernel serves, and `.copy-staging/` while a copy runs. [Who owns which store](./architecture.md#who-owns-which-store) says which of them an export carries.
 
-Set `KONAE_COPY_DIR`, `KONAE_COPY_S3_PREFIX` or both to copy the data directory off the volume, every hour by default. Each copy takes every app's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when it is complete, and an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. It stages each copy under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
+Set `KONAE_COPY_DIR`, `KONAE_COPY_S3=1` or both to copy the data directory off the volume, every hour by default. Each copy takes every app's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when it is complete, and an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. It stages each copy under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
 
 A failed copy never stops the Kernel from serving. The Kernel logs it, and `/_konae/health` reports it under `copies`: each target's `lastAttemptAt`, `lastSuccessAt`, `lastCopyId` and `lastError`, and an `alert` message while any target's last attempt failed. `copies.targets` is empty when no target is set.
 
@@ -189,9 +187,11 @@ Run `reconcile` with the Kernel stopped, or restart it afterwards, because a run
 
 ### File bytes in a bucket
 
-With `KONAE_FILES_S3_BUCKET` set, the bytes of app files live in that bucket, and each app's `data/files/index.json` stays in its folder and still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte passes through it. The browser never gets a bucket URL.
+With `KONAE_S3_BUCKET` set, the installation keeps file bytes under `files/` in that bucket, and copies under `copies/` when `KONAE_COPY_S3=1`. One key pair reaches both. Each app's `data/files/index.json` stays in its folder and still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). The Kernel sends only `PutObject`, `GetObject` with a range, `DeleteObject` and `ListObjectsV2`, and every byte passes through it. The browser never gets a bucket URL.
 
-`files-store.json` in the data directory records which store holds the bytes, and a Kernel whose settings name another store refuses to start. To move the bytes, stop the Kernel, set the `KONAE_FILES_S3_` settings and run one of:
+An installation set up before `KONAE_S3_BUCKET` may keep its older settings: `KONAE_FILES_S3_*` for files, `KONAE_DATA_BUCKET` with `KONAE_COPY_S3_PREFIX` for copies. The Kernel refuses to start with `KONAE_S3_BUCKET` beside any of them. It no longer writes Build Artifacts to `KONAE_ARTIFACT_BUCKET` or reads them from there; each app is served from its `dist/`.
+
+`files-store.json` in the data directory records which store holds the bytes, and a Kernel whose settings name another store refuses to start. `files-migrate` moves the bytes between the data directory and the bucket the settings name:
 
 ```sh
 KONAE_DATA_DIR=/data konae files-migrate --to s3
@@ -201,6 +201,30 @@ KONAE_DATA_DIR=/data konae files-migrate --to local
 It copies every indexed file, reads each back and compares its SHA-256, records the new store, and only then removes the old copies. A missing file or a mismatch stops it before anything switches. An upload writes its bytes before its index entry and a delete removes the entry first, so a crash can leave bytes no index names. `files-reconcile` removes those once they are an hour old, and `--dry-run` only counts them. A serving Kernel holds `kernel.lock` in the data directory, so both commands refuse while it runs, and a Kernel started while `files-migrate` runs refuses to start.
 
 A copy carries the file bytes, read from the bucket after the app's locks are released, so a restore needs no bucket and lands the bytes in each folder. Run `files-migrate --to s3` after a restore to put them back in the bucket.
+
+### Moving to one bucket
+
+Two commands move an installation from the older settings to `KONAE_S3_BUCKET`. Both read the older settings from a file in the format of `podman --env-file` and `docker --env-file`, one `NAME=value` a line, and refuse a file that users other than its owner can read. Neither deletes a source object.
+
+`artifacts-recover` writes into each app's `dist/` any file of its live release that the older `KONAE_ARTIFACT_BUCKET` holds and the folder lacks. A Kernel of this version no longer reads that bucket, so run it before the first start of this version, under any settings:
+
+```sh
+KONAE_DATA_DIR=/data konae artifacts-recover --from /root/older.env --dry-run
+KONAE_DATA_DIR=/data konae artifacts-recover --from /root/older.env
+```
+
+It compares every file the bucket holds for the release in each app's Deployment record with the one in `dist/`, writes only missing files and reads each back. It compares every app before it writes, so a file that differs stops the run with nothing written. An app that publishes during the run gets nothing written and the run stops, so it may run beside a serving Kernel. Run it as the user that owns the data directory.
+
+`storage-migrate` moves the file bytes from the store the file names to the store of the environment it runs in, which is the environment the Kernel will start with:
+
+```sh
+KONAE_DATA_DIR=/data konae storage-migrate --from /root/older.env --dry-run
+KONAE_DATA_DIR=/data konae storage-migrate --from /root/older.env
+```
+
+`--dry-run` reads only and may run beside a serving Kernel. It checks that each indexed file is in the source with its indexed size and counts what a run would copy. The index holds no checksum, so a source file with the right size and other bytes is copied as it is. Without it, the command needs the Kernel stopped. It copies every indexed file, reads each back and compares its SHA-256, and records the new store in `files-store.json` only when every file passed. A file the destination already holds with the same bytes counts as copied, so a run that stopped or failed can run again. A run removes the temporary files a killed run left in `transfers/`. The command refuses a destination holding files of an app this installation does not have. It does not move copies or the revocation record. When the file names no copies in S3, the command refuses a destination whose `copies/` prefix already holds objects, because it could not check that record. When the file names copies in S3, the environment must send copies to the same bucket and prefix with the same `KONAE_COPY_SECRET`, and the command opens every copy's manifest and the revocation record with the new keys before it switches. So choose as `KONAE_S3_BUCKET` the bucket whose `copies/` prefix already holds the copies. Copies and revocation entries made by Kernel 0.4.2 or earlier carry no signature, so the command refuses them unless `KONAE_COPY_ACCEPT_UNSIGNED=1` is set for that run. Unsigned entries stay in the revocation record after the move, so every later restore from that record needs the same setting, or it starts the restored installation in maintenance.
+
+The same command moves the files back. Give `--from` the settings the Kernel last started with, and run it in the environment of the older settings. Files written after the switch exist only in the new store, so going back always needs this run. A project deleted after the switch leaves its files in the older store, under its app ID, and the run back refuses them as another installation's. Delete that app's prefix from the older store, then run again.
 
 ## Verified accounts
 

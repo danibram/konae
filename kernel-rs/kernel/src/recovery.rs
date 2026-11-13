@@ -177,14 +177,14 @@ pub async fn record(state: &AppState, entry: Entry) -> Result<()> {
 /// Kernel. Reads the copy settings from the environment.
 pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
-    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3_PREFIX").is_none() {
+    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3_PREFIX").is_none() && read("KONAE_COPY_S3").is_none() {
         return Ok(());
     }
     let run = async {
-        let s3 = s3_client_from_env().await;
+        let s3 = crate::copy_bucket_from_env()?;
         let Some(config) = copies::CopyConfig::from_env(data_root, s3.is_some())? else { return Ok(()) };
-        let bucket = env("KONAE_DATA_BUCKET", "konae-data");
-        write(&config.targets, s3.as_ref(), &bucket, &entry, copies::CopyKey::from_env()?.as_ref()).await
+        let (client, bucket) = s3.map_or((None, String::new()), |(client, bucket)| (Some(client), bucket));
+        write(&config.targets, client.as_ref(), &bucket, &entry, copies::CopyKey::from_env()?.as_ref()).await
     };
     let result = match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(run)),

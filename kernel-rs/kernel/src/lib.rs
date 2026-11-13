@@ -6,9 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use aws_config::{BehaviorVersion, Region};
-use aws_credential_types::Credentials;
-use aws_sdk_s3::{Client as S3Client, config::Builder as S3ConfigBuilder, primitives::ByteStream};
+use aws_sdk_s3::Client as S3Client;
 use axum::{
     Json, Router, ServiceExt,
     body::Body,
@@ -63,6 +61,7 @@ pub mod schedule;
 pub mod schema_change;
 pub mod security;
 pub mod sources;
+pub mod storage_migration;
 pub mod sql_rules;
 pub mod transfers;
 #[cfg(test)]
@@ -76,7 +75,6 @@ pub struct AppState {
     pub deployments: Arc<RwLock<HashMap<String, Deployment>>>,
     pub db_locks: LockMap,
     pub s3: Option<S3Client>,
-    pub artifact_bucket: String,
     pub data_bucket: String,
     pub data_root: PathBuf,
     /// Where file bytes live and how many a Deployment may hold.
@@ -107,7 +105,6 @@ impl AppState {
             deployments: Arc::new(RwLock::new(HashMap::new())),
             db_locks: LockMap::default(),
             s3: None,
-            artifact_bucket: "artifacts".into(),
             data_bucket: "data".into(),
             files: file_store::Files::local(root),
             data_root: root.into(),
@@ -519,6 +516,7 @@ fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::resul
 pub async fn operator_command(installation: &installation::Installation) -> Result<bool> {
     Ok(copies::operator_command(installation).await?
         || file_store::operator_command().await?
+        || storage_migration::operator_command().await?
         || recovery::operator_command(installation).await?)
 }
 
@@ -596,9 +594,10 @@ pub async fn state_from_env(
     let public_origin = startup.hosts.public_origin.clone();
     tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
     let account_settings = accounts::AccountSettings::from_env(&data_root, mail_key, &public_origin, &installation)?;
-    let s3 = s3_client_from_env().await;
-    let artifact_bucket = env("KONAE_ARTIFACT_BUCKET", "konae-apps");
-    let data_bucket = env("KONAE_DATA_BUCKET", "konae-data");
+    let (s3, data_bucket) = match copy_bucket_from_env()? {
+        Some((client, bucket)) => (Some(client), bucket),
+        None => (None, String::new()),
+    };
     let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
     let files = file_store::Files::from_env(&data_root).await?;
@@ -606,7 +605,6 @@ pub async fn state_from_env(
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
         s3,
-        artifact_bucket,
         data_bucket,
         data_root,
         files,
@@ -672,48 +670,20 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({"ok": true, "kernel": "konae-rust", "version": 1,
-        "artifactStore": if state.s3.is_some() { "filesystem+s3" } else { "filesystem" },
         "copies": state.copies.health(),
         "files": {"store": state.files.store.kind(), "quotaBytes": state.files.limits.quota_bytes,
             "maxFileBytes": state.files.limits.max_file_bytes},
         "mail": state.accounts.queue.as_ref().map(|queue| queue.health())}))
 }
 
-/// The S3 client for artifacts and copies, or None when KONAE_S3_ENDPOINT is unset.
-pub async fn s3_client_from_env() -> Option<S3Client> {
-    let endpoint = std::env::var("KONAE_S3_ENDPOINT").ok()?;
-    let credentials = Credentials::new(
-        env("KONAE_S3_ACCESS_KEY", "konae"),
-        env("KONAE_S3_SECRET_KEY", "konae-secret"),
-        None,
-        None,
-        "konae-config",
-    );
-    let sdk_config = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(env("KONAE_S3_REGION", "us-east-1")))
-        .credentials_provider(credentials)
-        .endpoint_url(endpoint)
-        .load()
-        .await;
-    let s3_config = S3ConfigBuilder::from(&sdk_config)
-        .force_path_style(true)
-        .build();
-    Some(S3Client::from_conf(s3_config))
+/// The client and bucket of copies and the revocation record, or `None`
+/// when no S3 endpoint is set.
+pub fn copy_bucket_from_env() -> Result<Option<(S3Client, String)>> {
+    Ok(file_store::S3Settings::copies(&file_store::env_var)?.map(|settings| (file_store::s3_client(&settings), settings.bucket)))
 }
 
 pub fn backup_dir(state: &AppState, id: &str) -> PathBuf {
     layout::backups(&state.data_root, id)
-}
-
-/// Whether the artifact store answers.
-pub async fn test_storage(state: &AppState) -> Response {
-    let Some(s3) = state.s3.as_ref() else {
-        return Json(json!({"result": {"ok": true, "adapter": "filesystem"}})).into_response();
-    };
-    match s3.head_bucket().bucket(&state.artifact_bucket).send().await {
-        Ok(_) => Json(json!({"result": {"ok": true, "adapter": "s3-compatible", "bucket": state.artifact_bucket}})).into_response(),
-        Err(error_value) => error(StatusCode::BAD_GATEWAY, &error_value.to_string()),
-    }
 }
 
 /// Installs a release from its JSON payload: the project, the build and
@@ -867,25 +837,15 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         .await
         .and_then(|()| release_step(&id, "stage_local_artifact"))
     {
-        remove_artifact_version(&state, &id, &artifact_version).await;
+        remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
-    }
-    if let Err(error_value) = upload_artifact(&state, &id, &artifact_version, artifact_files)
-        .await
-        .and_then(|()| release_step(&id, "upload_artifact"))
-    {
-        remove_artifact_version(&state, &id, &artifact_version).await;
-        return error(
-            StatusCode::BAD_GATEWAY,
-            &format!("Artifact upload failed: {error_value}"),
-        );
     }
     let mut notices = Vec::new();
     if let Some(package) = input.initial_package.as_ref() {
         if let Err(error_value) = package::install(&state, package, &id)
             .await
         {
-            remove_artifact_version(&state, &id, &artifact_version).await;
+            remove_staged_dist(&state, &id, &artifact_version).await;
             let _ = tokio::fs::remove_dir_all(&data).await;
             file_store::forget_deployment(state.files.store.as_ref(), &id).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
@@ -894,7 +854,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         match path::arrive(&state, &deployment, package.manifest.path.as_ref()).await {
             Ok(lines) => notices = lines,
             Err(error_value) => {
-                remove_artifact_version(&state, &id, &artifact_version).await;
+                remove_staged_dist(&state, &id, &artifact_version).await;
                 let _ = tokio::fs::remove_dir_all(&data).await;
                 return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
             }
@@ -909,7 +869,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         .unwrap_or_default();
     if !db_path.exists() {
         if let Err(error_value) = initialize_database(&db_path) {
-            remove_artifact_version(&state, &id, &artifact_version).await;
+            remove_staged_dist(&state, &id, &artifact_version).await;
             return error(
                 StatusCode::BAD_REQUEST,
                 &format!("Database initialization failed: {error_value}"),
@@ -923,7 +883,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         open_auth(&state, &deployment).map(drop).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))
     };
     if let Err(error_value) = identity.and_then(|()| release_step(&id, "open_auth")) {
-        remove_artifact_version(&state, &id, &artifact_version).await;
+        remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     // From here until the new release serves, no Server Action runs on this
@@ -936,7 +896,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         Ok(change) => change,
         Err(error_value) => {
             remove_database_files(&staged_database);
-            remove_artifact_version(&state, &id, &artifact_version).await;
+            remove_staged_dist(&state, &id, &artifact_version).await;
             return match refusal::of(&error_value) {
                 Some(refused) => refusal_error(refused),
                 None => error(StatusCode::BAD_REQUEST, &format!("Schema update failed: {error_value}")),
@@ -952,7 +912,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         false
     } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
         remove_database_files(&staged_database);
-        remove_artifact_version(&state, &id, &artifact_version).await;
+        remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The changed database could not take the place of the live one: {error_value}"));
     } else {
         true
@@ -970,13 +930,13 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     {
         recorded.put_back().await;
         undo_database();
-        remove_artifact_version(&state, &id, &artifact_version).await;
+        remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
         recorded.put_back().await;
         undo_database();
-        remove_artifact_version(&state, &id, &artifact_version).await;
+        remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new files could not take the place of dist/: {error_value}"));
     }
     state
@@ -993,7 +953,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
     }
     http::routes_published(&deployment);
-    remove_stale_artifacts(&state, &id, &artifact_version).await;
+    remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
         Ok(value) => value,
         Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
@@ -1021,42 +981,13 @@ pub async fn stage_local_artifact(
     Ok(())
 }
 
-pub async fn upload_artifact(
-    state: &AppState,
-    id: &str,
-    version: &str,
-    files: HashMap<String, Vec<u8>>,
-) -> Result<()> {
-    let Some(s3) = state.s3.as_ref() else {
-        return Ok(());
-    };
-    let mut uploads = tokio::task::JoinSet::new();
-    for (path, contents) in files {
-        if uploads.len() >= 16 {
-            if let Some(result) = uploads.join_next().await {
-                result??;
-            }
-        }
-        let request = s3
-            .put_object()
-            .bucket(&state.artifact_bucket)
-            .key(format!("deployments/{id}/{version}/{path}"))
-            .body(ByteStream::from(contents));
-        uploads.spawn(async move { request.send().await.map(|_| ()).map_err(anyhow::Error::from) });
-    }
-    while let Some(result) = uploads.join_next().await {
-        result??;
-    }
-    Ok(())
-}
-
 /// Where a release's files wait until they become `dist/`.
 pub fn staged_dist(state: &AppState, id: &str, version: &str) -> PathBuf {
     layout::private(&state.data_root, id).join(format!("dist-{version}"))
 }
 
 /// Moves the staged files into `dist/` and the previous ones aside, for
-/// `remove_stale_artifacts` to delete. When the second move fails, the
+/// `remove_stale_dist` to delete. When the second move fails, the
 /// previous files go back to `dist/`.
 pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::Result<()> {
     let dist = layout::dist(&state.data_root, id);
@@ -1181,22 +1112,13 @@ fn release_step(_id: &str, _step: &'static str) -> Result<()> {
 }
 
 /// Best-effort removal of a release that never went live.
-pub async fn remove_artifact_version(state: &AppState, id: &str, version: &str) {
+pub async fn remove_staged_dist(state: &AppState, id: &str, version: &str) {
     let _ = tokio::fs::remove_dir_all(staged_dist(state, id, version)).await;
-    if let Some(s3) = state.s3.as_ref() {
-        let prefix = format!("deployments/{id}/{version}/");
-        if let Ok(keys) = list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
-            for key in keys {
-                let _ = s3.delete_object().bucket(&state.artifact_bucket).key(key).send().await;
-            }
-        }
-    }
 }
 
-/// Deletes the files of every release but the live one: retired or staged
-/// folders beside `dist/`, and S3 keys outside the live version. Failures are
-/// logged because the new release is already live.
-pub async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
+/// Deletes the retired or staged release folders beside `dist/`. Failures
+/// are logged because the new release is already live.
+pub async fn remove_stale_dist(state: &AppState, id: &str) {
     if let Ok(mut entries) = tokio::fs::read_dir(layout::private(&state.data_root, id)).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             if !entry.file_name().to_str().is_some_and(|name| name.starts_with("dist-")) {
@@ -1209,24 +1131,6 @@ pub async fn remove_stale_artifacts(state: &AppState, id: &str, version: &str) {
             if let Err(error_value) = removed {
                 eprintln!("Could not remove stale artifact {}: {error_value}", entry.path().display());
             }
-        }
-    }
-    let Some(s3) = state.s3.as_ref() else { return };
-    let prefix = format!("deployments/{id}/");
-    let live = format!("{prefix}{version}/");
-    let keys = match list_s3_keys(s3, &state.artifact_bucket, &prefix).await {
-        Ok(keys) => keys,
-        Err(error_value) => {
-            eprintln!("Could not list stale artifacts for {id}: {error_value}");
-            return;
-        }
-    };
-    for key in keys {
-        if key.starts_with(&live) {
-            continue;
-        }
-        if let Err(error_value) = s3.delete_object().bucket(&state.artifact_bucket).key(&key).send().await {
-            eprintln!("Could not remove stale artifact {key}: {error_value}");
         }
     }
 }
@@ -2094,22 +1998,7 @@ pub async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str
         anyhow::bail!("invalid artifact path");
     }
     let local = layout::dist(&state.data_root, &deployment.id).join(path);
-    match tokio::fs::read(local).await {
-        Ok(bytes) => Ok(bytes),
-        Err(local_error) => {
-            let Some(s3) = state.s3.as_ref() else {
-                return Err(local_error.into());
-            };
-            let key = format!("deployments/{}/{}/{path}", deployment.id, deployment.artifact_version);
-            let object = s3
-                .get_object()
-                .bucket(&state.artifact_bucket)
-                .key(key)
-                .send()
-                .await?;
-            Ok(object.body.collect().await?.into_bytes().to_vec())
-        }
-    }
+    Ok(tokio::fs::read(local).await?)
 }
 
 pub fn private_login_page(policy: &SignupPolicy, verification: auth::Verification, google: bool) -> Response {
@@ -3420,7 +3309,8 @@ pub async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<V
             .prefix(prefix)
             .set_continuation_token(continuation.take())
             .send()
-            .await?;
+            .await
+            .with_context(|| format!("Listing s3://{bucket}/{prefix} failed"))?;
         keys.extend(page.contents().iter().filter_map(|object| object.key().map(str::to_owned)));
         match page.next_continuation_token() {
             Some(token) if page.is_truncated() == Some(true) => continuation = Some(token.to_owned()),
@@ -5067,7 +4957,7 @@ pub mod tests {
         let list = |table: &str, column: &str| json!({"kind": "query", "access": "anonymous", "statement": format!("SELECT {column} FROM {table} ORDER BY id LIMIT 50"), "bindings": []});
         let both = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n";
         let notes_only = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n";
-        for step in ["stage_local_artifact", "upload_artifact", "open_auth", "schema_change", "persist_deployment", "switch_dist"] {
+        for step in ["stage_local_artifact", "open_auth", "schema_change", "persist_deployment", "switch_dist"] {
             let root = std::env::temp_dir().join(format!("konae-release-step-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);

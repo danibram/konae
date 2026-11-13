@@ -16,7 +16,7 @@ kernel-rs/
 └── konae/    Konae: the `konae` binary, which links the library
 ```
 
-`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, applies the schema change `app/schema.sql` asks of `data/database.sqlite`, and serves it with every primitive: Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
+`kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, applies the schema change `app/schema.sql` asks of `data/database.sqlite`, and serves it with every primitive: Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate`, `files-reconcile`, `storage-migrate` and `artifacts-recover`.
 
 `konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics and the project list. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
 
@@ -51,7 +51,8 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `provider.rs` | A provider's signature schemes, a route's `fields` and the memory of accepted deliveries |
 | `calls.rs` | Call actions, their queue and worker, the address rules and `then` mutations |
 | `usage.rs` | Usage and Signals |
-| `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the quotas, `files-migrate` and `files-reconcile` |
+| `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the S3 settings, the quotas, `files-migrate` and `files-reconcile` |
+| `storage_migration.rs` | `storage-migrate` and `artifacts-recover`, which move an installation from the older S3 settings to one bucket |
 | `files.rs` | Changing a file's visibility and deleting it |
 | `transfers.rs` | Chunked transfers in 64 KiB blocks, an app user's upload body in one request, and file upload receipts |
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
@@ -138,7 +139,7 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 
 A bare `kernel` keeps no owner and no audit log. Under Konae the same Kernel adds `owners.sqlite` and `mcp.sqlite` to the stores a copy carries and a restore installs.
 
-With an S3 file store the bytes of uploads live in the data bucket, and `data/files/index.json` in the app folder still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). With S3 configured, the Kernel also uploads each artifact to the artifact bucket and reads it back only when the local file is missing.
+With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation's bucket, and `data/files/index.json` in the app folder still decides which files exist and who may read them ([ADR-0009](./adr/0009-file-bytes-go-through-one-store-and-the-index-stays-with-the-app.md)). SQLite, sources and `dist/` stay local. With `KONAE_COPY_S3=1`, copies go to `copies/` in the same bucket and carry their own file bytes, so a copy restores a file deleted after it was made.
 
 ## Two doors, one set of refusals
 
@@ -222,7 +223,7 @@ object-src 'none'; base-uri 'none'
 A fragment page in a Build Artifact inlines the runtime and the compiled module. A whole-document page loads the runtime from `/runtime.js` and its modules from the app's origin. The Kernel hashes every inline `<script>` of each HTML response and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, Blob scripts and scripts from other origins do not run.
 
 - Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML` and the artifact inlines `styles.css`. Google Fonts is the only other origin, because the templates import it. Neither font host can read app data.
-- Images and media accept `blob:` and `data:` because `miniapp.files.read` hands a file to the page as a Blob URL.
+- Images and media accept `blob:` and `data:` so a page can show bytes it built itself, such as a generated PDF or an image preview before upload.
 - `connect-src 'self'` limits `fetch` to the app's origin, plus the origins the manifest's `connects` lists, at most 10. A request that needs a secret or a key is a call action, which the Kernel sends.
 
 Every host sends `frame-ancestors 'none'` and `X-Frame-Options: DENY`. Konae's pages on the editor host, such as owner sign-in, get `default-src 'self'` with their script hashes, and its JSON and errors get `default-src 'none'`. When `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` is HTTPS, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`. A custom domain gets `max-age=31536000` alone, because the names under the owner's domain are not the installation's.

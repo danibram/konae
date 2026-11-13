@@ -51,7 +51,7 @@ The Kernel stores small files for one Deployment, in its file store. A file is p
     ```
 
     Pass `{ visibility: "public" }` only when every visitor of a public app may read the bytes.
-4. Show a file with `files.url`. It returns the path `/_konae/files/<id>` on the app's own origin, which `img`, `fetch` and a link all reach. `files.upload` returns the same path as `url`. A Blob URL from `files.list` cannot be fetched again under the page's policy.
+4. Show a file with `files.url`. It returns the path `/_konae/files/<id>` on the app's own origin, which `img`, `fetch` and a link all reach. `files.upload` returns the same path as `url`. `files.list` returns the same path as `url` for each file, without reading the bytes.
 
     ```js
     image.src = await miniapp.files.url(photo.file_id);

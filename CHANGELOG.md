@@ -8,6 +8,9 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ### Added
 
+- `KONAE_S3_BUCKET` names one private bucket for the installation. File bytes go under `files/`, and with `KONAE_COPY_S3=1` copies and the revocation record go under `copies/`, all with the `KONAE_S3_*` key pair. The older `KONAE_FILES_S3_*`, `KONAE_DATA_BUCKET` and `KONAE_COPY_S3_PREFIX` settings keep working, and the Kernel refuses to start with both.
+- `storage-migrate --from <settings file>` moves file bytes from the store an older settings file names to the store of the current environment, reads each one back by SHA-256, and switches `files-store.json` only when all pass. `--dry-run` writes nothing. It keeps the source, can run again after a stop, refuses a destination holding another installation's files, and opens every copy manifest and the revocation record with the new keys before it switches. It does not move copies. Run with the settings swapped, it moves the files back.
+- `artifacts-recover --from <settings file>` writes into `dist/` any file of a live release that only the older artifact bucket holds.
 - Usage shows each published app's current storage by database, uploaded files, app accounts, Usage history, published pages and sources, with limits where they apply. Backups appear separately.
 - Usage counts daily activity per signed-in app account, including app opens and successful actions. Queued service calls count once, and anonymous visitors and sessions where an owner entered as an app user add no per-account activity. The app's export carries this history.
 - Usage compares operations and storage across apps with bar charts, and shows daily active accounts and activity by account alongside tables. `usage_summary` and `usage_overview` expose the new account and storage figures over MCP.
@@ -16,9 +19,14 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 - `miniapp.files.upload` sends the file in one `PUT /_konae/transfers/<id>` instead of one MCP call per 64 KiB, so a 2 MiB photo takes four requests instead of about seventy. Against an older Kernel it still sends blocks.
 - `miniapp.files.upload` returns the file's path, the one `files.url` gives, as `url`, instead of downloading the file again for a Blob URL.
+- `miniapp.files.list` returns each file's path as `url`, the one `files.url` gives, and reads no file bytes. It used to download every listed file for a Blob URL.
 - `GET /_konae/files/<id>` answers with an ETag and `Cache-Control: private, no-cache`. A browser that holds the file gets 304 after the Kernel checks the caller, with no read from the bucket.
 - `konae dev` defaults to 1 TiB per uploaded file and per app's uploaded files for local testing. `KONAE_FILE_MAX_BYTES` and `KONAE_FILES_QUOTA_BYTES` can set lower limits; editor previews and published Deployments keep their own limits.
 - The editor's new-project dialog selects Private notes by default and labels every template Public or Private. Choosing Shared list still creates a public app with anonymous writes.
+
+### Removed
+
+- The Kernel no longer copies Build Artifacts to `KONAE_ARTIFACT_BUCKET` or reads a missing `dist/` file from there, and the owner tool `storage_test` is gone. Every app is served from its `dist/`. On an installation that used the artifact bucket, run `artifacts-recover` before the first start of this version.
 
 ### Security
 

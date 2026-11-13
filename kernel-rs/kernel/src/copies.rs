@@ -38,7 +38,7 @@ use ring::{
 };
 
 use crate::{
-    AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery, s3_client_from_env,
+    AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery,
     safe_relative_path,
 };
 
@@ -50,6 +50,8 @@ const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "
 /// The databases at the data root come from the `Installation` the Kernel
 /// was started with; `mail.sqlite` keeps its links sealed in a copy.
 const MANIFEST: &str = "manifest.json";
+/// The prefix of copies in the installation's one bucket.
+pub const S3_PREFIX: &str = "copies/";
 /// The only cipher a copy names in its manifest.
 const ENCRYPTION: &str = "AES-256-GCM";
 const KEEP_RECENT: usize = 24;
@@ -83,13 +85,23 @@ pub struct CopyConfig {
 
 impl CopyConfig {
     pub fn from_env(data_root: &Path, s3_configured: bool) -> Result<Option<Self>> {
-        let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
         // Refuses a short secret at startup rather than at the first copy.
         CopyKey::from_env()?;
+        Self::from_vars(data_root, s3_configured, &crate::file_store::env_var)
+    }
+
+    pub fn from_vars(data_root: &Path, s3_configured: bool, get: crate::file_store::Vars<'_>) -> Result<Option<Self>> {
+        let unified = crate::file_store::unified(get)?;
+        let s3_prefix = match get("KONAE_COPY_S3").as_deref() {
+            None => get("KONAE_COPY_S3_PREFIX"),
+            Some("1") if unified => Some(S3_PREFIX.to_owned()),
+            Some("1") => bail!("KONAE_COPY_S3=1 needs KONAE_S3_BUCKET. The older settings name the prefix with KONAE_COPY_S3_PREFIX."),
+            Some(_) => bail!("KONAE_COPY_S3 must be 1 when set."),
+        };
         Self::parse(
-            read("KONAE_COPY_DIR").as_deref(),
-            read("KONAE_COPY_S3_PREFIX").as_deref(),
-            read("KONAE_COPY_INTERVAL_SECONDS").as_deref(),
+            get("KONAE_COPY_DIR").as_deref(),
+            s3_prefix.as_deref(),
+            get("KONAE_COPY_INTERVAL_SECONDS").as_deref(),
             data_root,
             s3_configured,
         )
@@ -113,14 +125,9 @@ impl CopyConfig {
             targets.push(Target::Directory(directory));
         }
         if let Some(prefix) = s3_prefix {
-            ensure!(s3_configured, "KONAE_COPY_S3_PREFIX needs KONAE_S3_ENDPOINT.");
+            ensure!(s3_configured, "Copies to S3 need KONAE_S3_ENDPOINT.");
             let prefix = normalize_prefix(prefix);
             ensure!(!prefix.is_empty(), "KONAE_COPY_S3_PREFIX must name a prefix, such as copies/.");
-            // Publishing deletes stale artifact keys under the bucket's deployments/<id>/.
-            ensure!(
-                !prefix.starts_with("deployments/"),
-                "KONAE_COPY_S3_PREFIX must not start with deployments/, where artifacts live."
-            );
             targets.push(Target::S3 { prefix });
         }
         if targets.is_empty() {
@@ -157,13 +164,24 @@ pub struct CopyKey {
 
 impl CopyKey {
     pub fn from_env() -> Result<Option<Self>> {
-        match std::env::var("KONAE_COPY_SECRET").ok().filter(|value| !value.is_empty()) {
+        Self::from_vars(&|name| std::env::var(name).ok())
+    }
+
+    /// `get` returns the secret as written, untrimmed, as the environment does.
+    pub fn from_vars(get: crate::file_store::Vars<'_>) -> Result<Option<Self>> {
+        match get("KONAE_COPY_SECRET").filter(|value| !value.is_empty()) {
             None => Ok(None),
             Some(secret) => {
                 ensure!(secret.len() >= 32, "KONAE_COPY_SECRET must be at least 32 characters.");
                 Ok(Some(Self::derive(&secret)))
             }
         }
+    }
+
+    /// The `keyCheck` a sealed manifest carries. It tells two secrets apart
+    /// without revealing either.
+    pub fn fingerprint(&self) -> &str {
+        &self.check
     }
 
     pub fn derive(secret: &str) -> Self {
@@ -919,8 +937,7 @@ async fn source_for(from: &str) -> Result<Source> {
         Some(location) => {
             let (bucket, prefix) = location.split_once('/').unwrap_or((location, ""));
             ensure!(!bucket.is_empty(), "{}", restore_usage());
-            let client = s3_client_from_env()
-                .await
+            let (client, _) = crate::copy_bucket_from_env()?
                 .context("Set KONAE_S3_ENDPOINT and its credentials to restore from S3.")?;
             Source::S3 { client, bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) }
         }
@@ -1022,6 +1039,59 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
+/// The checks `restore` makes of a manifest before it reads any copied
+/// file: its version, and on S3 its encryption, secret and MAC. `outcome`
+/// ends each refusal and says what the caller left undone.
+fn check_manifest(source: &Source, copy: &str, manifest: &Manifest, key: Option<&CopyKey>, accept_unsigned: bool, outcome: &str) -> Result<()> {
+    ensure!(manifest.version == 1, "The manifest version of copy {copy} is not supported. {outcome}");
+    // Copies on S3 are sealed whenever a secret is set. A plain manifest there
+    // is not one this installation made, so the secret is not set aside for it.
+    ensure!(
+        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
+        "Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set. Unset it to restore a copy made without it. {outcome}"
+    );
+    if let Some(encryption) = &manifest.encryption {
+        ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open. {outcome}", encryption.algorithm);
+        let key = key.with_context(|| format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. {outcome}"))?;
+        ensure!(
+            key.check == encryption.key_check,
+            "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. {outcome}"
+        );
+        match &manifest.mac {
+            Some(mac) => ensure!(
+                key.verify_manifest(copy, manifest, mac),
+                "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. {outcome}"
+            ),
+            None if accept_unsigned => println!("KONAE_COPY_ACCEPT_UNSIGNED is set: accepting copy {copy}, whose manifest carries no MAC."),
+            None => bail!("Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to accept it anyway. {outcome}"),
+        }
+    }
+    Ok(())
+}
+
+/// What `check_s3` read.
+#[derive(Debug)]
+pub struct CheckedCopies {
+    pub copies: usize,
+    /// Entries of the revocation record, or `None` when the location keeps none.
+    pub entries: Option<usize>,
+}
+
+/// Opens the manifest of every complete copy under `prefix`, and the
+/// revocation record beside them, with the checks `restore` makes. It reads
+/// no copied file, so it proves the location and the secret, not each byte.
+pub async fn check_s3(client: S3Client, bucket: &str, prefix: &str, key: Option<&CopyKey>, accept_unsigned: bool, outcome: &str) -> Result<CheckedCopies> {
+    let source = Source::S3 { client, bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) };
+    let ids = source.complete_copies().await?;
+    for copy in &ids {
+        let bytes = source.read(copy, MANIFEST).await.with_context(|| format!("Could not read the manifest of copy {copy}. {outcome}"))?;
+        let manifest: Manifest = serde_json::from_slice(&bytes).with_context(|| format!("The manifest of copy {copy} is invalid. {outcome}"))?;
+        check_manifest(&source, copy, &manifest, key, accept_unsigned, outcome)?;
+    }
+    let entries = source.record(key, accept_unsigned).await.with_context(|| format!("The revocation record does not open. {outcome}"))?.map(|entries| entries.len());
+    Ok(CheckedCopies { copies: ids.len(), entries })
+}
+
 /// `accept_unsigned` is `KONAE_COPY_ACCEPT_UNSIGNED`, read once by the caller.
 async fn restore(
     source: &Source,
@@ -1055,35 +1125,7 @@ async fn restore(
         .await
         .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
-    ensure!(manifest.version == 1, "The copy's manifest version is not supported.");
-    // Copies on S3 are sealed whenever a secret is set. A plain manifest there
-    // is not one this installation made, so the secret is not set aside for it.
-    ensure!(
-        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
-        "Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set. Unset it to restore a copy made without it. Nothing was installed."
-    );
-    if let Some(encryption) = &manifest.encryption {
-        ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open.", encryption.algorithm);
-        let key = key.with_context(|| {
-            format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
-        })?;
-        ensure!(
-            key.check == encryption.key_check,
-            "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
-        );
-        match &manifest.mac {
-            Some(mac) => ensure!(
-                key.verify_manifest(&copy, &manifest, mac),
-                "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
-            ),
-            None if accept_unsigned => {
-                println!("KONAE_COPY_ACCEPT_UNSIGNED is set: restoring copy {copy} without checking its manifest, which carries no MAC.")
-            }
-            None => bail!(
-                "Copy {copy} has no manifest MAC: an older Kernel made it, or it was altered. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to restore it anyway. Nothing was installed."
-            ),
-        }
-    }
+    check_manifest(source, &copy, &manifest, key, accept_unsigned, "Nothing was installed.")?;
     for file in &manifest.files {
         let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
         ensure!(
@@ -1361,7 +1403,6 @@ mod tests {
         assert_eq!(config.interval, Duration::from_secs(3600));
         let refuse = |dir, prefix, interval, s3| CopyConfig::parse(dir, prefix, interval, data, s3).unwrap_err().to_string();
         assert!(refuse(Some("/srv/konae/data/copies"), None, None, false).contains("outside"));
-        assert!(refuse(None, Some("deployments/x"), None, true).contains("must not start with deployments/"));
         assert!(refuse(None, Some("copies"), None, false).contains("KONAE_S3_ENDPOINT"));
         assert!(refuse(Some("/mnt/second"), None, Some("0"), false).contains("above zero"));
     }

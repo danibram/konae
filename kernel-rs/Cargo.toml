@@ -9,7 +9,6 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1"
 base64 = "0.22"
-aws-config = "1"
 aws-credential-types = "1"
 aws-sdk-s3 = "1"
 axum = "0.8"

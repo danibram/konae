@@ -108,7 +108,7 @@ const fixedVisibility: SdkError = { message: "File visibility is fixed to app-us
 const notUploader: SdkError = { message: "Only the person who uploaded this file may change or delete it.", when: "the caller may read the file but did not upload it", source: "kernel" };
 const unreadable: SdkError = { message: "File not found.", when: "the file does not exist, was deleted, or the caller may not read it", source: "kernel" };
 
-const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is a Blob URL; it keeps the type for image/png, image/jpeg, image/gif, image/webp and image/avif and is application/octet-stream otherwise";
+const fileShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }. ownerId is present only on files the caller uploaded. url is the path files.url returns for the file. The Kernel serves JavaScript, HTML, XML and SVG types as application/octet-stream";
 const storedShape = "{ id, name, type, size, visibility, createdAt, ownerId, url }, where url is the path files.url returns for the new file";
 
 export const sdkContract = {
@@ -365,7 +365,7 @@ export const sdkContract = {
       notes: [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
-        "files.list downloads over MCP, checks the SHA-256 and returns a Blob URL. The page's policy allows connect-src 'self' only, so fetch cannot read a Blob URL again. files.upload sends the file's bytes in one request and returns the file's path as url, without downloading it again. To fetch a file, or to show one without downloading every file, use files.url. It returns the file's path GET /_konae/files/<id>, under the page's base path, on the app's own origin, which img, fetch and a link all reach.",
+        "files.list returns metadata and the same-origin file path without reading file bytes. files.upload sends the file's bytes in one request and returns its path as url. The Kernel checks access on every file request, including conditional requests.",
         "The uploader alone changes a file's visibility with files.update or deletes it with files.delete. A deleted file stops counting against the Deployment's file quota and its ID answers File not found from then on, through every door.",
         "The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.",
         "A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.",
@@ -374,18 +374,15 @@ export const sdkContract = {
         {
           name: "list",
           signature: "miniapp.files.list()",
-          summary: "List and download every file the current actor may read.",
+          summary: "List metadata and same-origin URLs for files the current actor may read.",
           signedOut: true,
-          tools: ["files_list", "files_read", "transfer_read", "transfer_cancel"],
+          tools: ["files_list"],
           args: [],
           returns: `an array of ${fileShape}`,
-          errors: download,
-          limits: [
-            "every listed file is downloaded, one at a time, on each call",
-            "each file up to the installation's per-file limit",
-          ],
+          errors: [],
+          limits: [],
           examples: [{ code: "const files = await miniapp.files.list();", comment: "files visible to the current visitor or app user" }],
-          preview: "Reads files from browser storage and returns data URLs.",
+          preview: "Returns metadata and browser-storage data URLs. The editor preview has no Kernel file route.",
         },
         {
           name: "upload",

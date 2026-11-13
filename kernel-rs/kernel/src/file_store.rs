@@ -188,7 +188,7 @@ pub struct S3Store {
     pub settings: S3Settings,
 }
 
-/// `KONAE_FILES_S3_*`.
+/// A bucket, prefix and the keys that reach it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct S3Settings {
     pub endpoint: String,
@@ -201,22 +201,62 @@ pub struct S3Settings {
     pub path_style: bool,
 }
 
+/// Looks up one setting by name, from the environment or a settings file.
+pub type Vars<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Reads one setting from the environment, trimmed. An empty value counts as unset.
+pub fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty())
+}
+
+/// The settings `KONAE_S3_BUCKET` replaces. A Kernel refuses to start with
+/// both, so an installation is either on one bucket or on the old settings.
+const LEGACY_SETTINGS: [&str; 10] = [
+    "KONAE_FILES_S3_BUCKET", "KONAE_FILES_S3_ENDPOINT", "KONAE_FILES_S3_ACCESS_KEY", "KONAE_FILES_S3_SECRET_KEY",
+    "KONAE_FILES_S3_REGION", "KONAE_FILES_S3_PREFIX", "KONAE_FILES_S3_PATH_STYLE", "KONAE_COPY_S3_PREFIX",
+    "KONAE_ARTIFACT_BUCKET", "KONAE_DATA_BUCKET",
+];
+
+/// Whether `KONAE_S3_BUCKET` names the installation's one bucket.
+pub fn unified(get: Vars<'_>) -> Result<bool> {
+    if get("KONAE_S3_BUCKET").is_none() {
+        return Ok(false);
+    }
+    for name in LEGACY_SETTINGS {
+        ensure!(get(name).is_none(), "KONAE_S3_BUCKET cannot be combined with the older setting {name}. Remove {name}, or unset KONAE_S3_BUCKET to keep the older settings.");
+    }
+    Ok(true)
+}
+
+fn path_style(get: Vars<'_>, name: &str) -> Result<bool> {
+    match get(name).as_deref() {
+        None | Some("1") | Some("true") => Ok(true),
+        Some("0") | Some("false") => Ok(false),
+        Some(_) => bail!("{name} must be 1 or 0."),
+    }
+}
+
 impl S3Settings {
-    /// `None` when `KONAE_FILES_S3_BUCKET` is unset: the files stay in the folder.
+    /// The store for file bytes. It is `files/` in `KONAE_S3_BUCKET`, or the
+    /// older `KONAE_FILES_S3_*` bucket, and `None` keeps them in the data
+    /// directory.
     pub fn from_env() -> Result<Option<Self>> {
-        let get = |name: &str| std::env::var(name).ok().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+        Self::files(&env_var)
+    }
+
+    pub fn files(get: Vars<'_>) -> Result<Option<Self>> {
+        if unified(get)? {
+            return Self::installation(get);
+        }
         let Some(bucket) = get("KONAE_FILES_S3_BUCKET") else {
+            // KONAE_FILES_S3_REGION and KONAE_FILES_S3_PATH_STYLE alone
+            // have always been ignored, so an older installation may carry them.
             for name in ["KONAE_FILES_S3_ENDPOINT", "KONAE_FILES_S3_ACCESS_KEY", "KONAE_FILES_S3_SECRET_KEY", "KONAE_FILES_S3_PREFIX"] {
                 ensure!(get(name).is_none(), "{name} is set but KONAE_FILES_S3_BUCKET is not. Set the bucket, or unset the other KONAE_FILES_S3_ settings to keep files in the data directory.");
             }
             return Ok(None);
         };
         let required = |name: &str| get(name).with_context(|| format!("KONAE_FILES_S3_BUCKET is set, so {name} is required."));
-        let path_style = match get("KONAE_FILES_S3_PATH_STYLE").as_deref() {
-            None | Some("1") | Some("true") => true,
-            Some("0") | Some("false") => false,
-            Some(other) => bail!("KONAE_FILES_S3_PATH_STYLE must be 1 or 0, not {other:?}."),
-        };
         Ok(Some(Self {
             endpoint: required("KONAE_FILES_S3_ENDPOINT")?,
             region: get("KONAE_FILES_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
@@ -224,10 +264,49 @@ impl S3Settings {
             prefix: normalize_prefix(&get("KONAE_FILES_S3_PREFIX").unwrap_or_default()),
             access_key: required("KONAE_FILES_S3_ACCESS_KEY")?,
             secret_key: required("KONAE_FILES_S3_SECRET_KEY")?,
-            path_style,
+            path_style: path_style(get, "KONAE_FILES_S3_PATH_STYLE")?,
+        }))
+    }
+
+    /// The installation's bucket with `files/` as prefix, from `KONAE_S3_*`.
+    /// `None` without `KONAE_S3_BUCKET`.
+    fn installation(get: Vars<'_>) -> Result<Option<Self>> {
+        let Some(bucket) = get("KONAE_S3_BUCKET") else { return Ok(None) };
+        let required = |name: &str| get(name).with_context(|| format!("KONAE_S3_BUCKET is set, so {name} is required."));
+        Ok(Some(Self {
+            endpoint: required("KONAE_S3_ENDPOINT")?,
+            region: get("KONAE_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            bucket,
+            prefix: FILES_PREFIX.into(),
+            access_key: required("KONAE_S3_ACCESS_KEY")?,
+            secret_key: required("KONAE_S3_SECRET_KEY")?,
+            path_style: path_style(get, "KONAE_S3_PATH_STYLE")?,
+        }))
+    }
+
+    /// The bucket that copies and the revocation record use, with an empty
+    /// prefix. It is `KONAE_S3_BUCKET`, or the older `KONAE_DATA_BUCKET`, and
+    /// `None` without `KONAE_S3_ENDPOINT`. The older settings keep their
+    /// development keys as defaults.
+    pub fn copies(get: Vars<'_>) -> Result<Option<Self>> {
+        if unified(get)? {
+            return Ok(Self::installation(get)?.map(|settings| Self { prefix: String::new(), ..settings }));
+        }
+        let Some(endpoint) = get("KONAE_S3_ENDPOINT") else { return Ok(None) };
+        Ok(Some(Self {
+            endpoint,
+            region: get("KONAE_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            bucket: get("KONAE_DATA_BUCKET").unwrap_or_else(|| "konae-data".into()),
+            prefix: String::new(),
+            access_key: get("KONAE_S3_ACCESS_KEY").unwrap_or_else(|| "konae".into()),
+            secret_key: get("KONAE_S3_SECRET_KEY").unwrap_or_else(|| "konae-secret".into()),
+            path_style: path_style(get, "KONAE_S3_PATH_STYLE")?,
         }))
     }
 }
+
+/// The prefix of file bytes in the installation's one bucket.
+pub const FILES_PREFIX: &str = "files/";
 
 fn normalize_prefix(prefix: &str) -> String {
     let trimmed = prefix.trim_matches('/');
@@ -236,19 +315,7 @@ fn normalize_prefix(prefix: &str) -> String {
 
 impl S3Store {
     pub fn new(settings: S3Settings) -> Self {
-        let credentials = aws_credential_types::Credentials::new(&settings.access_key, &settings.secret_key, None, None, "konae-files");
-        let config = aws_sdk_s3::config::Builder::new()
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .region(aws_sdk_s3::config::Region::new(settings.region.clone()))
-            .credentials_provider(credentials)
-            .endpoint_url(&settings.endpoint)
-            .force_path_style(settings.path_style)
-            // A checksum header on every request is an SDK default that not
-            // every S3-compatible store accepts; the Kernel checks SHA-256 itself.
-            .request_checksum_calculation(aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired)
-            .response_checksum_validation(aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired)
-            .build();
-        Self { client: S3Client::from_conf(config), settings }
+        Self { client: s3_client(&settings), settings }
     }
 
     fn key(&self, deployment: &str, file: &str) -> String {
@@ -262,13 +329,8 @@ impl S3Store {
         let mut continuation: Option<String> = None;
         loop {
             let mut request = self.client.list_objects_v2().bucket(&self.settings.bucket).prefix(prefix);
-            if delimiter {
-                request = request.delimiter("/");
-            }
-            let page = request
-                .set_continuation_token(continuation.take())
-                .send()
-                .await
+            if delimiter { request = request.delimiter("/"); }
+            let page = request.set_continuation_token(continuation.take()).send().await
                 .with_context(|| format!("Listing s3://{}/{prefix} failed", self.settings.bucket))?;
             for object in page.contents() {
                 if let Some(key) = object.key() {
@@ -284,6 +346,23 @@ impl S3Store {
         }
         Ok((keys, folders))
     }
+}
+
+/// The one client builder for files, copies and the revocation record.
+pub fn s3_client(settings: &S3Settings) -> S3Client {
+    let credentials = aws_credential_types::Credentials::new(&settings.access_key, &settings.secret_key, None, None, "konae-storage");
+    let config = aws_sdk_s3::config::Builder::new()
+        .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+        .region(aws_sdk_s3::config::Region::new(settings.region.clone()))
+        .credentials_provider(credentials)
+        .endpoint_url(&settings.endpoint)
+        .force_path_style(settings.path_style)
+        // A checksum header on every request is an SDK default that not
+        // every S3-compatible store accepts; the Kernel checks SHA-256 itself.
+        .request_checksum_calculation(aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired)
+        .response_checksum_validation(aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired)
+        .build();
+    S3Client::from_conf(config)
 }
 
 fn not_found<E>(error: &aws_sdk_s3::error::SdkError<E>) -> bool {
@@ -518,14 +597,14 @@ const ORPHAN_GRACE_MS: u64 = 60 * 60 * 1000;
 
 /// What `files-store.json` records: `{"store":"local"}`, or the bucket and
 /// prefix of an S3 store. Keys and region stay in the environment.
-fn describe(settings: Option<&S3Settings>) -> serde_json::Value {
+pub(crate) fn describe(settings: Option<&S3Settings>) -> serde_json::Value {
     match settings {
         None => serde_json::json!({"store": "local"}),
         Some(s3) => serde_json::json!({"store": "s3", "endpoint": s3.endpoint, "bucket": s3.bucket, "prefix": s3.prefix}),
     }
 }
 
-fn spoken(recorded: &serde_json::Value) -> String {
+pub(crate) fn spoken(recorded: &serde_json::Value) -> String {
     match recorded["store"].as_str() {
         Some("s3") => format!(
             "s3://{}/{} at {}",
@@ -537,7 +616,7 @@ fn spoken(recorded: &serde_json::Value) -> String {
     }
 }
 
-async fn read_marker(data_root: &Path) -> Result<Option<serde_json::Value>> {
+pub(crate) async fn read_marker(data_root: &Path) -> Result<Option<serde_json::Value>> {
     match tokio::fs::read(data_root.join(MARKER_FILE)).await {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| format!("{MARKER_FILE} is not valid JSON."))?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -545,7 +624,7 @@ async fn read_marker(data_root: &Path) -> Result<Option<serde_json::Value>> {
     }
 }
 
-async fn write_marker(data_root: &Path, value: &serde_json::Value) -> Result<()> {
+pub(crate) async fn write_marker(data_root: &Path, value: &serde_json::Value) -> Result<()> {
     crate::write_atomic(&data_root.join(MARKER_FILE), &serde_json::to_vec_pretty(value)?).await?;
     Ok(())
 }
@@ -575,8 +654,8 @@ impl Files {
             Some(recorded) if recorded == wanted => {}
             Some(recorded) => {
                 let command = match (recorded["store"].as_str(), settings.is_some()) {
-                    (Some("s3"), false) => format!("Set the KONAE_FILES_S3_ settings it was started with again, or run {} files-migrate --to local with them set.", crate::program()),
-                    (Some("s3"), true) => "Set the KONAE_FILES_S3_ settings it was started with again; files-migrate moves files between the data directory and one bucket only.".to_owned(),
+                    (Some("s3"), false) => format!("Set the S3 settings it was started with again, or run {} files-migrate --to local with them set.", crate::program()),
+                    (Some("s3"), true) => format!("Set the S3 settings it was started with again, or stop the Kernel and run {} storage-migrate --from <file with those settings> with these settings.", crate::program()),
                     _ => format!("Stop the Kernel and run {} files-migrate --to s3 with these settings first.", crate::program()),
                 };
                 bail!("The files of this installation are in {}, but the settings name {}. {command}", spoken(&recorded), spoken(&wanted));
@@ -820,7 +899,7 @@ pub async fn operator_command() -> Result<bool> {
                 _ => bail!("{}", migrate_usage()),
             };
             let _stopped = hold_while_stopped(&data_root, "files-migrate")?;
-            let settings = S3Settings::from_env()?.context("files-migrate needs the KONAE_FILES_S3_ settings of the bucket, in both directions.")?;
+            let settings = S3Settings::from_env()?.context("files-migrate needs the S3 settings of the bucket, in both directions.")?;
             let recorded = read_marker(&data_root).await?.unwrap_or_else(|| describe(None));
             let bucket = describe(Some(&settings));
             let local = LocalFolder::new(&data_root);
@@ -845,7 +924,7 @@ pub async fn operator_command() -> Result<bool> {
                 summary.bytes,
                 summary.deployments,
                 spoken(&marker),
-                if to == "s3" { "the same KONAE_FILES_S3_ settings" } else { "KONAE_FILES_S3_BUCKET unset" }
+                if to == "s3" { "the same S3 settings" } else { "no KONAE_S3_BUCKET and no KONAE_FILES_S3_BUCKET" }
             );
             Ok(true)
         }
@@ -1142,7 +1221,7 @@ pub mod tests {
         assert_eq!(read_marker(&root).await.unwrap().unwrap(), bucket);
         assert_eq!(Files::open(&root, FileLimits::default(), Some(s3.settings.clone())).await.unwrap().store.kind(), "s3");
         let local_refused = Files::open(&root, FileLimits::default(), None).await.err().unwrap().to_string();
-        assert!(local_refused.contains("Set the KONAE_FILES_S3_ settings it was started with again"), "{local_refused}");
+        assert!(local_refused.contains("Set the S3 settings it was started with again"), "{local_refused}");
 
         migrate(&root, &s3, &local, &describe(None)).await.unwrap();
         assert_eq!(read_all(&local, &deployment, &b).await.unwrap().unwrap(), vec![3u8; 150_000]);

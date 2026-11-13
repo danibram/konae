@@ -39,8 +39,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        aws --endpoint-url http://minio:9000 s3 mb s3://konae-apps || true;
-        aws --endpoint-url http://minio:9000 s3 mb s3://konae-data || true
+        aws --endpoint-url http://minio:9000 s3 mb s3://konae || true
     networks:
       - konae
 
@@ -79,8 +78,7 @@ services:
       KONAE_S3_REGION: us-east-1
       KONAE_S3_ACCESS_KEY: konae
       KONAE_S3_SECRET_KEY: konae-secret
-      KONAE_ARTIFACT_BUCKET: konae-apps
-      KONAE_DATA_BUCKET: konae-data
+      KONAE_S3_BUCKET: konae
       # The gateway has a fixed address on the konae network. The Kernel
       # trusts X-Forwarded-For only from that peer, so login and action limits
       # count the client nginx appended, not the container address.

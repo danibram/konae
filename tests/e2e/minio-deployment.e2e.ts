@@ -7,9 +7,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("builds a multi-file app in the browser, deploys it to MinIO, and persists its data", async ({ page, baseURL }) => {
-  const storage = await page.request.post("/mcp", { data: { jsonrpc: "2.0", id: "storage", method: "tools/call", params: { name: "storage_test", arguments: {} } } });
-  expect(storage.ok()).toBe(true);
-  expect((await storage.json()).result.structuredContent.result).toMatchObject({ ok: true, adapter: "s3-compatible", bucket: "konae-apps" });
+  const health = await page.request.get("/_konae/health");
+  expect(health.ok()).toBe(true);
+  expect((await health.json()).files).toMatchObject({ store: "s3" });
 
   await page.goto("/");
 

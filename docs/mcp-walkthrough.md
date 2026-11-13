@@ -1294,7 +1294,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "chunkBytes": 65536,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
-      "size": 30720,
+      "size": 27648,
       "transferId": "<folder download>"
     },
     "manifest": {
