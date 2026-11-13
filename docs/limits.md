@@ -47,6 +47,7 @@ A Capsule and a Deployment run into these numbers. The Validation Gate and the K
 | Route request body | 64 KiB |
 | Actions and routes without a session or key | 30 per 10 seconds per client address and Deployment |
 | Actions and routes with a session or key | 120 per 10 seconds per app user or key |
+| Action statements running at once | 4 per Deployment, queries and mutations together. A call that gets no slot within 2 seconds answers `rate-limited` with `Retry-After`, as a call over its address limit does. Scheduled runs and the mutations a call's answer triggers are not counted |
 | Unknown or revoked API keys | 10 per minute per client address and Deployment |
 | Signature clock window | 300 seconds |
 | Replay window for one signature | 600 seconds |

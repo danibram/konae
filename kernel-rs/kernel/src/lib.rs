@@ -1305,7 +1305,10 @@ pub async fn invoke_action(
         Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
     } else {
         let _guard = action_lock(&state, &deployment.id, &action.kind).await;
-        run_action(db_path, action, params).await
+        match state.guards.statement_permit(&deployment.id).await {
+            Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+            Err(wait) => return http::rate_limited(wait),
+        }
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
     // Usage and Signals do not count what someone who entered as this account does.
@@ -2737,8 +2740,21 @@ impl Ran {
 }
 
 pub async fn run_action(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
+    run_action_holding(path, action, params, None).await
+}
+
+/// Like `run_action`, for a statement that holds one of the Deployment's
+/// slots (`Guards::statement_permit`). The permit moves into the blocking
+/// thread, so the slot stays held until the statement ends, whether or not
+/// the caller still waits for it.
+pub async fn run_action_in_slot(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>, permit: tokio::sync::OwnedSemaphorePermit) -> Result<Ran> {
+    run_action_holding(path, action, params, Some(permit)).await
+}
+
+async fn run_action_holding(path: PathBuf, action: &ActionDefinition, params: Vec<SqlValue>, permit: Option<tokio::sync::OwnedSemaphorePermit>) -> Result<Ran> {
     let action = action.clone();
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         if action.kind == "query" {
             run_query(&path, &action, params).map(|rows| Ran { answer: Value::from(rows), rows: Vec::new() })
         } else {

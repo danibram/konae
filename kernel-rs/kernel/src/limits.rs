@@ -3,11 +3,12 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use axum::http::HeaderMap;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Anonymous `actions_invoke` calls allowed per client address and Deployment.
 pub const ANONYMOUS_ACTIONS: u32 = 30;
@@ -19,6 +20,21 @@ pub const SIGNED_IN_ACTIONS_PERIOD: Duration = Duration::from_secs(10);
 pub const STATEMENTS_PER_DEPLOYMENT: usize = 4;
 /// How long a call waits for one of them before it is refused.
 pub const STATEMENT_WAIT: Duration = Duration::from_secs(2);
+/// Deployments whose slots the Kernel keeps while none is in use.
+const MAX_TRACKED_DEPLOYMENTS: usize = 10_000;
+
+/// A call that no statement slot freed for. It answers as the per-address
+/// limit does: `rate-limited`, with how long to wait.
+#[derive(Debug)]
+pub struct Busy(pub Duration);
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("rate-limited")
+    }
+}
+
+impl std::error::Error for Busy {}
 /// OAuth client registrations allowed per client address.
 pub const REGISTRATIONS: u32 = 10;
 pub const REGISTRATIONS_PERIOD: Duration = Duration::from_secs(60 * 60);
@@ -152,6 +168,7 @@ pub struct Guards {
     api_key_failures: RateLimiter,
     trusted_proxies: Vec<IpAddr>,
     statement_wait: Duration,
+    statements: Mutex<HashMap<String, Arc<Semaphore>>>,
 }
 
 impl Guards {
@@ -179,6 +196,7 @@ impl Guards {
             api_key_failures: RateLimiter::new(API_KEY_FAILURES, API_KEY_FAILURES_PERIOD, MAX_TRACKED_CLIENTS),
             trusted_proxies,
             statement_wait: STATEMENT_WAIT,
+            statements: Mutex::new(HashMap::new()),
         }
     }
 
@@ -189,11 +207,33 @@ impl Guards {
     }
 
     /// One of the Deployment's statement slots, or how long to tell the
-    /// caller to wait when none frees within the wait.
-    pub async fn statement_permit(&self, _deployment: &str) -> Result<tokio::sync::OwnedSemaphorePermit, Duration> {
-        let _ = self.statement_wait;
-        let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(STATEMENTS_PER_DEPLOYMENT));
-        Ok(slots.acquire_owned().await.expect("the semaphore is never closed"))
+    /// caller to wait when none frees within the wait. The permit holds the
+    /// slot until it is dropped, so move it into the work it guards.
+    pub async fn statement_permit(&self, deployment: &str) -> Result<OwnedSemaphorePermit, Duration> {
+        let slots = self.statement_slots(deployment);
+        match tokio::time::timeout(self.statement_wait, slots.acquire_owned()).await {
+            Ok(Ok(permit)) => Ok(permit),
+            _ => Err(self.statement_wait),
+        }
+    }
+
+    /// The Deployment's semaphore. Once the map reaches its size limit,
+    /// semaphores nobody holds or waits on are dropped, since a fresh one
+    /// behaves the same.
+    fn statement_slots(&self, deployment: &str) -> Arc<Semaphore> {
+        let mut slots = self.statements.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = slots.get(deployment) {
+            return existing.clone();
+        }
+        if slots.len() >= MAX_TRACKED_DEPLOYMENTS {
+            slots.retain(|_, semaphore| Arc::strong_count(semaphore) > 1);
+        }
+        slots.entry(deployment.to_owned()).or_insert_with(|| Arc::new(Semaphore::new(STATEMENTS_PER_DEPLOYMENT))).clone()
+    }
+
+    #[cfg(test)]
+    fn tracked_statements(&self) -> usize {
+        self.statements.lock().unwrap().len()
     }
 
     /// Takes one login or signup attempt for a client address and an email
@@ -506,5 +546,20 @@ mod tests {
         assert!(guards.statement_permit("app").await.is_err());
         drop(held.pop());
         assert!(guards.statement_permit("app").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn idle_statement_slots_are_dropped_at_the_size_limit_and_busy_ones_are_kept() {
+        let guards = Guards::new(Vec::new());
+        let busy = guards.statement_permit("busy").await.unwrap();
+        for i in 0..MAX_TRACKED_DEPLOYMENTS * 2 {
+            drop(guards.statement_permit(&format!("app-{i}")).await.unwrap());
+            assert!(guards.tracked_statements() <= MAX_TRACKED_DEPLOYMENTS);
+        }
+        let mut held = vec![busy];
+        for _ in 1..STATEMENTS_PER_DEPLOYMENT {
+            held.push(guards.statement_permit("busy").await.unwrap());
+        }
+        assert!(guards.with_statement_wait(Duration::from_millis(10)).statement_permit("busy").await.is_err(), "a Deployment with statements running keeps its slots");
     }
 }
