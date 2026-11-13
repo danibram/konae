@@ -39,6 +39,7 @@ pub mod files;
 pub mod folder;
 pub mod google;
 pub mod guard;
+pub mod heap;
 pub mod hostname;
 pub mod hosts;
 pub mod import;
@@ -585,6 +586,8 @@ pub async fn state_from_env(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<(AppState, Option<copies::CopyConfig>)> {
+    // Before any connection opens, so no statement runs without the ceiling.
+    heap::limit_from_env()?;
     let data_root = startup.data_root.clone();
     let public_origin = startup.hosts.public_origin.clone();
     tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
@@ -2498,12 +2501,12 @@ pub fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
         let mut rows = statement.query([])?;
         let mut values = Vec::new();
         let mut result_bytes = 0;
+        let mut budget = ResultBudget::default();
         while let Some(row) = rows.next()? {
-            let mut record = serde_json::Map::new();
-            for (index, name) in names.iter().enumerate() {
-                record.insert(name.clone(), sql_json(row.get_ref(index)?));
-            }
-            values.push(Value::Object(record));
+            let Some(record) = bounded_row(row, &names, &mut budget)? else {
+                anyhow::bail!("SQL result exceeds 2 MiB.");
+            };
+            values.push(record);
             result_bytes += serde_json::to_vec(values.last().unwrap())?.len();
             if result_bytes > 2 * 1024 * 1024 {
                 anyhow::bail!("SQL result exceeds 2 MiB.");
@@ -2754,13 +2757,11 @@ pub fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) 
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    let mut budget = ResultBudget::default();
     let rows = bounded_rows(statement
         .query_map(params_from_iter(params), |row| {
-            let mut object = serde_json::Map::new();
-            for (index, name) in names.iter().enumerate() {
-                object.insert(name.clone(), sql_json(row.get_ref(index)?));
-            }
-            Ok(Value::Object(object))
+            bounded_row(row, &names, &mut budget)?
+                .ok_or_else(|| rusqlite::Error::ToSqlConversionFailure(Box::new(ResultTooLarge)))
         })?)?;
     if rows.len() > 1000 {
         anyhow::bail!("Action returned more than 1000 rows.");
@@ -3568,13 +3569,66 @@ pub fn arm_deadline(db: &Connection) {
     db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
 }
 
+const QUERY_RESULT_TOO_LARGE: &str = "Query result exceeds 2 MiB or 1000 rows.";
+
+/// What an oversized action result answers when a column is read.
+#[derive(Debug)]
+struct ResultTooLarge;
+
+impl std::fmt::Display for ResultTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(QUERY_RESULT_TOO_LARGE)
+    }
+}
+
+impl std::error::Error for ResultTooLarge {}
+
+/// What a result has cost as JSON so far, counted as its columns are read.
+#[derive(Default)]
+pub struct ResultBudget {
+    bytes: usize,
+}
+
+impl ResultBudget {
+    /// Adds what `value` will cost as JSON: a blob costs twice its length as
+    /// hex. False once the whole result passes 2 MiB. Text counts without its
+    /// escapes, so `bounded_rows` still measures the finished row.
+    pub fn spend(&mut self, value: rusqlite::types::ValueRef<'_>) -> bool {
+        use rusqlite::types::ValueRef;
+        let cost = match value {
+            ValueRef::Null => 4,
+            ValueRef::Integer(_) => 20,
+            ValueRef::Real(_) => 24,
+            ValueRef::Text(text) => text.len() + 2,
+            ValueRef::Blob(blob) => blob.len() * 2 + 2,
+        };
+        self.bytes = self.bytes.saturating_add(cost);
+        self.bytes <= 2 * 1024 * 1024
+    }
+}
+
+/// A row as a JSON object, or `None` once `budget` is spent. The columns
+/// after the one that spent it are not read: SQLite expands a `zeroblob`
+/// only when its column is read.
+pub fn bounded_row(row: &rusqlite::Row<'_>, names: &[String], budget: &mut ResultBudget) -> rusqlite::Result<Option<Value>> {
+    let mut object = serde_json::Map::new();
+    for (index, name) in names.iter().enumerate() {
+        let value = row.get_ref(index)?;
+        if !budget.spend(value) {
+            return Ok(None);
+        }
+        object.insert(name.clone(), sql_json(value));
+    }
+    Ok(Some(Value::Object(object)))
+}
+
 pub fn bounded_rows(rows: impl Iterator<Item = rusqlite::Result<Value>>) -> Result<Vec<Value>> {
     let mut values = Vec::new();
     let mut bytes = 0;
     for row in rows.take(1001) {
         let row = row?;
         bytes += serde_json::to_vec(&row)?.len();
-        anyhow::ensure!(bytes <= 2 * 1024 * 1024 && values.len() < 1000, "Query result exceeds 2 MiB or 1000 rows.");
+        anyhow::ensure!(bytes <= 2 * 1024 * 1024 && values.len() < 1000, "{QUERY_RESULT_TOO_LARGE}");
         values.push(row);
     }
     Ok(values)
