@@ -587,8 +587,12 @@ describe("authenticated MCP", () => {
 
     const request = { deploymentId: receipt.id, emails: ["Ana@App.test"], idempotencyKey: "invite-ana-0001" };
     const created = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
-    expect(created.results[0]).toMatchObject({ status: "invited", delivery: "queued" });
-    expect(await manager.call("app_invitations_create", request)).toEqual(created);
+    const acceptUrl = (created.results[0] as { acceptUrl?: string }).acceptUrl;
+    expect(created.results[0]).toMatchObject({ status: "invited", delivery: "local-mailbox" });
+    // A retry with the same key answers the stored result, which never holds the link.
+    const retried = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
+    expect(retried.results[0]).toMatchObject({ status: "invited", invitationId: created.results[0].invitationId });
+    expect(retried.results[0]).not.toHaveProperty("acceptUrl");
     // The queue's worker writes the development mailbox shortly after the call returns.
     const readInvitations = async () => (await Bun.file(path.join(root, "mailbox.jsonl")).text().catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((message) => message.purpose === "invitation");
     let mailbox = await readInvitations();
@@ -596,7 +600,9 @@ describe("authenticated MCP", () => {
     expect(mailbox).toHaveLength(1);
     expect(mailbox[0]).toMatchObject({ to: "ana@app.test", scope: `deployment:${receipt.id}` });
     const token = new URL(mailbox[0].link).hash.slice("#invitation=".length);
-    expect(JSON.stringify(created)).not.toContain(token);
+    // The development transport sends nothing, so the first answer carries the link once; a retry does not.
+    expect(acceptUrl).toBe(mailbox[0].link);
+    expect(JSON.stringify(retried)).not.toContain(token);
 
     const opened = await fetch(`${url}/_konae/invitation`, { headers: { host: receipt.hostname } });
     expect(opened.status).toBe(200);

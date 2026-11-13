@@ -35,11 +35,18 @@ pub async fn read_call(request: Request) -> Result<Value, Response> {
 /// Reads one JSON-RPC call of at most `limit` bytes and answers it with its
 /// size; a larger body is refused with `refused`.
 pub async fn read_call_up_to(request: Request, limit: usize, refused: &str) -> Result<(Value, usize), Response> {
-    let bytes = match axum::body::to_bytes(request.into_body(), limit).await {
-        Ok(bytes) => bytes,
-        Err(_) => return Err(error(StatusCode::PAYLOAD_TOO_LARGE, refused)),
-    };
-    let call: Value = match serde_json::from_slice(&bytes) {
+    let bytes = read_body_up_to(request, limit, refused).await?;
+    Ok((parse_call(&bytes)?, bytes.len()))
+}
+
+/// Reads a request body of at most `limit` bytes, refusing a longer one with `refused`.
+pub async fn read_body_up_to(request: Request, limit: usize, refused: &str) -> Result<axum::body::Bytes, Response> {
+    axum::body::to_bytes(request.into_body(), limit).await.map_err(|_| error(StatusCode::PAYLOAD_TOO_LARGE, refused))
+}
+
+/// Parses one JSON-RPC call, answering a JSON-RPC error when it is not one.
+pub fn parse_call(bytes: &[u8]) -> Result<Value, Response> {
+    let call: Value = match serde_json::from_slice(bytes) {
         Ok(value) => value,
         Err(_) => return Err(rpc_error(Value::Null, -32700, "Invalid JSON.")),
     };
@@ -52,7 +59,7 @@ pub async fn read_call_up_to(request: Request, limit: usize, refused: &str) -> R
     {
         return Err(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request."));
     }
-    Ok((call, bytes.len()))
+    Ok(call)
 }
 
 /// The answer to a call without an ID: a notification is accepted, anything

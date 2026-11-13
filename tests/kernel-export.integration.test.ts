@@ -128,7 +128,7 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   // An invitation from the machine leaves through the running Kernel's mail worker.
   const invited = await command("invite", "bea@carried.test");
   expect(invited.error).toBe("");
-  expect(JSON.parse(invited.output)).toMatchObject({ results: [{ email: "bea@carried.test", status: "invited", delivery: "queued" }] });
+  expect(JSON.parse(invited.output)).toMatchObject({ results: [{ email: "bea@carried.test", status: "invited", delivery: "local-mailbox", acceptUrl: expect.stringContaining("/_konae/invitation#invitation=") }] });
   let mailed = false;
   for (let attempt = 0; attempt < 50 && !mailed; attempt++) {
     mailed = (await readFile(path.join(data, "mailbox.jsonl"), "utf8").catch(() => "")).includes("bea@carried.test");

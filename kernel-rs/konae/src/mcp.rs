@@ -894,11 +894,16 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     let tools = admin_tools(&owner);
     // Only a transfer_write may carry a block of ADMIN_CHUNK bytes; every
     // other call keeps the 200 KB bound of the runtime endpoint.
-    let call = match read_call_up_to(request, ADMIN_MCP_BODY_BYTES, &admin_body_refused()).await {
-        Ok((call, size)) if size > MCP_BODY_BYTES && !(call["method"] == "tools/call" && call["params"]["name"] == "transfer_write") => {
-            return error(StatusCode::PAYLOAD_TOO_LARGE, MCP_BODY_REFUSED);
-        }
-        Ok((call, _)) => call,
+    // A body over 200 KB is refused unless it parses as a transfer_write, so an
+    // unparsable or other large body never reaches the JSON-RPC answer path.
+    let bytes = match read_body_up_to(request, ADMIN_MCP_BODY_BYTES, &admin_body_refused()).await {
+        Ok(bytes) => bytes,
+        Err(response) => return response,
+    };
+    let call = match parse_call(&bytes) {
+        Ok(call) if bytes.len() <= MCP_BODY_BYTES || (call["method"] == "tools/call" && call["params"]["name"] == "transfer_write") => call,
+        Ok(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, MCP_BODY_REFUSED),
+        Err(_) if bytes.len() > MCP_BODY_BYTES => return error(StatusCode::PAYLOAD_TOO_LARGE, MCP_BODY_REFUSED),
         Err(response) => return response,
     };
     let id = call.get("id").cloned().unwrap_or(Value::Null);
