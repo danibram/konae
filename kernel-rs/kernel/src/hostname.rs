@@ -107,6 +107,9 @@ pub fn read_record(state: &AppState, id: &str) -> Record {
 async fn write_record(state: &AppState, id: &str, record: &Record) -> Result<()> {
     let path = crate::layout::private(&state.data_root, id).join(RECORD_FILE);
     let before = read_record(state, id);
+    let record = Record {
+        previous: record.previous.iter().filter(|name| !is_installation_host(state, name)).cloned().collect(),
+    };
     if record.previous.is_empty() {
         match tokio::fs::remove_file(&path).await {
             Err(error_value) if error_value.kind() != std::io::ErrorKind::NotFound => return Err(error_value.into()),
@@ -114,7 +117,7 @@ async fn write_record(state: &AppState, id: &str, record: &Record) -> Result<()>
         }
     } else {
         tokio::fs::create_dir_all(crate::layout::private(&state.data_root, id)).await?;
-        write_atomic(&path, &serde_json::to_vec_pretty(record)?).await?;
+        write_atomic(&path, &serde_json::to_vec_pretty(&record)?).await?;
     }
     with_index(state, |index| {
         for name in &before.previous {
@@ -132,7 +135,14 @@ async fn write_record(state: &AppState, id: &str, record: &Record) -> Result<()>
 /// The Deployment that held `host` before its current name.
 pub fn held_by(state: &AppState, host: &str) -> Option<String> {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if is_installation_host(state, &host) {
+        return None;
+    }
     with_index(state, |index| index.get(&host).cloned())
+}
+
+fn is_installation_host(state: &AppState, hostname: &str) -> bool {
+    domain::Rules::of(state).installation_hosts.iter().any(|host| host.eq_ignore_ascii_case(hostname.trim_end_matches('.')))
 }
 
 /// Frees a deleted Deployment's previous names.
@@ -350,5 +360,80 @@ mod tests {
         forget(&state, &notes.id).await.unwrap();
         assert_eq!(held_by(&state, "journal.apps.example.com"), None);
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn installation_hosts_in_previous_records_do_not_redirect() {
+        let root =
+            std::env::temp_dir().join(format!("konae-hostname-installation-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root))
+            .await
+            .unwrap();
+        let state = AppState {
+            public_origin: "https://editor.apps.example.com".into(),
+            own_origins: vec!["https://mcp.apps.example.com".into()],
+            ..test_state(&root)
+        };
+        let deployment = publish(&state, "notes").await;
+
+        // Model a legacy deployment whose current generated hostname is the
+        // editor host, then move it through hostname_set.
+        let mut legacy = deployment.clone();
+        legacy.hostname = "editor.apps.example.com".into();
+        legacy.url = "https://editor.apps.example.com".into();
+        {
+            let mut deployments = state.deployments.write().await;
+            deployments.remove(&deployment.hostname);
+            deployments.insert(legacy.hostname.clone(), legacy.clone());
+        }
+        let moved = set(&state, &legacy.id, "journal").await.unwrap();
+        assert_eq!(moved["previousHostnames"], json!([]));
+
+        // A folder restored from disk can still contain an installation host.
+        let restored_root =
+            std::env::temp_dir().join(format!("konae-hostname-restored-{}", Uuid::new_v4()));
+        let moved_deployment = deployment_by_id(&state, &legacy.id).await.unwrap();
+        let restored = AppState {
+            data_root: restored_root.clone(),
+            deployments: Arc::new(RwLock::new(HashMap::from([(
+                moved_deployment.hostname.clone(),
+                moved_deployment,
+            )]))),
+            ..state.clone()
+        };
+        tokio::fs::create_dir_all(crate::layout::private(&restored_root, &legacy.id))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            crate::layout::private(&restored_root, &legacy.id).join(RECORD_FILE),
+            serde_json::to_vec(&Record {
+                previous: vec![
+                    "editor.apps.example.com".into(),
+                    "mcp.apps.example.com".into(),
+                ],
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let app = stack(restored, Router::new());
+        for hostname in ["editor.apps.example.com", "mcp.apps.example.com"] {
+            let request = Request::builder()
+                .uri("/owner?tab=apps")
+                .header(header::HOST, hostname)
+                .body(Body::empty())
+                .unwrap();
+            let response = tower::ServiceExt::oneshot(app.clone(), request)
+                .await
+                .unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::PERMANENT_REDIRECT,
+                "{hostname} redirected to the moved app"
+            );
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+        let _ = tokio::fs::remove_dir_all(restored_root).await;
     }
 }

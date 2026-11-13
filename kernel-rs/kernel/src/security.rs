@@ -184,11 +184,11 @@ pub async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
     let own = state.own_origins.iter().filter_map(|origin| configured(origin)).any(|own| own == host);
     // A stored record on an installation host does not make that host an app.
     let installation = public.as_deref() == Some(host.as_str()) || own;
-    if (!installation && state.deployments.read().await.contains_key(&host)) || super::domain::claimed(state, &host) {
-        return true;
-    }
     if installation {
         return false;
+    }
+    if state.deployments.read().await.contains_key(&host) || super::domain::claimed(state, &host) {
+        return true;
     }
     // The path host is `<domain>`, which holds the path addresses and the home.
     // With `KONAE_DOMAIN=localhost` it is the bare `localhost`, so it is
@@ -274,6 +274,45 @@ mod tests {
         let same = client.get(format!("http://{address}/same")).header("host", &host).send().await.unwrap();
         assert_eq!(same.status(), StatusCode::NOT_MODIFIED);
         assert!(same.headers().get(header::CONTENT_SECURITY_POLICY).is_none());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_stored_alias_on_an_installation_host_is_not_an_app_origin() {
+        let root = std::env::temp_dir().join(format!(
+            "konae-security-installation-alias-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let (base, _) = crate::tests::login_test_state(&root, "public").await;
+        let state = AppState {
+            public_origin: "https://editor.apps.example.com".into(),
+            own_origins: vec!["https://mcp.apps.example.com".into()],
+            host_suffix: "apps.example.com".into(),
+            ..base
+        };
+        let id = "legacy";
+        tokio::fs::create_dir_all(crate::layout::private(&root, id))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            crate::layout::private(&root, id).join(super::super::domain::RECORD_FILE),
+            serde_json::to_vec(&super::super::domain::Record {
+                hostname: "editor.apps.example.com".into(),
+                token: "legacy-token".into(),
+                verified: true,
+                verified_at: Some(1),
+                created_at: 1,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://editor.apps.example.com"),
+        );
+        assert!(!from_app_origin(&state, &headers).await);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
