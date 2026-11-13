@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- An owner's reset link opened the installation's root, where the editor reads no link and an installation without the editor answers 404. It opens `/_konae/owner/login` now, as a confirmation link already did.
+
 ## [0.4.0] - 2026-11-13
 
 ### Added

@@ -122,7 +122,9 @@ async fn creator_recover(State(state): State<Konae>, request: Request) -> Respon
         let _guard = database_lock(&state, "owner-auth").await;
         let auth = creator_store(&state)?;
         let email = input.email.clone();
-        let delivery = creator_delivery(&email, client, &origin);
+        // The link opens the owner page, as a verification link does: the
+        // installation's root may be the editor, which reads no link, or nothing.
+        let delivery = creator_delivery(&email, client, &super::admission::login_page(&origin, None));
         issue_and_send(mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
         Ok::<(), AuthError>(())
     }
@@ -319,6 +321,10 @@ mod tests {
         assert_eq!((unknown, known), (StatusCode::ACCEPTED, StatusCode::ACCEPTED));
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Recovery);
+        // The editor reads no #recovery link, and an installation without the
+        // editor answers 404 on its root, so the link opens the owner page.
+        let link = fixture.mailbox.0.lock().unwrap().last().unwrap().link.clone();
+        assert!(link.starts_with("http://localhost/_konae/owner/login#recovery="), "{link}");
         assert_eq!(owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await.status(), StatusCode::GONE);
         assert_eq!(owner(&fixture, "/_konae/owner/reset", json!({"token": token, "password": "a new password"})).await.status(), StatusCode::OK);
         assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&first), None)).unwrap().is_none());
