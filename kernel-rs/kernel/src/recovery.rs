@@ -16,11 +16,11 @@
 use crate::installation::Installation;
 use std::sync::{LazyLock, RwLock as SyncRwLock};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use aws_sdk_s3::primitives::ByteStream;
 use rusqlite::params;
 
-use super::copies::Target;
+use super::copies::{CopyKey, Target};
 use super::*;
 
 pub const LEDGER_DIR: &str = "revocations";
@@ -62,6 +62,11 @@ impl Entry {
 
     fn file_name(&self) -> String {
         format!("{:013}-{}.json", self.at, self.id)
+    }
+
+    #[cfg(test)]
+    pub fn file_name_for_test(&self) -> String {
+        self.file_name()
     }
 }
 
@@ -111,7 +116,8 @@ fn clear_hold(data_root: &Path) -> Result<()> {
 
 /// Writes `entry` to every copy target. With no target configured there is
 /// no copy to restore and nothing to record.
-pub async fn write(targets: &[Target], s3: Option<&S3Client>, bucket: &str, entry: &Entry) -> Result<()> {
+/// With a key, an entry sent to S3 carries a `mac` bound to its file name.
+pub async fn write(targets: &[Target], s3: Option<&S3Client>, bucket: &str, entry: &Entry, key: Option<&CopyKey>) -> Result<()> {
     let bytes = serde_json::to_vec(entry)?;
     for target in targets {
         match target {
@@ -121,10 +127,18 @@ pub async fn write(targets: &[Target], s3: Option<&S3Client>, bucket: &str, entr
             }
             Target::S3 { prefix } => {
                 let s3 = s3.context("S3 is not configured.")?;
+                let bytes = match key {
+                    Some(key) => {
+                        let mut value = serde_json::to_value(entry)?;
+                        value["mac"] = Value::String(key.sign_entry(&entry.file_name(), entry)?);
+                        serde_json::to_vec(&value)?
+                    }
+                    None => bytes.clone(),
+                };
                 s3.put_object()
                     .bucket(bucket)
                     .key(format!("{prefix}{LEDGER_DIR}/{}", entry.file_name()))
-                    .body(ByteStream::from(bytes.clone()))
+                    .body(ByteStream::from(bytes))
                     .send()
                     .await?;
             }
@@ -152,7 +166,7 @@ pub async fn record(state: &AppState, entry: Entry) -> Result<()> {
     if targets.is_empty() {
         return Ok(());
     }
-    write(targets, state.s3.as_ref(), &state.data_bucket, &entry).await.map_err(|error_value| {
+    write(targets, state.s3.as_ref(), &state.data_bucket, &entry, state.copies.key()).await.map_err(|error_value| {
         anyhow::anyhow!(
             "The change holds on this server, but it could not be recorded at the copy target, so a restore could undo it: {error_value:#}. Repeat the same request to record it."
         )
@@ -170,7 +184,7 @@ pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
         let s3 = s3_client_from_env().await;
         let Some(config) = copies::CopyConfig::from_env(data_root, s3.is_some())? else { return Ok(()) };
         let bucket = env("KONAE_DATA_BUCKET", "konae-data");
-        write(&config.targets, s3.as_ref(), &bucket, &entry).await
+        write(&config.targets, s3.as_ref(), &bucket, &entry, copies::CopyKey::from_env()?.as_ref()).await
     };
     let result = match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(run)),
@@ -210,6 +224,28 @@ pub fn parse(files: &[Vec<u8>]) -> Result<Vec<Entry>> {
         .iter()
         .map(|bytes| serde_json::from_slice::<Entry>(bytes).context("The revocation record holds a file that does not parse."))
         .collect()
+}
+
+/// Checks one S3 entry file against its MAC. Returns how many entries passed
+/// without one because `accept_unsigned` is set. An entry with a MAC that does
+/// not verify is refused either way: only an absent MAC is an old Kernel's.
+pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8], accept_unsigned: bool) -> Result<usize> {
+    let value: Value = serde_json::from_slice(bytes).with_context(|| format!("The revocation record file {name} does not parse."))?;
+    let entry: Entry = serde_json::from_value(value.clone()).with_context(|| format!("The revocation record file {name} does not parse."))?;
+    match value.get("mac") {
+        Some(Value::String(mac)) => {
+            ensure!(
+                key.verify_entry(name, &entry, mac)?,
+                "The revocation record file {name} has a MAC that does not verify, so it was not written with this KONAE_COPY_SECRET or was altered."
+            );
+            Ok(0)
+        }
+        Some(_) => bail!("The revocation record file {name} has a MAC that does not verify, so it was not written with this KONAE_COPY_SECRET or was altered."),
+        None if accept_unsigned => Ok(1),
+        None => bail!(
+            "The revocation record file {name} carries no MAC: an older Kernel wrote it, or someone without KONAE_COPY_SECRET did. Set KONAE_COPY_ACCEPT_UNSIGNED=1 to accept entries an older Kernel wrote."
+        ),
+    }
 }
 
 /// Applies the record to a data directory that is not serving. Only the
@@ -288,7 +324,10 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
             );
         }
         Some("--from") if args.len() == 3 => {
-            let record = copies::read_record(&args[2]).await;
+            let record = match copies::CopyKey::from_env() {
+                Ok(key) => copies::read_record(&args[2], key.as_ref(), copies::accept_unsigned_from_env()).await,
+                Err(error_value) => Err(error_value),
+            };
             match apply_or_hold(&root, installation, record)? {
                 Ok(changed) => {
                     clear_hold(&root)?;
@@ -320,14 +359,14 @@ mod tests {
         let targets = [Target::Directory(one.clone()), Target::Directory(two.clone())];
         start(&targets[0], None, "data").await.unwrap();
         let entry = Entry::new("app-user", Some("app-1"), "user-1", "suspended");
-        write(&targets, None, "data", &entry).await.unwrap();
+        write(&targets, None, "data", &entry, None).await.unwrap();
         for root in [&one, &two] {
             let files = std::fs::read_dir(root.join(LEDGER_DIR)).unwrap().count();
             assert!(files >= 1);
         }
-        let record = copies::read_record(one.to_str().unwrap()).await.unwrap().unwrap();
+        let record = copies::read_record(one.to_str().unwrap(), None, false).await.unwrap().unwrap();
         assert_eq!(parse(&record).unwrap(), vec![entry]);
-        assert!(copies::read_record(two.to_str().unwrap()).await.unwrap().is_none(), "no started.json means no readable record");
+        assert!(copies::read_record(two.to_str().unwrap(), None, false).await.unwrap().is_none(), "no started.json means no readable record");
         std::fs::remove_dir_all(one).unwrap();
         std::fs::remove_dir_all(two).unwrap();
     }
