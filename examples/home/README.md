@@ -1,6 +1,6 @@
 # The home
 
-The page an installation answers on its bare domain. It says what Konae does and what every app has, shows an example app being described, used and moved between two servers, runs the editor's row-limit check on a statement the visitor can edit, and links to the editor on `app.<domain>` and to the docs on `<domain>/p/docs/`. It is a public Konae app with no tables, no Server Actions and no accounts. Everything it shows runs in the browser.
+The page an installation answers on its bare domain. It says what Konae does and what every app has, shows an example app being described, used and moved between two servers, runs the editor's row-limit check on a statement the visitor can edit, and links to the editor on `app.<domain>`, to the docs on `<domain>/p/docs/` and to [the invitation requests](../invitation/README.md) on `<domain>/p/invitation/`. Its footer links the privacy policy and the terms when `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/` answer. The animation names the installation's own domain as the first server. It is a public Konae app with no tables, no Server Actions and no accounts. Everything it shows runs in the browser.
 
 ## How the Kernel finds it
 
@@ -39,4 +39,4 @@ path_set  { deploymentId, enabled: true, name: "konae-home" }
 path_read { deploymentId }
 ```
 
-The app has no accounts, so `path_set` needs no `acceptSharedOrigin`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect.
+The app has no accounts, so `path_set` needs no `acceptSharedOrigin`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect, and [the invitation requests](../invitation/README.md) with the name `invitation`.

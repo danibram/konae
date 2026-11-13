@@ -56,7 +56,7 @@ bun run examples/probes/replay-all.ts
 
 ## The home and the architecture map
 
-`examples/home/` is the page an installation answers on its bare domain once an app's path address holds the name `konae-home`. `examples/architecture-map/` is a static map of the system. Each has a `README.md` with the commands to publish it.
+`examples/home/` is the page an installation answers on its bare domain once an app's path address holds the name `konae-home`. `examples/invitation/` is the form the home sends a visitor to for an invitation code, with one table, one anonymous action, a guard and a notice to the owner. `examples/architecture-map/` is a static map of the system. Each has a `README.md` with the commands to publish it.
 
 ## Read next
 

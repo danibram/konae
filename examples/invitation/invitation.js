@@ -37,8 +37,8 @@ const es = {
   terms: "Términos",
 };
 const words = {
-  en: { other: "Español", page: "Request an invitation · Konae", saving: "Sending…", repeated: "That address has already asked. The code will reach it by email.", busy: "Too many requests just now. Wait a few seconds and try again.", offline: "The app could not reach its server. Check the connection and try again." },
-  es: { other: "English", page: "Pide una invitación · Konae", saving: "Enviando…", repeated: "Ese correo ya pidió un código. Le llegará por correo.", busy: "Demasiadas peticiones ahora mismo. Espera unos segundos y prueba otra vez.", offline: "La app no pudo llegar a su servidor. Revisa la conexión y prueba otra vez." },
+  en: { other: "Español", page: "Request an invitation · Konae", saving: "Sending…", repeated: "That address has already asked, or it is not an email address.", busy: "Too many requests just now. Wait a few seconds and try again.", offline: "The app could not reach its server. Check the connection and try again." },
+  es: { other: "English", page: "Pide una invitación · Konae", saving: "Enviando…", repeated: "Ese correo ya pidió un código, o no es una dirección de correo.", busy: "Demasiadas peticiones ahora mismo. Espera unos segundos y prueba otra vez.", offline: "La app no pudo llegar a su servidor. Revisa la conexión y prueba otra vez." },
 };
 const marked = [...document.querySelectorAll("[data-t]")];
 const english = new Map(marked.map((element) => [element, element.innerHTML]));
