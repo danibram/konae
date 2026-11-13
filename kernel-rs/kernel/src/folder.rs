@@ -143,7 +143,8 @@ fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::Action
 pub async fn free_hostname(state: &AppState, slug: &str) -> String {
     let slug = Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into());
     let wanted = format!("{slug}.{}", state.host_suffix);
-    if !state.deployments.read().await.contains_key(&wanted) {
+    // A name another app held before it moved still redirects to that app.
+    if !state.deployments.read().await.contains_key(&wanted) && crate::hostname::held_by(state, &wanted).is_none() {
         return wanted;
     }
     let short_id = Uuid::new_v4().simple().to_string().chars().take(6).collect::<String>();
@@ -211,14 +212,18 @@ async fn reload(state: &AppState, deployment: Deployment) {
             return;
         }
     };
+    // The Deployment as it stands now, so a hostname_set since the watcher
+    // read it is not undone.
+    let mut deployments = state.deployments.write().await;
+    let Some(current) = deployments.values().find(|item| item.id == deployment.id) else { return };
     let installed = Installed {
-        hostname: deployment.hostname.clone(),
-        created_at: deployment.created_at,
-        actions: deployment.actions.clone(),
-        artifact_version: deployment.artifact_version.clone(),
+        hostname: current.hostname.clone(),
+        created_at: current.created_at,
+        actions: current.actions.clone(),
+        artifact_version: current.artifact_version.clone(),
     };
     let updated = settings.deployment(installed, &state.public_origin);
-    state.deployments.write().await.insert(updated.hostname.clone(), updated);
+    deployments.insert(updated.hostname.clone(), updated);
 }
 
 #[cfg(test)]

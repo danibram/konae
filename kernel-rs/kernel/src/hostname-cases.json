@@ -1,0 +1,22 @@
+{
+ "context": {
+  "suffix": "apps.example.com",
+  "installationHosts": ["konae.example.com", "app.apps.example.com"]
+ },
+ "cases": [
+  { "case": "one label", "name": "notes", "hostnameOut": "notes.apps.example.com", "error": null },
+  { "case": "the whole name", "name": "notes.apps.example.com", "hostnameOut": "notes.apps.example.com", "error": null },
+  { "case": "capitals, spaces and a trailing dot are normalised", "name": "  Notes.Apps.Example.Com. ", "hostnameOut": "notes.apps.example.com", "error": null },
+  { "case": "digits and inner hyphens", "name": "shop-2", "hostnameOut": "shop-2.apps.example.com", "error": null },
+  { "case": "a label of 63 characters", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hostnameOut": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.apps.example.com", "error": null },
+  { "case": "nothing", "name": "   ", "error": "Name the new hostname, such as notes or notes.apps.example.com.", "code": "hostname.missing" },
+  { "case": "the suffix alone", "name": "apps.example.com", "error": "apps.example.com is not one name under this installation's app suffix apps.example.com. Name one label, such as notes, or add a hostname outside the suffix with domain_set.", "code": "hostname.outside-suffix" },
+  { "case": "a name outside the suffix", "name": "notes.example.org", "error": "notes.example.org is not one name under this installation's app suffix apps.example.com. Name one label, such as notes, or add a hostname outside the suffix with domain_set.", "code": "hostname.outside-suffix" },
+  { "case": "two labels under the suffix", "name": "a.b.apps.example.com", "error": "a.b.apps.example.com is not one name under this installation's app suffix apps.example.com. Name one label, such as notes, or add a hostname outside the suffix with domain_set.", "code": "hostname.outside-suffix" },
+  { "case": "a leading hyphen", "name": "-notes", "error": "-notes is not a valid name. Use letters, digits and hyphens, 1 to 63 characters, that do not start or end with a hyphen.", "code": "hostname.name-invalid" },
+  { "case": "an underscore", "name": "my_notes", "error": "my_notes is not a valid name. Use letters, digits and hyphens, 1 to 63 characters, that do not start or end with a hyphen.", "code": "hostname.name-invalid" },
+  { "case": "a label of 64 characters", "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "error": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is not a valid name. Use letters, digits and hyphens, 1 to 63 characters, that do not start or end with a hyphen.", "code": "hostname.name-invalid" },
+  { "case": "the installation's own host", "name": "app", "error": "app.apps.example.com is this installation's own host. Choose another name.", "code": "hostname.installation-host" },
+  { "case": "a name another app holds or held", "name": "notes", "taken": true, "error": "notes.apps.example.com is another app's address on this installation. Choose another name.", "code": "hostname.taken" }
+ ]
+}

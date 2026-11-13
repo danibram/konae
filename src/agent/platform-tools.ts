@@ -68,6 +68,7 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   signup_policy_set: "confirm",
   sign_in_methods_set: "confirm",
   app_invitations_create: "confirm",
+  hostname_set: "confirm",
   domain_set: "confirm",
   domain_clear: "confirm",
   path_set: "confirm",
@@ -100,6 +101,7 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
       const emails = Array.isArray(args.emails) ? args.emails.map(String) : [];
       return `The agent will email an invitation to ${emails.join(", ") || "nobody"}.`;
     }
+    case "hostname_set": return `The agent will move this app's generated address to ${String(args.name)}. The old address redirects there, and app users sign in again on the new one.`;
     case "domain_set": return `The agent will set ${String(args.hostname)} as this app's domain and check its TXT record.`;
     case "domain_clear": return "The agent will remove this app's custom domain. The generated address keeps working.";
     case "path_set": {

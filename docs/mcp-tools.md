@@ -38,7 +38,7 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | None | `platform_describe`, `platform_guide`, `session_inspect` and `mail_status` |
 | `read` | `projects_list`, `project_inspect`, `project_sources_read`, `storage_test`, `signup_policy_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` writes |
-| `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `project_import`, and `initialSignupPolicy` on a first release |
+| `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `project_import`, and `initialSignupPolicy` on a first release |
 | `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
 | `export_data` | `project_export` and reading its downloads |
 | The owner's browser session | `tokens_list`, `token_create`, `token_revoke` and `app_user_enter` |
@@ -60,6 +60,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Sign-in methods | `sign_in_methods_read`, `sign_in_methods_set` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
+| Generated hostname | `hostname_set` |
 | Custom domain | `domain_read`, `domain_set`, `domain_clear` |
 | Path address | `path_read`, `path_set`, `path_clear` |
 | Maintenance | `maintenance_read`, `maintenance_set` |
@@ -100,6 +101,7 @@ Every tool that writes has a tool that observes its effect through the same door
 | `app_user_suspend` | `app_users_list` |
 | `app_user_resume` | `app_users_list` |
 | `app_user_enter` | `auth_session` |
+| `hostname_set` | `project_inspect` |
 | `domain_set` | `domain_read` |
 | `domain_clear` | `domain_read` |
 | `path_set` | `path_read` |

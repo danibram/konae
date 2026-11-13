@@ -781,6 +781,28 @@ A Deployment can answer on one hostname its owner controls, such as `notes.examp
 
 An export carries the hostname without its token. The import creates a pending claim with a token the destination issues, and `domain_read` there prints the record to add. `kernel-rs/kernel/src/domain-cases.json` lists every rule.
 
+## Generated hostname
+
+The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
+
+```json
+{ "deploymentId": "…", "hostname": "notes.apps.example.com", "url": "https://notes.apps.example.com", "changed": true,
+  "previousHostnames": ["notes-1a2b3c.apps.example.com"],
+  "googleCallback": "https://notes.apps.example.com/_konae/auth/google/callback" }
+```
+
+The names the Deployment held before answer every request with a 308 redirect to the same path and query on the new name, and no other app can take them. Email links already sent and bookmarks keep working, because the browser keeps the fragment through the redirect. The new name is a new origin. App users sign in again there, and an app with Google sign-in needs `googleCallback` registered in its Google client before the button works on the new name. A service that calls the app's HTTP routes, an API key client or an MCP client may not follow the redirect, so give it the new address. A custom domain and a path address do not change. `project_inspect` shows the new `url`. Moving back to a previous name takes it off the redirect list, and deleting the app frees its previous names.
+
+| Refusal | Message |
+| --- | --- |
+| No name | `Name the new hostname, such as notes or notes.<suffix>.` |
+| More than one label, or a name outside the suffix | `<name> is not one name under this installation's app suffix <suffix>. Name one label, such as notes, or add a hostname outside the suffix with domain_set.` |
+| A label with other characters, or that starts or ends with a hyphen | `<label> is not a valid name. Use letters, digits and hyphens, 1 to 63 characters, that do not start or end with a hyphen.` |
+| A name another app holds now or held before | `<name> is another app's address on this installation. Choose another name.` |
+| The editor's or the MCP host | `<name> is this installation's own host. Choose another name.` |
+
+The names live in `apps/<id>/.konae/hostname.json`, which copies carry and an export does not, like the generated hostname itself.
+
 ## Path address
 
 A Deployment can answer at `<domain>/p/<id>`, and at `<domain>/p/<name>` once named, with no DNS of its own. `KONAE_DOMAIN` names the domain.
