@@ -6,7 +6,7 @@ import { slug } from "./slug.js";
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const { root, route } = document.body.dataset;
+const { root, route, v } = document.body.dataset;
 const content = $("#content");
 const sidebar = $("#sidebar");
 const tocBox = $("#toc");
@@ -90,7 +90,7 @@ function tableOfContents() {
 let renderer;
 const loadRenderer = () => (renderer ??= new Promise((resolve, reject) => {
   const script = document.createElement("script");
-  script.src = `${root}vendor/mermaid.js`;
+  script.src = `${root}vendor/mermaid.js?v=${v}`;
   script.onload = () => resolve(globalThis.mermaid);
   script.onerror = () => reject(Error("The diagram renderer did not load."));
   document.head.append(script);

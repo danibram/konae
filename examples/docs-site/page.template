@@ -7,10 +7,10 @@
   <meta name="description" content="Documentation for Konae, for people and for agents.">
   <link rel="icon" href="data:,">
   <link rel="alternate" type="text/markdown" href="{{root}}content/{{route}}.md" title="This page as markdown">
-  <link rel="stylesheet" href="{{root}}styles.css">
-  <link rel="stylesheet" href="{{root}}site.css">
+  <link rel="stylesheet" href="{{root}}styles.css?v={{v}}">
+  <link rel="stylesheet" href="{{root}}site.css?v={{v}}">
 </head>
-<body data-root="{{root}}" data-route="{{route}}">
+<body data-root="{{root}}" data-route="{{route}}" data-v="{{v}}">
   <a class="skip" href="#main">Skip to content</a>
   <header class="top">
     <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
@@ -36,6 +36,6 @@
     <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
   </div>
   <div id="scrim" class="scrim" hidden></div>
-  <script type="module" src="{{root}}shell.js"></script>
+  <script type="module" src="{{root}}shell.js?v={{v}}"></script>
 </body>
 </html>

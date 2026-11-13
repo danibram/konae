@@ -62,7 +62,18 @@ const esc = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;",
 const rootOf = (route: string) => "../".repeat(route.split("/").length - 1);
 const hrefOf = (root: string, route: string) => (route === "index" ? root || "./" : root + route);
 
-function shell(template: string, site: Site, page: Pick<Page, "route" | "title">) {
+/**
+ * A short name for the bytes of the site's own styles and scripts. Each page
+ * asks for them as `site.css?v=<name>`, so a proxy that lets browsers keep CSS
+ * and JavaScript for hours serves the new ones as soon as they change.
+ */
+async function assetsVersion() {
+  const hash = new Bun.CryptoHasher("sha256");
+  for (const file of ["shell.js", "slug.js", "site.css", "public/styles.css", "package.json"]) hash.update(await readFile(path.join(appRoot, file)));
+  return hash.digest("hex").slice(0, 10);
+}
+
+function shell(template: string, site: Site, page: Pick<Page, "route" | "title">, v: string) {
   const root = rootOf(page.route);
   const bySource = new Map(site.pages.map((entry) => [entry.source, entry]));
   const nav = site.config.nav.map(({ section, pages }) => {
@@ -73,7 +84,7 @@ function shell(template: string, site: Site, page: Pick<Page, "route" | "title">
     });
     return `      <h2>${esc(section)}</h2>\n      <ul>${items.join("")}</ul>`;
   }).join("\n");
-  const values: Record<string, string> = { title: esc(page.title), root, route: page.route, home: hrefOf(root, "index"), nav };
+  const values: Record<string, string> = { title: esc(page.title), root, route: page.route, home: hrefOf(root, "index"), nav, v };
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key]);
 }
 
@@ -166,6 +177,7 @@ function llms(site: Site) {
 
 export async function writeSite(site: Site) {
   const template = await readFile(path.join(appRoot, "page.template"), "utf8");
+  const v = await assetsVersion();
   for (const generated of ["pages", "public/content", "public/vendor", "index.html", "public/llms.txt", "seed.sql"]) await rm(path.join(appRoot, generated), { recursive: true, force: true });
   const write = async (relative: string, contents: string) => {
     await mkdir(path.dirname(path.join(appRoot, relative)), { recursive: true });
@@ -173,7 +185,7 @@ export async function writeSite(site: Site) {
   };
   for (const page of site.pages) {
     await write(`public/content/${page.route}.md`, page.markdown);
-    await write(page.route === "index" ? "index.html" : `pages/${page.route}.html`, shell(template, site, page));
+    await write(page.route === "index" ? "index.html" : `pages/${page.route}.html`, shell(template, site, page, v));
   }
   await write("public/content/site.json", JSON.stringify({
     repository: site.config.repository.replace(/\/$/, ""),

@@ -18,7 +18,7 @@ The Konae docs, published as a Konae app. The markdown under `docs/` is the only
 
 | File | Role |
 | --- | --- |
-| `page.template` | The shell of every page: header, navigation, search box and an empty article. |
+| `page.template` | The shell of every page: header, navigation, search box and an empty article. It asks for the styles and `shell.js` with `?v=`, a name `bun run docs:site` derives from their bytes, so a proxy that lets browsers keep CSS and JavaScript for hours serves a change at once. |
 | `shell.js` | Fetches `content/<route>.md`, renders it with `marked`, gives headings the ids GitHub gives them, points `.md` links at pages, draws each `mermaid` block as a diagram, builds the table of contents and runs the search. |
 | `slug.js` | The heading id rule, shared with the generator. |
 | `site.css` | Styles. |
