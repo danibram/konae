@@ -224,7 +224,7 @@ describe("konae CLI", () => {
   });
 
   test("login without KONAE_PASSWORD or KONAE_EMAIL and without a terminal refuses as before", async () => {
-    const refusal = "Set KONAE_EMAIL and KONAE_PASSWORD. To create the account, also set KONAE_INVITATION_CODE, or KONAE_SETUP_KEY for the first owner.";
+    const refusal = "Set KONAE_EMAIL and KONAE_PASSWORD, or run login --browser to sign in through the browser without them. To create the account, also set KONAE_INVITATION_CODE, or KONAE_SETUP_KEY for the first owner.";
     await expect(loginCredentials({ KONAE_EMAIL: "ada@example.test" }, { isTTY: false })).rejects.toThrow(refusal);
     await expect(loginCredentials({ KONAE_PASSWORD: "a-long-password" }, { isTTY: undefined })).rejects.toThrow(refusal);
     const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))) as Record<string, string>;
@@ -710,7 +710,7 @@ describe("konae CLI", () => {
     const unnamed = cli("tool", "--url", origin());
     expect(await unnamed.exited).toBe(1);
     expect(await new Response(unnamed.stderr).text()).toContain("Name the tool");
-    expect(HELP).toContain("tool secret_set");
+    expect(HELP).toContain("set <name> --dir <folder> [--use route|call|google]");
   });
 
   test("tool --stdin reads one argument from standard input, so a secret stays off the command line", async () => {

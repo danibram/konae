@@ -1709,7 +1709,7 @@ mod tests {
 
     async fn restored_notes(source: &Source, copy: Option<&str>, label: &str, deployment: &Deployment, key: &CopyKey) -> (String, Result<String>) {
         let root = scratch(label);
-        let outcome = restore(source, copy, &root, Some(key), false, &crate::installation::Installation::for_test()).await;
+        let outcome = restore(source, copy, &root, Some(key), &crate::installation::Installation::for_test()).await;
         let outcome = outcome.map(|summary| {
             assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
             summary.copy_id
@@ -1795,7 +1795,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_default_choice_needs_a_mac_even_when_the_override_is_on() {
+    async fn the_default_choice_needs_a_mac() {
         let (source, copies, id, deployment) = plain_copy("override-default").await;
         let client = fake_s3_client().await;
         let key = CopyKey::derive(TEST_SECRET);
@@ -1805,7 +1805,7 @@ mod tests {
         planted.mac = None;
         put_manifest(&client, LATER_ID, &planted).await;
         let root = scratch("override-default-restored");
-        let summary = restore(&s3_source(&client), None, &root, Some(&key), true, &crate::installation::Installation::for_test()).await.expect("the verified copy is chosen");
+        let summary = restore(&s3_source(&client), None, &root, Some(&key), &crate::installation::Installation::for_test()).await.expect("the verified copy is chosen");
         assert_eq!(summary.copy_id, id);
         assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
         for path in [source, copies, root] {
@@ -1827,7 +1827,7 @@ mod tests {
         subset.files.retain(|file| file.path != artifact);
         put_manifest(&client, &newer, &subset).await;
         let root = scratch("override-subset-restored");
-        let summary = restore(&s3_source(&client), None, &root, Some(&key), true, &crate::installation::Installation::for_test()).await.expect("the older verified copy is installed");
+        let summary = restore(&s3_source(&client), None, &root, Some(&key), &crate::installation::Installation::for_test()).await.expect("the older verified copy is installed");
         assert_eq!(summary.copy_id, older);
         assert!(crate::layout::folder(&root, &deployment.id).join("dist/index.html").is_file(), "the whole copy is installed");
         for path in [source, copies, root] {
@@ -1852,7 +1852,7 @@ mod tests {
         assert_eq!(chosen, older);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].starts_with(&format!("Skipped copy {LATER_ID}: ")) && lines[0].contains("is not encrypted"), "{lines:?}");
-        assert!(lines[1].starts_with(&format!("Skipped copy {newer}: ")) && lines[1].contains("not chosen automatically") && lines[1].contains("--copy"), "{lines:?}");
+        assert!(lines[1].starts_with(&format!("Skipped copy {newer}: ")) && lines[1].contains("no manifest MAC"), "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("restore it anyway")), "{lines:?}");
         for path in [source, copies] {
             let _ = std::fs::remove_dir_all(path);
@@ -1902,7 +1902,7 @@ mod tests {
         let (client, older_asked) = s3_that_refuses_the_newest_manifest(LATER_ID, "2020-01-01T00-00-00.000Z").await;
         let root = scratch("read-error-restored");
         let key = CopyKey::derive(TEST_SECRET);
-        let refused = restore(&s3_source(&client), None, &root, Some(&key), false, &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
+        let refused = restore(&s3_source(&client), None, &root, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
         assert!(refused.contains(LATER_ID) && refused.contains("Nothing was installed"), "{refused}");
         assert_eq!(older_asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the restore did not roll back to the older copy");
         assert_eq!(std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0), 0);

@@ -792,7 +792,7 @@ mod tests {
         let html = String::from_utf8(
             axum::body::to_bytes(consent.into_body(), usize::MAX).await.unwrap().to_vec(),
         ).unwrap();
-        assert!(html.contains("for 24 hours") && html.contains("downloads each app's accounts"), "{html}");
+        assert!(html.contains("<span>24 hours. After that") && html.contains("Download each app's accounts"), "{html}");
         let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();
         let allowed = router.clone().oneshot(Request::builder().method("POST").uri("/oauth/authorize")
             .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
