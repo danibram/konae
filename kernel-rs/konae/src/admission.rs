@@ -1,4 +1,4 @@
-//! Creator admission: who may create a creator account on this installation.
+//! Owner admission: who may create an owner account on this installation.
 //!
 //! The operator issues invitation codes from the server with the Kernel
 //! executable. A code is single use, expires, and is stored in
@@ -35,7 +35,7 @@ const MAX_RETURN_BYTES: usize = 4096;
 pub(crate) const CODE_REFUSED: &str =
     "This invitation code is not valid. It may be mistyped, expired, revoked or already used.";
 pub(crate) const CODE_REQUIRED: &str =
-    "An invitation code is required to create a creator account. Ask the operator of this installation for one.";
+    "An invitation code is required to create an owner account. Ask the operator of this installation for one.";
 const KEY_REFUSED: &str =
     "A valid installation setup key is required to create the first owner.";
 
@@ -79,6 +79,8 @@ fn install(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// The label is part of every stored hash. Renaming it would stop each issued
+/// code from matching, so it keeps the name the commands had before they said `owner`.
 fn hash_code(normalized: &str) -> String {
     hex::encode(Sha256::digest(format!("creator-code:{normalized}").as_bytes()))
 }
@@ -131,8 +133,8 @@ pub(crate) fn read(state: &Konae, body: &Value) -> std::result::Result<Admission
             .ok_or(AuthError::AdmissionRefused(CODE_REFUSED));
     }
     let key = body["setupKey"].as_str().unwrap_or("");
-    if !key.is_empty() && crate::digest(key.as_bytes()) == crate::digest(state.admin_key.as_bytes()) {
-        return Ok(Admission::SetupKey { development: state.admin_key == DEFAULT_ADMIN_KEY });
+    if !key.is_empty() && crate::digest(key.as_bytes()) == crate::digest(state.setup_key.as_bytes()) {
+        return Ok(Admission::SetupKey { development: state.setup_key == DEFAULT_SETUP_KEY });
     }
     Err(AuthError::AdmissionRefused(match mode(state) {
         Mode::SetupKey => KEY_REFUSED,
@@ -188,7 +190,7 @@ pub(crate) fn admit(
 /// `setup-key` while the installation key can still create a creator;
 /// `code` once any code exists or, for a configured key, any creator exists.
 pub(crate) fn mode(state: &Konae) -> Mode {
-    let development = state.admin_key == DEFAULT_ADMIN_KEY;
+    let development = state.setup_key == DEFAULT_SETUP_KEY;
     match store_counts(&state.data_root) {
         Ok((0, _)) if development => Mode::SetupKey,
         Ok((0, 0)) => Mode::SetupKey,
@@ -245,7 +247,7 @@ pub(crate) fn login_page(origin: &str, return_to: Option<&str>) -> String {
 // ---------------------------------------------------------------------------
 // Operator commands
 
-/// One issued code, as `creator-code-list` shows it.
+/// One issued code, as `owner-code-list` shows it.
 #[derive(Debug, PartialEq, Eq)]
 struct CodeRow {
     id: String,
@@ -256,12 +258,12 @@ struct CodeRow {
     creator: Option<(String, String)>,
 }
 
-/// Runs `creator-code-create`, `creator-code-list` or `creator-code-revoke`
+/// Runs `owner-code-create`, `owner-code-list` or `owner-code-revoke`
 /// against `KONAE_DATA_DIR`. Returns false when the arguments name
 /// another command.
 pub fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if !args.first().is_some_and(|name| name.starts_with("creator-code-")) {
+    if !args.first().is_some_and(|name| name.starts_with("owner-code-")) {
         return Ok(false);
     }
     let root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
@@ -269,11 +271,11 @@ pub fn operator_command() -> Result<bool> {
     Ok(true)
 }
 
-const USAGE: &str = "Usage: konae creator-code-create [--expires-in 14d] [--note TEXT] | creator-code-list | creator-code-revoke <id>";
+const USAGE: &str = "Usage: konae owner-code-create [--expires-in 14d] [--note TEXT] | owner-code-list | owner-code-revoke <id>";
 
 fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
     match args.first().map(String::as_str) {
-        Some("creator-code-create") => {
+        Some("owner-code-create") => {
             let mut ttl = DEFAULT_TTL_SECONDS;
             let mut note = String::new();
             let mut rest = args[1..].iter();
@@ -291,17 +293,17 @@ fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
             );
             let (id, code, expires_at) = create(root, &note, ttl, now)?;
             Ok(format!(
-                "Invitation code, shown once: {code}\nID: {id}\nExpires: {}\nIt creates one creator account. The setup key no longer creates accounts on this installation.",
+                "Invitation code, shown once: {code}\nID: {id}\nExpires: {}\nIt creates one owner account. The setup key no longer creates accounts on this installation.",
                 timestamp(expires_at)
             ))
         }
-        Some("creator-code-list") => {
+        Some("owner-code-list") => {
             anyhow::ensure!(args.len() == 1, "{USAGE}");
             let rows = list(root, now)?;
             if rows.is_empty() {
                 return Ok("No invitation codes have been issued.".into());
             }
-            let mut out = String::from("ID\tSTATE\tCREATED\tEXPIRES\tCREATOR\tNOTE");
+            let mut out = String::from("ID\tSTATE\tCREATED\tEXPIRES\tOWNER\tNOTE");
             for row in rows {
                 let creator = row
                     .creator
@@ -319,7 +321,7 @@ fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
             }
             Ok(out)
         }
-        Some("creator-code-revoke") => {
+        Some("owner-code-revoke") => {
             anyhow::ensure!(args.len() == 2, "{USAGE}");
             revoke(root, &args[1], now)
         }
@@ -400,7 +402,7 @@ fn revoke(root: &Path, id: &str, now: i64) -> Result<String> {
     match record {
         None => anyhow::bail!("No invitation code has the ID {id}."),
         Some((_, Some(_), Some(email))) => anyhow::bail!(
-            "Code {id} was already used by {email}. Suspend that creator with creator-account-suspend instead."
+            "Code {id} was already used by {email}. Suspend that owner with owner-account-suspend instead."
         ),
         Some((_, Some(_), None)) => anyhow::bail!("Code {id} was already used and created no account."),
         Some((Some(_), _, _)) => Ok(format!("Code {id} is already revoked.")),
@@ -480,7 +482,7 @@ mod tests {
             },
             ..AppState::for_test(&root)
         };
-        let state = Konae { admin_key: key.into(), ..Konae::for_test(kernel) };
+        let state = Konae { setup_key: key.into(), ..Konae::for_test(kernel) };
         Fixture { state, mailbox, root }
     }
 
@@ -569,31 +571,31 @@ mod tests {
     #[test]
     fn the_operator_creates_lists_and_revokes_codes() {
         let fixture = fixture(Verification::Local, KEY);
-        assert_eq!(fixture.cli(&["creator-code-list"]).unwrap(), "No invitation codes have been issued.");
+        assert_eq!(fixture.cli(&["owner-code-list"]).unwrap(), "No invitation codes have been issued.");
         let created = fixture
-            .cli(&["creator-code-create", "--expires-in", "2d", "--note", "For Ada"])
+            .cli(&["owner-code-create", "--expires-in", "2d", "--note", "For Ada"])
             .unwrap();
         assert!(created.starts_with("Invitation code, shown once: "));
         assert!(created.ends_with("The setup key no longer creates accounts on this installation."), "{created}");
         let id = created.lines().nth(1).unwrap().trim_start_matches("ID: ").to_owned();
-        let listed = fixture.cli(&["creator-code-list"]).unwrap();
+        let listed = fixture.cli(&["owner-code-list"]).unwrap();
         let row = listed.lines().nth(1).unwrap();
         assert!(row.starts_with(&format!("{id}\topen\t")), "{row}");
         assert!(row.ends_with("\t-\tFor Ada"), "{row}");
         assert!(!listed.contains(created.lines().next().unwrap().rsplit(' ').next().unwrap()), "the list never shows the code");
 
-        assert!(fixture.cli(&["creator-code-revoke", &id]).unwrap().starts_with("Revoked code"));
-        assert!(fixture.cli(&["creator-code-revoke", &id]).unwrap().contains("already revoked"));
-        assert!(fixture.cli(&["creator-code-list"]).unwrap().contains(&format!("{id}\trevoked\t")));
-        assert!(fixture.cli(&["creator-code-revoke", "code_unknown"]).is_err());
-        assert!(fixture.cli(&["creator-code-create", "--expires-in"]).is_err());
-        assert!(fixture.cli(&["creator-code-create", "--colour", "red"]).is_err());
-        assert!(fixture.cli(&["creator-code-create", "--note", "two\nlines"]).is_err());
-        assert!(fixture.cli(&["creator-code-list", "extra"]).is_err());
+        assert!(fixture.cli(&["owner-code-revoke", &id]).unwrap().starts_with("Revoked code"));
+        assert!(fixture.cli(&["owner-code-revoke", &id]).unwrap().contains("already revoked"));
+        assert!(fixture.cli(&["owner-code-list"]).unwrap().contains(&format!("{id}\trevoked\t")));
+        assert!(fixture.cli(&["owner-code-revoke", "code_unknown"]).is_err());
+        assert!(fixture.cli(&["owner-code-create", "--expires-in"]).is_err());
+        assert!(fixture.cli(&["owner-code-create", "--colour", "red"]).is_err());
+        assert!(fixture.cli(&["owner-code-create", "--note", "two\nlines"]).is_err());
+        assert!(fixture.cli(&["owner-code-list", "extra"]).is_err());
 
         // A code issued with a past clock lists as expired.
         create(&fixture.root, "", MIN_TTL_SECONDS, now_seconds() - 2 * MIN_TTL_SECONDS).unwrap();
-        assert!(fixture.cli(&["creator-code-list"]).unwrap().contains("\texpired\t"));
+        assert!(fixture.cli(&["owner-code-list"]).unwrap().contains("\texpired\t"));
     }
 
     #[test]
@@ -601,8 +603,8 @@ mod tests {
         let fixture = fixture(Verification::Required, KEY);
         super::owners::creator_store(&fixture.state).unwrap();
         // The operator's shell does not set KONAE_ACCOUNT_VERIFICATION.
-        fixture.cli(&["creator-code-create"]).unwrap();
-        fixture.cli(&["creator-code-list"]).unwrap();
+        fixture.cli(&["owner-code-create"]).unwrap();
+        fixture.cli(&["owner-code-list"]).unwrap();
         let recorded: String = Connection::open(owners_path(&fixture.root))
             .unwrap()
             .query_row("SELECT value FROM account_meta WHERE key = 'verification'", [], |row| row.get(0))
@@ -639,21 +641,21 @@ mod tests {
         assert!(!text.to_lowercase().contains("key"));
         assert_eq!((fixture.accounts(), fixture.sent()), (0, 0));
         // Revoking every code does not reopen it.
-        fixture.cli(&["creator-code-revoke", &id]).unwrap();
+        fixture.cli(&["owner-code-revoke", &id]).unwrap();
         assert_eq!(fixture.signup(json!({"email": "first@example.test", "setupKey": KEY})).await.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn the_development_key_keeps_creating_local_owners_until_a_code_exists() {
-        let fixture = fixture(Verification::Local, DEFAULT_ADMIN_KEY);
+        let fixture = fixture(Verification::Local, DEFAULT_SETUP_KEY);
         for email in ["one@example.test", "two@example.test"] {
-            let body = json!({"email": email, "password": PASSWORD, "setupKey": DEFAULT_ADMIN_KEY});
+            let body = json!({"email": email, "password": PASSWORD, "setupKey": DEFAULT_SETUP_KEY});
             assert_eq!(fixture.signup(body).await.status(), StatusCode::OK);
         }
         assert_eq!(mode(&fixture.state), Mode::SetupKey);
         fixture.code(DEFAULT_TTL_SECONDS);
         assert_eq!(mode(&fixture.state), Mode::Code);
-        let body = json!({"email": "three@example.test", "password": PASSWORD, "setupKey": DEFAULT_ADMIN_KEY});
+        let body = json!({"email": "three@example.test", "password": PASSWORD, "setupKey": DEFAULT_SETUP_KEY});
         assert_eq!(message(fixture.signup(body).await).await, (StatusCode::FORBIDDEN, CODE_REQUIRED.to_owned()));
         assert_eq!(fixture.accounts(), 2);
     }
@@ -684,13 +686,13 @@ mod tests {
         assert_eq!(signup.status(), StatusCode::ACCEPTED);
         let link = fixture.last_link();
         assert!(link.starts_with("http://localhost/_konae/owner/login#verification="), "{link}");
-        let listed = fixture.cli(&["creator-code-list"]).unwrap();
+        let listed = fixture.cli(&["owner-code-list"]).unwrap();
         assert!(listed.contains(&format!("{id}\tused\t")), "{listed}");
         assert!(listed.contains("ada@example.test (pending)"), "{listed}");
         let session = fixture.verify(&link).unwrap();
         assert_eq!(session.user.name, "ada@example.test");
-        assert!(fixture.cli(&["creator-code-list"]).unwrap().contains("ada@example.test (active)"));
-        assert!(fixture.cli(&["creator-code-revoke", &id]).unwrap_err().to_string().contains("creator-account-suspend"));
+        assert!(fixture.cli(&["owner-code-list"]).unwrap().contains("ada@example.test (active)"));
+        assert!(fixture.cli(&["owner-code-revoke", &id]).unwrap_err().to_string().contains("owner-account-suspend"));
 
         // The same code is refused for anyone else, and creates nothing.
         let again = fixture.signup(json!({"email": "eve@example.test", "code": code})).await;
@@ -723,7 +725,7 @@ mod tests {
         let fixture = fixture(Verification::Required, KEY);
         let (_, expired, _) = create(&fixture.root, "", MIN_TTL_SECONDS, now_seconds() - MIN_TTL_SECONDS - 1).unwrap();
         let (revoked_id, revoked) = fixture.code(DEFAULT_TTL_SECONDS);
-        fixture.cli(&["creator-code-revoke", &revoked_id]).unwrap();
+        fixture.cli(&["owner-code-revoke", &revoked_id]).unwrap();
         let unknown = new_code().unwrap();
         for code in [expired.as_str(), revoked.as_str(), unknown.as_str(), "not-a-code"] {
             let response = fixture.signup(json!({"email": "eve@example.test", "code": code})).await;
@@ -746,7 +748,7 @@ mod tests {
         let response = fixture.signup(json!({"email": "ada@example.test", "code": probe})).await;
         assert_eq!(response.status(), StatusCode::ACCEPTED, "the same answer as a new email");
         assert_eq!(fixture.sent(), sent, "an active creator gets no link");
-        assert!(fixture.cli(&["creator-code-list"]).unwrap().contains(&format!("{id}\tused\t")));
+        assert!(fixture.cli(&["owner-code-list"]).unwrap().contains(&format!("{id}\tused\t")));
         let reuse = fixture.signup(json!({"email": "new@example.test", "code": probe})).await;
         assert_eq!(reuse.status(), StatusCode::FORBIDDEN);
     }

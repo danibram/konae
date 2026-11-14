@@ -66,7 +66,7 @@ services:
       # The e2e suites sign up owners with this well-known key. The Kernel refuses
       # it on a non-loopback bind unless KONAE_ALLOW_DEFAULT_KEY is 1. Only the
       # gateway is published, and only on 127.0.0.1.
-      KONAE_ADMIN_KEY: local-development-key
+      KONAE_SETUP_KEY: local-development-key
       KONAE_ALLOW_DEFAULT_KEY: "1"
       KONAE_DATA_DIR: /data
       KONAE_KERNEL_PORT: "8787"

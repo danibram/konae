@@ -24,7 +24,7 @@ beforeAll(async () => {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: origin,
-      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: root, KONAE_ADMIN_KEY: setupKey,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: root, KONAE_SETUP_KEY: setupKey,
     }, stdout: "ignore", stderr: "inherit",
   });
   let ready = false;

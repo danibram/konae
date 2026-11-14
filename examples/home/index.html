@@ -197,7 +197,7 @@
       </div>
       <div class="dev-rows">
         <article class="dev" data-reveal>
-          <div><h3 data-t="dev.own.t">Run your own installation</h3><p data-t="dev.own.p">The editor, the server and storage in one stack. The editor opens at app.localhost:8080, and the first owner signs up with the installation's setup key. On the local stack the setup key is <code class="ui-code">local-development-key</code>. Set your own with <code class="ui-code">KONAE_ADMIN_KEY</code> before anyone else can reach the server. One app can also leave on its own as a folder that runs with Docker.</p><a class="more" href="p/docs/operate" data-link="operate" data-t="dev.own.more">Operate an installation</a></div>
+          <div><h3 data-t="dev.own.t">Run your own installation</h3><p data-t="dev.own.p">The editor, the server and storage in one stack. The editor opens at app.localhost:8080, and the first owner signs up with the installation's setup key. On the local stack the setup key is <code class="ui-code">local-development-key</code>. Set your own with <code class="ui-code">KONAE_SETUP_KEY</code> before anyone else can reach the server. One app can also leave on its own as a folder that runs with Docker.</p><a class="more" href="p/docs/operate" data-link="operate" data-t="dev.own.more">Operate an installation</a></div>
           <figure class="ui-pre code"><figcaption><span data-t="dev.terminal">Terminal</span><button class="ui-button ui-button-sm copy" type="button" data-copy aria-live="polite">Copy</button></figcaption><pre>git clone https://github.com/danibram/konae
 cd konae
 docker compose up --build</pre></figure>
@@ -220,7 +220,7 @@ bun run konae -- dev --dir app
 bun run konae -- publish --dir app</pre></figure>
         </article>
         <article class="dev" data-reveal>
-          <div><h3 data-t="dev.mcp.t">Connect an agent</h3><p data-t="dev.mcp.p">An MCP client builds, checks and publishes with the same rules. Start with the <code class="ui-code">platform_guide</code> tool.</p><p class="dev-links"><a class="more" href="p/docs/mcp-guide" data-link="mcp-guide" data-t="dev.mcp.more">The MCP guide</a> <a class="more" href="p/docs/llms.txt" data-link="llms">llms.txt</a></p></div>
+          <div><h3 data-t="dev.mcp.t">Connect an agent</h3><p data-t="dev.mcp.p">An MCP client builds, checks and publishes with the same rules. Start with the <code class="ui-code">platform_guide</code> tool.</p><p class="dev-links"><a class="more" href="p/docs/mcp-guide" data-link="mcp-guide" data-t="dev.mcp.more">The reference</a> <a class="more" href="p/docs/llms.txt" data-link="llms">llms.txt</a></p></div>
           <figure class="ui-pre code"><figcaption><span data-t="dev.endpoint">MCP endpoint</span><button class="ui-button ui-button-sm copy" type="button" data-copy aria-live="polite">Copy</button></figcaption><pre data-text="mcp">https://app.example.com/mcp</pre></figure>
         </article>
       </div>

@@ -4,22 +4,22 @@ This page takes one app through every operation an outside agent performs on Kon
 
 `tests/mcp-walkthrough.integration.test.ts` recorded every command and every answer below from two running installations of the `konae` binary, and it fails when this page differs from what they answer. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. The first installation answers on `http://localhost:4173`, the second on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>.localhost` on its installation's port. The commands call that address the `<Kernel URL>`.
 
-A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [The MCP guide](mcp.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
+A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [The reference](reference/README.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
 
 ## 1. Get an Agent Credential with an invitation code
 
-A new owner needs an invitation code from the installation's operator. The operator issues one on the server, where `KONAE_DATA_DIR` names the installation's data directory:
+A new owner needs an invitation code from the installation's operator. The operator issues one on the server, with the server binary `konae` (not the `bun run konae` CLI) and the `KONAE_DATA_DIR` of the running installation:
 
 <!-- walkthrough:operator -->
 ```sh
-konae creator-code-create --note 'Walkthrough agent'
+konae owner-code-create --note 'Walkthrough agent'
 ```
 
 ```text
 Invitation code, shown once: <invitation code>
 ID: <code id>
 Expires: <expiry>
-It creates one creator account. The setup key no longer creates accounts on this installation.
+It creates one owner account. The setup key no longer creates accounts on this installation.
 ```
 <!-- /walkthrough:operator -->
 
@@ -154,7 +154,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "--export-data": "adds export_data",
       "--manage-users": "adds manage_users"
     },
-    "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+    "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
     "permissions": {
       "export_data": "project_export",
@@ -809,7 +809,7 @@ content-type: text/html; charset=utf-8
 ```
 <!-- /walkthrough:runtime -->
 
-The shop signs each webhook with the secret over the timestamp, a fresh nonce, the method, the path, the query and the body. `src/lib/route-signature.ts` signs, and [HTTP routes](mcp.md#signatures) gives the same in shell. The same signature twice is a replay, and an unsigned request is refused:
+The shop signs each webhook with the secret over the timestamp, a fresh nonce, the method, the path, the query and the body. `src/lib/route-signature.ts` signs, and [HTTP routes](reference/routes-and-calls.md#signatures) gives the same in shell. The same signature twice is a replay, and an unsigned request is refused:
 
 <!-- walkthrough:signed-route -->
 ```sh

@@ -38,7 +38,7 @@ export const visibilityCopy: Record<DeploymentVisibility, { label: string; sente
 /**
  * What a republish says about access. The Kernel keeps the current signup
  * policy on a republish, except that publishing a public app as private turns
- * Open into Closed (docs/mcp.md, "Signup policy").
+ * Open into Closed (docs/reference/accounts.md, "Signup policy").
  */
 export function republishAccessNote(current: { visibility: DeploymentVisibility; mode?: SignupMode }, next: DeploymentVisibility): string {
   if (current.visibility === "public" && next === "private" && current.mode === "open") {
@@ -241,8 +241,8 @@ function shellQuote(value: string) {
 }
 
 /**
- * A curl command that calls one route with an API key, as docs/mcp.md
- * describes: `Authorization: Bearer lbk_...` on the Deployment host. A key
+ * A curl command that calls one route with an API key, as
+ * docs/reference/routes-and-calls.md describes: `Authorization: Bearer lbk_...` on the Deployment host. A key
  * that names a signed action replaces the signature. A GET maps the query
  * string onto the inputs; a POST sends a JSON object.
  */

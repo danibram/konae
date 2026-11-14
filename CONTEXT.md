@@ -22,7 +22,7 @@ _Avoid_: Konae Kernel, development Kernel, runtime server
 
 **Owner**:
 A person with a Konae account who makes and manages apps, in the editor or through the owner's MCP. Owners exist only in Konae, and an app folder carries none, so an export leaves its owner behind (ADR-0001). The account proves its email before it holds a session (ADR-0003).
-_Avoid_: Project Owner, admin, creator (the `creator-*` commands keep it in their names)
+_Avoid_: Project Owner, admin, creator
 
 **App User**:
 A person with an account in one app. The Kernel keeps the account and its sessions in the app's `data/identity.sqlite`. The Kernel keeps no role for it; an app that needs an administrator keeps roles in its own table and checks them in SQL against the actor binding (ADR-0001).
@@ -207,7 +207,7 @@ The person who runs an installation: its settings, its copies, its file store an
 _Avoid_: owner, admin
 
 **Kernel Commands**:
-What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs the installation commands and adds `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend`, `creator-account-resume` and, with Clerk, `creator-suspend`. Under Konae the owner tools do what the commands on one app do.
+What the `kernel` binary does on the machine instead of serving. On one app: `users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter` and `import`, each calling the function the owner tool calls, with the same refusals (`kernel-rs/kernel/src/operator.rs`). On the installation: `restore`, `reconcile`, `files-migrate` and `files-reconcile`. The `konae` binary runs the installation commands and adds `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend`, `owner-account-resume` and, with Clerk, `owner-suspend`. Under Konae the owner tools do what the commands on one app do.
 _Avoid_: admin page, CLI (that is `konae`)
 
 **Runtime Endpoint**:
@@ -243,11 +243,11 @@ _Avoid_: magic link, reset token
 _Avoid_: email confirmation setting
 
 **Setup Key**:
-`KONAE_ADMIN_KEY`, which creates Konae's first owner while no owner and no invitation code exists. It never authenticates an MCP tool, and Konae refuses to start on a reachable address while it is the development default (ADR-0003).
+`KONAE_SETUP_KEY`, which creates Konae's first owner while no owner and no invitation code exists. It never authenticates an MCP tool, and Konae refuses to start on a reachable address while it is the development default (ADR-0003).
 _Avoid_: installation key, admin password, Agent Credential
 
 **Invitation Code**:
-A single-use, expiring code the operator issues with `konae creator-code-create`, which admits one owner. The account it creates still proves its email (ADR-0003).
+A single-use, expiring code the operator issues with `konae owner-code-create`, which admits one owner. The account it creates still proves its email (ADR-0003).
 _Avoid_: invite link, setup key, invitation (that is an app's)
 
 **Email Job**:

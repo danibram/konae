@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { listSecrets, readContactEmail, readSignupPolicy, type ContactEmailState, type DeploymentReceipt, type SignupMode } from "../deployments/client";
+import { listSecrets, readContactEmail, readSignupPolicy, readSourcesDiffer, type ContactEmailState, type DeploymentReceipt, type SignupMode } from "../deployments/client";
 import { missingContactSentence } from "./AppContactEmail";
 import { readDomain } from "../deployments/domains";
 import type { DeploymentVisibility } from "../deployments/manifest";
@@ -85,6 +85,22 @@ function useReleaseFacts(projectId: string, deploymentId: string | undefined, si
   return { secrets, rules };
 }
 
+/**
+ * Whether the published app runs actions this editor did not save. It is read
+ * each time the dialog opens, because a folder publish can land at any time.
+ * A read that fails says nothing.
+ */
+function useSourcesDiffer(projectId: string, read: boolean): boolean {
+  const [differ, setDiffer] = useState(false);
+  useEffect(() => {
+    if (!read) return;
+    let live = true;
+    readSourcesDiffer(projectId).then((value) => { if (live) setDiffer(value); }, () => undefined);
+    return () => { live = false; };
+  }, [projectId, read]);
+  return differ;
+}
+
 /** The owner clears this refusal by setting a secret, which Auth > Integrations does. */
 function setsSecret(code: string | undefined): boolean {
   return code !== undefined && refusalCodes().includes(code as RefusalCode) && hintOf(code as RefusalCode).tool === "secret_set";
@@ -100,6 +116,7 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
   const publishedPolicy = usePublishedPolicy(republish && !deployment ? current?.id : undefined);
   const signedOut = session.state === "signed-out";
   const facts = useReleaseFacts(project.id, current?.id, session.state === "signed-in");
+  const sourcesDiffer = useSourcesDiffer(project.id, republish && !deployment && session.state === "signed-in");
   const { refusal, ownerActs, actions } = deployReadiness(project, facts);
   const errorRef = useRef<HTMLDivElement>(null);
   const listCanLeave = refusal === null;
@@ -121,6 +138,7 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
               <h2>Deploy {project.name}</h2>
               <p>Accounts, rows, and rules leave with this app. Export takes the same folder to another machine.</p>
               <p className={`publish-limit${listCanLeave ? "" : " is-refused"}`}>{refusal ?? "Every query names its LIMIT. It can leave."}</p>
+              {sourcesDiffer && <p className="publish-sources-differ" role="status">The published app runs actions that did not come from this editor, as after konae publish from an app folder. Deploy replaces that release with the files in this editor.</p>}
             </header>
 
             {republish && current ? (

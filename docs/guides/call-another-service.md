@@ -36,7 +36,7 @@ The URL is https, or http to an app of this installation. It never names a priva
 
     For an outside service, use an `https://` URL. `http://` reaches only an app of this installation, such as `inbox.localhost` on a local one.
 2. Choose `auth`. `{ "secret": "<name>", "header": "X-Inbox-Signature" }` signs the request with a signing secret, in `X-Konae-Signature` unless `header` names another. `{ "key": "<name>" }` sends the API key a secret holds as `Authorization: Bearer`.
-3. Set the secret with `secret_set` and `"use": "call"`. A release whose call names an unset secret is refused, and the refusal names it. Without `"use": "call"` the Kernel refuses a value that another of your projects already holds as a route secret. A call secret verifies no route of its own app, so it may repeat the receiving app's route secret.
+3. Set the secret with `secret_set` and `"use": "call"`, from the CLI with `bun run konae -- tool secret_set '{"projectId":"<id>","name":"inbox_events","use":"call"}' --stdin value --dir ./my-app` and the value piped in. A release whose call names an unset secret is refused, and the refusal names it. Without `"use": "call"` the Kernel refuses a value that another of your projects already holds as a route secret. A call secret verifies no route of its own app, so it may repeat the receiving app's route secret.
 
     ```json
     { "projectId": "<id>", "name": "inbox_events", "value": "<the receiving app's route secret>", "use": "call" }

@@ -44,11 +44,11 @@ my-app/
 
 ## Export the app
 
-1. Log in with `export_data`.
+1. Log in with `export_data`, unless the login saved in the folder already has it. `tool session_inspect` shows it in the `can` map. An OAuth client never gets `export_data`. Use a CLI login or a token the owner creates in their browser session with that permission.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
-    bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --export-data
+    bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --manage-users --export-data
     ```
 
 2. Write the folder, with the published app's data, into an empty folder. Without `--with-data` it writes the folder without `data/` and needs no credential.
@@ -64,29 +64,63 @@ my-app/
 
 The `kernel` binary serves an exported folder as it is, with its `data/`. At startup it checks the folder as Konae checks a release, applies the schema change `app/schema.sql` asks, writes its own record into the folder's `.konae/`, and prints the app's address. People sign in with the passwords they have.
 
-### On this machine
+### Get the binary
 
-Put the folder at `apps/<id>/` of a data directory, where `<id>` is the `id` in its `konae.json`, and start the binary from a Konae checkout:
+Each release attaches the `kernel` binary to its GitHub Release for macOS and Linux, on arm64 and x64. Download the one for this machine, check it against `SHA256SUMS` and make it executable. Replace `X.Y.Z` with the version in the exported folder's `konae.json` and `darwin-arm64` with `darwin-x64`, `linux-x64` or `linux-arm64`.
+
+```sh
+base=https://github.com/danibram/konae/releases/download/vX.Y.Z
+curl -fLO "$base/kernel-X.Y.Z-darwin-arm64"
+curl -fLO "$base/SHA256SUMS"
+shasum -a 256 -c --ignore-missing SHA256SUMS
+chmod +x kernel-X.Y.Z-darwin-arm64
+```
+
+On Linux, `sha256sum -c --ignore-missing SHA256SUMS` does the check. The binary is not signed, so a file saved from a browser may need `xattr -d com.apple.quarantine <file>` on macOS. The Linux binaries need glibc 2.36 or newer. The 0.6.0 release attached no binaries, so build from a checkout for that version.
+
+To build it from a Konae checkout instead, which needs a Rust toolchain:
 
 ```sh
 cargo build --manifest-path kernel-rs/Cargo.toml --bin kernel
-mkdir -p /tmp/kernel-data/apps
-cp -R /tmp/my-app-export "/tmp/kernel-data/apps/$(bun -e 'console.log(require("/tmp/my-app-export/konae.json").id)')"
-KONAE_DATA_DIR=/tmp/kernel-data KONAE_PUBLIC_ORIGIN=http://localhost:8787 kernel-rs/target/debug/kernel
 ```
 
-It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening on 8787`. `KONAE_KERNEL_PORT` changes the port. `bun run konae -- dev --dir /tmp/my-app-export` runs the same binary on the folder in place and restarts it when `app/` changes.
+That writes `kernel-rs/target/debug/kernel`.
+
+### On this machine
+
+`dev` serves the folder in place, with its `data/`, and restarts the Kernel when `app/` changes. Set `KONAE_KERNEL_BIN` to the downloaded binary and `dev` runs it and needs no Rust. Without it, the first run compiles the Kernel from the checkout.
+
+```sh
+KONAE_KERNEL_BIN="$PWD/kernel-X.Y.Z-darwin-arm64" bun run konae -- dev --dir /tmp/my-app-export
+```
+
+A server that serves several app folders with one `kernel` needs the other layout. Put the folder at `apps/<id>/` of a data directory, where `<id>` is the `id` in its `konae.json`, and start the binary. It needs no checkout:
+
+```sh
+mkdir -p /tmp/kernel-data/apps
+cp -R /tmp/my-app-export "/tmp/kernel-data/apps/$(bun -e 'console.log(require("/tmp/my-app-export/konae.json").id)')"
+KONAE_DATA_DIR=/tmp/kernel-data KONAE_PUBLIC_ORIGIN=http://localhost:8787 ./kernel-X.Y.Z-darwin-arm64
+```
+
+With the cargo build, the last line starts `kernel-rs/target/debug/kernel` instead.
+
+It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening on 8787`. `KONAE_KERNEL_PORT` changes the port.
 
 ### In a container
 
-1. Pick a Kernel image. A release publishes `ghcr.io/danibram/konae-kernel:<version>`. To build from a checkout instead:
+1. In the exported folder, copy the example settings.
+
+    ```sh
+    cp .env.example .env
+    ```
+
+    The export fills `KONAE_KERNEL_IMAGE` with `ghcr.io/danibram/konae-kernel:<the version in konae.json>`. Add a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start. To run a checkout's Kernel instead, build it from the Konae checkout, then set `KONAE_KERNEL_IMAGE=konae-kernel:local` in the exported folder's `.env`.
 
     ```sh
     docker build -f Dockerfile.kernel -t konae-kernel:local .
     ```
 
-2. In the exported folder, copy `.env.example` to `.env`. Set `KONAE_KERNEL_IMAGE` to that image, such as `ghcr.io/danibram/konae-kernel:<version>` or `konae-kernel:local`, and a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start.
-3. Start it, and read the address it prints.
+2. From the exported folder, start it and read the address it prints.
 
     ```sh
     docker compose up -d
@@ -137,7 +171,12 @@ Into an app that already exists on another Konae, open App settings under **More
 
 Into a new app over MCP:
 
-1. Run `project_create` with the same `projectId`. Then run `secret_set` for every secret the app's routes sign with. A release that signs with an unset secret is refused.
+1. Run `project_create` with the same `projectId`. Then set every secret the app's routes sign with, one command each, because a release that signs with an unset secret is refused. The value takes 16 to 512 characters. `--stdin value` reads it from standard input, so it stays out of the shell history. Use a credential for the destination, in `KONAE_MCP_TOKEN` or in a folder's `.konae/` from `login` there.
+
+    ```sh
+    printf '%s' "$SECRET" | KONAE_MCP_TOKEN=<destination token> bun run konae -- tool secret_set '{"projectId":"app_...","name":"orders_hook"}' --stdin value --url <destination installation URL>
+    ```
+
 2. For each part of the data the manifest lists, call `transfer_begin` with `size`, `sha256`, `projectId` and its name as `component`. Call `transfer_write` for each block, then `transfer_complete`.
 3. Upload the release JSON built from `app/` and `dist/`, with `initialPackage` holding the `manifest` and a `components` map of part name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same data imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.

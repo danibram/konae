@@ -65,7 +65,7 @@ pub struct Limits {
     /// Notices (`notify`, ADR-0012) count apart from account email, so a
     /// busy app never uses up the allowance that signup and recovery need.
     pub notify_app_per_day: u32,
-    pub notify_creator_per_day: u32,
+    pub notify_owner_per_day: u32,
     /// Notices one address receives from one app in a day.
     pub notify_recipient_per_day: u32,
 }
@@ -83,7 +83,7 @@ impl Default for Limits {
             installation_per_day: 1000,
             client_per_hour: 20,
             notify_app_per_day: 200,
-            notify_creator_per_day: 500,
+            notify_owner_per_day: 500,
             notify_recipient_per_day: 50,
         }
     }
@@ -91,6 +91,11 @@ impl Default for Limits {
 
 impl Limits {
     fn from_env() -> Result<Self> {
+        for (old, new) in [("KONAE_MAIL_LIMIT_CREATOR_PER_DAY", "KONAE_MAIL_LIMIT_OWNER_PER_DAY"), ("KONAE_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY", "KONAE_MAIL_LIMIT_NOTIFY_OWNER_PER_DAY")] {
+            if std::env::var(old).ok().filter(|value| !value.is_empty()).is_some() {
+                anyhow::bail!("{old} is now {new}. Set {new} to the same value and remove {old}.");
+            }
+        }
         let defaults = Self::default();
         let read = |name: &str, default: u32| -> Result<u32> {
             match std::env::var(name).as_deref() {
@@ -105,19 +110,19 @@ impl Limits {
         Ok(Self {
             recipient_per_minute: read("KONAE_MAIL_LIMIT_RECIPIENT_PER_MINUTE", defaults.recipient_per_minute)?,
             recipient_per_day: read("KONAE_MAIL_LIMIT_RECIPIENT_PER_DAY", defaults.recipient_per_day)?,
-            creator_per_day: read("KONAE_MAIL_LIMIT_CREATOR_PER_DAY", defaults.creator_per_day)?,
+            creator_per_day: read("KONAE_MAIL_LIMIT_OWNER_PER_DAY", defaults.creator_per_day)?,
             app_per_day: read("KONAE_MAIL_LIMIT_APP_PER_DAY", defaults.app_per_day)?,
             installation_per_day: read("KONAE_MAIL_LIMIT_INSTALLATION_PER_DAY", defaults.installation_per_day)?,
             client_per_hour: read("KONAE_MAIL_LIMIT_CLIENT_PER_HOUR", defaults.client_per_hour)?,
             notify_app_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_APP_PER_DAY", defaults.notify_app_per_day)?,
-            notify_creator_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY", defaults.notify_creator_per_day)?,
+            notify_owner_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_OWNER_PER_DAY", defaults.notify_owner_per_day)?,
             notify_recipient_per_day: read("KONAE_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY", defaults.notify_recipient_per_day)?,
         })
     }
 }
 
 /// The key that seals links at rest. `KONAE_MAIL_SECRET` when set;
-/// otherwise the key the binary passes: Konae's `KONAE_ADMIN_KEY`, which
+/// otherwise the key the binary passes: Konae's `KONAE_SETUP_KEY`, which
 /// every installation reachable from another machine already keeps secret,
 /// or the `kernel` binary's own `mail-key` (`operator::mail_key`). The development
 /// default key is public, so it seals nothing for a real provider; the
@@ -128,8 +133,8 @@ fn mail_secret(key: &str, development: bool) -> Result<String> {
         return Ok(secret);
     }
     anyhow::ensure!(
-        development || key != DEFAULT_ADMIN_KEY,
-        "Email needs a secret to encrypt queued links. Set KONAE_MAIL_SECRET, or set KONAE_ADMIN_KEY to a secret value."
+        development || key != DEFAULT_SETUP_KEY,
+        "Email needs a secret to encrypt queued links. Set KONAE_MAIL_SECRET, or set KONAE_SETUP_KEY to a secret value."
     );
     Ok(key.to_owned())
 }
@@ -137,7 +142,7 @@ fn mail_secret(key: &str, development: bool) -> Result<String> {
 struct LinkKey(LessSafeKey);
 
 impl LinkKey {
-    /// HKDF-SHA256 with a fixed salt and label, so the admin key itself
+    /// HKDF-SHA256 with a fixed salt and label, so the setup key itself
     /// never encrypts anything and rotating either secret is one variable.
     fn derive(secret: &str) -> Self {
         let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-mail-v1").extract(secret.as_bytes());
@@ -1390,7 +1395,7 @@ fn check_notice_budget(connection: &Connection, limits: &Limits, notice: &Notice
     if count("", &[])? >= limits.installation_per_day {
         return Ok(Some("installation-limit"));
     }
-    if count("AND purpose = 'notify' AND creator = ?2", &[notice.creator])? >= limits.notify_creator_per_day {
+    if count("AND purpose = 'notify' AND creator = ?2", &[notice.creator])? >= limits.notify_owner_per_day {
         return Ok(Some("creator-limit"));
     }
     if count("AND purpose = 'notify' AND scope = ?2", &[notice.scope])? >= limits.notify_app_per_day {
@@ -1694,6 +1699,15 @@ async fn resend_events(State(state): State<AppState>, headers: HeaderMap, body: 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_old_mail_limit_name_is_refused_with_the_new_one() {
+        // Serialised by the name: no other test sets it.
+        unsafe { std::env::set_var("KONAE_MAIL_LIMIT_CREATOR_PER_DAY", "5") };
+        let message = super::Limits::from_env().unwrap_err().to_string();
+        unsafe { std::env::remove_var("KONAE_MAIL_LIMIT_CREATOR_PER_DAY") };
+        assert_eq!(message, "KONAE_MAIL_LIMIT_CREATOR_PER_DAY is now KONAE_MAIL_LIMIT_OWNER_PER_DAY. Set KONAE_MAIL_LIMIT_OWNER_PER_DAY to the same value and remove KONAE_MAIL_LIMIT_CREATOR_PER_DAY.");
+    }
+
     use super::*;
     use std::{
         collections::VecDeque,
@@ -2525,11 +2539,11 @@ mod tests {
     }
 
     #[test]
-    fn the_mail_secret_falls_back_to_the_admin_key_but_never_the_public_default() {
+    fn the_mail_secret_falls_back_to_the_setup_key_but_never_the_public_default() {
         assert!(std::env::var("KONAE_MAIL_SECRET").is_err());
-        assert_eq!(mail_secret("an operator admin key", false).unwrap(), "an operator admin key");
-        assert!(mail_secret(DEFAULT_ADMIN_KEY, false).is_err(), "a real provider needs a real secret");
-        assert!(mail_secret(DEFAULT_ADMIN_KEY, true).is_ok(), "the development mailbox keeps working locally");
+        assert_eq!(mail_secret("an operator setup key", false).unwrap(), "an operator setup key");
+        assert!(mail_secret(DEFAULT_SETUP_KEY, false).is_err(), "a real provider needs a real secret");
+        assert!(mail_secret(DEFAULT_SETUP_KEY, true).is_ok(), "the development mailbox keeps working locally");
     }
 
     #[test]
@@ -2801,7 +2815,7 @@ mod tests {
         );
 
         // The creator's notices and the installation's total.
-        let creator = fixture_with(Scripted::new(), Limits { notify_creator_per_day: 1, ..Limits::default() }).await;
+        let creator = fixture_with(Scripted::new(), Limits { notify_owner_per_day: 1, ..Limits::default() }).await;
         notice_accounts(&creator);
         notify(&creator, "alerts.raise", json!({"title": "x"}), None).await;
         notify(&creator, "alerts.raise", json!({"title": "y"}), None).await;

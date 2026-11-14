@@ -1,5 +1,5 @@
 //! What `platform_guide` answers, and the hint a refused tool call carries.
-//! docs/mcp.md is the long form of every topic; docs/mcp-walkthrough.md runs
+//! docs/reference/ is the long form of every topic; docs/mcp-walkthrough.md runs
 //! them in order against a Kernel.
 
 use super::mcp::{admin_tools, Owner};
@@ -87,7 +87,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "firstRun": {
                 "cli": [
                     "bun run konae -- init --dir <folder> --name '<name>' && bun run konae -- dev --dir <folder>, which need no credential",
-                    "bun run konae -- login --dir <folder> --url <Kernel URL>",
+                    "bun run konae -- login --dir <folder> --url <installation URL>",
                     "bun run konae -- publish --dir <folder>, then open the Deployment URL and call one Server Action"
                 ],
                 "mcp": [
@@ -107,7 +107,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "divergences": [
                 {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
                 {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on bun run konae -- dev or on a published Deployment."},
-                {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number. konae dev allows 1 TiB per file and per app unless KONAE_FILE_MAX_BYTES or KONAE_FILES_QUOTA_BYTES names a lower limit."},
+                {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number. konae dev applies the same 2 MiB per file, and KONAE_FILE_MAX_BYTES raises it there. Its quota for all files is 1 TiB unless KONAE_FILES_QUOTA_BYTES names another."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
                 {"where": "editor build vs konae build", "fact": "The editor's build reads npm packages from esm.sh; konae build and an app folder's npm run build read them from node_modules. Both use the exact versions in package.json, but the bundles are not byte-identical."},
                 {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."},
@@ -137,7 +137,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "unit": "The app folder is the app: konae.json, app/, dist/ and data/ with its database, accounts, files and Usage. The Kernel keeps it under apps/<id>/, and an export hands the same folder over."
         }),
         "credentials" => json!({
-            "login": "bun run konae -- login --dir <folder> --url <Kernel URL> reads KONAE_EMAIL and KONAE_PASSWORD. Add KONAE_INVITATION_CODE, the code the operator issued with konae creator-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+            "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data"},
             "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
             "permissions": {
@@ -167,7 +167,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "liveData": "pull is an export of the published app's data (database, accounts, files, Usage) into .konae/pull/data and needs export_data. dev --reset imports it into the folder's data/ with the kernel binary's import command, after a backup in .konae/backups. Nothing travels back to the published app. The Kernel brings data/ to app/schema.sql when it starts, so a column the next version adds is tried on the published rows first. sql and events read the folder's data/ through the kernel binary's commands, and the published Deployment only with --prod.",
             "events": "events lists what the local app did besides answer its page: email with its recipient and text (nothing is sent; it lands in .konae/kernel/mailbox.jsonl), calls to other services, scheduled runs, routes and Signals. dev serves the same list as a page on the port after the app's. Run events with --json after calling an action to check a notify, a call or a signal did what the Capsule declares, and with --follow to watch.",
             "start": "In an empty folder, either run init, or call project_create with a name and an optional template and write the files it returns into app/ plus konae.json {id, name, slug, visibility, signupPolicy, signInMethods, kernel, manifest}. Both give the same files. init also writes AGENTS.md, action-contract.md, compose.yaml, .env.example and a package.json whose npm run build writes dist/. Then dev runs it locally and publish sends it to the installation.",
-            "isolation": "dev runs the kernel binary on the folder with its own data/, no owner and no MCP, and does not proxy production. It keeps the Signup Policy konae.json names; on an app that is not Open, invite a test account with the kernel binary's invite command, as dev prints it.",
+            "isolation": "dev runs the kernel binary on the folder with its own data/, no owner and no MCP, and does not proxy production. It keeps the Signup Policy konae.json names; on an app that is not Open and holds no account, dev invites test@example.com and prints the link that opens the invitation. For another address, use the kernel binary's invite command, as dev prints it.",
             "sources": "publish sends the text files of app/ and the built dist/. The editor saves its sources into the app folder's app/ on the installation with project_sources_save, so a publish from a laptop's folder does not change what the editor shows.",
             "contract": "contract writes action-contract.json, its schema, action-contract.md and actions.d.ts, which types miniapp.actions.call, from actions.json and schema.sql. conform calls every action on a Deployment and checks the answers against that file, so point it at a test Deployment. The owner reads what ran with usage_read and signals_read."
         }),
@@ -182,7 +182,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.",
                 "Call release_plan with transferId, inspect its planId, expectedRevision and schema, then call release_apply with planId.",
                 "schema is the change the Kernel derived from schema.sql to the live database, with statements, losses and confirmation. A new table, column or index applies. When losses is not empty (a dropped table, a dropped column, a changed column type), show the owner each loss's sentence and pass confirmation as confirmSchema only after the owner agrees. Without it release_apply refuses with schema.confirmation-required and changes nothing.",
-                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
+                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect. Its sourcesDiffer is true when that release came with actions other than the editor's saved app/actions.json, as after konae publish from an app folder, and the editor's next Deploy replaces them."
             ],
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",

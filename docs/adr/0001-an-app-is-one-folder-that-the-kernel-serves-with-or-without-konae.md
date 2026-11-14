@@ -63,5 +63,5 @@ A third reason keeps the secrets out of `identity.sqlite`. An export carries onl
 
 - The Kernel reads one app folder format and no other.
 - An app built outside the editor arrives with its own `dist/`. When the editor's browser build can build `app/`, the app is edited in the web. When it cannot, Konae serves the `dist/` that came with it and the editor says the app is built on its owner's machine.
-- The Kernel image is built with `Dockerfile.kernel`. Releases publish it as `ghcr.io/danibram/konae-kernel:<version>` for `linux/amd64`; see [Releasing](../releasing.md).
+- The Kernel image is built with `Dockerfile.kernel`. Releases publish it as `ghcr.io/danibram/konae-kernel:<version>` for `linux/amd64` and `linux/arm64`; see [Releasing](../releasing.md).
 - This record leaves open an MCP endpoint per app for a user's agent, a plain HTTP runtime endpoint, and merging Konae's two databases.

@@ -55,3 +55,5 @@ Konae admits owners with invitation codes that the operator issues, lists and re
 - Required mode needs a mail transport (ADR-0012). Without one, signup and recovery answer 503 and active accounts still sign in.
 - An export drops sessions and open links, so an old link never works on another machine.
 - An account's `verified_at` may come from a challenge or from Google.
+
+On 2026-11-14 the commands became `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend`, `owner-account-resume` and `owner-suspend`, because every other page calls this person an owner. The old names answer with the new one and fail.

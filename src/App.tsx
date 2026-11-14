@@ -793,6 +793,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPublishing(true);
     setDeployError("");
     try {
+      // The Kernel compares a release's actions with the saved sources, so the
+      // save of what this Deploy releases lands first. A failed save shows in
+      // the editor already, and the release goes ahead.
+      await sources.save(project).catch(() => undefined);
       const artifact = await buildProjectInBrowser(project);
       // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;

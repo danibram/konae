@@ -23,7 +23,7 @@ async function start(name: string, port: number): Promise<Kernel> {
   const url = `http://127.0.0.1:${port}`;
   const setupKey = `pull-integration-${name}-setup-secret`;
   const process_ = Bun.spawn(["kernel-rs/target/debug/konae"], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: path.join(root, name), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1" },
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: path.join(root, name), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_SETUP_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {

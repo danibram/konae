@@ -143,22 +143,22 @@ async fn creator_host(state: &Konae, headers: &HeaderMap) -> bool {
 }
 
 
-/// Suspends or resumes a local creator account from the server, before the
+/// Suspends or resumes a local owner account from the server, before the
 /// Kernel starts listening:
-/// `konae creator-account-suspend <email>` and
-/// `konae creator-account-resume <email>`. Suspension ends the
+/// `konae owner-account-suspend <email>` and
+/// `konae owner-account-resume <email>`. Suspension ends the
 /// creator's sessions, open links and MCP credentials; projects and app
 /// accounts stay. Returns false when the arguments name another command.
 pub fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let suspend = match args.first().map(String::as_str) {
-        Some("creator-account-suspend") => true,
-        Some("creator-account-resume") => false,
+        Some("owner-account-suspend") => true,
+        Some("owner-account-resume") => false,
         _ => return Ok(false),
     };
     anyhow::ensure!(
         args.len() == 2,
-        "Usage: konae creator-account-suspend <email> | creator-account-resume <email>"
+        "Usage: konae owner-account-suspend <email> | owner-account-resume <email>"
     );
     let root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
     println!("{}", run_operator_command(&root, suspend, &args[1])?);
@@ -168,13 +168,13 @@ pub fn operator_command() -> Result<bool> {
 
 fn run_operator_command(root: &Path, suspend: bool, email: &str) -> Result<String> {
     let owners = root.join("owners.sqlite");
-    anyhow::ensure!(owners.exists(), "No creator accounts exist in {}.", root.display());
+    anyhow::ensure!(owners.exists(), "No owner accounts exist in {}.", root.display());
     let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
     let auth = AuthService::open_in(&owners, CREATOR_SCOPE, verification)?;
-    let not_found = || anyhow::anyhow!("No {}creator account has that email.", if suspend { "" } else { "suspended " });
+    let not_found = || anyhow::anyhow!("No {}owner account has that email.", if suspend { "" } else { "suspended " });
     if !suspend {
         let (id, state) = auth.resume(email).map_err(|_| not_found())?;
-        return Ok(format!("Resumed creator {id}. The account is {state}; it signs in again to get a session."));
+        return Ok(format!("Resumed owner {id}. The account is {state}; it signs in again to get a session."));
     }
     let id = auth.suspend(email).map_err(|_| not_found())?;
     // The account is suspended even if this cleanup fails, and a delegated
@@ -197,7 +197,7 @@ fn run_operator_command(root: &Path, suspend: bool, email: &str) -> Result<Strin
     }
     super::recovery::record_offline(root, super::recovery::Entry::new("creator", None, &id, "suspended"))?;
     Ok(format!(
-        "Suspended creator {id}. Projects and app accounts remain available to the installation operator."
+        "Suspended owner {id}. Projects and app accounts remain available to the installation operator."
     ))
 }
 

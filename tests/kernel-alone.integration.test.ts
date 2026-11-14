@@ -47,7 +47,7 @@ test("the kernel binary alone serves an app folder's Server Actions on the runti
   for (const file of ["owners.sqlite", "mcp.sqlite"]) await rm(path.join(data, `${file}-wal`), { force: true });
   for (const file of ["owners.sqlite", "mcp.sqlite"]) await rm(path.join(data, `${file}-shm`), { force: true });
 
-  const { KONAE_ADMIN_KEY: _, ...env } = konae.env;
+  const { KONAE_SETUP_KEY: _, ...env } = konae.env;
   alone = Bun.spawn([kernelBinary], { env, stdout: "ignore", stderr: "inherit" });
   let ready = false;
   for (let attempt = 0; attempt < 150 && !ready; attempt++) {

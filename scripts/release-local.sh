@@ -17,7 +17,9 @@ Usage: scripts/release-local.sh [--dry-run] [--no-push] [--overwrite] [--any-hos
 
 Builds ghcr.io/danibram/konae and ghcr.io/danibram/konae-kernel for linux/amd64
 from a clean checkout of HEAD, tags them X.Y.Z, X.Y and latest, pushes them
-and prints their digests. X.Y.Z comes from package.json.
+and prints their digests. X.Y.Z comes from package.json. The workflow on a
+version tag publishes linux/amd64 and linux/arm64; a push from here replaces
+the tag with an amd64-only image, so prefer the workflow for a release.
 
   --dry-run    Run the local checks, then print every build and push command
                without running it. Touches no registry and builds nothing.

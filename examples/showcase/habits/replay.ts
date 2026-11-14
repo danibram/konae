@@ -48,7 +48,7 @@ function kernelEnv(data: string, extra: Record<string, string> = {}) {
   return {
     ...inherited,
     KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
-    KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: data, KONAE_ADMIN_KEY: setupKey,
+    KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: data, KONAE_SETUP_KEY: setupKey,
     KONAE_TRUSTED_PROXIES: "127.0.0.1",
     KONAE_ACCOUNT_VERIFICATION: "required", KONAE_MAIL_TRANSPORT: "development",
     // days.close is declared daily at 00:05 UTC; the test clock runs it every 2 seconds.

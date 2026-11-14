@@ -32,7 +32,7 @@ async function installation(https: boolean, separateMcp = false) {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_DATA_DIR: root,
-      KONAE_ADMIN_KEY: key, KONAE_PUBLIC_ORIGIN: `${https ? "https" : "http"}://localhost:${port}`,
+      KONAE_SETUP_KEY: key, KONAE_PUBLIC_ORIGIN: `${https ? "https" : "http"}://localhost:${port}`,
       KONAE_HOST_SUFFIX: "localhost",
       ...(separateMcp ? { KONAE_MCP_ORIGIN: `https://control.localhost:${port}` } : {}),
     }, stdout: "ignore", stderr: "inherit",

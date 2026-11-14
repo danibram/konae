@@ -27,7 +27,7 @@ function cli(...args: string[]) {
 }
 
 function issueCode(note = "integration") {
-  const created = cli("creator-code-create", "--note", note);
+  const created = cli("owner-code-create", "--note", note);
   expect(created.ok).toBe(true);
   const code = created.out.match(/shown once: (\S+)/)![1];
   const id = created.out.match(/ID: (\S+)/)![1];
@@ -83,7 +83,7 @@ beforeAll(async () => {
   const port = Number(process.env.KONAE_ADMISSION_TEST_PORT) || 19400 + Math.floor(Math.random() * 90);
   url = `http://127.0.0.1:${port}`;
   kernel = Bun.spawn([binary], {
-    env: { ...operatorEnv(), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_MAIL_LIMIT_RECIPIENT_PER_MINUTE: "100", KONAE_MAIL_LIMIT_CLIENT_PER_HOUR: "1000" },
+    env: { ...operatorEnv(), KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_SETUP_KEY: setupKey, KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development", KONAE_MAIL_LIMIT_RECIPIENT_PER_MINUTE: "100", KONAE_MAIL_LIMIT_CLIENT_PER_HOUR: "1000" },
     stdout: "ignore", stderr: "inherit",
   });
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -96,7 +96,24 @@ beforeAll(async () => {
 
 afterAll(async () => { kernel?.kill(); if (kernel) await kernel.exited; if (root) await rm(root, { recursive: true, force: true }); });
 
-describe("creator admission", () => {
+describe("renamed names", () => {
+  test("a creator-* command answers with its new name and fails", () => {
+    const run = cli("creator-code-create", "--note", "old name");
+    expect(run.ok).toBe(false);
+    expect(run.err.trim()).toBe("creator-code-create is now owner-code-create.");
+    expect(run.out).toBe("");
+    expect(cli("owner-code-list").out).not.toContain("old name");
+  });
+
+  test("konae refuses to start with KONAE_ADMIN_KEY set and KONAE_SETUP_KEY unset", () => {
+    const run = Bun.spawnSync([binary], { env: { ...operatorEnv(), KONAE_ADMIN_KEY: "an-old-secret", KONAE_KERNEL_PORT: "0", KONAE_BIND: "127.0.0.1" }, timeout: 20_000 });
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr.toString()).toContain("KONAE_ADMIN_KEY is now KONAE_SETUP_KEY.");
+    expect(run.stdout.toString()).not.toContain("listening");
+  });
+});
+
+describe("owner admission", () => {
   test("the installation key creates the first owner and no one after", async () => {
     expect(await admission()).toBe("setup-key");
     expect((await post("/_konae/owner/signup", { email: "operator@admission.test", setupKey })).status).toBe(202);
@@ -118,7 +135,7 @@ describe("creator admission", () => {
   test("a creator admitted with a code verifies and lands back on the MCP client's consent", async () => {
     const issued = issueCode("For Ada");
     codeId = issued.id;
-    expect(cli("creator-code-list").out).toContain(`${codeId}\topen\t`);
+    expect(cli("owner-code-list").out).toContain(`${codeId}\topen\t`);
 
     const registration = await (await fetch(`${url}/oauth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "Admission agent", redirect_uris: ["http://127.0.0.1:9996/callback"] }) })).json();
     const challenge = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(oauth.verifier))).toString("base64url");
@@ -137,7 +154,7 @@ describe("creator admission", () => {
     const link = await lastLinkFor("ada@admission.test");
     expect(link.pathname).toBe("/_konae/owner/login");
     expect(link.searchParams.get("returnTo")).toBe(returnTo);
-    expect(cli("creator-code-list").out).toContain("ada@admission.test (pending)");
+    expect(cli("owner-code-list").out).toContain("ada@admission.test (pending)");
 
     creatorCookie = await verify("ada@admission.test");
     const consent = await fetch(url + returnTo, { headers: { cookie: creatorCookie } });
@@ -152,12 +169,12 @@ describe("creator admission", () => {
     expect(exchanged.status).toBe(200);
     creatorToken = (await exchanged.json()).access_token;
     expect(await new McpClient(`${url}/mcp`, { token: creatorToken }).call("projects_list")).toMatchObject({ projects: [] });
-    expect(cli("creator-code-list").out).toMatch(new RegExp(`${codeId}\\tused\\t.*ada@admission\\.test \\(active\\)`));
+    expect(cli("owner-code-list").out).toMatch(new RegExp(`${codeId}\\tused\\t.*ada@admission\\.test \\(active\\)`));
   });
 
   test("a used, revoked or unknown code and the key once codes exist are refused", async () => {
     const revoked = issueCode("Revoked before use");
-    expect(cli("creator-code-revoke", revoked.id).out).toContain("Revoked code");
+    expect(cli("owner-code-revoke", revoked.id).out).toContain("Revoked code");
     expect((await post("/_konae/owner/signup", { email: "eve@admission.test", code: "0000000000000000000000000" })).status).toBe(403);
     expect((await post("/_konae/owner/signup", { email: "eve@admission.test", code: revoked.code })).status).toBe(403);
     expect((await post("/_konae/owner/signup", { email: "eve@admission.test", setupKey })).status).toBe(403);
@@ -166,7 +183,7 @@ describe("creator admission", () => {
     expect((await post("/_konae/owner/signup", { email: "bob@admission.test", code: spent.code })).status).toBe(202);
     expect((await post("/_konae/owner/signup", { email: "eve@admission.test", code: spent.code })).status).toBe(403);
     expect((await mailbox()).some((item) => item.to === "eve@admission.test")).toBe(false);
-    expect(cli("creator-code-revoke", spent.id).ok).toBe(false);
+    expect(cli("owner-code-revoke", spent.id).ok).toBe(false);
   });
 
   test("suspending a creator ends their sessions, links, OAuth codes and MCP credentials", async () => {
@@ -181,7 +198,7 @@ describe("creator admission", () => {
     expect((await post("/_konae/owner/recover", { email: "ada@admission.test" })).status).toBe(202);
     const recovery = tokenOf(await lastLinkFor("ada@admission.test"));
 
-    const suspended = cli("creator-account-suspend", "ada@admission.test");
+    const suspended = cli("owner-account-suspend", "ada@admission.test");
     expect(suspended.ok).toBe(true);
 
     await expect(owner.call("projects_list")).rejects.toThrow();
@@ -191,10 +208,10 @@ describe("creator admission", () => {
     expect(exchange.status).toBe(400);
     expect((await post("/_konae/owner/reset", { token: recovery, password: "another password 2026" })).status).toBe(410);
     expect((await post("/_konae/owner/login", { email: "ada@admission.test", password })).status).toBe(403);
-    expect(cli("creator-code-list").out).toContain("ada@admission.test (suspended)");
+    expect(cli("owner-code-list").out).toContain("ada@admission.test (suspended)");
 
     // A creator admitted with a code but suspended before verifying loses the link.
-    expect(cli("creator-account-suspend", "bob@admission.test").ok).toBe(true);
+    expect(cli("owner-account-suspend", "bob@admission.test").ok).toBe(true);
     expect((await post("/_konae/owner/verify", { token: tokenOf(await lastLinkFor("bob@admission.test")), password })).status).toBe(410);
   }, 30_000);
 });
@@ -215,7 +232,7 @@ describe("konae login --verify-from", () => {
     expect(done.code).toBe(0);
     const saved = JSON.parse(await readFile(path.join(folder, ".konae/credentials.json"), "utf8")) as { token: string };
     expect(await new McpClient(`${url}/mcp`, { token: saved.token }).call("projects_list")).toMatchObject({ projects: [] });
-    expect(cli("creator-code-list").out).toContain("cli@admission.test (active)");
+    expect(cli("owner-code-list").out).toContain("cli@admission.test (active)");
     // The account now signs in with the password the CLI set, without the code.
     expect((await runLogin(folder, { KONAE_EMAIL: env.KONAE_EMAIL, KONAE_PASSWORD: env.KONAE_PASSWORD })).code).toBe(0);
     await rm(folder, { recursive: true, force: true });

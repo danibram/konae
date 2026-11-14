@@ -19,14 +19,16 @@ const dirFlag = process.argv.indexOf("--dir");
 export const appRoot = dirFlag > 0 ? path.resolve(process.argv[dirFlag + 1]) : path.join(repo, "examples/docs-site");
 
 type NavEntry = string | { page: string; label: string };
-type SiteConfig = { title: string; summary: string; repository: string; nav: { section: string; pages: NavEntry[] }[]; include: string[]; routes?: Record<string, string> };
+type SiteConfig = { title: string; summary: string; repository: string; nav: { section: string; pages: NavEntry[] }[]; include: string[]; unlisted?: string[]; routes?: Record<string, string> };
 export type Page = { route: string; source: string; title: string; label: string; markdown: string };
 export type Site = { config: SiteConfig; pages: Page[] };
 
 /**
  * docs/README.md is the home, and every other file keeps its path without
- * `.md`, unless site.json names another route for it. docs/mcp.md needs one:
- * every Deployment answers /mcp with its runtime endpoint.
+ * `.md`, unless site.json names another route for it. docs/reference/README.md
+ * is the route `reference`, and docs/mcp-guide.md keeps `mcp-guide`, the
+ * address the old MCP guide was published at. Every Deployment answers /mcp
+ * with its runtime endpoint, so no page can live there.
  */
 export const routeOf = (source: string, routes: Record<string, string> = {}) =>
   routes[source] ?? (source === "README.md" ? "index" : source.replace(/(^|\/)README\.md$/, "$1index").replace(/\.md$/, ""));
@@ -41,12 +43,13 @@ async function markdownUnder(folder: string): Promise<string[]> {
   return found.sort();
 }
 
-/** The pages site.json names in its nav, then the folders it includes without listing each file. */
+/** The pages site.json names in its nav, then the folders it includes and the files it lists as `unlisted`, which answer at their route and appear in no menu. */
 export async function readSite(): Promise<Site> {
   const config = JSON.parse(await readFile(path.join(docsRoot, "site.json"), "utf8")) as SiteConfig;
   const labels = new Map<string, string | undefined>();
   for (const { pages } of config.nav) for (const entry of pages) labels.set(typeof entry === "string" ? entry : entry.page, typeof entry === "string" ? undefined : entry.label);
   for (const folder of config.include) for (const source of await markdownUnder(folder)) if (!labels.has(source)) labels.set(source, undefined);
+  for (const source of config.unlisted ?? []) if (!labels.has(source)) labels.set(source, undefined);
   const pages: Page[] = [];
   for (const [source, label] of labels) {
     const markdown = await readFile(path.join(docsRoot, source), "utf8");

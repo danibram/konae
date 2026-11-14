@@ -15,7 +15,7 @@
 //! same callers check. Every other host is resolved once, every address it
 //! resolves to must be public, and the request is pinned to the address that
 //! was checked, so a DNS answer cannot change between the check and the
-//! connection. The rules are listed in docs/mcp.md, "Calls between apps".
+//! connection. The rules are listed in docs/reference/routes-and-calls.md, "Calls between apps".
 //!
 //! The checks that need no knowledge of the installation run at both doors:
 //! `parseServerActionSource` in src/kernel/actions.ts makes them in the same

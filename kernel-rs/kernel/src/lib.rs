@@ -621,9 +621,45 @@ pub async fn state_from_env(
     Ok((state, copy_config))
 }
 
+/// Binds the Kernel's port. A port another process holds is refused with its
+/// number and the variable that picks another; any other failure keeps the
+/// system's text beside the address.
+pub async fn bind(startup: &Startup) -> Result<tokio::net::TcpListener> {
+    let (host, port) = (startup.bind.as_str(), startup.port);
+    tokio::net::TcpListener::bind((host, port)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AddrInUse {
+            anyhow::anyhow!("Port {port} on {host} is already in use. Another Konae or Kernel may hold it. Set KONAE_KERNEL_PORT to a free port, or pass --port to konae dev.")
+        } else {
+            anyhow::anyhow!("Could not listen on {host}:{port}: {error}")
+        }
+    })
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_taken_port_is_refused_with_its_number_and_how_to_pick_another() {
+        let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = held.local_addr().unwrap().port();
+        let startup = Startup { port, bind: "127.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new() };
+        let message = bind(&startup).await.unwrap_err().to_string();
+        assert!(message.contains(&format!("Port {port} on 127.0.0.1 is already in use")), "{message}");
+        assert!(message.contains("KONAE_KERNEL_PORT") && message.contains("--port"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn another_bind_failure_keeps_the_system_text_and_the_address() {
+        let startup = Startup { port: 0, bind: "256.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new() };
+        let message = bind(&startup).await.unwrap_err().to_string();
+        assert!(message.starts_with("Could not listen on 256.0.0.1:0: "), "{message}");
+    }
+}
+
 /// Binds the port and serves the Kernel, with `extra` beside its routes.
 pub async fn listen(startup: &Startup, state: AppState, extra: Router<AppState>, name: &str) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind((startup.bind.as_str(), startup.port)).await?;
+    let listener = bind(startup).await?;
     println!("{name} listening on {}", startup.port);
     serve(listener, state, extra).await?;
     Ok(())
@@ -3819,7 +3855,7 @@ pub fn content_type(path: &str) -> &'static str {
     }
 }
 
-pub const DEFAULT_ADMIN_KEY: &str = "local-development-key";
+pub const DEFAULT_SETUP_KEY: &str = "local-development-key";
 
 /// True for localhost, *.localhost and loopback IP addresses.
 pub fn is_local_host(host: &str) -> bool {

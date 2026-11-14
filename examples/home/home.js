@@ -25,7 +25,7 @@ const links = {
   checks: docs("gate-and-kernel"),
   cli: docs("guides/edit-files-with-the-cli"),
   operate: docs("operate"),
-  "mcp-guide": docs("mcp-guide"),
+  "mcp-guide": docs("reference"),
   pieces: docs("pieces"),
   invite: at(domain, "/p/invitation/"),
   privacy: at(domain, "/p/politica-de-privacidad/"),

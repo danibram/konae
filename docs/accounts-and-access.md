@@ -33,7 +33,7 @@ Server Actions decide what a Runtime Actor may do, and no Runtime Actor is ever 
 The app decides, in the statement and its bindings. A Server Action binds the caller with `{ "source": "actor", "field": "id" }`.
 
 - `id` is the app user's ID or the API key's ID. It is null for a visitor and for a schedule's run.
-- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner names the first one with SQL in Data.
+- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner names the first one with SQL in Data, such as `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';` with the ID from Auth > Users or `app_users_list`. From the CLI, `bun run konae -- sql --dir <folder> --prod "<statement>"` runs it.
 
 ```json
 "items.list": {
@@ -64,9 +64,9 @@ The Signup Policy decides who may create an app account on one Deployment.
 | `closed` | Nobody signs up. A person the owner invites can still accept the invitation. |
 | `allowlist` | Only exact emails or `@domain` entries, up to 100. A domain entry matches that exact domain, not its subdomains. Entering an address sends no invitation. |
 
-Public Deployments start Open. Private Deployments start Closed. A first release may name another mode. After that, a republish never changes it, except that republishing a public app as private turns Open into Closed.
+Public Deployments start Open. A private Deployment starts Closed when its first release names no mode. The editor's deploy dialog preselects Invitation only for a private app, and `konae init` writes `invitation` into `konae.json`, so a first release from either door names it. After that, a republish never changes it, except that republishing a public app as private turns Open into Closed.
 
-The owner changes it in the editor's Auth > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. An app folder published with the CLI takes its first release's policy from `signupPolicy` in `konae.json`, which `konae init` sets to `invitation`.
+The owner changes it in the editor's Auth > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. An app folder published with the CLI takes its first release's policy from `signupPolicy` in `konae.json`.
 
 In local verification mode, Konae does not verify email addresses. Whoever signs up first with a listed address gets that account. Use Closed for apps that hold private data, or require verification.
 
@@ -79,7 +79,7 @@ Every app account can sign in with email and password. The owner can add Google 
 3. Register the redirect URIs that `sign_in_methods_read` lists in that client.
 4. Turn Google on with `sign_in_methods_set` and `["password", "google"]`, which needs `manage_users`.
 
-A Google sign-in reaches the app account with the same email. For an email with no account, the Signup Policy decides as it does for a password. Password stays on, so every account keeps a way back in. An export carries the setting and the accounts but never the client, so on another installation the owner sets the two secrets again. [The MCP guide](./mcp.md#sign-in-methods) states every rule and refusal.
+A Google sign-in reaches the app account with the same email. For an email with no account, the Signup Policy decides as it does for a password. Password stays on, so every account keeps a way back in. An export carries the setting and the accounts but never the client, so on another installation the owner sets the two secrets again. [The reference](./reference/accounts.md#sign-in-methods) states every rule and refusal.
 
 ## Invitations
 

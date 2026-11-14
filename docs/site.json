@@ -16,13 +16,21 @@
       "guides/call-another-service.md",
       "guides/upload-files.md",
       "guides/invite-people.md",
+      "guides/add-a-second-owner.md",
       "guides/give-the-app-an-address.md",
       "guides/take-the-app-elsewhere.md"
     ] },
     { "section": "Reference", "pages": [
       "cli.md",
       { "page": "mcp-tools.md", "label": "MCP tools and guide topics" },
-      { "page": "mcp.md", "label": "MCP guide" },
+      { "page": "reference/README.md", "label": "Reference index" },
+      "reference/projects-and-releases.md",
+      "reference/accounts.md",
+      "reference/actions.md",
+      "reference/routes-and-calls.md",
+      "reference/usage-and-signals.md",
+      "reference/addresses.md",
+      "reference/export-and-import.md",
       { "page": "mcp-walkthrough.md", "label": "MCP walkthrough" },
       { "page": "sdk.md", "label": "SDK" },
       "pieces.md",
@@ -34,11 +42,12 @@
       "operate.md",
       "releasing.md",
       { "page": "architecture.md", "label": "Architecture" },
-      "clerk-creator-access.md",
+      "clerk-owner-access.md",
       { "page": "adr/README.md", "label": "Decision records" }
     ] },
     { "section": "Examples", "pages": ["examples.md"] }
   ],
   "include": ["adr"],
-  "routes": { "mcp.md": "mcp-guide" }
+  "unlisted": ["mcp-guide.md"],
+  "routes": { "reference/README.md": "reference", "mcp-guide.md": "mcp-guide" }
 }

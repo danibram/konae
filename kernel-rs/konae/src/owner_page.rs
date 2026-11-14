@@ -81,4 +81,19 @@ mod tests {
             assert!(CSS.contains(&format!("/_konae/owner/fonts/{file}")), "{file} is served but unused");
         }
     }
+
+    #[test]
+    fn the_token_form_offers_one_day_a_week_and_a_month_and_sends_the_one_chosen() {
+        let page = LOGIN.as_str();
+        let select = page.split(r#"<select class="select" id="ttl">"#).nth(1).and_then(|rest| rest.split("</select>").next()).expect("the token form has a duration select");
+        let options: Vec<&str> = select.split("<option").skip(1).collect();
+        assert_eq!(options.len(), 3, "{select}");
+        for (option, (seconds, label)) in options.iter().zip([("86400", "1 day"), ("604800", "7 days"), ("2592000", "30 days")]) {
+            assert!(option.contains(&format!(r#"value="{seconds}""#)) && option.contains(&format!(">{label}</option>")), "{option}");
+        }
+        assert!(options[0].contains("selected"), "1 day is the default");
+        assert!(page.contains("ttlSeconds:Number($('#ttl').value)"), "the page sends the chosen duration");
+        assert!(!page.contains("ttlSeconds:86400"), "the duration is no longer fixed");
+        assert!(page.contains("selectedOptions[0].textContent"), "the summary names the duration");
+    }
 }

@@ -39,7 +39,7 @@ try {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))),
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
       KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: path.join(scratch, "data"),
-      KONAE_ADMIN_KEY: setupKey, KONAE_TRUSTED_PROXIES: "127.0.0.1",
+      KONAE_SETUP_KEY: setupKey, KONAE_TRUSTED_PROXIES: "127.0.0.1",
     },
     stdout: "ignore", stderr: "inherit",
   });

@@ -2,7 +2,7 @@
 
 A Capsule and a Deployment run into these numbers. The Validation Gate and the Kernel both enforce the declaration limits, and the Kernel alone enforces the runtime ones.
 
-[The MCP guide](./mcp.md) states each rule with its refusal. The operator can change the file, email and call limits, and [Operate an installation](./operate.md#environment-variables) lists the variables.
+[The reference](./reference/README.md) states each rule with its refusal. The operator can change the file, email and call limits, and [Operate an installation](./operate.md#environment-variables) lists the variables.
 
 ## Declarations
 

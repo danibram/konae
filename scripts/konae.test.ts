@@ -7,7 +7,7 @@ import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templa
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
 import { usageRange } from "../src/lib/usage";
 import type { Sources } from "../src/lib/what-happened";
-import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, isLoopbackUrl, kernelRecord, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning, toolArguments } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, publishLocal, readSecret, serverCommandMessage, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -160,11 +160,181 @@ describe("konae CLI", () => {
     expect(await new Response(run.stderr).text()).toContain("--verify-from reads a development mailbox on this machine, so it works only with a Kernel on localhost or 127.0.0.1, not konae.example.com.");
   });
 
+  test("login without KONAE_PASSWORD or KONAE_EMAIL and without a terminal refuses as before", async () => {
+    const refusal = "Set KONAE_EMAIL and KONAE_PASSWORD. To create the account, also set KONAE_INVITATION_CODE, or KONAE_SETUP_KEY for the first owner.";
+    await expect(loginCredentials({ KONAE_EMAIL: "ada@example.test" }, { isTTY: false })).rejects.toThrow(refusal);
+    await expect(loginCredentials({ KONAE_PASSWORD: "a-long-password" }, { isTTY: undefined })).rejects.toThrow(refusal);
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))) as Record<string, string>;
+    const run = Bun.spawn([process.execPath, "run", "scripts/konae.ts", "login", "--dir", tmpdir(), "--url", origin()], {
+      env: { ...environment, KONAE_EMAIL: "ada@example.test" }, stdin: "ignore", stderr: "pipe", stdout: "ignore",
+    });
+    expect(await run.exited).toBe(1);
+    expect(await new Response(run.stderr).text()).toContain(refusal);
+  });
+
+  test("login asks on a terminal only for what the environment leaves unset", async () => {
+    const asked: Array<[string, boolean]> = [];
+    const answer = async (question: string, secret: boolean) => { asked.push([question, secret]); return secret ? "a-long-password" : " ada@example.test "; };
+    expect(await loginCredentials({}, { isTTY: true }, answer)).toEqual({ email: "ada@example.test", password: "a-long-password" });
+    expect(asked).toEqual([["Email: ", false], ["Password for ada@example.test: ", true]]);
+    asked.length = 0;
+    expect(await loginCredentials({ KONAE_EMAIL: "bob@example.test" }, { isTTY: true }, answer)).toEqual({ email: "bob@example.test", password: "a-long-password" });
+    expect(asked).toEqual([["Password for bob@example.test: ", true]]);
+    asked.length = 0;
+    expect(await loginCredentials({ KONAE_EMAIL: "bob@example.test", KONAE_PASSWORD: "set-in-env" }, { isTTY: true }, answer)).toEqual({ email: "bob@example.test", password: "set-in-env" });
+    expect(asked).toEqual([]);
+  });
+
+  test("the password prompt does not echo, edits with backspace, restores the terminal and rejects on Ctrl-C", async () => {
+    const stream = () => {
+      let listener: ((chunk: string) => void) | undefined;
+      const state = { raw: [] as boolean[], paused: 0, output: "" };
+      const input: PromptInput = {
+        setRawMode: (on) => { state.raw.push(on); }, resume: () => {}, pause: () => { state.paused++; },
+        on: (_, next) => { listener = next; }, off: () => { listener = undefined; },
+      };
+      return { state, input, type: (text: string) => listener?.(text), listening: () => listener !== undefined, output: { write: (text: string) => { state.output += text; } } };
+    };
+    const typed = stream();
+    const secret = readSecret("Password for ada@example.test: ", typed.input, typed.output);
+    typed.type("a-lon");
+    typed.type("x\u007fg-password\r");
+    expect(await secret).toBe("a-long-password");
+    expect(typed.state.output).toBe("Password for ada@example.test: \n");
+    expect(typed.state.raw).toEqual([true, false]);
+    expect(typed.state.paused).toBe(1);
+    expect(typed.listening()).toBe(false);
+
+    const cancelled = stream();
+    const refused = readSecret("Password: ", cancelled.input, cancelled.output);
+    cancelled.type("abc\u0003");
+    await expect(refused).rejects.toThrow("Cancelled.");
+    expect(cancelled.state.raw).toEqual([true, false]);
+    expect(cancelled.listening()).toBe(false);
+  });
+
+  test("help says login asks for what is unset, and that dev invites the test account and keeps the Kernel's file limit", () => {
+    const flat = HELP.replace(/\s+/g, " ");
+    expect(flat).toContain("asks for either one that is unset when there is a terminal");
+    expect(flat).toContain(`invited at ${TEST_ACCOUNT_EMAIL}`);
+    expect(flat).toContain("KONAE_FILE_MAX_BYTES raises that limit");
+  });
+
+  test("the invitation link is the newest line for the address, past the lines already seen", () => {
+    const line = (to: string, scope: string, purpose: string, token: string) => JSON.stringify({ to, purpose, scope, link: `http://localhost:8796/_konae/account#${purpose}=${token}`, expiresAt: 1 });
+    const mailbox = [
+      line("test@example.com", "deployment:app", "invitation", "old"),
+      line("other@example.com", "deployment:app", "invitation", "other"),
+      line("test@example.com", "creator", "invitation", "owner"),
+      line("test@example.com", "deployment:app", "recovery", "recovery"),
+      "not json",
+      line("Test@Example.com", "deployment:app", "invitation", "new"),
+    ].join("\n");
+    expect(invitationLink(mailbox, "test@example.com")).toBe("http://localhost:8796/_konae/account#invitation=new");
+    expect(invitationLink(mailbox, "test@example.com", 6)).toBeUndefined();
+    expect(invitationLink(mailbox, "cara@example.com")).toBeUndefined();
+  });
+
+  test("dev invites the test account once, waits for its link, and says nothing new when accounts exist", async () => {
+    const mailbox = path.join(directory, "mailbox.jsonl");
+    const link = "http://localhost:8796/_konae/account#invitation=abc";
+    const stub = (users: unknown[], afterInvite?: () => Promise<void>) => {
+      const ran: string[][] = [];
+      return { ran, kernel: { async run(args: string[]) {
+        ran.push(args);
+        if (args[0] === "users") return JSON.stringify({ users, nextCursor: null });
+        await afterInvite?.();
+        return "{}";
+      } } };
+    };
+    const empty = stub([], async () => { await writeFile(mailbox, `${JSON.stringify({ to: TEST_ACCOUNT_EMAIL, purpose: "invitation", scope: "deployment:app", link, expiresAt: 1 })}\n`); });
+    expect(await inviteTestAccount(empty.kernel, mailbox, 2)).toEqual({ line: `Test account: open ${link} and choose a password.` });
+    expect(empty.ran).toEqual([["users"], ["invite", TEST_ACCOUNT_EMAIL]]);
+
+    const held = stub([{ userId: "u1", email: "ada@example.test", state: "pending" }]);
+    expect(await inviteTestAccount(held.kernel, mailbox, 2)).toEqual({});
+    expect(held.ran).toEqual([["users"]]);
+
+    const silent = stub([]);
+    const lost = await inviteTestAccount(silent.kernel, path.join(directory, "none.jsonl"), 0.3);
+    expect(lost.line).toBeUndefined();
+    expect(lost.failed).toContain("did not reach");
+    const refused = await inviteTestAccount({ async run(args) { if (args[0] === "users") return JSON.stringify({ users: [] }); throw Error("This app is closed."); } }, mailbox, 1);
+    expect(refused).toEqual({ failed: "This app is closed." });
+  });
+
+  test("a local Kernel keeps the Kernel's own per-file limit, a 1 TiB quota, and takes either from the environment", async () => {
+    const saved = { quota: process.env.KONAE_FILES_QUOTA_BYTES, file: process.env.KONAE_FILE_MAX_BYTES, bin: process.env.KONAE_KERNEL_BIN };
+    const fake = path.join(directory, "kernel");
+    await writeFile(fake, "");
+    try {
+      process.env.KONAE_KERNEL_BIN = fake;
+      delete process.env.KONAE_FILES_QUOTA_BYTES; delete process.env.KONAE_FILE_MAX_BYTES;
+      const settings = await initLocal(path.join(directory, "app-folder"), { name: "Probe" });
+      const bare = await localKernel(path.join(directory, "app-folder"), settings);
+      expect(bare.env.KONAE_FILES_QUOTA_BYTES).toBe(String(1024 ** 4));
+      expect("KONAE_FILE_MAX_BYTES" in bare.env).toBe(false);
+      process.env.KONAE_FILE_MAX_BYTES = "5242880"; process.env.KONAE_FILES_QUOTA_BYTES = "10485760";
+      const raised = await localKernel(path.join(directory, "app-folder"), settings);
+      expect([raised.env.KONAE_FILE_MAX_BYTES, raised.env.KONAE_FILES_QUOTA_BYTES]).toEqual(["5242880", "10485760"]);
+    } finally {
+      for (const [name, value] of [["KONAE_FILES_QUOTA_BYTES", saved.quota], ["KONAE_FILE_MAX_BYTES", saved.file], ["KONAE_KERNEL_BIN", saved.bin]] as const) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
+  });
+
   test("help names every command and every login flag, and an unknown command prints it", async () => {
     for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template", "tool"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");
+  });
+
+  test("help calls the address of an installation its installation URL and says what to put there", () => {
+    expect(HELP).not.toContain("Kernel URL");
+    expect(HELP).toContain("--url <installation URL>");
+    expect(HELP).toContain("http://localhost:4173 under bun run dev:local");
+    expect(HELP).toContain("http://app.localhost:8080 under Compose");
+    expect(NO_INSTALLATION).not.toContain("Kernel URL");
+    expect(Math.max(...HELP.split("\n").map((line) => line.length))).toBeLessThanOrEqual(125);
+  });
+
+  test("an operator command of the server binary is named as one, with where to run it", async () => {
+    for (const name of ["owner-code-create", "owner-code-list", "owner-code-revoke", "owner-account-suspend", "owner-account-resume", "restore", "reconcile", "files-migrate"]) expect(SERVER_COMMANDS).toContain(name);
+    expect(serverCommandMessage("owner-code-create")).toBe("owner-code-create is a command of the konae server binary, not of this CLI. Run KONAE_DATA_DIR=data/kernel-local kernel-rs/target/debug/konae owner-code-create for bun run dev:local, or docker compose exec --user konae kernel konae owner-code-create under Compose.");
+    const run = cli("owner-code-create");
+    expect(await run.exited).toBe(1);
+    const said = await new Response(run.stderr).text();
+    expect(said).toContain("owner-code-create is a command of the konae server binary, not of this CLI.");
+    expect(said).toContain("docker compose exec --user konae kernel konae owner-code-create");
+    expect(said).not.toContain("Unknown command");
+    expect(said).not.toContain("Usage: bun run konae");
+  });
+
+  test("domain takes the Deployment from the id in konae.json, and refuses naming both ways when neither is given", async () => {
+    answers.domain_read = { status: "none", generatedUrl: "http://notes.localhost" };
+    const withUrl = (...args: string[]) => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "domain", "--url", origin(), ...args], {
+      env: { ...process.env, KONAE_MCP_TOKEN: "token" }, stdout: "pipe", stderr: "pipe", cwd: tmpdir(),
+    });
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_from_folder", name: "Notes", slug: "notes" }));
+    const fromFolder = withUrl("--dir", directory);
+    expect(await fromFolder.exited).toBe(0);
+    expect(await new Response(fromFolder.stdout).text()).toContain("This app has no custom domain.");
+    expect(calls.map((call) => [call.name, call.arguments.deploymentId])).toEqual([["domain_read", "app_from_folder"]]);
+    calls.length = 0;
+    const named = withUrl("--dir", directory, "--deployment", "dep_named");
+    expect(await named.exited).toBe(0);
+    expect(calls.map((call) => call.arguments.deploymentId)).toEqual(["dep_named"]);
+    calls.length = 0;
+    const neither = withUrl();
+    expect(await neither.exited).toBe(1);
+    const refusal = await new Response(neither.stderr).text();
+    expect(refusal).toContain(DOMAIN_NEEDS_DEPLOYMENT);
+    expect(refusal).toContain("--deployment <id>");
+    expect(refusal).toContain("--dir <folder>");
+    expect(calls).toEqual([]);
+    expect(HELP).toContain("[--deployment <id>]");
   });
 
   test("domain checks the hostname by the Kernel's rules before domain_set and prints the TXT record", async () => {
@@ -261,7 +431,8 @@ describe("konae CLI", () => {
   test("a signup policy konae.json cannot hold is refused before anything is sent", async () => {
     expect(manifestSignupPolicy({})).toBeUndefined();
     expect(manifestSignupPolicy({ signupPolicy: { mode: "closed" } })).toEqual({ mode: "closed", allowlist: [] });
-    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).toThrow('signupPolicy.mode must be "open", "invitation", "closed" or "allowlist"');
+    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).toThrow('konae.json signupPolicy.mode must be "open", "invitation", "closed" or "allowlist"');
+    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).not.toThrow("project.manifest");
     expect(() => manifestSignupPolicy({ signupPolicy: { mode: "allowlist", allowlist: "@example.test" } })).toThrow("must be a list of emails and @domains");
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: "invitation" } } };

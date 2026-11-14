@@ -17,7 +17,7 @@ type ActionBinding =
 /** Who may call a route: a signed sender, a program with an API key, a person with a session. */
 export type RouteCaller = "signature" | "key" | "session";
 
-/** An action's HTTP route on its Deployment host. See docs/mcp.md, "HTTP routes". */
+/** An action's HTTP route on its Deployment host. See docs/reference/routes-and-calls.md, "HTTP routes". */
 export type HttpBinding = {
   method: "GET" | "POST";
   path: string;
@@ -74,18 +74,18 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   signal?: SignalDeclaration;
   /**
    * The refusal a mutation answers with when its statement changes no row,
-   * instead of { changes: 0 }. See docs/mcp.md, "Guards".
+   * instead of { changes: 0 }. See docs/reference/usage-and-signals.md, "Guards".
    */
   guard?: string;
-  /** The email the mutation queues when it changes a row. See docs/mcp.md, "Notices". */
+  /** The email the mutation queues when it changes a row. See docs/reference/usage-and-signals.md, "Notices". */
   notify?: NotifyDeclaration;
   /**
    * When the Kernel's timer runs a mutation that takes no input: every
    * `<n>m` or `<n>h` from 5 minutes to 24 hours, or daily at `HH:MM` UTC.
-   * See docs/mcp.md, "Scheduled work".
+   * See docs/reference/usage-and-signals.md, "Scheduled work".
    */
   schedule?: ScheduleDeclaration;
-  /** An action of `"kind": "call"`. See docs/mcp.md, "Calls between apps". */
+  /** An action of `"kind": "call"`. See docs/reference/routes-and-calls.md, "Calls between apps". */
   call?: CallDeclaration;
 };
 

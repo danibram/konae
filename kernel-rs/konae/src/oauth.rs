@@ -287,7 +287,7 @@ async fn authorize_page(
                 .into_response();
         }
     };
-    let csrf = crate::digest(format!("{}:{}", state.admin_key, owner.id).as_bytes());
+    let csrf = crate::digest(format!("{}:{}", state.setup_key, owner.id).as_bytes());
     let fields = a
         .iter()
         .map(|(key, value)| {
@@ -466,7 +466,7 @@ async fn authorize(
         anyhow::ensure!(
             a.get("csrf")
                 == Some(&crate::digest(
-                    format!("{}:{}", state.admin_key, owner.id).as_bytes()
+                    format!("{}:{}", state.setup_key, owner.id).as_bytes()
                 )),
             "Invalid consent token."
         );
@@ -535,9 +535,9 @@ async fn token(
         let code: Value = serde_json::from_str(&body)?;
         if let Some(config) = super::clerk::ClerkConfig::from_env()? {
             let owners = Connection::open(state.data_root.join("owners.sqlite"))?;
-            anyhow::ensure!(super::clerk::owner_allowed(&owners, &config, code["owner"].as_str().unwrap_or(""))?, "Creator is not admitted.");
+            anyhow::ensure!(super::clerk::owner_allowed(&owners, &config, code["owner"].as_str().unwrap_or(""))?, "Owner is not admitted.");
         } else {
-            anyhow::ensure!(super::owners::creator_store(&state)?.is_active(code["owner"].as_str().unwrap_or(""))?, "Creator is not active.");
+            anyhow::ensure!(super::owners::creator_store(&state)?.is_active(code["owner"].as_str().unwrap_or(""))?, "Owner is not active.");
         }
         anyhow::ensure!(
             code["client_id"] == get("client_id")

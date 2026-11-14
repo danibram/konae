@@ -4,11 +4,21 @@ An agent operates Konae through the owner's MCP on `/mcp`. The editor calls the 
 
 ## Connect
 
-Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256, and the token lasts one hour with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/_konae/owner/login`, or from `token_create`.
+Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256, and the token lasts one hour with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/_konae/owner/login`, which issues a token of 1, 7 or 30 days, or from `token_create`.
 
 ```text
 Authorization: Bearer YOUR_TOKEN
 ```
+
+The endpoint takes one JSON-RPC 2.0 request per POST and needs no `initialize` first. A tool's answer is in `result.content[0].text`, and `result.structuredContent.result` holds the same value as JSON.
+
+```sh
+curl -s http://localhost:4173/mcp \
+  -H "Authorization: Bearer $KONAE_MCP_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_inspect","arguments":{}}}'
+```
+
+From a folder you logged in to, `bun run konae -- tool session_inspect --dir ./my-app` makes the same call with the saved token. See [`tool` in the CLI](./cli.md#tool).
 
 OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `export_data`. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
 
@@ -75,7 +85,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 
 The app runtime and app account tools run on an app's runtime endpoint, `/_konae/mcp` on the app's host, with an app session. Called on `/mcp`, they answer where they run.
 
-[The MCP guide](./mcp.md) gives each tool's arguments, answers and refusals, and [the walkthrough](./mcp-walkthrough.md) runs them in order on one app.
+[The reference](./reference/README.md) gives each tool's arguments, answers and refusals, and [the walkthrough](./mcp-walkthrough.md) runs them in order on one app.
 
 ## Read back after every write
 

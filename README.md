@@ -37,10 +37,14 @@ flowchart TB
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) 1.3 or newer. The Docker images pin Bun 1.3.11.
-- A Rust toolchain with Cargo 1.91 or newer.
-- Google Chrome, for the Playwright suites, which run with `channel: "chrome"`.
-- Docker with Compose, for the full stack, the S3 store the tests use, and running an exported app in a container.
+| Path | Needs |
+| --- | --- |
+| The editor, `bun run dev:local` | [Bun](https://bun.sh) 1.3 or newer, and a Rust toolchain with Cargo 1.91 or newer. The Docker images pin Bun 1.3.11. |
+| The CLI, `konae dev` | Bun, and either the Rust toolchain above or a `kernel` binary from the [GitHub Release](https://github.com/danibram/konae/releases), which `KONAE_KERNEL_BIN` names. `konae init` needs only Bun. |
+| Docker Compose, or an export in a container | Docker with Compose. |
+| The tests | Google Chrome for the Playwright suites, which run with `channel: "chrome"`, and Docker for the S3 store. |
+
+`bun run dev:local` and the first `konae dev` compile the Kernel with Cargo. The first compile takes about a minute with a warm Cargo cache, and later runs reuse the build. With `KONAE_KERNEL_BIN` set to a downloaded `kernel` binary, `konae dev` compiles nothing and needs no Rust. Each release publishes that binary for macOS and Linux on arm64 and x64, with a `SHA256SUMS` file ([Releasing](./docs/releasing.md) lists the names). To run Konae without Bun or Rust, see [Run it in Docker](#run-it-in-docker).
 
 ## Run it locally
 
@@ -57,13 +61,25 @@ Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothi
 
 `docker compose up --build` runs the complete stack, with a gateway and an S3 store, at [http://app.localhost:8080](http://app.localhost:8080). [Operate an installation](./docs/operate.md) covers it, along with every environment variable, copies and restores, email, and what to set before a Kernel is reachable from outside.
 
+## Run it in Docker
+
+The published image carries Konae, its Kernel and the editor, so a machine with Docker needs no Bun, Rust or checkout. Replace `your-setup-key` with a key of your own before running this command. You will use it to create the first owner.
+
+```sh
+docker run -d --name konae -p 127.0.0.1:8787:8787 -v konae-data:/data \
+  -e KONAE_SETUP_KEY='your-setup-key' -e KONAE_PUBLIC_ORIGIN=http://localhost:8787 \
+  ghcr.io/danibram/konae:0.7.0
+```
+
+Open [http://localhost:8787](http://localhost:8787), press **Create owner account** and give that key. The data stays in the `konae-data` volume. The image is built for `linux/amd64` and `linux/arm64`. Without `KONAE_MAIL_TRANSPORT` the container sends no email, so invitations to app users are refused; `KONAE_MAIL_TRANSPORT=development` writes them to `mailbox.jsonl` in the volume instead. [Operate an installation](./docs/operate.md) covers the rest. The `0.6.0` image reads the key as `KONAE_ADMIN_KEY` and is built for `linux/amd64` only, so on Apple Silicon add `--platform linux/amd64`.
+
 ## Make a first app in the editor
 
 Press **New project**, name it and pick a starting point. Press **Connect a model** to give the build agent your Anthropic, OpenAI or OpenRouter key, which stays in the browser, then describe a change. The Validation Gate checks the change, and **Apply** saves it. **Deploy** publishes the app and shows its address. [First app from the editor](./docs/guides/first-app-from-the-editor.md) walks through it.
 
 ## Make a first app from a folder
 
-`init` and `dev` need no credential and no installation. Run the commands from this repository.
+`init` and `dev` need no credential and no installation. Run the commands from this repository, or run `bun link` here once and write `konae` instead of `bun run konae --`.
 
 ```sh
 bun run konae -- init --dir /tmp/my-list --name "My list" --template tasks
@@ -74,10 +90,11 @@ bun run konae -- dev --dir /tmp/my-list
 
 The `tasks` template is a public list that anyone with the link can use. The default template, `notes`, is private and takes accounts by invitation only, and `dev` prints the `kernel invite` command that creates a test account.
 
-To publish, `login` saves a credential and the installation's address in the folder's `.konae/`, and the first `publish` registers the project there and prints its address:
+To publish, `login` saves a credential and the installation's address in the folder's `.konae/`, and the first `publish` registers the project there and prints its address. `--url` is the editor's address. On a fresh local install the line below creates the first owner with the setup key `local-development-key`. If you already pressed **Create owner account** in the editor, use that email and password. A reachable installation needs its operator's setup key, or an invitation code in `KONAE_INVITATION_CODE` for a later owner. A token cannot widen itself, so ask for `--manage-users` and `--export-data` now, because `pull`, `export --with-data` and inviting app users need them.
 
 ```sh
-KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/my-list --url http://localhost:4173 --export-data
+KONAE_EMAIL=you@example.com KONAE_PASSWORD=... KONAE_SETUP_KEY=local-development-key \
+bun run konae -- login --dir /tmp/my-list --url http://localhost:4173 --manage-users --export-data
 bun run konae -- publish --dir /tmp/my-list
 ```
 
@@ -90,7 +107,7 @@ bun run konae -- pull --dir /tmp/my-list
 bun run konae -- dev --dir /tmp/my-list --reset
 ```
 
-[Edit files with the CLI](./docs/guides/edit-files-with-the-cli.md) explains each step, and [the CLI reference](./docs/cli.md) covers `sql`, `events`, `contract` and `conform`. `bun link` in this repository puts `konae` on your path.
+[Edit files with the CLI](./docs/guides/edit-files-with-the-cli.md) explains each step, and [the CLI reference](./docs/cli.md) covers `sql`, `events`, `contract` and `conform`.
 
 A page calls the SDK the build adds:
 
@@ -109,7 +126,13 @@ Export writes the app folder with its data. In the editor, **Export** downloads 
 bun run konae -- export --dir /tmp/my-list --out /tmp/my-list-export --with-data
 ```
 
-The `kernel` binary serves the exported folder alone. Put the folder at `apps/<id>/` of a data directory, where `<id>` is the `id` in its `konae.json`, and start the binary:
+`konae dev` serves the exported folder in place, with its data, at its own address:
+
+```sh
+bun run konae -- dev --dir /tmp/my-list-export
+```
+
+The `kernel` binary also serves a directory of app folders with no Konae around it. Put the folder at `apps/<id>/` of a data directory, where `<id>` is the `id` in its `konae.json`, and start the binary:
 
 ```sh
 cargo build --manifest-path kernel-rs/Cargo.toml --bin kernel
@@ -118,7 +141,7 @@ cp -R /tmp/my-list-export "/tmp/kernel-data/apps/$(bun -e 'console.log(require("
 KONAE_DATA_DIR=/tmp/kernel-data KONAE_PUBLIC_ORIGIN=http://localhost:8787 kernel-rs/target/debug/kernel
 ```
 
-It checks the folder as Konae checks a release, prints `Serving My list at http://my-list.localhost:8787`, and serves the app with its rows. App users sign in with the passwords they already have. The exported folder's `compose.yaml` runs the same binary in a container built from `Dockerfile.kernel`, and its `AGENTS.md` lists the `kernel` commands that manage users, keys and secrets. [Take the app elsewhere](./docs/guides/take-the-app-elsewhere.md) covers both, and the import into another Konae.
+Either way the Kernel checks the folder as Konae checks a release, prints `Serving My list at http://my-list.localhost:...`, and serves the app with its rows. App users sign in with the passwords they already have. The exported folder's `.env.example` names the Kernel image, so `cp .env.example .env` and `docker compose up -d` run the same binary in a container. The published image is built for `linux/amd64` and `linux/arm64`. The folder's `AGENTS.md` lists the `kernel` commands that manage users, keys and secrets. [Take the app elsewhere](./docs/guides/take-the-app-elsewhere.md) covers both, and the import into another Konae.
 
 ## Documentation
 
@@ -130,7 +153,7 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 | Write an app | [The Capsule](./docs/capsule.md), [Server Actions](./docs/server-actions.md), [the SDK](./docs/sdk.md) |
 | Decide who gets in | [Accounts and access](./docs/accounts-and-access.md) |
 | Do one task | The guides in [`docs/guides/`](./docs/guides/) |
-| Drive it from an agent or a script | [MCP tools](./docs/mcp-tools.md), [the MCP guide](./docs/mcp.md), [the walkthrough](./docs/mcp-walkthrough.md), [the CLI](./docs/cli.md) |
+| Drive it from an agent or a script | [MCP tools](./docs/mcp-tools.md), [the reference](./docs/reference/README.md), [the walkthrough](./docs/mcp-walkthrough.md), [the CLI](./docs/cli.md) |
 | Know the numbers and the gaps | [Limits](./docs/limits.md), [Named divergences](./docs/divergences.md) |
 | Operate a server | [Operate an installation](./docs/operate.md), [Releasing](./docs/releasing.md), [the architecture](./docs/architecture.md) |
 | See why it is built this way | [The decision records](./docs/adr/README.md) |

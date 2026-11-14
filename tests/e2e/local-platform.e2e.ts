@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test, type Page } from "playwright/test";
+import { McpClient, type Transfer } from "../../src/mcp/client";
+import { publishProject } from "../../src/deployments/release";
 
 test.beforeEach(async ({ page }) => {
   // The Kernel limits owner signups per client address. The test server trusts the local
@@ -275,6 +277,42 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   expect(download.suggestedFilename()).toMatch(/\.tar$/);
   await download.saveAs(testInfo.outputPath("app-folder.tar"));
   await app.screenshot({ path: testInfo.outputPath("published-app.png"), fullPage: true });
+});
+
+test("the Deploy dialog says when the published app runs actions from an app folder", async ({ page, baseURL }) => {
+  const projectId = (await createProject(page, `Folder publish ${Date.now()}`)).split("/").pop()!;
+  await publish(page);
+  // The owner's browser session delegates a token, as `konae login` does.
+  const token = await page.evaluate(async (projectId) => {
+    const rpc = async (method: string, params: object) => (await (await fetch("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+    })).json()).result;
+    await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
+    return (await rpc("tools/call", { name: "token_create", arguments: { scopes: ["read", "write", "publish"], projectIds: [projectId], ttlSeconds: 600 } })).structuredContent.result.token as string;
+  }, projectId);
+  // An exported folder with one changed query, published through publishProject as `konae publish` does.
+  const folder = new McpClient(new URL("/mcp", baseURL).href, { token });
+  const saved = await folder.call<{ transfer: Transfer }>("project_sources_read", { projectId });
+  const project = JSON.parse(new TextDecoder().decode(await folder.download(saved.transfer)));
+  project.files["actions.json"] = project.files["actions.json"].replace("LIMIT 100", "LIMIT 50");
+  const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": "<p>Published from a folder</p>" } };
+  await publishProject(folder, project, () => ({ project, visibility: "public", artifact }), async () => true);
+
+  const warning = "The published app runs actions that did not come from this editor, as after konae publish from an app folder. Deploy replaces that release with the files in this editor.";
+  const dialog = page.getByRole("dialog", { name: "Deploy application" });
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await expect(dialog.getByText(warning)).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("deploy-dialog-sources-differ.png") });
+  await dialog.getByRole("button", { name: "Deploy public", exact: true }).click();
+  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Back to workshop" }).click();
+  // After the editor's own release the dialog reads the Kernel again and says nothing.
+  const inspected = page.waitForResponse((response) => new URL(response.url()).pathname === "/mcp" && (response.request().postData() ?? "").includes('"project_inspect"'));
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  expect((await (await inspected).json()).result.structuredContent.result.sourcesDiffer).toBe(false);
+  await expect(dialog.getByText(warning)).toHaveCount(0);
 });
 
 test("public notes authenticate users and isolate private rows", async ({ page, context }, testInfo) => {

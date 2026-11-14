@@ -192,7 +192,7 @@ describe("integrations", () => {
     expect(notes[1]).toBe("Revoked at import, because keys do not work on another machine: Mirror (public files); Orders (orders.receive). Create a new key for each program that still needs access.");
   });
 
-  test("builds the curl docs/mcp.md describes for each route", () => {
+  test("builds the curl docs/reference/routes-and-calls.md describes for each route", () => {
     const [list, receive] = routeActions(routes);
     expect(routeCurl("https://orders-1a2b.example.net/", list, "lbk_test")).toBe('curl -H "Authorization: Bearer lbk_test" "https://orders-1a2b.example.net/api/orders?min=1"');
     expect(routeCurl("https://orders-1a2b.example.net", receive, "lbk_test")).toBe(`curl -X POST -H "Authorization: Bearer lbk_test" -H 'Content-Type: application/json' --data '{"id":"text","total":1}' "https://orders-1a2b.example.net/hooks/orders"`);

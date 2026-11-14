@@ -63,7 +63,7 @@ export function featureRows(summary: UsageSummary) {
   });
 }
 
-// The Kernel names each notice "<action>: <reason>", where reason is "queued" or why nothing was queued (docs/mcp.md).
+// The Kernel names each notice "<action>: <reason>", where reason is "queued" or why nothing was queued (docs/reference/usage-and-signals.md, "Notices").
 const noticeReasons: Record<string, string> = {
   "no-transport": "this installation has no email service",
   "owner-has-no-email": "the Deployment has no contact email",

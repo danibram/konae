@@ -11,7 +11,7 @@ The home links to it at `<domain>/p/invitation/`.
 - Its `notify` sends one email to the app's contact email for each new row. A first publish from Konae fills the contact email with the owner's. `contact_email_set` changes it.
 - The privacy and terms links show only when `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/` answer.
 
-The app sends no code itself. The operator reads the requests and issues each code with `konae creator-code-create`, as [Operate an installation](../../docs/operate.md#creator-admission) describes.
+The app sends no code itself. The operator reads the requests and issues each code with `konae owner-code-create`, as [Operate an installation](../../docs/operate.md#owner-admission) describes.
 
 ## Read the requests
 

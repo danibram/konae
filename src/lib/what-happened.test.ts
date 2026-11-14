@@ -86,14 +86,16 @@ describe("what happened", () => {
     expect(callOutcome(call({ state: "failed", error: "brand-new" })).words).toContain("brand-new");
   });
 
-  test("every reason and failure kind docs/mcp.md names has words", () => {
-    const docs = readFileSync(new URL("../../docs/mcp.md", import.meta.url), "utf8");
-    const notices = docs.slice(docs.indexOf("### Notices"));
+  test("every reason and failure kind the reference names has words", () => {
+    const page = (name: string) => readFileSync(new URL(`../../docs/reference/${name}.md`, import.meta.url), "utf8");
+    const usage = page("usage-and-signals");
+    const notices = usage.slice(usage.indexOf("### Notices"));
     const reasons = [...notices.slice(0, notices.indexOf("A queued notice")).matchAll(/^\| `([a-z-]+)`/gm)].map((match) => match[1]);
     const limits = [...notices.matchAll(/`([a-z]+-limit)`/g)].map((match) => match[1]);
     expect(reasons.length).toBeGreaterThan(5);
     for (const reason of [...reasons, ...limits]) expect(noticeReasons[reason], reason).toBeDefined();
-    const kinds = docs.slice(docs.indexOf("A failure kind is one of"));
+    const accounts = page("accounts");
+    const kinds = accounts.slice(accounts.indexOf("A failure kind is one of"));
     for (const [, kind] of kinds.slice(0, kinds.indexOf("\n")).matchAll(/`([a-z-]+)`/g)) {
       if (["superseded", "link-expired", "secret-unavailable"].includes(kind)) continue; // account links only
       expect(noticeFailures[kind], kind).toBeDefined();

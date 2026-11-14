@@ -2,12 +2,22 @@
 
 The `konae` command makes an app in a folder, runs it on this machine, publishes it, and moves it. Run it from the repository root with Bun.
 
+Three things carry the name `konae`.
+
+| Name | What it is | Where it runs |
+| --- | --- | --- |
+| Konae | The platform, which holds the editor, owner accounts and the owner's MCP on `/mcp`. | `bun run dev:local`, Docker Compose |
+| This CLI | `scripts/konae.ts`. | `bun run konae --` in the repository, or `konae` after `bun link` |
+| The server binary | `kernel-rs/konae`, with the operator commands such as `owner-code-create`. This CLI directs you to the server binary when you enter one of these commands. | `kernel-rs/target/debug/konae` under `bun run dev:local`, `docker compose exec --user konae kernel konae <command>` under Compose |
+
 ```sh
 bun run konae -- <command> [options]
 bun run konae -- help
 ```
 
 `init`, `dev`, `build`, `contract`, `conform`, `export` without `--with-data`, and `sql` and `events` without `--prod` need no owner credential. `publish`, `pull`, `domain`, `tool`, `export --with-data`, and `sql` and `events` with `--prod` read it from `<folder>/.konae/credentials.json` or from `KONAE_MCP_TOKEN`. Never put a token in app source.
+
+`--url` is the installation's URL, which is the editor's origin, `http://localhost:4173` under `bun run dev:local`. Without it, a command uses the address `login` saved in the folder.
 
 ## login
 
@@ -18,7 +28,7 @@ bun run konae -- login --dir ./my-app --url http://localhost:4173 \
   [--verify-from <mailbox.jsonl>]
 ```
 
-Reads `KONAE_EMAIL` and `KONAE_PASSWORD`. Add `KONAE_INVITATION_CODE`, the code the operator issued, to create the account, or `KONAE_SETUP_KEY` for an installation's first owner. It saves a 24-hour token with `read`, `write` and `publish`.
+Reads `KONAE_EMAIL` and `KONAE_PASSWORD`. When one is unset and the command runs in a terminal, it asks for it, and the password is not echoed. Without a terminal it refuses, so a script sets both. Add `KONAE_INVITATION_CODE`, the code the operator issued, to create the account, or `KONAE_SETUP_KEY` for an installation's first owner. It saves a 24-hour token with `read`, `write` and `publish`. `token_create` makes a token of up to 30 days, but only an owner's browser session may call it, so the saved token cannot. The owner sign-in page at `/_konae/owner/login` calls it for you and offers 1, 7 or 30 days. Put such a token in `KONAE_MCP_TOKEN`, which overrides the credentials file.
 
 | Flag | Adds | For |
 | --- | --- | --- |
@@ -41,12 +51,12 @@ Writes an app folder into an empty folder, without a credential or a Kernel: `ko
 bun run konae -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
 ```
 
-Builds `dist/`, compiles the `kernel` binary, and runs it on the folder. The Kernel reads `konae.json`, `app/`, `dist/` and `data/` where they are, with no owner and no link to production. It checks the folder as a release and brings `data/database.sqlite` to what `app/schema.sql` states. A change that loses data is refused with the plan's confirmation; run `dev` again with `--confirm-schema` and that confirmation to apply it. When a file in `app/` changes, `dev` builds again and restarts the Kernel. The app keeps the Signup Policy in `konae.json`; to create a test account on an app that is not Open, invite it with the `kernel` binary's `invite` command, which `dev` prints. Its email, notices and invitations included, goes to `.konae/kernel/mailbox.jsonl`. `--reset` imports the data `pull` exported with the `kernel` binary's `import` command, which backs up `data/` into `.konae/backups` first, or empties `data/` when there is none. On every start and change it writes `actions.d.ts` beside `konae.json`, which types `miniapp.actions.call`.
+Builds `dist/`, compiles the `kernel` binary with Cargo, and runs it on the folder. The first run takes about a minute while it compiles, and `dev` prints a line saying so first. `KONAE_KERNEL_BIN` names a built `kernel` binary to run instead, such as the one a release attaches for macOS and Linux on arm64 and x64 (see [Take the app elsewhere](./guides/take-the-app-elsewhere.md#get-the-binary)); with it set, `dev` compiles nothing and needs no Rust toolchain. The Kernel reads `konae.json`, `app/`, `dist/` and `data/` where they are, with no owner and no link to production. It checks the folder as a release and brings `data/database.sqlite` to what `app/schema.sql` states. A change that loses data is refused with the plan's confirmation; run `dev` again with `--confirm-schema` and that confirmation to apply it. When a file in `app/` changes, `dev` builds again and restarts the Kernel. The app keeps the Signup Policy in `konae.json`. When it is not Open and the app holds no account yet, `dev` invites `test@example.com`, waits up to 15 seconds for the invitation to reach the mailbox and prints `Test account: open <link> and choose a password.` When the app holds an account, as after `--reset` with pulled data or on a second run, it invites no one. For another address it prints the `kernel` binary's `invite` command. Its email, notices and invitations included, goes to `.konae/kernel/mailbox.jsonl`. Files are limited as on a Kernel, 2 MiB each, and `KONAE_FILE_MAX_BYTES` raises that. The quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another, so `--reset` can import the files of a published app. `--reset` imports the data `pull` exported with the `kernel` binary's `import` command, which backs up `data/` into `.konae/backups` first, or empties `data/` when there is none. On every start and change it writes `actions.d.ts` beside `konae.json`, which types `miniapp.actions.call`.
 
 ## pull
 
 ```sh
-bun run konae -- pull --dir ./my-app [--url <Kernel URL>]
+bun run konae -- pull --dir ./my-app [--url <installation URL>]
 ```
 
 Exports the published app's data, its database, accounts, files and Usage, into `.konae/pull/data`, laid out as an export lays out `data/`. Needs a credential from `login --export-data`. `dev --reset` imports it. Nothing travels back to the published app.
@@ -54,7 +64,7 @@ Exports the published app's data, its database, accounts, files and Usage, into 
 ## sql
 
 ```sh
-bun run konae -- sql --dir ./my-app [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
+bun run konae -- sql --dir ./my-app [--prod] [--url <installation URL>] ("<statement>" | --file <file.sql>)
 ```
 
 Runs SQL on `data/database.sqlite` with the `kernel` binary's `sql` command, the function `database_execute` calls on Konae. That is where to look at the exported data's rows after a schema change. Only `--prod` reaches the published Deployment, through `database_execute`.
@@ -86,7 +96,7 @@ Writes `action-contract.json`, its schema, `action-contract.md` and `actions.d.t
 ## publish
 
 ```sh
-bun run konae -- publish --dir ./my-app [--url <Kernel URL>] [--confirm-schema <confirmation>]
+bun run konae -- publish --dir ./my-app [--url <installation URL>] [--confirm-schema <confirmation>]
 ```
 
 Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with `tool secret_set` first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`.
@@ -112,15 +122,15 @@ Writes the app folder into an empty folder: `konae.json`, `app/`, a fresh `dist/
 ## domain
 
 ```sh
-bun run konae -- domain --dir <folder> --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
+bun run konae -- domain [--dir <folder>] [--deployment <id>] [--set <hostname> | --clear] [--url <installation URL>]
 ```
 
-Shows, sets or clears the app's custom domain. It talks to `--url` or the installation `login` saved, as `publish` does, with the token from `<folder>/.konae/credentials.json` or `KONAE_MCP_TOKEN`. `--set` prints the TXT record that proves you control the hostname. Run it again once the record is at your DNS provider.
+Shows, sets or clears the app's custom domain. Without `--deployment`, it uses the `id` in the `konae.json` of `--dir`, which is the Deployment's ID. It talks to `--url` or the installation `login` saved, as `publish` does, with the token from `<folder>/.konae/credentials.json` or `KONAE_MCP_TOKEN`. `--set` prints the TXT record that proves you control the hostname. Run it again once the record is at your DNS provider.
 
 ## tool
 
 ```sh
-bun run konae -- tool <name> ['<json arguments>'] [--stdin <key>] [--dir <folder>] [--url <Kernel URL>]
+bun run konae -- tool <name> ['<json arguments>'] [--stdin <key>] [--dir <folder>] [--url <installation URL>]
 ```
 
 Calls one tool of the owner's MCP and prints its answer as JSON. The arguments are one JSON object and default to `{}`. `--stdin <key>` reads that one argument from standard input, without its final line break, so a secret's value stays off the command line and out of the shell history. It talks to `--url` or the installation `login` saved, as `publish` does, with the token from `<folder>/.konae/credentials.json` or `KONAE_MCP_TOKEN`. When the tool refuses, it prints the tool's own words and exits with 1. [MCP tools and guide topics](./mcp-tools.md) lists the tools, and `tool session_inspect` shows what this credential may call.
@@ -128,6 +138,20 @@ Calls one tool of the owner's MCP and prints its answer as JSON. The arguments a
 ```sh
 printf '%s' "$HOOK_SECRET" | bun run konae -- tool secret_set '{"projectId":"app_1","name":"hook"}' --stdin value --dir ./my-app
 ```
+
+## konae.json
+
+`init` writes `konae.json`, and the Kernel reads it wherever it serves the folder. These are the fields and what `publish` does with each.
+
+| Field | `publish` reads it | Changed later by |
+| --- | --- | --- |
+| `id` | Every time. It names the project and its Deployment. | No tool. |
+| `name`, `slug`, `manifest` | Every time, as the project's record. | Edit the file and publish. The hostname is not in this file. `hostname_set` moves it. |
+| `visibility` | Every time, with the release plan. | Edit the file and publish. |
+| `signupPolicy` | On the first release only. A later publish that names another policy warns and changes nothing. | `signup_policy_set` |
+| `contactEmail` | Every time it is set. | `contact_email_set`, until the next publish sends the file's value again. |
+| `signInMethods` | Never. | `sign_in_methods_set` |
+| `kernel` | Never. It is the version of the Kernel that wrote the file. | The Kernel. |
 
 ## Read next
 

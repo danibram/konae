@@ -6,6 +6,42 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The operator commands of `konae` that name an owner say `owner`. `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend` and `owner-account-resume` were `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend` and `creator-account-resume`, and `owner-suspend` was `creator-suspend`. An old name answers `creator-code-create is now owner-code-create.` and exits with an error.
+- The server reads its setup key from `KONAE_SETUP_KEY`, the name `konae login` already read. `konae` refuses to start while `KONAE_ADMIN_KEY` is set and `KONAE_SETUP_KEY` is not.
+- `KONAE_MAIL_LIMIT_OWNER_PER_DAY` and `KONAE_MAIL_LIMIT_NOTIFY_OWNER_PER_DAY` were `KONAE_MAIL_LIMIT_CREATOR_PER_DAY` and `KONAE_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY`. An installation that sets an old name is refused at startup with the new one.
+- The messages of those commands, the owner admission refusals and the owner sign-in say "owner" where they said "creator". The docs section "Creator admission" is "Owner admission", and `docs/clerk-creator-access.md` is `docs/clerk-owner-access.md`.
+- `konae dev` limits a file to 2 MiB as a Kernel does, and `KONAE_FILE_MAX_BYTES` raises it. The quota for all files stays at 1 TiB so `--reset` can import a published app's files.
+- `--url` in the CLI's help is the installation URL, the editor's origin.
+- The validation message for the Signup Policy in `konae.json` names `signupPolicy.mode`, as the file does.
+- The reference of platform rules moves from `mcp.md` to `docs/reference/`, one page per topic. `/mcp-guide` answers with the list of those pages, so an old link lands on the list rather than on its section.
+- A guide, Add a second owner, and the first-run pages name which binary each command belongs to, what the first `dev` compiles, how to get a model key, and the `konae tool` form of every owner tool the guides name.
+
+### Added
+
+#### Release and install
+
+- A release attaches the `kernel` binary for macOS and Linux on arm64 and x64, with `SHA256SUMS`, and publishes `konae` and `konae-kernel` for `linux/amd64` and `linux/arm64`. `KONAE_KERNEL_BIN` runs a downloaded binary in `konae dev`, so `dev` needs no Rust.
+- One `docker run` of the `konae` image starts an installation with the editor, with `KONAE_SETUP_KEY` and `KONAE_PUBLIC_ORIGIN` as its only settings. The README shows the line.
+
+#### CLI
+
+- `konae dev` invites `test@example.com` when the app's Signup Policy is not Open and the folder holds no account yet, and prints the invitation link ready to open.
+- `konae login` asks for the email and the password on a terminal when `KONAE_EMAIL` or `KONAE_PASSWORD` is unset, with no echo for the password. Without a terminal it refuses as before.
+- `konae domain` takes the Deployment's ID from the `konae.json` of `--dir`.
+- `init` and `export` write `.env.example` with `KONAE_KERNEL_IMAGE` set to the Kernel version in `konae.json`, so a container needs only `cp .env.example .env` and `docker compose up -d`.
+- A server command typed into the CLI, such as `owner-code-create`, answers where the server binary is instead of `Unknown command`.
+
+#### Editor and owner page
+
+- The Deploy dialog says when the published app runs actions that did not come from the editor, as after `konae publish` from an exported folder. `project_inspect` returns it as `sourcesDiffer`, which the Kernel decides when it applies each release.
+- The owner page issues a token of 1, 7 or 30 days.
+
+#### Kernel
+
+- A port already in use is refused with its number and how to pick another.
+
 ## [0.6.0] - 2026-11-13
 
 The first release. It publishes two images for `linux/amd64`, `ghcr.io/danibram/konae:0.6.0` and `ghcr.io/danibram/konae-kernel:0.6.0`.

@@ -328,7 +328,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("konae-mail-key-{}", Uuid::new_v4()));
         let key = mail_key(&root).unwrap();
-        assert!(key.len() >= 32 && key != crate::DEFAULT_ADMIN_KEY);
+        assert!(key.len() >= 32 && key != crate::DEFAULT_SETUP_KEY);
         let mode = std::fs::metadata(root.join(MAIL_KEY_FILE)).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(mail_key(&root).unwrap(), key);

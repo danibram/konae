@@ -24,7 +24,7 @@ beforeAll(async () => {
   kernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))),
-      KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_ADMIN_KEY: setupKey,
+      KONAE_DATA_DIR: root, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_SETUP_KEY: setupKey,
       KONAE_PUBLIC_ORIGIN: url, KONAE_HOST_SUFFIX: "localhost", },
     stdout: "ignore", stderr: "inherit",
   });

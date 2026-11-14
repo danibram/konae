@@ -18,7 +18,7 @@
 //! Deployment a key or a session, and an unsigned route on a public one
 //! anyone (`route_callers`). An action whose route does not answer anyone
 //! answers only there: `actions_invoke` refuses it (`route_only`).
-//! docs/mcp.md, "HTTP routes", states the signature scheme a sender computes.
+//! docs/reference/routes-and-calls.md, "HTTP routes", states the signature scheme a sender computes.
 //! A route may instead declare a provider's own scheme and a `fields` map
 //! that reads a nested payload; provider.rs holds both (ADR-0013).
 

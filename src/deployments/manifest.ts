@@ -25,7 +25,7 @@ export type CapsuleManifest = {
   /**
    * Origins the page may reach with fetch, added to its connect-src, such as
    * another app's public GET route. A key never goes to the browser; a call
-   * action carries it from the Kernel. See docs/mcp.md, "Calls between apps".
+   * action carries it from the Kernel. See docs/reference/routes-and-calls.md, "Calls between apps".
    */
   connects?: string[];
   runtime: {

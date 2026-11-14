@@ -46,7 +46,7 @@ const operatorMail = "Check the mail transport. mail_status shows its state.";
 
 /**
  * A notice the Kernel did not queue. Usage counts it under notify as
- * `<action>: <reason>` (docs/mcp.md, Notices). `queued` is not here.
+ * `<action>: <reason>` (docs/reference/usage-and-signals.md, Notices). `queued` is not here.
  */
 export const noticeReasons: Record<string, Outcome> = {
   "no-transport": { tone: "danger", words: "Not sent: this installation has no mail transport.", fix: { who: "operator", what: "Set KONAE_MAIL_TRANSPORT to resend, smtp or development." } },
@@ -63,7 +63,7 @@ export const noticeReasons: Record<string, Outcome> = {
   "storage-error": { tone: "danger", words: "Not sent: the mail queue could not be written.", fix: { who: "operator", what: "Read the Kernel log for the cause." } },
 };
 
-/** Why a queued notice failed: the job's failure kind (docs/mcp.md, Account email). */
+/** Why a queued notice failed: the job's failure kind (docs/reference/accounts.md, Account email). */
 export const noticeFailures: Record<string, Outcome> = {
   "provider-unavailable": { tone: "danger", words: "Not sent: the mail provider did not answer after every retry.", fix: { who: "operator", what: operatorMail } },
   rejected: { tone: "danger", words: "Not sent: the mail provider refused this message.", fix: { who: "operator", what: operatorMail } },
@@ -78,7 +78,7 @@ export const noticeFailures: Record<string, Outcome> = {
 
 const actionsJson = "Change the call's url in actions.json.";
 
-/** Why a call ended without a 2xx answer: the Kernel's error kind (docs/mcp.md, calls). */
+/** Why a call ended without a 2xx answer: the Kernel's error kind (docs/reference/routes-and-calls.md, Calls between apps). */
 export const callFailures: Record<string, Outcome> = {
   timeout: { tone: "danger", words: "The service did not answer in time.", fix: { who: "service", what: "The service at that address is slow or down. Check it, then trigger the action again." } },
   network: { tone: "danger", words: "The connection to the service failed.", fix: { who: "service", what: "The service at that address is down or refusing connections. Check it, then trigger the action again." } },

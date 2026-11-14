@@ -77,7 +77,7 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   return [
     { path: "compose.yaml", contents: composeFile(settings) },
-    { path: ".env.example", contents: envExample },
+    { path: ".env.example", contents: envExample(settings) },
     { path: ".gitignore", contents: gitignore },
     { path: "AGENTS.md", contents: agentsGuide(settings, secretNames(input.actionsSource)) },
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
@@ -95,9 +95,11 @@ export const gitignore = `data/
 node_modules/
 `;
 
-const envExample = `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
-# The image to run. A release publishes ghcr.io/danibram/konae-kernel:<version>.
-KONAE_KERNEL_IMAGE=
+/** The image is the Kernel version konae.json names, so an exported folder runs the Kernel that wrote it. */
+function envExample(settings: AppSettings) {
+  return `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
+# The image to run. A release publishes this tag for linux/amd64 and linux/arm64. A local image can replace it.
+KONAE_KERNEL_IMAGE=ghcr.io/danibram/konae-kernel:${settings.kernel}
 KONAE_PORT=8787
 KONAE_PUBLIC_ORIGIN=http://localhost:8787
 KONAE_HOST_SUFFIX=localhost
@@ -107,6 +109,7 @@ KONAE_HOST_SUFFIX=localhost
 # Without a transport, invitations and password resets are refused.
 KONAE_MAIL_TRANSPORT=
 `;
+}
 
 function composeFile(settings: AppSettings) {
   return `# Runs the Kernel on this folder. The Kernel opens it as apps/${settings.id}
@@ -167,7 +170,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Run it
 
-1. \`npm install\`, then \`npm run build\` to write \`dist/\`.
+1. To write \`dist/\`, run \`npm install\` once, then \`npm run build\`, which bundles \`app/\` with esbuild. From a Konae checkout, \`bun run konae -- build --dir <this folder>\` and \`dev\` write it without \`npm install\`. They use the checkout's bundler until \`node_modules\` exists, then run \`npm run build\`. An exported folder already carries a built \`dist/\`.
 2. On this machine, from a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
 4. To publish on a Konae installation: \`bun run konae -- login --dir <this folder> --url <installation>\`, then \`bun run konae -- publish --dir <this folder>\`.

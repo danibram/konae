@@ -49,10 +49,10 @@ bun run docs:site --seed /tmp/konae-docs
 
 ## Add or change a page
 
-Edit the markdown under `docs/`. A new page also needs an entry in `docs/site.json`, which holds the navigation. Write links to other pages as relative `.md` paths, such as `./capsule.md#layout`, so they work in the repository and on the site. Write a diagram as a `mermaid` code block and say the same in the paragraph under it, because an agent reads the markdown and search skips the block. Keep a diagram to a few nodes a row, top to bottom, so it stays readable in the page's column. `bun run docs:site` copies `@mermaid-js/tiny` from `node_modules` into `public/vendor/`, about 2.9 MB that only a page with a diagram loads. A link to a file outside the site opens the repository when `repository` in `docs/site.json` holds its URL, and shows as plain text when it is empty.
+Edit the markdown under `docs/`. A new page also needs an entry in `docs/site.json`, which holds the navigation. Write links to other pages as relative `.md` paths, such as `./capsule.md#layout`, so they work in the repository and on the site. Write a diagram as a `mermaid` code block and say the same in the paragraph under it, because an agent reads the markdown and search skips the block. Keep a diagram to a few nodes a row, top to bottom, so it stays readable in the page's column. `bun run docs:site` copies `@mermaid-js/tiny` from `node_modules` into `public/vendor/`, about 2.9 MB that only a page with a diagram loads. A link to a file outside the site opens the repository when `repository` in `docs/site.json` holds its URL, and shows as plain text when it is empty. A page that only keeps an old address alive goes under `unlisted` in `docs/site.json`, so it answers at its route and appears in no menu.
 
 `scripts/docs-site.test.ts` fails when a page in the navigation is missing, when a relative link names a file or a heading that does not exist, or when the MCP reference misses a tool the Kernel registers.
 
 ## Limits of this example
 
-A page cannot live at `/mcp`, because every Deployment answers that path with its runtime endpoint. The MCP guide is therefore at `/mcp-guide`.
+A page cannot live at `/mcp`, because every Deployment answers that path with its runtime endpoint. The reference is at `/reference`, and `/mcp-guide`, where the old MCP guide was, is a short page that lists the reference pages.

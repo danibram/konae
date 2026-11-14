@@ -273,7 +273,7 @@ pub fn exchange(
         params![provider, claims.sub],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    ensure!(!suspended, "This creator is suspended.");
+    ensure!(!suspended, "This owner is suspended.");
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let expires_at = now
         .checked_add(SESSION_TTL_SECONDS)
@@ -332,7 +332,7 @@ pub fn revoke(db: &Connection, token: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// The operator suspends a creator without deleting projects or app users.
+/// The operator suspends an owner without deleting projects or app users.
 pub fn suspend(db: &mut Connection, owner: &str) -> Result<()> {
     install(db)?;
     let tx = db.transaction()?;
@@ -341,7 +341,7 @@ pub fn suspend(db: &mut Connection, owner: &str) -> Result<()> {
             "UPDATE creator_identities SET suspended=1 WHERE owner=?1",
             [owner]
         )? == 1,
-        "Creator not found."
+        "Owner not found."
     );
     tx.execute("DELETE FROM creator_sessions WHERE owner=?1", [owner])?;
     tx.commit()?;
@@ -351,15 +351,15 @@ pub fn suspend(db: &mut Connection, owner: &str) -> Result<()> {
 /// Runs a local maintenance command before the Kernel starts listening.
 pub fn operator_command() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) != Some("creator-suspend") {
+    if args.first().map(String::as_str) != Some("owner-suspend") {
         return Ok(false);
     }
     ensure!(
         args.len() == 2 && valid_id(&args[1], "user_"),
-        "Usage: konae creator-suspend <Clerk user subject>"
+        "Usage: konae owner-suspend <Clerk user subject>"
     );
     let issuer = std::env::var("KONAE_CLERK_ISSUER")
-        .context("Set KONAE_CLERK_ISSUER before suspending a hosted creator.")?;
+        .context("Set KONAE_CLERK_ISSUER before suspending a hosted owner.")?;
     let root = std::path::PathBuf::from(
         std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()),
     );
@@ -375,7 +375,7 @@ pub fn operator_command() -> Result<bool> {
             |row| row.get(0),
         )
         .optional()?
-        .context("Creator not found for this issuer and subject.")?;
+        .context("Owner not found for this issuer and subject.")?;
     suspend(&mut db, &owner)?;
     // Suspension is durable even if cleanup in the MCP database fails.
     let mcp_path = root.join("mcp.sqlite");
@@ -386,7 +386,7 @@ pub fn operator_command() -> Result<bool> {
         revoke_delegations(&mut mcp, &owner)?;
     }
     println!(
-        "Suspended creator {owner}. Projects and app accounts remain available to the installation operator."
+        "Suspended owner {owner}. Projects and app accounts remain available to the installation operator."
     );
     Ok(true)
 }

@@ -50,7 +50,7 @@ The editor runs at `http://localhost:4173` after `bun run dev:local`, at `http:/
 
 ### 1. Sign in
 
-The editor opens on the owner sign-in page. The first owner of an installation presses **Create owner account** and gives the setup key, which a local install fills in. Every later owner needs an invitation code, which the operator issues with `konae creator-code-create` (see [Creator admission](./operate.md#creator-admission)). From the CLI, `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, plus `KONAE_SETUP_KEY` for the first owner or `KONAE_INVITATION_CODE` for a later one.
+The editor opens on the owner sign-in page. The first owner of an installation presses **Create owner account** and gives the setup key, which a local install fills in. Every later owner needs an invitation code, which the operator issues with the `owner-code-create` command of the server binary (`kernel-rs/target/debug/konae` under `bun run dev:local`, `docker compose exec --user konae kernel konae` under Compose), which the `konae` CLI does not have. [Add a second owner](./guides/add-a-second-owner.md) shows the command, and [Owner admission](./operate.md#owner-admission) has the rules.
 
 ### 2. Make an app in the editor
 
@@ -58,16 +58,17 @@ If you do not write code, stay in the editor. Create a project, press **Connect 
 
 ### 3. Or work from a folder with the CLI
 
-Run the commands from the Konae repository.
+Run the commands from the Konae repository. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, and asks for either one that is unset when it runs in a terminal. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE` for a later owner. A token cannot widen itself, so one `login` asks for `--manage-users` and `--export-data` up front.
 
 ```sh
-bun run konae -- init --dir ./my-app --name 'My app'
+bun run konae -- init --dir ./my-app --name 'My app' --template tasks
 bun run konae -- dev --dir ./my-app
-bun run konae -- login --dir ./my-app --url http://localhost:4173
+KONAE_EMAIL=you@example.com KONAE_PASSWORD=... KONAE_SETUP_KEY=local-development-key \
+bun run konae -- login --dir ./my-app --url http://localhost:4173 --manage-users --export-data
 bun run konae -- publish --dir ./my-app
 ```
 
-`init` writes the app folder. `dev` runs it on this machine with the `kernel` binary and starts it again when the files change. `login` saves a 24-hour credential with `read`, `write` and `publish` in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
+`init` writes the app folder. The `tasks` template is public. Without `--template`, `init` writes `notes`, a private app with invitation signup, and its first `dev` serves a sign-in page. `dev` invites `test@example.com` and prints a link that opens the invitation, so you can choose a password and sign in. `dev` compiles the Kernel on its first run, which takes about a minute, runs the folder with the `kernel` binary, and starts it again when the files change. `login` saves a 24-hour credential in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
 
 ### 4. Prove it
 
@@ -84,7 +85,7 @@ Export the app folder with its data, and run it on the `kernel` binary or import
 
 ## For agents
 
-An agent that connects over MCP calls `platform_describe` and `projects_list` first. It then reads the `rules` and `pieces` topics of `platform_guide`. The [MCP reference](./mcp-tools.md) lists every topic. The docs site publishes `llms.txt`, which links to the markdown of each page.
+An agent that connects over MCP calls `platform_describe` and `projects_list` first. It then reads the `rules` and `pieces` topics of `platform_guide`. The [MCP tools and guide topics](./mcp-tools.md) page lists every topic. The docs site publishes `llms.txt`, which links to the markdown of each page.
 
 ## Read next
 

@@ -47,11 +47,11 @@ export function manifestSignupPolicy(manifest: Record<string, unknown>): SignupP
   const value = manifest.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || !SIGNUP_MODES.includes(value.mode as SignupMode)) {
-    throw Error('konae.json project.manifest.signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
+    throw Error('konae.json signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
   }
   const allowlist = value.allowlist ?? [];
   if (!Array.isArray(allowlist) || !allowlist.every((entry) => typeof entry === "string")) {
-    throw Error("konae.json project.manifest.signupPolicy.allowlist must be a list of emails and @domains.");
+    throw Error("konae.json signupPolicy.allowlist must be a list of emails and @domains.");
   }
   return { mode: value.mode as SignupMode, allowlist };
 }
@@ -63,7 +63,7 @@ function describePolicy(policy: SignupPolicy) {
 /**
  * The warning a republish prints when konae.json names another policy
  * than the Deployment has. A publish never changes who may join an app that
- * exists (docs/mcp.md, "Signup policy"), so the file and the app can differ.
+ * exists (docs/reference/accounts.md, "Signup policy"), so the file and the app can differ.
  */
 export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy): string | undefined {
   const entries = (policy: SignupPolicy) => policy.allowlist.map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join("\n");
@@ -89,15 +89,27 @@ export const INIT_TEMPLATES = ["tasks", "notes", "members", "form", "webhook", "
 const DEV_SESSION = ".konae/dev.json";
 
 /** What publish, pull and export say when nothing names the installation. */
-export const NO_INSTALLATION = "No installation to talk to. Pass --url <Kernel URL>, or run login in this folder, which saves the one it signed in to.";
+export const NO_INSTALLATION = "No installation to talk to. Pass --url <installation URL>, or run login in this folder, which saves the one it signed in to.";
+
+/** What domain says when neither --deployment nor a --dir with konae.json names the Deployment. */
+export const DOMAIN_NEEDS_DEPLOYMENT = "Name the Deployment with --deployment <id>, or with --dir <folder> whose konae.json carries its id. project_inspect shows the ID.";
+
+/** The commands of the server binary `konae` (kernel-rs/konae), which this CLI does not run. */
+export const SERVER_COMMANDS = ["owner-code-create", "owner-code-list", "owner-code-revoke", "owner-account-suspend", "owner-account-resume", "restore", "reconcile", "files-migrate", "files-reconcile"];
+
+/** What the CLI answers when a server command is typed here. */
+export function serverCommandMessage(command: string) {
+  return `${command} is a command of the konae server binary, not of this CLI. Run KONAE_DATA_DIR=data/kernel-local kernel-rs/target/debug/konae ${command} for bun run dev:local, or docker compose exec --user konae kernel konae ${command} under Compose.`;
+}
 
 /** What `konae help` prints: every command with its options, in the order a project meets them. */
 export const HELP = `Usage: bun run konae -- <command> [options]
 
-login     --dir <folder> --url <Kernel URL> [--manage-users] [--export-data]
+login     --dir <folder> --url <installation URL> [--manage-users] [--export-data]
           [--verify-from <mailbox.jsonl>]
-          Reads KONAE_EMAIL and KONAE_PASSWORD, plus KONAE_INVITATION_CODE to create the
-          account with an operator's invitation code, or KONAE_SETUP_KEY for the first owner.
+          Reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when there is a
+          terminal. KONAE_INVITATION_CODE creates the account with an operator's invitation code,
+          and KONAE_SETUP_KEY creates the first owner.
           Saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json.
           Each flag adds that permission: inviting app users and exporting live data.
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
@@ -111,13 +123,16 @@ dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm
           Builds dist/ and runs the kernel binary on the folder, with data/ as its data, and starts it
           again when a file in app/ changes. The Kernel checks the folder as a release. Its email,
           notices and invitations included, goes to <folder>/.konae/kernel/mailbox.jsonl.
+          An app whose Signup Policy is not open and that holds no account gets one invited at
+          test@example.com, and dev prints the link that opens it.
+          A file over 2 MiB is refused as on a Kernel; KONAE_FILE_MAX_BYTES raises that limit.
           It sets and prints a local value for each signing secret actions.json names, and serves a
           page of what the app did (email, calls, scheduled runs, Signals) on the next port.
           KONAE_KERNEL_BIN names a built kernel binary to run instead of compiling one.
           --reset imports the data pull exported into data/, after a backup, or empties data/ when there is none.
           A schema change that loses data is refused; --confirm-schema applies the plan it names.
           Writes actions.d.ts, which types miniapp.actions.call.
-sql       --dir <folder> [--prod] [--url <Kernel URL>] ("<statement>" | --file <file.sql>)
+sql       --dir <folder> [--prod] [--url <installation URL>] ("<statement>" | --file <file.sql>)
           Runs SQL on data/database.sqlite with the kernel binary's sql command. Only --prod reaches the
           published Deployment, through database_execute.
 events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
@@ -125,14 +140,14 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           runs, routes and Signals, oldest first. Locally an email shows its recipient and text,
           because nothing is sent. --json prints one object per line and --follow keeps printing.
           Only --prod reads the published Deployment.
-pull      --dir <folder> [--url <Kernel URL>]
+pull      --dir <folder> [--url <installation URL>]
           Exports the published app's data (database, accounts, files, Usage) into
           <folder>/.konae/pull/data. Needs a credential from login --export-data. dev --reset imports it.
 build     --dir <folder>                 Builds app/ into dist/. It runs npm run build once node_modules is
           installed, and the built-in bundler before that.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
           actions.d.ts, which types miniapp.actions.call.
-publish   --dir <folder> [--url <Kernel URL>] [--confirm-schema <confirmation>]
+publish   --dir <folder> [--url <installation URL>] [--confirm-schema <confirmation>]
           Builds and publishes to --url or the installation login saved. Set each signing secret
           with tool secret_set first. The Kernel changes the database to what schema.sql states. A
           change that drops a table or a column, or changes a column's type, prints its plan and
@@ -145,16 +160,19 @@ export    --dir <folder> --out <empty folder> [--with-data]
           Writes the app folder: konae.json, app/, a fresh dist/ and the files every app folder
           carries. --with-data adds the published app's data/ and needs a credential from
           login --export-data. Secrets never go with it.
-domain    --deployment <id> [--set <hostname> | --clear] [--dir <folder>] [--url <Kernel URL>]
-          Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
-          control the hostname; run it again once the record is at your DNS provider.
-tool      <name> ['<json arguments>'] [--stdin <key>] [--dir <folder>] [--url <Kernel URL>]
+domain    [--deployment <id>] [--set <hostname> | --clear] [--dir <folder>] [--url <installation URL>]
+          Shows, sets or clears the app's custom domain. --deployment defaults to the id in
+          <folder>/konae.json, which is the Deployment's ID. --set prints the TXT record that proves
+          you control the hostname; run it again once the record is at your DNS provider.
+tool      <name> ['<json arguments>'] [--stdin <key>] [--dir <folder>] [--url <installation URL>]
           Calls one tool of the owner's MCP and prints its answer as JSON. The arguments are one JSON
           object and default to {}. --stdin <key> reads that argument from standard input, so a
           secret's value stays off the command line. A refusal prints the tool's own words.
 
 init, build, contract, dev, and sql and events without --prod need no credential. Every other command but login reads it from
-<folder>/.konae/credentials.json or KONAE_MCP_TOKEN, and talks to --url or the installation login saved in that file.`;
+<folder>/.konae/credentials.json or KONAE_MCP_TOKEN, and talks to --url or the installation login saved in that file.
+The installation URL is the editor's origin: http://localhost:4173 under bun run dev:local,
+http://app.localhost:8080 under Compose.`;
 
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
@@ -185,16 +203,58 @@ async function mailboxLines(file: string) {
   return (await readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
 }
 
+/** Polls the development mailbox every 200 ms for up to `seconds` until `pick` finds what it waits for. */
+export async function waitForMailbox<T>(file: string, pick: (mailbox: string) => T | undefined, seconds = 15): Promise<T | undefined> {
+  for (const deadline = Date.now() + seconds * 1000; Date.now() < deadline; await Bun.sleep(200)) {
+    const found = pick(await readFile(file, "utf8").catch(() => ""));
+    if (found !== undefined) return found;
+  }
+}
+
 /** Waits for the Kernel's mail worker to write the link, then answers it with the password. */
 async function verifyFromMailbox(url: string, file: string, email: string, password: string, seen: number) {
-  for (const deadline = Date.now() + 15_000; Date.now() < deadline; await Bun.sleep(200)) {
-    const token = creatorVerificationToken(await readFile(file, "utf8").catch(() => ""), email, seen);
-    if (!token) continue;
-    return fetch(new URL("/_konae/owner/verify", url), {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, password }),
-    });
-  }
+  const token = await waitForMailbox(file, (mailbox) => creatorVerificationToken(mailbox, email, seen));
+  if (token) return fetch(new URL("/_konae/owner/verify", url), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, password }),
+  });
   throw Error(`No verification link for ${email} reached ${file} within 15 seconds. Check that this is the mailbox of the Kernel at ${url}, which writes one when KONAE_MAIL_TRANSPORT=development.`);
+}
+
+/** The address `dev` invites to try an app whose Signup Policy is not open. */
+export const TEST_ACCOUNT_EMAIL = "test@example.com";
+
+/**
+ * The newest invitation link for `email` among the development mailbox's
+ * lines past the first `seen`. Lines for owners, other addresses and other
+ * purposes are skipped.
+ */
+export function invitationLink(mailbox: string, email: string, seen = 0): string | undefined {
+  return mailbox.split("\n").filter(Boolean).slice(seen)
+    .map((line) => { try { return JSON.parse(line) as { to?: string; scope?: string; purpose?: string; link?: string }; } catch { return {}; } })
+    .filter((item) => item.purpose === "invitation" && item.scope !== "creator" && item.to?.toLowerCase() === email.toLowerCase() && item.link)
+    .at(-1)?.link;
+}
+
+/** Whether the local app holds an account, invited or active, as `kernel users` lists them. */
+export async function holdsAppAccounts(kernel: Pick<LocalKernel, "run">) {
+  const listed = JSON.parse(await kernel.run(["users"])) as { users?: unknown[] };
+  return (listed.users?.length ?? 0) > 0;
+}
+
+/**
+ * Invites the test account when the local app holds no account yet, waits for
+ * the link to reach the mailbox, and returns the line that says where to open
+ * it. It returns nothing when accounts exist, and the reason when the
+ * invitation or its link did not come.
+ */
+export async function inviteTestAccount(kernel: Pick<LocalKernel, "run">, mailbox: string, seconds = 15): Promise<{ line?: string; failed?: string }> {
+  if (await holdsAppAccounts(kernel)) return {};
+  const seen = await mailboxLines(mailbox);
+  try { await kernel.run(["invite", TEST_ACCOUNT_EMAIL]); } catch (error) { return { failed: error instanceof Error ? error.message : String(error) }; }
+  const link = await waitForMailbox(mailbox, (text) => invitationLink(text, TEST_ACCOUNT_EMAIL, seen), seconds);
+  return link
+    ? { line: `Test account: open ${link} and choose a password.` }
+    : { failed: `The invitation for ${TEST_ACCOUNT_EMAIL} did not reach ${mailbox} within ${seconds} seconds.` };
 }
 
 /** Signs in, or creates the account with an invitation code or, for the first owner, the setup key. */
@@ -414,6 +474,64 @@ export function confirmOnTerminal(accepted?: string): ConfirmSchema {
   };
 }
 
+/** The part of a terminal input stream the password prompt uses, so a test can stand in for it. */
+export type PromptInput = {
+  isTTY?: boolean; setRawMode?(on: boolean): unknown; resume(): unknown; pause(): unknown; setEncoding?(encoding: string): unknown;
+  on(event: "data", listener: (chunk: string) => void): unknown; off(event: "data", listener: (chunk: string) => void): unknown;
+};
+
+/**
+ * Reads a line with the typed characters not echoed: the input goes into raw
+ * mode, which is restored on Enter and on Ctrl-C, where the promise rejects.
+ */
+export function readSecret(question: string, input: PromptInput = process.stdin, output: { write(text: string): unknown } = process.stdout): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let typed = "";
+    output.write(question);
+    const finish = (cancelled: boolean) => {
+      input.off("data", onData);
+      input.setRawMode?.(false);
+      input.pause();
+      output.write("\n");
+      if (cancelled) reject(Error("Cancelled.")); else resolve(typed);
+    };
+    const onData = (chunk: string) => {
+      for (const character of chunk) {
+        if (character === "\r" || character === "\n") return finish(false);
+        if (character === "\u0003" || character === "\u0004") return finish(true);
+        if (character === "\u007f" || character === "\b") typed = typed.slice(0, -1);
+        else if (character >= " ") typed += character;
+      }
+    };
+    input.setEncoding?.("utf8");
+    input.setRawMode?.(true);
+    input.on("data", onData);
+    input.resume();
+  });
+}
+
+/** Reads one line from the terminal, echoing it unless `secret`. */
+export async function askOnTerminal(question: string, secret: boolean): Promise<string> {
+  if (secret) return readSecret(question);
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try { return await prompt.question(question); } finally { prompt.close(); }
+}
+
+/**
+ * The email and password `login` signs in with: the variables when set,
+ * otherwise a prompt when there is a terminal, so a script without one fails
+ * as before. The password is not echoed.
+ */
+export async function loginCredentials(env: Record<string, string | undefined>, terminal: { isTTY?: boolean }, ask: (question: string, secret: boolean) => Promise<string> = askOnTerminal) {
+  let email = env.KONAE_EMAIL; let password = env.KONAE_PASSWORD;
+  if (terminal.isTTY) {
+    email ||= (await ask("Email: ", false)).trim();
+    if (email) password ||= await ask(`Password for ${email}: `, true);
+  }
+  if (!email || !password) throw Error("Set KONAE_EMAIL and KONAE_PASSWORD. To create the account, also set KONAE_INVITATION_CODE, or KONAE_SETUP_KEY for the first owner.");
+  return { email, password };
+}
+
 /** Replaces `dist/` with the built artifact's files. */
 async function writeDist(root: string, artifact: { files: Record<string, string>; encodings?: Record<string, string> }) {
   const dist = path.join(root, DIST_FOLDER);
@@ -565,18 +683,23 @@ export async function initLocal(root: string, options: { name?: string; template
 export type LocalKernel = { binary: string; env: Record<string, string | undefined>; data: string; run(args: string[], input?: string): Promise<string> };
 
 /**
+ * 1 TiB, the quota a local Kernel holds unless KONAE_FILES_QUOTA_BYTES names another.
+ * `kernel import` checks pulled files against the quota and the per-file limit, and
+ * a published app's files can exceed the 20 MiB default quota, so `dev --reset` needs room.
+ */
+const LOCAL_FILES_QUOTA = String(1024 ** 4);
+
+/**
  * The `kernel` binary on this machine and the environment that points it at
  * the folder. Its data directory is `.konae/kernel`, where `apps/<id>` links
  * back to the folder, so the Kernel reads `konae.json`, `app/`, `dist/` and
  * `data/` where they are. KONAE_KERNEL_BIN names a built `kernel` binary to
  * run instead of compiling one.
  */
-/** 1 TiB: no file or app folder on this machine reaches it, so a local Kernel has no file limit in practice. */
-const LOCAL_FILE_LIMIT = String(1024 ** 4);
-
 export async function localKernel(root: string, settings: AppSettings, options: { port?: string; confirmSchema?: string; build?: boolean } = {}): Promise<LocalKernel> {
   const binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : path.join(toolRoot, "kernel-rs/target/debug/kernel");
   if (!process.env.KONAE_KERNEL_BIN && options.build !== false) {
+    console.log("Building the Kernel with cargo. The first build takes about a minute.");
     const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml"), "-p", "kernel"], { stdout: "inherit", stderr: "inherit" });
     if (await compilation.exited !== 0) throw Error("Could not build the Kernel. Install Rust, or set KONAE_KERNEL_BIN to a kernel binary built from this checkout.");
   }
@@ -593,9 +716,9 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
     // Account links and notices land in a file on this machine, never a provider.
     KONAE_MAIL_TRANSPORT: "development",
-    // A local run takes files of any size unless these name a limit, so uploads can be tried with real files.
-    KONAE_FILES_QUOTA_BYTES: process.env.KONAE_FILES_QUOTA_BYTES || LOCAL_FILE_LIMIT,
-    KONAE_FILE_MAX_BYTES: process.env.KONAE_FILE_MAX_BYTES || LOCAL_FILE_LIMIT,
+    // The per-file limit is the Kernel's own, so a file refused here is refused on a Deployment. KONAE_FILE_MAX_BYTES raises it.
+    KONAE_FILES_QUOTA_BYTES: process.env.KONAE_FILES_QUOTA_BYTES || LOCAL_FILES_QUOTA,
+    ...(process.env.KONAE_FILE_MAX_BYTES ? { KONAE_FILE_MAX_BYTES: process.env.KONAE_FILE_MAX_BYTES } : {}),
     // Shortens every schedule so a run can be watched; the Kernel takes it only on loopback.
     ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),
     ...(options.confirmSchema ? { KONAE_CONFIRM_SCHEMA: options.confirmSchema } : {}),
@@ -714,6 +837,7 @@ async function main() {
     console.log(HELP);
     return;
   }
+  if (SERVER_COMMANDS.includes(command)) throw Error(serverCommandMessage(command));
   if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
@@ -725,8 +849,7 @@ async function main() {
   const root = path.resolve(option("dir", process.cwd())!);
   if (command === "login") {
     const url = option("url", process.env.KONAE_URL ?? "http://localhost:4173")!;
-    const email = process.env.KONAE_EMAIL; const password = process.env.KONAE_PASSWORD;
-    if (!email || !password) throw Error("Set KONAE_EMAIL and KONAE_PASSWORD. To create the account, also set KONAE_INVITATION_CODE, or KONAE_SETUP_KEY for the first owner.");
+    const { email, password } = await loginCredentials(process.env, process.stdin);
     const scopes = loginScopes(args);
     const verifyFrom = option("verify-from");
     const token = await login(url, email, password, { code: process.env.KONAE_INVITATION_CODE, setupKey: process.env.KONAE_SETUP_KEY }, scopes, verifyFrom && path.resolve(verifyFrom));
@@ -763,8 +886,9 @@ async function main() {
   // The owner's MCP on that installation, with KONAE_MCP_TOKEN or the token login saved.
   const ownerClient = async () => new McpClient(endpoint(await installation()), { token: await credentials(root) });
   if (command === "domain") {
-    const deploymentId = option("deployment");
-    if (!deploymentId) throw Error("Name the Deployment with --deployment <id>. project_inspect shows its ID.");
+    // konae.json's id is the Deployment's ID, so a folder names the Deployment without --deployment.
+    const deploymentId = option("deployment") ?? (args.includes("--dir") ? (await readSettings(root)).id : undefined);
+    if (!deploymentId) throw Error(DOMAIN_NEEDS_DEPLOYMENT);
     for (const line of await domainLocal(await ownerClient(), deploymentId, { set: option("set"), clear: args.includes("--clear") })) console.log(line);
     return;
   }
@@ -914,7 +1038,11 @@ async function main() {
         // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
         const envFile = path.join(root, ".konae/kernel.env");
         await writeFile(envFile, Object.entries(kernel.env).filter(([name]) => name.startsWith("KONAE_")).map(([name, value]) => `${name}=${value}\n`).join(""), { mode: 0o600 });
-        console.log(`The Signup Policy is ${policy}. To create a test account, invite it, and open the link that lands in ${path.join(kernel.data, "mailbox.jsonl")}:`);
+        const mailbox = path.join(kernel.data, "mailbox.jsonl");
+        const test = await inviteTestAccount(kernel, mailbox).catch((error) => ({ failed: error instanceof Error ? error.message : String(error) }));
+        if (test.line) console.log(test.line);
+        if (test.failed) console.warn(`Could not invite the test account. ${test.failed}`);
+        console.log(`The Signup Policy is ${policy}. To invite another address, run this, and open the link that lands in ${mailbox}:`);
         console.log(`  env $(cat ${envFile}) ${kernel.binary} invite <email> --app ${settings.id}`);
       }
       console.log(feed

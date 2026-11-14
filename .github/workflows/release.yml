@@ -1,5 +1,5 @@
-# Builds and pushes the two install images when a version tag lands.
-# See docs/releasing.md.
+# Builds the `kernel` binaries and the two multi-arch install images when a
+# version tag lands, then opens the GitHub Release. See docs/releasing.md.
 name: Release
 
 on:
@@ -16,9 +16,15 @@ env:
   OWNER: danibram
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  # Reads the version from the tag and refuses a release whose package.json,
+  # Cargo workspace or CHANGELOG.md disagree, before any build starts.
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -52,18 +58,7 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract changelog section
-        id: notes
         run: |
           version="${{ steps.version.outputs.version }}"
           outfile="${RUNNER_TEMP}/release-notes.md"
@@ -76,54 +71,204 @@ jobs:
             echo "No ## [${version}] section in CHANGELOG.md." >&2
             exit 1
           fi
-          echo "path=${outfile}" >> "$GITHUB_OUTPUT"
 
-      # linux/amd64 only for now. Emulating arm64 under QEMU made the first
-      # release take longer than a deploy wait. Add arm64 with a native runner later.
-      - name: Build and push konae
+      - name: Keep the notes for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+
+  # One native runner per platform. The Linux binaries build inside the same
+  # rust:1.91-bookworm image the Dockerfiles use, so they link against glibc
+  # 2.36 and run on Debian 12 and anything newer. A build on the runner's own
+  # Ubuntu 24.04 would need glibc 2.39.
+  binaries:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: darwin, arch: arm64, runner: macos-15 }
+          - { os: darwin, arch: x64, runner: macos-15-intel }
+          - { os: linux, arch: x64, runner: ubuntu-24.04 }
+          - { os: linux, arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build the kernel binary on macOS
+        if: matrix.os == 'darwin'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: |
+          rustup toolchain install 1.91 --profile minimal
+          cargo +1.91 build --locked --release --bin kernel --manifest-path kernel-rs/Cargo.toml
+
+      - name: Build the kernel binary on Linux
+        if: matrix.os == 'linux'
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -e CARGO_HOME=/tmp/cargo -v "$PWD:/src" -w /src \
+            rust:1.91-bookworm \
+            cargo build --locked --release --bin kernel --manifest-path kernel-rs/Cargo.toml
+
+      - name: Name the binary
+        run: |
+          name="kernel-${{ needs.prepare.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p out
+          cp kernel-rs/target/release/kernel "out/${name}"
+          chmod 755 "out/${name}"
+          "out/${name}" --help || true
+
+      - name: Keep the binary for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.os }}-${{ matrix.arch }}
+          path: out/kernel-*
+          if-no-files-found: error
+
+  # Each image builds once per architecture on a native runner and is pushed by
+  # digest. The next job joins the two digests under the version tags. QEMU
+  # made the first release of the Rust stage slower than a deploy could wait,
+  # so no build here emulates.
+  images:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: konae, description: "Konae: Kernel with owner accounts, MCP and the project list", file: Dockerfile.konae, platform: linux/amd64, runner: ubuntu-24.04, arch: amd64 }
+          - { image: konae, description: "Konae: Kernel with owner accounts, MCP and the project list", file: Dockerfile.konae, platform: linux/arm64, runner: ubuntu-24.04-arm, arch: arm64 }
+          - { image: konae-kernel, description: "Kernel alone: serves app folders without Konae", file: Dockerfile.kernel, platform: linux/amd64, runner: ubuntu-24.04, arch: amd64 }
+          - { image: konae-kernel, description: "Kernel alone: serves app folders without Konae", file: Dockerfile.kernel, platform: linux/arm64, runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }} by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.konae
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:${{ steps.version.outputs.major_minor }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae:latest
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           labels: |
-            org.opencontainers.image.title=konae
-            org.opencontainers.image.description=Konae: Kernel with owner accounts, MCP and the project list
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.source=https://github.com/danibram/konae
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=konae
-          cache-to: type=gha,mode=max,scope=konae
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
 
-      - name: Build and push konae-kernel
-        uses: docker/build-push-action@v6
+      - name: Keep the digest for the merge job
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@v4
         with:
-          context: .
-          file: Dockerfile.kernel
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:${{ steps.version.outputs.major_minor }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/konae-kernel:latest
-          labels: |
-            org.opencontainers.image.title=konae-kernel
-            org.opencontainers.image.description=Kernel alone: serves app folders without Konae
-            org.opencontainers.image.source=https://github.com/danibram/konae
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=konae-kernel
-          cache-to: type=gha,mode=max,scope=konae-kernel
+          name: digest-${{ matrix.arch }}-${{ matrix.image }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+
+  merge:
+    needs: [prepare, images]
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [konae, konae-kernel]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*-${{ matrix.image }}
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag one multi-arch image
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          repo="${REGISTRY}/${OWNER}/${{ matrix.image }}"
+          version="${{ needs.prepare.outputs.version }}"
+          major_minor="${{ needs.prepare.outputs.major_minor }}"
+          digests=(*)
+          [ "${#digests[@]}" = 2 ] || { echo "Expected one digest per architecture, found: ${digests[*]}" >&2; exit 1; }
+          sources=()
+          for digest in "${digests[@]}"; do sources+=("${repo}@sha256:${digest}"); done
+          docker buildx imagetools create \
+            -t "${repo}:${version}" -t "${repo}:${major_minor}" -t "${repo}:latest" \
+            "${sources[@]}"
+
+      - name: Show the result
+        run: docker buildx imagetools inspect "${REGISTRY}/${OWNER}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}"
+
+  # Runs only when every binary and both images are done, so a Release page
+  # never lists a release that has half its files.
+  release:
+    needs: [prepare, binaries, merge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download the binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*
+          path: assets
+          merge-multiple: true
+
+      - name: Download the notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+
+      - name: Write SHA256SUMS
+        working-directory: assets
+        run: |
+          binaries=(kernel-*)
+          [ "${#binaries[@]}" = 4 ] || { echo "Expected four binaries, found: ${binaries[*]}" >&2; exit 1; }
+          sha256sum "${binaries[@]}" > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
-          body_path: ${{ steps.notes.outputs.path }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          body_path: notes/release-notes.md
           generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: |
+            assets/kernel-*
+            assets/SHA256SUMS

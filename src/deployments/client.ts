@@ -18,6 +18,16 @@ export async function deployProject(project: MiniAppProject, visibility: Deploym
 }
 
 /**
+ * Whether the running release came with actions other than the editor's saved
+ * sources, as after `konae publish` from an app folder. The Kernel decides it
+ * when it applies each release.
+ */
+export async function readSourcesDiffer(projectId: string): Promise<boolean> {
+  const inspected = await platformMcp.call<{ sourcesDiffer?: boolean }>("project_inspect", { projectId });
+  return inspected.sourcesDiffer === true;
+}
+
+/**
  * Who may create an account on a deployed app, in the order the editor offers
  * them. `invitation` admits only people the owner invited; `allowlist` holds
  * exact emails and `@domain` entries. The Kernel's `signup_policy_set` accepts
@@ -72,7 +82,7 @@ export function setGoogleClientPart(projectId: string, name: typeof GOOGLE_CLIEN
 }
 
 // App accounts and invitations. Every tool needs the manage_users permission,
-// which the owner's browser session holds. docs/mcp.md, "Users and invitations".
+// which the owner's browser session holds. docs/reference/accounts.md, "Users and invitations".
 
 export type AppUserState = "pending" | "active" | "suspended";
 export type AppUser = { userId: string; email: string; state: AppUserState; verified: boolean; verifiedAt: number | null; createdAt: number };
@@ -139,7 +149,7 @@ export function readMailStatus(refresh = false) {
 }
 
 // Signing secrets belong to the project, so they can be set before the first
-// release. API keys belong to one Deployment. docs/mcp.md, "HTTP routes".
+// release. API keys belong to one Deployment. docs/reference/routes-and-calls.md, "HTTP routes".
 
 /**
  * One row of `secrets_list`. `use` is "call" for a secret a route may not sign
