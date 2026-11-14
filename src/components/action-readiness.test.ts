@@ -232,6 +232,20 @@ describe("an action's sentence says only what its statement proves", () => {
     expect(actorFiltered("SELECT id FROM notes WHERE ?1 = user_id LIMIT 5", [actor])).toBe(true);
   });
 
+  test("a named parameter or a SELECT alias claims nothing, since the filter cannot be proved", () => {
+    // SQLite gives :me the first number, so `user_id = ?` reads the second binding, the caller's input.
+    expect(actorFiltered("SELECT id, title, user_id FROM notes WHERE title <> :me AND user_id = ? LIMIT 50", [actor, input])).toBe(false);
+    expect(actorFiltered("SELECT id FROM notes WHERE user_id = @me LIMIT 5", [actor])).toBe(false);
+    expect(actorFiltered("SELECT id FROM notes WHERE user_id = $me LIMIT 5", [actor])).toBe(false);
+    // `me` is the actor itself, so the filter compares the actor with itself and every row passes.
+    expect(actorFiltered("SELECT id, ?1 AS me FROM notes WHERE me = ?1 LIMIT 5", [actor])).toBe(false);
+    expect(actorFiltered("SELECT id, ?1 me FROM notes WHERE me = ?1 LIMIT 5", [actor])).toBe(false);
+    expect(actorFiltered('SELECT id, upper(?1) AS "Me" FROM notes WHERE me = ?1 LIMIT 5', [actor])).toBe(false);
+    // A column the list only names, or names under DISTINCT, is still the table's.
+    expect(actorFiltered("SELECT DISTINCT user_id FROM notes WHERE user_id = ?1 LIMIT 5", [actor])).toBe(true);
+    expect(actorFiltered("SELECT n.user_id, title FROM notes n WHERE n.user_id = ?1 LIMIT 5", [actor])).toBe(true);
+  });
+
   test("a change scoped to the actor changes their own rows; one that writes the actor claims nothing", () => {
     const mutation = (statement: string, bindings: Array<{ source: string }>) => ({ name: "notes.update", kind: "mutation", access: "authenticated" as const, statement, bindings });
     expect(actionSentence(mutation("UPDATE notes SET title = ?1 WHERE id = ?2 AND user_id = ?3", [input, input, actor]), "private"))

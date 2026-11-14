@@ -2,7 +2,7 @@ import { parseServerActionSource, routeCallers, type HttpBinding, type RouteCall
 import { releaseRefusal, type ReleaseFacts } from "../agent/release-check";
 import { ownerFixes } from "../kernel/refusal";
 import { limitIndex, unboundedQueryReason } from "../lib/query-bound";
-import { sqlTokens } from "../lib/sql-tokens";
+import { sqlTokens, type SqlToken } from "../lib/sql-tokens";
 import type { RuntimeActionAccess } from "../deployments/manifest";
 
 export type DescribedAction = {
@@ -111,12 +111,19 @@ function queryRows(statement: string | undefined): string {
  * OR or NOT that could let other rows through. Anything else, an actor checked inside a subquery or EXISTS
  * included, is false, so a line never claims a row filter the SQL does not
  * prove. Parameters number as SQLite numbers them. ?N is N, and a bare ? is
- * one past the largest number so far.
+ * one past the largest number so far. A named parameter (:name, @name, $name)
+ * takes a number too, so a statement with one claims nothing, and so does a
+ * filter on a name the SELECT list defines as an alias.
  */
 export function actorFiltered(statement: string, bindings: ReadonlyArray<{ source: string }>): boolean {
   const actorAt = new Set(bindings.flatMap((binding, index) => binding.source === "actor" ? [index + 1] : []));
   if (actorAt.size === 0) return false;
   const tokens = sqlTokens(statement);
+  const named = tokens.some((token, index) => {
+    const next = tokens[index + 1];
+    return token.kind === "symbol" && [":", "@", "$"].includes(token.text) && next !== undefined && next.start === token.end && (next.kind === "word" || next.kind === "identifier");
+  });
+  if (named) return false;
   const parameter = new Map<number, number>();
   let largest = 0;
   tokens.forEach((token, index) => {
@@ -140,11 +147,29 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
   if (first === "UPDATE" && tableAt !== -1) return false;
   const whereAt = top.findIndex((_, at) => word(at) === "WHERE");
   if (tableAt !== -1 && top.slice(tableAt, whereAt).some(({ token }) => token.kind === "symbol" && token.text === ",")) return false;
+  // Names the SELECT list defines: the last word of an item that is more than a bare column, as in `?1 AS me` or `?1 me`.
+  const aliases = new Set<string>();
+  if (first === "SELECT" && tableAt !== -1) {
+    let item: SqlToken[] = [];
+    const close = () => {
+      const words = item[0]?.kind === "word" && ["DISTINCT", "ALL"].includes(item[0].text.toUpperCase()) ? item.slice(1) : item;
+      const last = words.at(-1);
+      const before = words.at(-2);
+      if (words.length >= 2 && last && (last.kind === "word" || last.kind === "identifier") && !(before?.kind === "symbol" && before.text === ".")) aliases.add(unquote(last.text));
+      item = [];
+    };
+    for (const { token } of top.slice(1, tableAt)) {
+      if (token.kind === "symbol" && token.text === ",") close(); else item.push(token);
+    }
+    close();
+  }
   const from = whereAt + 1;
   let to = top.findIndex((_, at) => at >= from && ["GROUP", "ORDER", "LIMIT", "HAVING", "RETURNING", "WINDOW"].includes(word(at)));
   if (to === -1) to = top.length;
   // The clause as terms: AND, a column (qualified or not), the actor parameter, `=`, or anything else.
   const terms: string[] = [];
+  // The unqualified name of each "column" term, so a filter on an alias is not taken for a column.
+  const names = new Map<number, string>();
   for (let at = from; at < to; at += 1) {
     const { token, index } = top[at];
     // OR and NOT can let other rows through; BETWEEN and CASE carry an AND that joins no condition.
@@ -154,6 +179,7 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
       const dot = top[at + 1]?.token;
       const name = top[at + 2]?.token;
       if (dot?.kind === "symbol" && dot.text === "." && (name?.kind === "word" || name?.kind === "identifier")) at += 2;
+      else names.set(terms.length, unquote(token.text));
       terms.push("column");
     } else if (token.kind === "symbol" && token.text === "?") {
       if (parameter.get(index) !== undefined && tokens[index + 1]?.start === token.end && /^\d+$/.test((tokens[index + 1] as { text?: string }).text ?? "")) at += 1;
@@ -165,9 +191,21 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
       terms.push(joined ? "other" : "=");
     } else terms.push("other");
   }
-  // One AND-joined term must read `column = actor` or `actor = column` on its own.
-  const parts = terms.join(" ").split("AND").map((part) => part.trim());
-  return parts.some((part) => part === "column = actor" || part === "actor = column");
+  // One AND-joined term must read `column = actor` or `actor = column` on its own, on a column that is not an alias.
+  let start = 0;
+  for (let at = 0; at <= terms.length; at += 1) {
+    if (at < terms.length && terms[at] !== "AND") continue;
+    const part = terms.slice(start, at).join(" ");
+    const column = part === "column = actor" ? start : part === "actor = column" ? start + 2 : -1;
+    if (column !== -1 && !aliases.has(names.get(column) ?? "")) return true;
+    start = at + 1;
+  }
+  return false;
+}
+
+/** An identifier as SQLite compares it: without its quotes, in lower case. */
+function unquote(text: string) {
+  return text.replace(/^["`[]|["`\]]$/g, "").toLowerCase();
 }
 
 /** Who may call an action that the runtime endpoint answers. */
