@@ -25,7 +25,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -53,6 +53,10 @@ const MANIFEST: &str = "manifest.json";
 pub const S3_PREFIX: &str = "copies/";
 /// The only cipher a copy names in its manifest.
 const ENCRYPTION: &str = "AES-256-GCM";
+/// The largest manifest.json restore reads.
+const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+/// Copies the default choice passes over before it gives up.
+const MAX_SKIPPED_COPIES: usize = 50;
 const KEEP_RECENT: usize = 24;
 const KEEP_DAILY_DAYS: u64 = 30;
 const DAY_MS: u64 = 86_400_000;
@@ -965,6 +969,36 @@ impl Source {
         }
     }
 
+    /// A copy's manifest bytes. `Ok(None)` when the manifest is over
+    /// `MAX_MANIFEST_BYTES`, checked on the object's length before the body is
+    /// read and again while reading.
+    async fn read_manifest_bytes(&self, copy: &str) -> Result<Option<Vec<u8>>> {
+        match self {
+            Source::Directory(root) => {
+                let path = root.join(copy).join(MANIFEST);
+                if tokio::fs::metadata(&path).await?.len() > MAX_MANIFEST_BYTES {
+                    return Ok(None);
+                }
+                Ok(Some(tokio::fs::read(path).await?))
+            }
+            Source::S3 { client, bucket, prefix } => {
+                let object = client.get_object().bucket(bucket).key(format!("{prefix}{copy}/{MANIFEST}")).send().await?;
+                if object.content_length().is_some_and(|length| length > MAX_MANIFEST_BYTES as i64) {
+                    return Ok(None);
+                }
+                let mut body = object.body;
+                let mut bytes = Vec::new();
+                while let Some(chunk) = body.try_next().await? {
+                    bytes.extend_from_slice(&chunk);
+                    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+                        return Ok(None);
+                    }
+                }
+                Ok(Some(bytes))
+            }
+        }
+    }
+
     /// The revocation record's entries. `None` when `started.json` is
     /// missing: the source never kept a record, so it cannot prove none.
     /// With a key, each entry on S3 must carry a valid MAC for its file name,
@@ -1017,33 +1051,91 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
-/// The checks `restore` makes of a manifest before it reads any copied
-/// file: its version, and on S3 its encryption, secret and MAC. `outcome`
-/// ends each refusal and says what the caller left undone.
-fn check_manifest(source: &Source, copy: &str, manifest: &Manifest, key: Option<&CopyKey>, outcome: &str) -> Result<()> {
-    ensure!(manifest.version == 1, "The manifest version of copy {copy} is not supported. {outcome}");
-    // Copies on S3 are sealed whenever a secret is set. A plain manifest there
-    // is not one this installation made, so the secret is not set aside for it.
+/// What a manifest is worth once read. The outer error is a failure to read
+/// it (transport, throttling, permission), which says nothing about the copy.
+/// The inner error is a verdict on the bytes: too large, unparsable, or a
+/// version this Kernel does not read.
+async fn read_manifest(source: &Source, copy: &str) -> Result<std::result::Result<Manifest, String>> {
+    let Some(bytes) = source.read_manifest_bytes(copy).await? else {
+        return Ok(Err(format!("The manifest of copy {copy} is larger than 4 MiB.")));
+    };
+    let manifest: Manifest = match serde_json::from_slice(&bytes) {
+        Ok(manifest) => manifest,
+        Err(_) => return Ok(Err(format!("The manifest of copy {copy} is invalid."))),
+    };
+    if manifest.version != 1 {
+        return Ok(Err(format!("The manifest version of copy {copy} is not supported.")));
+    }
+    Ok(Ok(manifest))
+}
+
+fn not_encrypted(copy: &str) -> String {
+    format!("Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set, and a copy this installation sends to S3 with the secret is always encrypted.")
+}
+
+/// Checks an encrypted copy's manifest against the secret. A manifest
+/// without a MAC never passes: the Kernel signs every manifest it encrypts.
+fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>) -> Result<()> {
+    let Some(encryption) = &manifest.encryption else {
+        return Ok(());
+    };
+    ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {:?}, which this Kernel cannot open.", encryption.algorithm);
+    let key = key.with_context(|| {
+        format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
+    })?;
     ensure!(
-        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
-        "Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set. Unset it to restore a copy made without it. {outcome}"
+        key.check == encryption.key_check,
+        "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
     );
-    if let Some(encryption) = &manifest.encryption {
-        ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {}, which this Kernel cannot open. {outcome}", encryption.algorithm);
-        let key = key.with_context(|| format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. {outcome}"))?;
-        ensure!(
-            key.check == encryption.key_check,
-            "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. {outcome}"
-        );
-        match &manifest.mac {
-            Some(mac) => ensure!(
-                key.verify_manifest(copy, manifest, mac),
-                "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. {outcome}"
-            ),
-            None => bail!("Copy {copy} has no manifest MAC. The Kernel signs every manifest it encrypts, so this one was altered. {outcome}"),
-        }
+    match &manifest.mac {
+        Some(mac) => ensure!(
+            key.verify_manifest(copy, manifest, mac),
+            "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
+        ),
+        None => bail!("Copy {copy} has no manifest MAC. The Kernel signs every manifest it encrypts, so this one was altered. Nothing was installed."),
     }
     Ok(())
+}
+
+/// The newest copy on S3 whose manifest is encrypted and carries a MAC that
+/// verifies under the secret. A manifest without a MAC can be planted or cut
+/// down by anyone who can write to the bucket. Each copy passed over is reported with its reason, so a
+/// planted copy is seen and does not hide the genuine ones. Only a verdict on
+/// the copy itself passes it over; a failure to read it stops the restore.
+async fn newest_authentic_copy(source: &Source, key: &CopyKey, report: &mut dyn FnMut(String)) -> Result<String> {
+    let copies = source.complete_copies().await?;
+    ensure!(!copies.is_empty(), "No complete copy found. A complete copy has a manifest.json.");
+    let mut skipped = 0;
+    let mut newest_reason = String::new();
+    for copy in copies.iter().rev() {
+        ensure!(
+            skipped < MAX_SKIPPED_COPIES,
+            "Stopped after {MAX_SKIPPED_COPIES} skipped copies without finding one that could be authenticated. The newest: {newest_reason} Nothing was installed."
+        );
+        let manifest = read_manifest(source, copy)
+            .await
+            .map_err(|error| anyhow::anyhow!("Could not read the manifest of copy {copy}: {error:#}. Nothing was installed."))?;
+        let verdict = manifest.and_then(|manifest| {
+            if manifest.encryption.is_none() {
+                return Err(not_encrypted(copy));
+            }
+            check_sealed(copy, &manifest, Some(key)).map_err(|error| format!("{error:#}"))
+        });
+        match verdict {
+            Ok(()) => return Ok(copy.clone()),
+            Err(reason) => {
+                let reason = reason.trim_end_matches(" Nothing was installed.").to_owned();
+                report(format!("Skipped copy {copy}: {reason}"));
+                if skipped == 0 {
+                    newest_reason = reason;
+                }
+                skipped += 1;
+            }
+        }
+    }
+    bail!(
+        "No copy in the source could be authenticated, {skipped} skipped. The newest: {newest_reason} While KONAE_COPY_SECRET is set, only a copy encrypted and signed with it is chosen automatically, and a copy that is not encrypted never is. Nothing was installed."
+    )
 }
 
 async fn restore(
@@ -1063,6 +1155,10 @@ async fn restore(
             (&direct, name.to_owned())
         }
         (source, Some(copy)) => (source, copy.to_owned()),
+        (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
+            let key = key.expect("checked by the guard");
+            (source, newest_authentic_copy(source, key, &mut |line| println!("{line}")).await?)
+        }
         (source, None) => {
             let latest = source.complete_copies().await?.pop();
             (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
@@ -1072,12 +1168,19 @@ async fn restore(
         !copy.is_empty() && !copy.contains('/') && copy != "." && copy != "..",
         "The copy ID is invalid."
     );
-    let manifest_bytes = source
-        .read(&copy, MANIFEST)
+    let manifest = read_manifest(source, &copy)
         .await
-        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("The copy's manifest.json is invalid.")?;
-    check_manifest(source, &copy, &manifest, key, "Nothing was installed.")?;
+        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?
+        .map_err(|reason| anyhow::anyhow!("{reason} Nothing was installed."))?;
+    // Copies on S3 are sealed whenever a secret is set. A plain manifest there
+    // is not one this installation made, so the secret is not set aside for it.
+    ensure!(
+        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
+        "{} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.",
+        not_encrypted(&copy),
+        crate::program()
+    );
+    check_sealed(&copy, &manifest, key)?;
     for file in &manifest.files {
         let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
         ensure!(
@@ -1195,11 +1298,7 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
     let mut clear = |path: &Path, names: &[&str]| -> Result<()> {
         let connection = Connection::open(path)?;
         for name in names {
-            let exists = connection
-                .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(()))
-                .optional()?
-                .is_some();
-            if exists {
+            if crate::table_exists(&connection, name)? {
                 removed += connection.execute(&format!("DELETE FROM \"{name}\""), [])?;
             }
         }
@@ -1599,6 +1698,273 @@ mod tests {
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
+    }
+
+    /// A copy ID that sorts after every real one, as a planted copy would choose.
+    const LATER_ID: &str = "2099-01-01T00-00-00.000Z";
+
+    async fn put_manifest(client: &S3Client, id: &str, manifest: &Manifest) {
+        client.put_object().bucket("data").key(format!("copies/{id}/{MANIFEST}")).body(ByteStream::from(serde_json::to_vec_pretty(manifest).unwrap())).send().await.unwrap();
+    }
+
+    async fn restored_notes(source: &Source, copy: Option<&str>, label: &str, deployment: &Deployment, key: &CopyKey) -> (String, Result<String>) {
+        let root = scratch(label);
+        let outcome = restore(source, copy, &root, Some(key), false, &crate::installation::Installation::for_test()).await;
+        let outcome = outcome.map(|summary| {
+            assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+            summary.copy_id
+        });
+        let installed = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        let _ = std::fs::remove_dir_all(&root);
+        (installed.to_string(), outcome)
+    }
+
+    #[tokio::test]
+    async fn a_planted_plain_copy_does_not_hide_the_genuine_copy_from_the_default_choice() {
+        let (source, copies, id, deployment) = plain_copy("planted-later").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        upload_plain(&client, &copies.join(&id), LATER_ID).await;
+        let (_, outcome) = restored_notes(&s3_source(&client), None, "planted-later-restored", &deployment, &key).await;
+        assert_eq!(outcome.expect("the genuine copy is installed"), id);
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_planted_sealed_looking_copy_with_a_wrong_or_missing_mac_is_skipped() {
+        let (source, copies, id, deployment) = plain_copy("planted-mac").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let genuine: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap()).unwrap();
+        // The genuine manifest under another copy ID: sealed, right key check, MAC bound to the other ID.
+        put_manifest(&client, "2099-01-01T00-00-00.000Z", &genuine).await;
+        let mut unsigned = genuine.clone();
+        unsigned.mac = None;
+        put_manifest(&client, "2099-01-02T00-00-00.000Z", &unsigned).await;
+        let mut forged = genuine.clone();
+        forged.mac = Some("not hex".into());
+        put_manifest(&client, "2099-01-03T00-00-00.000Z", &forged).await;
+        let (_, outcome) = restored_notes(&s3_source(&client), None, "planted-mac-restored", &deployment, &key).await;
+        assert_eq!(outcome.expect("the genuine copy is installed"), id);
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn with_only_planted_copies_restore_refuses_and_installs_nothing() {
+        let (source, copies, id, deployment) = plain_copy("planted-only").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        upload_plain(&client, &copies.join(&id), &id).await;
+        upload_plain(&client, &copies.join(&id), LATER_ID).await;
+        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
+        let (installed, outcome) = restored_notes(&s3_source(&client), None, "planted-only-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("no copy can be authenticated").to_string();
+        assert!(refused.contains("2 skipped") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn naming_a_planted_copy_is_refused_without_telling_the_operator_to_unset_the_secret() {
+        let (source, copies, id, deployment) = plain_copy("planted-named").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        upload_plain(&client, &copies.join(&id), LATER_ID).await;
+        let (installed, outcome) = restored_notes(&s3_source(&client), Some(LATER_ID), "planted-named-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("a planted copy is refused when named").to_string();
+        assert!(refused.contains("is not encrypted") && refused.contains("KONAE_COPY_SECRET") && refused.contains("--copy") && refused.contains("Nothing was installed"), "{refused}");
+        assert!(!refused.to_lowercase().contains("unset"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    async fn second_copy(source: &Path, copies: &Path) -> String {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        run_copy(&state(source), &[Target::Directory(copies.to_owned())]).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_default_choice_needs_a_mac_even_when_the_override_is_on() {
+        let (source, copies, id, deployment) = plain_copy("override-default").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        // Planted: the genuine manifest, sealed-looking with a copied key check, and no MAC.
+        let mut planted: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap()).unwrap();
+        planted.mac = None;
+        put_manifest(&client, LATER_ID, &planted).await;
+        let root = scratch("override-default-restored");
+        let summary = restore(&s3_source(&client), None, &root, Some(&key), true, &crate::installation::Installation::for_test()).await.expect("the verified copy is chosen");
+        assert_eq!(summary.copy_id, id);
+        assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
+        for path in [source, copies, root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_genuine_folder_whose_manifest_was_replaced_by_an_unsigned_subset_is_skipped() {
+        let (source, copies, older, deployment) = plain_copy("override-subset").await;
+        let newer = second_copy(&source, &copies).await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&older), &older, Some(&key)).await;
+        send_genuine(&client, &copies.join(&newer), &newer, Some(&key)).await;
+        let mut subset: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{newer}/{MANIFEST}")).await.unwrap()).unwrap();
+        subset.mac = None;
+        let artifact = format!("apps/{}/dist/index.html", deployment.id);
+        subset.files.retain(|file| file.path != artifact);
+        put_manifest(&client, &newer, &subset).await;
+        let root = scratch("override-subset-restored");
+        let summary = restore(&s3_source(&client), None, &root, Some(&key), true, &crate::installation::Installation::for_test()).await.expect("the older verified copy is installed");
+        assert_eq!(summary.copy_id, older);
+        assert!(crate::layout::folder(&root, &deployment.id).join("dist/index.html").is_file(), "the whole copy is installed");
+        for path in [source, copies, root] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn each_copy_the_default_choice_passes_over_is_reported_with_its_reason() {
+        let (source, copies, older, _) = plain_copy("skip-lines").await;
+        let newer = second_copy(&source, &copies).await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&older), &older, Some(&key)).await;
+        send_genuine(&client, &copies.join(&newer), &newer, Some(&key)).await;
+        let mut subset: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{newer}/{MANIFEST}")).await.unwrap()).unwrap();
+        subset.mac = None;
+        put_manifest(&client, &newer, &subset).await;
+        upload_plain(&client, &copies.join(&older), LATER_ID).await;
+        let mut lines = Vec::new();
+        let chosen = newest_authentic_copy(&s3_source(&client), &key, &mut |line| lines.push(line)).await.unwrap();
+        assert_eq!(chosen, older);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with(&format!("Skipped copy {LATER_ID}: ")) && lines[0].contains("is not encrypted"), "{lines:?}");
+        assert!(lines[1].starts_with(&format!("Skipped copy {newer}: ")) && lines[1].contains("not chosen automatically") && lines[1].contains("--copy"), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("restore it anyway")), "{lines:?}");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// An S3 endpoint that lists two copies and refuses to read the newest
+    /// manifest. The counter holds how many objects of the older copy were asked for.
+    async fn s3_that_refuses_the_newest_manifest(newest: &str, older: &str) -> (S3Client, Arc<std::sync::atomic::AtomicUsize>) {
+        use axum::{Router, extract::Path as UrlPath, http::StatusCode, response::IntoResponse, routing::get};
+        let listing = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>data</Name><Prefix>copies/</Prefix><KeyCount>2</KeyCount><IsTruncated>false</IsTruncated>\
+             <Contents><Key>copies/{older}/{MANIFEST}</Key><Size>1</Size></Contents><Contents><Key>copies/{newest}/{MANIFEST}</Key><Size>1</Size></Contents></ListBucketResult>"
+        );
+        let list = move || {
+            let body = listing.clone();
+            async move { ([("content-type", "application/xml")], body) }
+        };
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = asked.clone();
+        let older = older.to_owned();
+        let app = Router::new()
+            .route("/{bucket}", get(list.clone()))
+            .route("/{bucket}/", get(list))
+            .route("/{bucket}/{*key}", get(move |UrlPath((_, key)): UrlPath<(String, String)>| async move {
+                if key.contains(&older) {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                (StatusCode::FORBIDDEN, "<Error><Code>AccessDenied</Code><Message>denied</Message></Error>").into_response()
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let credentials = aws_credential_types::Credentials::new("konae", "konae-secret", None, None, "copies-test");
+        let config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .credentials_provider(credentials)
+            .endpoint_url(format!("http://{address}"))
+            .force_path_style(true)
+            .build();
+        (S3Client::from_conf(config), asked)
+    }
+
+    #[tokio::test]
+    async fn a_read_error_on_the_newest_copy_stops_the_restore_instead_of_rolling_back() {
+        let (client, older_asked) = s3_that_refuses_the_newest_manifest(LATER_ID, "2020-01-01T00-00-00.000Z").await;
+        let root = scratch("read-error-restored");
+        let key = CopyKey::derive(TEST_SECRET);
+        let refused = restore(&s3_source(&client), None, &root, Some(&key), false, &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
+        assert!(refused.contains(LATER_ID) && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(older_asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the restore did not roll back to the older copy");
+        assert_eq!(std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_manifest_over_four_mebibytes_is_refused() {
+        let (source, copies, id, deployment) = plain_copy("big-manifest").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let mut manifest: Manifest = serde_json::from_slice(&read_s3_bytes(&client, "data", &format!("copies/{id}/{MANIFEST}")).await.unwrap()).unwrap();
+        manifest.files.push(ManifestFile { path: "x".repeat(5 * 1024 * 1024), size: 0, sha256: String::new() });
+        put_manifest(&client, LATER_ID, &manifest).await;
+        let (installed, outcome) = restored_notes(&s3_source(&client), Some(LATER_ID), "big-manifest-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("an oversized manifest is refused").to_string();
+        assert!(refused.contains("4 MiB") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_choice_gives_up_after_fifty_skipped_copies() {
+        let (source, copies, id, deployment) = plain_copy("fifty").await;
+        let client = fake_s3_client().await;
+        let key = CopyKey::derive(TEST_SECRET);
+        send_genuine(&client, &copies.join(&id), &id, Some(&key)).await;
+        let manifest: Manifest = serde_json::from_slice(&std::fs::read(copies.join(&id).join(MANIFEST)).unwrap()).unwrap();
+        for second in 0..51 {
+            put_manifest(&client, &format!("2099-01-01T00-00-{second:02}.000Z"), &manifest).await;
+        }
+        let (installed, outcome) = restored_notes(&s3_source(&client), None, "fifty-restored", &deployment, &key).await;
+        let refused = outcome.err().expect("the genuine copy is out of reach").to_string();
+        assert!(refused.contains("50 skipped") && refused.contains("Nothing was installed"), "{refused}");
+        assert_eq!(installed, "0");
+        for path in [source, copies] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[test]
+    fn a_restore_signs_out_sessions_in_tables_spelled_in_capitals() {
+        let root = scratch("signout-case");
+        let identity = crate::layout::apps(&root).join("one").join("data").join("identity.sqlite");
+        std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        let db = Connection::open(&identity).unwrap();
+        db.execute_batch(
+            "CREATE TABLE app_users(id TEXT PRIMARY KEY);
+             CREATE TABLE APP_SESSIONS(token_hash TEXT); INSERT INTO app_sessions VALUES('session');
+             CREATE TABLE Account_Challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('link');",
+        )
+        .unwrap();
+        drop(db);
+        let removed = invalidate_sessions(&root, &crate::installation::Installation::for_test()).unwrap();
+        let db = Connection::open(&identity).unwrap();
+        let left: i64 = db.query_row("SELECT (SELECT COUNT(*) FROM app_sessions) + (SELECT COUNT(*) FROM account_challenges)", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "sessions or links survived the restore");
+        assert_eq!(removed, 2);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

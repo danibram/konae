@@ -399,7 +399,7 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
     let mut removed = 0;
     for table in ACCESS_TABLES {
         let exists = connection
-            .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [table], |_| Ok(()))
+            .query_row("SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)=?1", [table], |_| Ok(()))
             .optional()?
             .is_some();
         if exists {
@@ -736,27 +736,38 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
 pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits) -> Result<()> {
     let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
     let database = path("database").context("The package has no database.")?;
+    // The integrity check connects every virtual table and runs its module on
+    // the file's shadow tables, so no component is checked before all three are
+    // known to hold no trigger, view or virtual table.
+    no_trigger_or_view(&database, "database", "database")?;
+    for (name, label, what) in [("identity", "accounts", "accounts component"), ("usage", "usage", "usage component")] {
+        if let Some(component) = path(name) {
+            no_trigger_or_view(&component, label, what)?;
+        }
+    }
     integrity(&database, "database")?;
-    no_trigger_or_view(&database, "database")?;
     let accounts = match path("identity") {
         Some(identity) => {
             integrity(&identity, "accounts")?;
-            no_trigger_or_view(&identity, "accounts component")?;
             let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let has_users: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_users')",
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE lower(type)='table' AND lower(name)='app_users')",
                 [],
                 |r| r.get(0),
             )?;
             ensure!(has_users, "The accounts component has no app_users table.");
-            let has_hashes: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('app_users') WHERE name='password_hash')", [], |r| r.get(0))?;
-            if has_hashes {
-                let mut hashes = db.prepare("SELECT password_hash FROM app_users")?;
-                let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
-                for hash in rows {
-                    let known = matches!(hash?, rusqlite::types::Value::Text(hash) if auth::is_stored_password_hash(&hash));
-                    ensure!(known, "The accounts component holds a password hash this Kernel did not write.");
+            // Only a missing column means there are no hashes. A generated
+            // column is hidden from `pragma_table_info`, so the scan asks for it by name.
+            match db.prepare("SELECT password_hash FROM app_users") {
+                Ok(mut hashes) => {
+                    let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
+                    for hash in rows {
+                        let known = matches!(hash?, rusqlite::types::Value::Text(hash) if auth::is_stored_password_hash(&hash));
+                        ensure!(known, "The accounts component holds a password hash this Kernel did not write.");
+                    }
                 }
+                Err(rusqlite::Error::SqlInputError { msg, .. } | rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.starts_with("no such column") => {}
+                Err(error) => return Err(error.into()),
             }
             Some(db)
         }
@@ -767,16 +778,19 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     }
     if let Some(usage) = path("usage") {
         integrity(&usage, "usage")?;
-        no_trigger_or_view(&usage, "usage component")?;
     }
     Ok(())
 }
 
-/// Refuses a component that holds a trigger or a view. The Kernel creates
-/// neither in any of its files.
-fn no_trigger_or_view(path: &Path, what: &str) -> Result<()> {
+/// Refuses a component that holds a trigger, a view or a virtual table. The
+/// Kernel creates none of them in any of its files.
+fn no_trigger_or_view(path: &Path, label: &str, what: &str) -> Result<()> {
     let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .and_then(|db| super::sql_rules::stored_trigger_or_view(&db, what))?;
+        .and_then(|db| match super::sql_rules::stored_trigger_or_view(&db, what)? {
+            Some(refusal) => Ok(Some(refusal)),
+            None => super::sql_rules::stored_virtual_table(&db, what),
+        })
+        .with_context(|| format!("The {label} component is not a SQLite database."))?;
     match stored {
         Some(refusal) => anyhow::bail!(refusal),
         None => Ok(()),
@@ -980,6 +994,34 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn revoking_access_finds_tables_and_columns_whatever_their_case() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("identity.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE app_users(id TEXT PRIMARY KEY, state TEXT); INSERT INTO app_users VALUES('u1', 'active');
+             CREATE TABLE APP_SESSIONS(token_hash TEXT); INSERT INTO APP_SESSIONS VALUES('secret-session-hash');
+             CREATE TABLE Account_Challenges(token_hash TEXT); INSERT INTO account_challenges VALUES('secret-link-hash');
+             CREATE TABLE ENTRY_LINKS(token_hash TEXT); INSERT INTO entry_links VALUES('secret-entry-hash');
+             CREATE TABLE API_KEYS(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+               actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER, REVOKED_REASON TEXT);
+             INSERT INTO api_keys VALUES('key-live', 'live-key-hash', 'Mirror', '[]', '[\"public\"]', 1, NULL, NULL);",
+        )
+        .unwrap();
+        drop(db);
+        assert_eq!(revoke_access(&path).unwrap(), 4, "a session, two links and the live key");
+        let db = Connection::open(&path).unwrap();
+        for table in ["app_sessions", "account_challenges", "entry_links"] {
+            let rows: i64 = db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(rows, 0, "{table} still holds rows");
+        }
+        let live: i64 = db.query_row("SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(live, 0, "the key is still live");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Writes a Deployment's files into an archive from one store and unpacks
     /// it into another, on a blocking thread as the capture and the import do.
     async fn round_trip(source: Arc<dyn file_store::FileStore>, target: Arc<dyn file_store::FileStore>, root: &Path) {
@@ -1162,6 +1204,102 @@ mod tests {
         let usage = file_with(&root, "usage.sqlite", "CREATE TABLE u(v); CREATE VIEW seen AS SELECT v FROM u;", None);
         let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
         assert!(error.to_string().contains("usage component holds CREATE VIEW seen"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_password_hash_column_is_checked_whatever_its_case() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let (salt, hash) = ("00".repeat(16), "00".repeat(32));
+        for (table, column) in [("app_users", "PASSWORD_HASH"), ("APP_USERS", "PASSWORD_HASH"), ("APP_USERS", "password_hash")] {
+            let identity = root.join("upper.sqlite");
+            let db = Connection::open(&identity).unwrap();
+            db.execute_batch(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, email TEXT NOT NULL, {column} TEXT NOT NULL, created_at INTEGER NOT NULL)")).unwrap();
+            db.execute("INSERT INTO app_users (id, email, password_hash, created_at) VALUES ('u1', 'a@example.test', ?1, 0)", [format!("pbkdf2-sha256$4294967295${salt}${hash}")]).unwrap();
+            drop(db);
+            let error = check_components(&components(&root, database.clone(), Some(identity.clone()), None), &Default::default()).unwrap_err();
+            assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.", "{table} {column}");
+            std::fs::remove_file(identity).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A file whose FTS5 shadow table is damaged, so SQLite's integrity check, which
+    /// runs the module's own code on the shadow tables, reports a problem.
+    fn damaged_fts(root: &Path, name: &str, base: &str) -> PathBuf {
+        let path = file_with(root, name, &format!("{base}; CREATE VIRTUAL TABLE notes USING fts5(body); INSERT INTO notes VALUES('one two three');"), None);
+        let db = Connection::open(&path).unwrap();
+        db.execute("UPDATE notes_data SET block = x'0001' WHERE id > 10", []).unwrap();
+        let problem: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        assert_ne!(problem, "ok", "the fixture must fail the integrity check");
+        path
+    }
+
+    #[test]
+    fn a_generated_password_hash_column_is_scanned_too() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let (salt, hash) = ("00".repeat(16), "00".repeat(32));
+        let identity = file_with(
+            &root,
+            "generated.sqlite",
+            &format!(
+                "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT NOT NULL, created_at INTEGER NOT NULL,
+                   password_hash TEXT GENERATED ALWAYS AS ('pbkdf2-sha256$4294967295${salt}${hash}') VIRTUAL);
+                 INSERT INTO app_users (id, email, created_at) VALUES ('u1', 'a@example.test', 0);"
+            ),
+            None,
+        );
+        let error = check_components(&components(&root, database.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.");
+        // An accounts file with no such column at all has no hashes to read and still imports.
+        let bare = file_with(&root, "bare.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT)", None);
+        check_components(&components(&root, database, Some(bare), None), &Default::default()).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_virtual_table_is_refused_before_sqlite_runs_its_code_on_the_file() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = file_with(&root, "plain.sqlite", "CREATE TABLE t(v)", None);
+        let identity = damaged_fts(&root, "identity.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, password_hash TEXT)");
+        let usage = damaged_fts(&root, "usage.sqlite", "CREATE TABLE u(v)");
+        let database = damaged_fts(&root, "database.sqlite", "CREATE TABLE d(v)");
+        let sentence = |what: &str| format!("The {what} holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing.");
+        let error = check_components(&components(&root, database, None, None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), sentence("database"));
+        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), sentence("accounts component"));
+        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), sentence("usage component"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_component_is_refused_when_it_holds_a_virtual_table_and_a_kernel_file_still_imports() {
+        let root = std::env::temp_dir().join(format!("konae-package-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = file_with(&root, "database.sqlite", "CREATE TABLE t(v)", None);
+        let identity = root.join("identity.sqlite");
+        AuthService::open(&identity).unwrap();
+        let usage = file_with(&root, "usage.sqlite", "CREATE TABLE u(v)", None);
+        check_components(&components(&root, plain.clone(), Some(identity.clone()), Some(usage.clone())), &Default::default()).unwrap();
+
+        let fts = file_with(&root, "fts.sqlite", "CREATE TABLE t(v); CREATE VIRTUAL TABLE notes USING fts5(body)", None);
+        let error = check_components(&components(&root, fts, None, None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The database holds CREATE VIRTUAL TABLE notes, and Konae runs no virtual tables. Drop it before importing.");
+
+        Connection::open(&identity).unwrap().execute_batch("CREATE VIRTUAL TABLE places USING rtree(id, x0, x1)").unwrap();
+        let error = check_components(&components(&root, plain.clone(), Some(identity), None), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The accounts component holds CREATE VIRTUAL TABLE places, and Konae runs no virtual tables. Drop it before importing.");
+
+        Connection::open(&usage).unwrap().execute_batch("CREATE VIRTUAL TABLE seen USING fts5(body)").unwrap();
+        let error = check_components(&components(&root, plain, None, Some(usage)), &Default::default()).unwrap_err();
+        assert_eq!(error.to_string(), "The usage component holds CREATE VIRTUAL TABLE seen, and Konae runs no virtual tables. Drop it before importing.");
         let _ = std::fs::remove_dir_all(root);
     }
 }

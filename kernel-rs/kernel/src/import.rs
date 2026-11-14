@@ -396,7 +396,9 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
 /// Copies the live app's sessions and API keys into the incoming identity
 /// file, in place of whatever it carries. A session whose account the
 /// incoming file lacks is dropped. Open email links and entry links of the
-/// incoming file go, since they were issued elsewhere.
+/// incoming file go, since they were issued elsewhere. The incoming file's
+/// own key table goes too: the file ends with the Kernel's table, which holds
+/// only the live app's keys.
 fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
     let connection = Connection::open(incoming)?;
     connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON;")?;
@@ -404,44 +406,37 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
         connection.execute(&format!("DELETE FROM \"{table}\""), [])?;
     }
     super::invitations::forget_tokens(&connection)?;
-    if !live.exists() {
-        return Ok(());
-    }
     // The key table comes from the Kernel's own DDL, never from text in a file.
     // It is made before the attach, because `IF NOT EXISTS` also looks at the
     // attached database's tables.
-    let live_has_keys: bool = Connection::open(live)?.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE lower(type) = 'table' AND name = 'api_keys')",
-        [],
-        |row| row.get(0),
-    )?;
-    if live_has_keys {
-        super::http::keys_table(&connection)?;
+    connection.execute_batch("DROP TABLE IF EXISTS main.api_keys")?;
+    super::http::keys_table(&connection)?;
+    if !live.exists() {
+        return Ok(());
     }
+    let live_has_keys = super::table_exists(&Connection::open(live)?, "api_keys")?;
     connection.execute("ATTACH DATABASE ?1 AS live", [live.to_string_lossy().as_ref()])?;
-    // The schema goes in as the pragma's argument, because a `main.` prefix
-    // on the function still reads the attached database's table.
-    let columns = |schema: &str, table: &str| -> Result<Vec<String>> {
-        let mut statement = connection.prepare("SELECT name FROM pragma_table_info(?1, ?2)")?;
-        let names = statement.query_map([table, schema], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(names)
-    };
     connection.execute(
         "INSERT INTO main.app_sessions (token_hash, user_id, expires_at, entered_by)
          SELECT token_hash, user_id, expires_at, entered_by FROM live.app_sessions
          WHERE user_id IN (SELECT id FROM main.app_users WHERE state = 'active')",
         [],
     )?;
-    let live_keys = columns("live", "api_keys")?;
-    if !live_keys.is_empty() {
-        let incoming_keys = columns("main", "api_keys")?;
+    if live_has_keys {
+        // The schema goes in as the pragma's argument, because a `main.` prefix
+        // on the function still reads the attached database's table.
+        let live_keys = {
+            let mut statement = connection.prepare("SELECT name FROM pragma_table_info('api_keys', 'live')")?;
+            let names = statement.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            names
+        };
+        // Only the Kernel's own column names reach SQL, never a name from a file.
         let shared = super::http::API_KEY_COLUMNS
             .iter()
-            .filter(|name| live_keys.iter().any(|live| live == *name) && incoming_keys.iter().any(|incoming| incoming == *name))
+            .filter(|name| live_keys.iter().any(|live| live.eq_ignore_ascii_case(name)))
             .map(|name| format!("\"{name}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        connection.execute("DELETE FROM main.api_keys", [])?;
         connection.execute(&format!("INSERT INTO main.api_keys ({shared}) SELECT {shared} FROM live.api_keys"), [])?;
     }
     connection.execute("DETACH DATABASE live", [])?;
@@ -501,7 +496,8 @@ mod tests {
         let bo = live.signup("bo@example.test", "bo's password").unwrap();
         {
             let db = Connection::open(root.join("live.sqlite")).unwrap();
-            db.execute_batch("CREATE TABLE api_keys(id TEXT PRIMARY KEY, name TEXT, revoked_at INTEGER); INSERT INTO api_keys VALUES('k1','live key',NULL);").unwrap();
+            super::super::http::keys_table(&db).unwrap();
+            db.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
         }
         // The incoming file is an export of the same app: Ana is there, Bo is not, and its key arrived revoked.
         let incoming_path = root.join("incoming.sqlite");
@@ -573,6 +569,83 @@ mod tests {
         assert_eq!(columns, ["id", "token_hash", "name", "actions", "files", "created_at", "revoked_at", "revoked_reason"]);
         let name: String = incoming.query_row("SELECT name FROM api_keys WHERE id='k1'", [], |row| row.get(0)).unwrap();
         assert_eq!(name, "live key");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    const KEY_ROW: &str = "(id, token_hash, name, actions, files, created_at, revoked_at) VALUES";
+
+    fn keys_of(path: &Path) -> Vec<(String, Option<i64>)> {
+        Connection::open(path)
+            .unwrap()
+            .prepare("SELECT id, revoked_at FROM api_keys ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_key_table_in_the_incoming_file_never_survives_when_the_live_file_has_none() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        AuthService::open(root.join("live.sqlite")).unwrap();
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        let incoming = Connection::open(&incoming_path).unwrap();
+        super::super::http::keys_table(&incoming).unwrap();
+        incoming.execute_batch(&format!("INSERT INTO api_keys {KEY_ROW} ('uploader', 'uploader-hash', 'Uploader', '[]', '[]', 1, NULL);")).unwrap();
+        drop(incoming);
+        carry_access(&incoming_path, &root.join("live.sqlite")).unwrap();
+        assert_eq!(keys_of(&incoming_path), Vec::<(String, Option<i64>)>::new(), "the uploader's key does not reach the importer's app");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_revoked_at_column_spelled_in_capitals_does_not_bring_revoked_keys_back() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let live_path = root.join("live.sqlite");
+        AuthService::open(&live_path).unwrap();
+        let live = Connection::open(&live_path).unwrap();
+        super::super::http::keys_table(&live).unwrap();
+        live.execute_batch(&format!(
+            "INSERT INTO api_keys {KEY_ROW} ('k-live', 'h1', 'Live', '[]', '[]', 1, NULL), ('k-revoked', 'h2', 'Revoked', '[]', '[]', 1, 5);"
+        ))
+        .unwrap();
+        drop(live);
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        Connection::open(&incoming_path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE api_keys(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+                   actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, REVOKED_AT INTEGER, revoked_reason TEXT)",
+            )
+            .unwrap();
+        carry_access(&incoming_path, &live_path).unwrap();
+        assert_eq!(keys_of(&incoming_path), [("k-live".to_owned(), None), ("k-revoked".to_owned(), Some(5))]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_live_key_table_spelled_in_capitals_is_carried() {
+        let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let live_path = root.join("live.sqlite");
+        AuthService::open(&live_path).unwrap();
+        Connection::open(&live_path)
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE API_KEYS(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+                   actions TEXT NOT NULL, files TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER, revoked_reason TEXT);
+                 INSERT INTO api_keys {KEY_ROW} ('k1', 'h1', 'Live', '[]', '[]', 1, NULL);"
+            ))
+            .unwrap();
+        let incoming_path = root.join("incoming.sqlite");
+        AuthService::open(&incoming_path).unwrap();
+        carry_access(&incoming_path, &live_path).unwrap();
+        assert_eq!(keys_of(&incoming_path), [("k1".to_owned(), None)]);
         let _ = std::fs::remove_dir_all(root);
     }
 }
