@@ -1,4 +1,5 @@
 import type { DeploymentReceipt } from "../deployments/client";
+import { textFiles } from "./source-files";
 import { normalizeManifest } from "../deployments/manifest";
 import { architectureProjectId } from "./architecture";
 import { cloneStarter, repairDroppedPreviewUpload } from "./starter";
@@ -50,7 +51,7 @@ function draftSignature(project: MiniAppProject): string {
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
     return value;
   };
-  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, encodings: repaired.encodings, directories: [...(repaired.directories ?? [])].sort(), manifest: repaired.manifest }));
+  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: textFiles(repaired), directories: [...(repaired.directories ?? [])].sort(), manifest: repaired.manifest }));
 }
 
 const projectsKey = "konae:projects";
@@ -119,13 +120,24 @@ export function resetWorkspaceProject(project: MiniAppProject): MiniAppProject {
   };
 }
 
+/**
+ * What this browser keeps of a project: its text files. The installation
+ * holds a file that is not text, and the editor cannot change one, so no
+ * edit of it waits in the browser, and an image does not fill the storage.
+ */
+export function browserCopy(project: MiniAppProject): MiniAppProject {
+  if (!project.encodings) return project;
+  const { encodings: _, ...rest } = project;
+  return { ...rest, files: textFiles(project) };
+}
+
 export function persistWorkspace(
   projects: readonly MiniAppProject[],
   activeProjectId: string,
   deployments: DeploymentIndex,
   storage: Pick<Storage, "setItem"> = localStorage,
 ) {
-  storage.setItem(projectsKey, JSON.stringify(projects));
+  storage.setItem(projectsKey, JSON.stringify(projects.map(browserCopy)));
   storage.setItem(activeProjectKey, activeProjectId);
   storage.setItem(deploymentsKey, JSON.stringify(
     Object.fromEntries(Object.entries(deployments).map(([projectId, deployment]) => [projectId, withoutAccessCode(deployment)])),

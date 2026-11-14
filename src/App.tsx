@@ -83,7 +83,7 @@ import { isEncoded, keptEncodings, sourceBytes, textFiles } from "./lib/source-f
 import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, refusedSpot } from "./components/action-readiness";
-import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
+import { browserCopy, createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
 import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
@@ -255,7 +255,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const flush = () => {
       const current = workspaceRef.current;
       const items = current.projects.map((item) => item.id === current.project.id ? current.project : item);
-      try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...items])); }
+      try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...items].map(browserCopy))); }
       catch { /* The regular save reports storage failures in the editor. */ }
     };
     window.addEventListener("pagehide", flush);
@@ -397,7 +397,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const timeout = window.setTimeout(() => {
       try {
         persistWorkspace(projects, project.id, deployments, workspaceStorage);
-        workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...projects]));
+        workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...projects].map(browserCopy)));
       } catch (error) {
         // A full or unavailable localStorage must say so. Reporting "Saving"
         // forever, or worse "Saved locally", would hide that the work of the

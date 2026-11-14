@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { architectureProjectId } from "./architecture";
 import { cloneStarter } from "./starter";
-import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./workspace";
+import { browserCopy, createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./workspace";
 
 function memoryStorage(seed: Record<string, string> = {}) {
   const values = new Map(Object.entries(seed));
@@ -58,6 +58,19 @@ describe("workspace project registry", () => {
     expect(recoveryDrafts(seeded, [])).toEqual([]);
     const edited = { ...seeded[0], files: { ...seeded[0].files, "app.js": "an owner edit" } };
     expect(recoveryDrafts([edited], [])).toEqual([edited]);
+  });
+
+  test("the browser keeps the text files of a project, and that copy is no draft of the saved project", () => {
+    const saved = { ...cloneStarter(), id: "app_logo", files: { ...cloneStarter().files, "public/logo.png": "iVBORw0KGgo=" }, encodings: { "public/logo.png": "base64" as const } };
+    const storage = memoryStorage();
+    persistWorkspace([saved], saved.id, {}, storage);
+    const [kept] = JSON.parse(storage.getItem("konae:projects")!);
+    expect(kept.files["public/logo.png"]).toBeUndefined();
+    expect(kept.encodings).toBeUndefined();
+    expect(kept.files["app.js"]).toBe(saved.files["app.js"]);
+    expect(recoveryDrafts([kept], [saved])).toEqual([]);
+    const plain = cloneStarter();
+    expect(browserCopy(plain)).toBe(plain);
   });
 
   test("migrates the original single-project draft and deployment", () => {
