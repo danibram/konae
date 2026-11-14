@@ -2303,9 +2303,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// A publish from an app folder runs actions the editor never saved, and
-    /// project_inspect says so until the editor releases its own sources.
-
     #[tokio::test]
     async fn one_owner_cannot_give_two_apps_the_same_route_secret() {
         let root = std::env::temp_dir().join(format!("konae-secret-reuse-{}", Uuid::new_v4()));

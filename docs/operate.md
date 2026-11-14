@@ -147,7 +147,7 @@ The editor, the `konae` CLI, the test configurations and an exported folder read
 | `KONAE_KERNEL_URL` | `dev:local`, `vite.config.ts` | `http://127.0.0.1:<kernel port>` under `dev:local`, `http://127.0.0.1:8787` for plain `bun run dev` | The Konae the editor proxies `/mcp`, `/_konae`, `/oauth` and `/.well-known` to. |
 | `KONAE_MCP_TOKEN` | `konae` CLI | unset | Bearer token for every command that needs a credential. When unset, the CLI reads `<folder>/.konae/credentials.json`. |
 | `KONAE_KERNEL_BIN` | `konae dev`, `sql`, `events` | unset | A `kernel` binary built from this checkout. `dev` runs it instead of compiling one with `cargo`. |
-| `KONAE_URL` | `konae login`, `konae domain`, `konae hostname` | `http://localhost:4173` | Konae installation to talk to. `--url` overrides it. |
+| `KONAE_URL` | `konae login` | `http://localhost:4173` | Installation that `login` signs in to, and saves in `.konae/credentials.json`. `--url` overrides it. Every other remote command talks to `--url` or the installation that file saved. |
 | `KONAE_EMAIL`, `KONAE_PASSWORD` | `konae login` | unset | Owner credentials exchanged for a 24-hour MCP token. `login --browser` reads neither and signs in through the browser instead. |
 | `KONAE_SETUP_KEY` | `konae login` | unset | The setup key, needed only to create an installation's first owner. |
 | `KONAE_INVITATION_CODE` | `konae login` | unset | Invitation code that creates the owner account when it does not exist yet. Under required verification, add `--verify-from <data folder>/mailbox.jsonl` on a local Konae to answer the emailed link in the same run. |
