@@ -150,16 +150,18 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```json
 {
   "result": {
-    "browser": "When nobody has the owner's password, run bun run konae -- login --browser --dir <folder> --url <Kernel URL>, with the same flags. It prints an address and opens it; hand the address to the owner, who opens it in a browser on the same machine, signs in and allows access within 5 minutes. It saves the same 24-hour token in the same file, one hour under Clerk. No password or token passes through the terminal or the agent.",
+    "browser": "When nobody has the owner's password, run bun run konae -- login --browser --dir <folder> --url <installation URL>, with the same flags. It prints an address and opens it; hand the address to the owner, who opens it in a browser on the same machine, signs in and allows access within 5 minutes. It saves the same 24-hour token in the same file, one hour under Clerk. No password or token passes through the terminal or the agent.",
     "flags": {
       "--export-data": "adds export_data",
       "--manage-users": "adds manage_users"
     },
-    "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
-    "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
+    "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish, and the installation's address, in <folder>/.konae/credentials.json, which publish, pull, push, secret, domain, hostname, tool, export --with-data, and sql and events with --prod read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+    "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. A client that redirects to http://127.0.0.1, localhost or [::1] gets a 24-hour token and may also ask for export_data; any other client gets a one-hour token without export_data. Under Clerk every token lasts one hour. There is no refresh token.",
     "permissions": {
       "export_data": "project_export and reading its downloads",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+      "none": "platform_describe, platform_guide, session_inspect and mail_status",
+      "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
       "read": "projects_list, project_inspect, project_sources_read, signup_policy_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_read, signals_read, usage_summary, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
@@ -201,12 +203,12 @@ location: /_konae/owner/login?returnTo=%2Foauth%2Fauthorize%3F<the same paramete
 ```
 
 ```text
-Allow 127.0.0.1:9999, an agent on this computer, to use your Konae projects?
+Allow agent.example, a server on the internet, to use your Konae projects?
 Allowing sends it an access token. Only continue if you started this sign-in from an agent you trust.
 Client: Walkthrough agent Name not verified
 Clients name themselves when they register, so Konae cannot confirm this one.
-Token goes to: 127.0.0.1:9999
-Usually an agent in your terminal or your code editor.
+Token goes to: agent.example
+Allow only if you recognise this address.
 It may: Read: See your projects, their files and their data
 Edit: Change project files and data
 Publish: Publish and roll back your apps
@@ -600,7 +602,7 @@ bun run konae -- publish --dir /tmp/orders
 ```
 
 ```text
-http://orders.localhost:4173
+This first release names the app http://orders.localhost:4173, and every later release keeps that name. To use another name under the same suffix, run konae hostname --deployment <project id> --set <name> before you register Google sign-in or share links.
 ```
 
 ```json

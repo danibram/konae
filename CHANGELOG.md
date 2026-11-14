@@ -6,6 +6,39 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- `konae login --browser` signs the owner in through the browser with OAuth and PKCE on a loopback port and saves a 24-hour credential without a password. OAuth clients that redirect to `127.0.0.1` or `localhost` get 24-hour tokens and may ask for `export_data`, and the consent page says how long the token lasts.
+- `konae secret set <name> [--use route|call|google]` reads the value from stdin and reads the name back. `konae secret list` prints names and uses, never values.
+- `konae push` replaces the published app's data with the folder's `data/` through `project_import`. It checks the installation's file limits before sending anything, runs the import in maintenance after a backup, and refuses without `--yes`.
+- `release_plan` and `konae publish` name the generated hostname before a first release fixes it. `konae hostname` shows it or moves it, and the old name answers with a 308 to the new one.
+
+### Changed
+
+- Owner transfers over MCP move in 4 MiB blocks, so a release takes a few `transfer_write` calls instead of dozens. The proxy in front of `/mcp` must accept bodies of about 5.4 MiB.
+- A release build minifies, from the `build.mjs` new app folders get, from `konae build`'s own bundler and from the editor's Deploy alike; `konae dev` and the editor preview build readable. The new `build.mjs` also type-checks `app/src/` against `actions.d.ts`. `src/main.tsx` is an entry in every build.
+- With `KONAE_MAIL_TRANSPORT=development`, invitations answer `delivery: "local-mailbox"` and their `acceptUrl` once. A Kernel serving over https with that transport warns at startup.
+- The `rules` topic no longer asks for `transfer_status` after each block or for a second `release_plan`.
+
+### Fixed
+
+- The editor's sentence for an action says it reads or changes only the caller's own rows only when the SQL proves it. A named parameter (`:name`, `@name`, `$name`), or a filter on a name the SELECT list defines, made it claim that for a query that reads other people's rows.
+- Exporting a published app, from the editor or from Projects, no longer builds the editor's draft, so a draft that does not build no longer keeps the app's accounts and rows from leaving.
+- After a first deploy, inviting yourself no longer says the app opens when the Signup Policy refuses your address. The receipt names the rule, and on a development transport it hands over the link.
+- The owner MCP says when a token expired and how to get a new one.
+- A pending sign-in and the signup hint no longer mention an email the installation never sent, and a pending sign-in names a waiting invitation.
+- The build and the Validation Gate refuse an app whose pages are all whole documents that load no script, since its entry would never run.
+- A first publish holds its generated name against a concurrent move and never takes the installation's own host or the path host. A call from another app to a moved app's old name still reaches it.
+- Saving a project's manifest takes up to 100 actions, as the Validation Gate and the Kernel do.
+- `KONAE_URL` is documented as read by `konae login` only. Every other remote command talks to `--url` or the installation `login` saved.
+
+### Security
+
+- An import refuses virtual tables and a password hash column hidden under another case or as a generated column, and accepts a table row only when it reads as `CREATE TABLE` with a b-tree.
+- An import replaces the incoming API key table with the Kernel's own, and revoking access matches table and column names in any case.
+- A restore signs out sessions held in tables spelled in capitals.
+- With `KONAE_COPY_SECRET` set, a restore from S3 without `--copy` takes the newest copy that is encrypted and signed with the secret, prints each copy it skips and why, and stops after 50 skipped copies or at the first copy it cannot read, so a copy planted in the bucket neither restores nor hides the genuine ones. A manifest over 4 MiB is refused.
+
 ## [0.7.0] - 2026-11-14
 
 An installation that sets `KONAE_ADMIN_KEY` or a `KONAE_MAIL_LIMIT_*CREATOR*` name refuses to start on this version until it uses the new name with the same value.
