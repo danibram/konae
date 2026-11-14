@@ -72,7 +72,7 @@ export function AppImport({ deploymentId, project, visibility, onImported, onSig
       <span className="import-file-name">{folder?.name ?? "No file selected"}</span>
     </div>
     {folder && <>
-      <p>{folder.name}: {folder.read.settings.name}, {Object.keys(folder.read.sources).length} source files{hasData ? ", with data" : ", without data"}.</p>
+      <p>{folder.name}: {folder.read.settings.name}, {Object.keys(folder.read.sources.files).length} source files{hasData ? ", with data" : ", without data"}.</p>
       <fieldset className="import-choices" disabled={busy}>
         <legend>Replace</legend>
         {choices.map((choice) => <Radio key={choice.value} name="import-replace" value={choice.value} checked={replace === choice.value} disabled={choice.value !== "sources" && !hasData}

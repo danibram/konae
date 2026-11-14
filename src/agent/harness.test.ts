@@ -392,6 +392,18 @@ describe("konae agent", () => {
     expect(session.harness.requests[session.harness.requests.length - 1].messageCount).toBe(1);
   });
 
+  test("a file that is not text stays out of the agent's copy, and the first message names it", async () => {
+    const { agent, harness } = agentFor([call(cssEdit), say("Hecho.")]);
+    const logo = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAAC";
+    agent.retarget({ ...starterProject, files: { ...starterProject.files, "public/logo.png": logo }, encodings: { "public/logo.png": "base64" } });
+
+    await agent.send("ponlo azul");
+    const seeded = harness.requests[0].lastMessage;
+    expect(seeded).toContain("Files that are not text, which you cannot read or change and the build publishes as they are: /workspace/public/logo.png.");
+    expect(seeded).not.toContain(logo);
+    expect(Object.keys(agent.proposal()!.files)).not.toContain("public/logo.png");
+  });
+
   test("a file changed outside the agent re-seeds the capsule instead of trusting the transcript", async () => {
     const { agent, harness } = agentFor([call(cssEdit), say("Hecho."), say("Y esto.")]);
 

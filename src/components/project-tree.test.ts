@@ -22,6 +22,13 @@ describe("project tree", () => {
     expect(next.directories).toContain("lib/text");
   });
 
+  test("a file that is not text keeps its encoding when it or its folder moves", () => {
+    const withLogo = { files: { ...tree.files, "public/logo.png": "iVBORw0KGgo=" }, directories: [...tree.directories, "public"], encodings: { "public/logo.png": "base64" as const } };
+    expect(renamePath(withLogo, "public", "assets").encodings).toEqual({ "assets/logo.png": "base64" });
+    expect(renamePath(withLogo, "public/logo.png", "img/logo.png").encodings).toEqual({ "img/logo.png": "base64" });
+    expect(renamePath(withLogo, "src/label.js", "lib/label.js").encodings).toEqual({ "public/logo.png": "base64" });
+  });
+
   test("renames a folder with everything inside it", () => {
     const next = renamePath(tree, "src", "source");
     expect(Object.keys(next.files).sort()).toEqual(["app.js", "source/features/tasks.ts", "source/label.js"]);

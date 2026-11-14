@@ -29,6 +29,13 @@ describe("project file tree", () => {
     });
   });
 
+  test("a delete takes the encoding of a file that is not text with it", () => {
+    const tree = { files: { "index.html": "home", "public/logo.png": "iVBORw0KGgo=" }, directories: ["public"], encodings: { "public/logo.png": "base64" as const } };
+    expect(removePath(tree, "public").encodings).toBeUndefined();
+    expect(removePath(tree, "index.html").encodings).toEqual({ "public/logo.png": "base64" });
+    expect(createFile(tree, "src/a.ts").encodings).toEqual({ "public/logo.png": "base64" });
+  });
+
   test("refuses to create a reserved project file or anything inside one", () => {
     const tree = { files: { "app.js": "app" }, directories: [] };
     expect(() => createFile(tree, "schema.sql")).toThrow("schema.sql is a reserved project file. Choose another name.");

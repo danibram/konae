@@ -3,6 +3,7 @@ import staticArtifactSource from "./static-artifact.js?raw";
 import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
 import { createTar, readTar } from "./tar";
 import type { MiniAppProject } from "./types";
+import { sourceContents } from "./source-files";
 import type { PackageComponentName } from "./portable-package";
 import {
   DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, generatedFiles,
@@ -46,7 +47,7 @@ export async function createProjectExport(
     };
     entries = [
       { path: SETTINGS_FILE, contents: `${JSON.stringify(settings, null, 2)}\n` },
-      ...Object.entries(project.files).map(([file, contents]) => ({ path: `${SOURCES_FOLDER}/${file}`, contents })),
+      ...Object.keys(project.files).map((file) => ({ path: `${SOURCES_FOLDER}/${file}`, contents: sourceContents(project, file) })),
       ...Object.entries(artifact.files).map(([file, contents]) => ({
         path: `${DIST_FOLDER}/${file}`,
         contents: artifact.encodings?.[file] === "base64" ? decodeBase64(contents) : contents,

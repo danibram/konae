@@ -50,7 +50,7 @@ function draftSignature(project: MiniAppProject): string {
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
     return value;
   };
-  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, directories: [...(repaired.directories ?? [])].sort(), manifest: repaired.manifest }));
+  return JSON.stringify(canonical({ name: repaired.name, slug: repaired.slug, files: repaired.files, encodings: repaired.encodings, directories: [...(repaired.directories ?? [])].sort(), manifest: repaired.manifest }));
 }
 
 const projectsKey = "konae:projects";

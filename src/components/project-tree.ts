@@ -1,3 +1,4 @@
+import { keptEncodings } from "../lib/source-files";
 import { directoriesForFiles, existingDirectory, existingFile, fileAncestor, invalidPathMessage, normalizeProjectPath, protectedProjectPaths, requireUnreservedPath, type ProjectTree } from "../lib/project-files";
 
 export type TreeNode =
@@ -116,5 +117,5 @@ export function renamePath(tree: ProjectTree, fromInput: string, toInput: string
     ...directoriesForFiles(files),
     ...(isDirectory ? [to, ...ancestorsOf(to)] : ancestorsOf(to)),
   ]);
-  return { files, directories: [...directories].sort() };
+  return { files, directories: [...directories].sort(), encodings: keptEncodings(tree.encodings, files, { rename: moved }) };
 }

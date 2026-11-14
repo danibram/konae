@@ -67,7 +67,7 @@ describe("what the prompt says a Deployment serves", () => {
     expect(prompt).toContain("never create runtime.js or public/runtime.js");
     expect(runtimeFile).toBe("runtime.js");
     expect(prompt).toContain("about.html references /team.jpg, but the Capsule holds no team.jpg.");
-    expect(prompt).toContain("This editor holds text files only.");
+    expect(prompt).toContain("You write text files only, so an image you add is SVG.");
   });
 
   test("shows guard, schedule, signal and http in the actions.json format, and that a signal action has no statement", () => {

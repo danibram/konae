@@ -3,14 +3,15 @@
 // export's manifest and parts for the data. It is the inverse of export-project.ts and
 // `dataEntries` in app-folder.ts.
 import { checksum, encodeBase64 } from "../mcp/client";
+import { sourceFilesFrom, type SourceFiles } from "./source-files";
 import { DATA_FOLDER, DIST_FOLDER, SETTINGS_FILE, SOURCES_FOLDER, dataPaths, type AppSettings } from "./app-folder";
 import { packageFormat, packageVersion, type PackageComponentName, type PackageContent, type PackageManifest } from "./portable-package";
 import { createTar, readTar } from "./tar";
 
 export type ImportedFolder = {
   settings: AppSettings;
-  /** The text files of `app/`, by path inside it. */
-  sources: Record<string, string>;
+  /** The files of `app/`, by path inside it: text, or base64 that `encodings` names. */
+  sources: SourceFiles;
   /** The files of `dist/`, by path inside it. */
   dist: Record<string, Uint8Array>;
   /** Each data component as the bytes a package upload carries. */
@@ -28,10 +29,7 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
   const inside = new Map(entries.filter((entry) => entry.path.startsWith(prefix)).map((entry) => [entry.path.slice(prefix.length), entry.contents]));
   const settings = JSON.parse(text.decode(inside.get(SETTINGS_FILE)!)) as AppSettings;
   const under = (folder: string) => [...inside].filter(([path]) => path.startsWith(`${folder}/`)).map(([path, contents]) => [path.slice(folder.length + 1), contents] as const);
-  const sources: Record<string, string> = {};
-  for (const [path, contents] of under(SOURCES_FOLDER)) {
-    try { sources[path] = text.decode(contents); } catch { throw new Error(`${SOURCES_FOLDER}/${path} is not text. The sources of an app are text files.`); }
-  }
+  const sources = sourceFilesFrom(under(SOURCES_FOLDER));
   const dist = Object.fromEntries(under(DIST_FOLDER));
   const data: ImportedFolder["data"] = {};
   for (const name of ["database", "identity", "usage"] as const) {
@@ -61,7 +59,7 @@ export function sourcesPayload(folder: ImportedFolder, project: { id: string; na
     try { files[path] = text.decode(bytes); } catch { files[path] = encodeBase64(bytes); encodings[path] = "base64"; }
   }
   return {
-    project: { ...project, files: folder.sources, manifest: { ...folder.settings.manifest, visibility } },
+    project: { ...project, ...folder.sources, manifest: { ...folder.settings.manifest, visibility } },
     visibility,
     artifact: { version: 1, entrypoint: "index.html", files, ...(Object.keys(encodings).length ? { encodings } : {}) },
   };

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as esbuild from "esbuild";
 import type { MiniAppProject } from "../lib/types";
+import { decodeBase64, encodeBase64 } from "../mcp/client";
 
 // esbuild-wasm starts only in a browser; the editor's plugins run the same on native esbuild.
 mock.module("esbuild-wasm", () => ({ initialize: async () => {}, build: esbuild.build }));
-const { compileProjectInBrowser, packageUrl } = await import("./browser-build");
+const { buildProjectInBrowser, compileProjectInBrowser, packageUrl } = await import("./browser-build");
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -81,5 +82,14 @@ describe("packages in the editor's build", () => {
   test("an app file cannot import a URL", async () => {
     serve({});
     await expect(compileProjectInBrowser(project({ "app.js": 'import "https://esm.sh/x@1.0.0";' }))).rejects.toThrow("Import a package by its name and list it in package.json.");
+  });
+});
+
+describe("a file that is not text in the editor's build", () => {
+  test("a binary public file is published as its bytes, and esbuild never reads it", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
+    const built = await buildProjectInBrowser({ ...project({ "app.js": "document.body.dataset.ready = '1';", "public/logo.png": encodeBase64(png) }), encodings: { "public/logo.png": "base64" } });
+    expect(built.encodings).toEqual({ "logo.png": "base64" });
+    expect(decodeBase64(built.files["logo.png"]!)).toEqual(png);
   });
 });

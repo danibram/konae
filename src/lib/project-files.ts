@@ -1,6 +1,9 @@
+import { keptEncodings } from "./source-files";
 export type ProjectTree = {
   files: Record<string, string>;
   directories: string[];
+  /** The files that are not text, as src/lib/source-files.ts describes. A move or a delete takes them along. */
+  encodings?: Record<string, "base64">;
 };
 
 /**
@@ -83,7 +86,7 @@ export function createDirectory(tree: ProjectTree, input: string): ProjectTree {
   requireUnreservedPath(path);
   requireNoFile(tree.files, path);
   requireNoFileAncestor(tree.files, path);
-  return { files: { ...tree.files }, directories: mergeDirectories(tree.directories, path) };
+  return { files: { ...tree.files }, directories: mergeDirectories(tree.directories, path), encodings: tree.encodings };
 }
 
 export function createFile(tree: ProjectTree, input: string, content = ""): ProjectTree {
@@ -97,15 +100,18 @@ export function createFile(tree: ProjectTree, input: string, content = ""): Proj
   return {
     files: { ...tree.files, [path]: content },
     directories: parent ? mergeDirectories(tree.directories, parent) : [...tree.directories].sort(),
+    encodings: tree.encodings,
   };
 }
 
 export function removePath(tree: ProjectTree, input: string): ProjectTree {
   const path = requirePath(input);
   const prefix = `${path}/`;
+  const files = Object.fromEntries(Object.entries(tree.files).filter(([name]) => name !== path && !name.startsWith(prefix)));
   return {
-    files: Object.fromEntries(Object.entries(tree.files).filter(([name]) => name !== path && !name.startsWith(prefix))),
+    files,
     directories: tree.directories.filter((name) => name !== path && !name.startsWith(prefix)).sort(),
+    encodings: keptEncodings(tree.encodings, files),
   };
 }
 

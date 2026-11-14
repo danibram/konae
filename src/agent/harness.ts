@@ -2,6 +2,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, type Models } from "@earendil-works/pi-ai";
 import type { MiniAppProject, ProjectFile } from "../lib/types";
+import { isEncoded, textFiles } from "../lib/source-files";
 import { capsuleFileFor, createCapsuleWorkspace } from "./capsule-env";
 import type {
   AgentKeyStore,
@@ -36,7 +37,7 @@ export type KonaeAgentHandle = KonaeAgent & {
   /** Throw away the scratch copy's edits and the transcript. */
   discard(): void;
   /** Re-seed the workspace from the Project after a proposal was applied. */
-  reseed(files: CapsuleFiles): void;
+  reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void;
   /**
    * Point the session at a Project: a different one starts a new conversation,
    * the same one refreshes the system prompt and re-seeds files changed outside
@@ -116,8 +117,9 @@ class KonaeAgentSession implements KonaeAgentHandle {
     this.config = sessionConfig;
     this.thinkingLevel = options.thinkingLevel ?? "low";
     this.riskyThinkingLevel = options.riskyThinkingLevel ?? "medium";
-    this.workspace = new WorkspaceHolder(project.files);
-    this.seedFiles = { ...project.files };
+    // The model reads and writes text. A file that is not text stays out of its copy and keeps its bytes.
+    this.workspace = new WorkspaceHolder(textFiles(project));
+    this.seedFiles = { ...textFiles(project) };
     this.validator = options.validator ?? createCapsuleValidator(options.loadSql);
     this.unsubscribes.push(this.workspace.onMutation((mutation) => this.onMutation(mutation)));
 
@@ -207,42 +209,44 @@ class KonaeAgentSession implements KonaeAgentHandle {
   discard() {
     this.agent.abort();
     this.runToken += 1;
-    this.replaceWorkspace(this.project.files);
+    this.replaceWorkspace(textFiles(this.project));
     this.seeded = false;
     this.modelView = null;
     this.risky = false;
     this.clearTranscriptWhenIdle();
   }
 
-  reseed(files: CapsuleFiles) {
+  reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]) {
     // The Project moved: the session's copy of it has to move too, or a later
     // discard restores the workspace from the Capsule as it was before the Apply
     // and quietly proposes the old files back over the applied ones.
-    this.project = { ...this.project, files };
-    this.replaceWorkspace(files);
-    this.forgetSeedIfUnseen(files);
+    this.project = { ...this.project, files, encodings };
+    const text = textFiles(this.project);
+    this.replaceWorkspace(text);
+    this.forgetSeedIfUnseen(text);
   }
 
   retarget(project: MiniAppProject) {
     const switched = project.id !== this.project.id;
     this.project = project;
     this.agent.state.systemPrompt = systemPromptFor(project, this.config);
+    const text = textFiles(project);
     if (switched) {
       // Another Capsule entirely: nothing of this conversation may leak into it.
       this.agent.abort();
       this.runToken += 1;
-      this.replaceWorkspace(project.files);
+      this.replaceWorkspace(text);
       this.seeded = false;
       this.modelView = null;
       this.risky = false;
       this.clearTranscriptWhenIdle();
       return;
     }
-    if (sameFiles(project.files, this.seedFiles)) return;
+    if (sameFiles(text, this.seedFiles)) return;
     // The Project moved under the workspace (an Apply, a hand edit, a reset).
     const dropped = this.workspace.changedFiles().length > 0;
-    this.replaceWorkspace(project.files);
-    this.forgetSeedIfUnseen(project.files);
+    this.replaceWorkspace(text);
+    this.forgetSeedIfUnseen(text);
     if (dropped) {
       this.report("The Capsule changed outside the agent, so the pending proposal was dropped. Ask again to redo it against the current files.");
     }
@@ -320,7 +324,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
     // Set before awaiting the run: a discard during it must be able to reset this.
     this.seeded = true;
     this.modelView = files;
-    return buildInitialUserMessage({ ...this.project, files }, text);
+    return buildInitialUserMessage({ ...this.project, files }, text, Object.keys(this.project.files).filter((path) => isEncoded(this.project, path)));
   }
 
   private escalated(): ThinkingLevel {

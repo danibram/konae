@@ -2,6 +2,7 @@ import * as esbuild from "esbuild-wasm";
 import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
 import { normalizeProjectPath } from "../lib/project-files";
+import { sourceContents, textFiles } from "../lib/source-files";
 import { hostedRuntime, type BuildArtifact } from "./artifact";
 import { appEntry, assembleStaticArtifact } from "../lib/static-artifact.js";
 
@@ -9,17 +10,17 @@ let initialized: Promise<void> | undefined;
 
 /**
  * The editor's door to the static publishing contract in
- * src/lib/static-artifact.js, the same rules `konae build` runs. A Managed
- * Project holds text files only, so a page that references an image the
- * project does not hold is refused here as it would be by the CLI.
+ * src/lib/static-artifact.js, the same rules `konae build` runs. A file that
+ * is not text, such as an image under public/, reaches it as bytes, and
+ * esbuild sees only the text files.
  */
 export async function buildProjectInBrowser(project: MiniAppProject): Promise<BuildArtifact> {
   return assembleStaticArtifact({
     paths: Object.keys(project.files),
-    read: async (path) => project.files[path],
+    read: async (path) => sourceContents(project, path),
     // A Deploy minifies with NODE_ENV production, as konae build does; the preview stays readable, as konae dev does.
     compile: () => compileProjectInBrowser(project, { release: true }),
-    bundle: async (path) => bundleInBrowser(project.files, path, true),
+    bundle: async (path) => bundleInBrowser(textFiles(project), path, true),
     runtime: hostedRuntime,
     routing: project.manifest.routing,
   });
@@ -27,7 +28,7 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
 
 export async function compileProjectInBrowser(project: MiniAppProject, options: { release?: boolean } = {}): Promise<{ body: string; styles: string; script: string }> {
   const entrypoint = appEntry(Object.keys(project.files)) ?? "app.js";
-  const { script, styles: importedCss } = await bundleInBrowser(project.files, entrypoint, options.release ?? false);
+  const { script, styles: importedCss } = await bundleInBrowser(textFiles(project), entrypoint, options.release ?? false);
   return {
     body: project.files["index.html"] ?? "<main id=app></main>",
     styles: [project.files["styles.css"] ?? "", importedCss].filter(Boolean).join("\n"),

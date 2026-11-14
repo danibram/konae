@@ -50,7 +50,7 @@ The publish build, the same one the CLI and the export run, decides what a Deplo
 - /workspace/404.html is what a Deployment answers, with status 404, for a path it does not hold. Without one the Kernel shows its own small page. So /tasks/3 has no page unless a file publishes there: link between real pages, or keep in-app views on one page with a query string or a #fragment.
 - Every file under /workspace/public/ is published as it is, without the public/ prefix: public/robots.txt answers at /robots.txt. Put a file there when no page names it, or when a script fetches it.
 - Any other file ships only when a page or a stylesheet a page loads names it: an img src, a link href, a CSS url(). A name the Capsule does not hold fails the publish, for example "about.html references /team.jpg, but the Capsule holds no team.jpg." The Validation Gate does not check this, so check every path you write. Write links and asset paths relative, such as about.html or ./team.jpg, because an app may answer under /p/<name>/ and a root-relative path such as /about leaves that prefix.
-- This editor holds text files only. An image you add is SVG. A photo or a font goes in through the konae CLI, or the app stores it at runtime with miniapp.files.upload.
+- You write text files only, so an image you add is SVG. A file the Capsule holds that is not text, such as a PNG, is named in the first message. Link to it by its path and leave it as it is. A photo or a font goes in through the konae CLI, or the app stores it at runtime with miniapp.files.upload.
 - runtime.js is the name the build gives the SDK, so never create runtime.js or public/runtime.js. schema.sql and actions.json never ship.
 
 # The data contract
@@ -163,14 +163,15 @@ A project is born as one of seven templates, each a Capsule that already passes 
  * The whole Capsule seeded into the first user message so a typical edit costs
  * one model turn instead of a read-heavy loop.
  */
-export function buildInitialUserMessage(project: MiniAppProject, userPrompt: string): string {
+export function buildInitialUserMessage(project: MiniAppProject, userPrompt: string, kept: readonly ProjectFile[] = []): string {
   const files = Object.keys(project.files).sort().map((file) => {
     const content = project.files[file] ?? "";
     const fence = longestFence(content);
     return `${capsulePathFor(file)}\n${fence}${fenceLanguage(file)}\n${content}\n${fence}`;
   });
+  const others = kept.length ? `\n\nFiles that are not text, which you cannot read or change and the build publishes as they are: ${[...kept].sort().map(capsulePathFor).join(", ")}.` : "";
 
-  return `Capsule: ${project.name}\n\n${files.join("\n\n")}\n\nThe owner asks:\n\n${userPrompt.trim()}`;
+  return `Capsule: ${project.name}\n\n${files.join("\n\n")}${others}\n\nThe owner asks:\n\n${userPrompt.trim()}`;
 }
 
 function fenceLanguage(file: ProjectFile): string {

@@ -79,6 +79,8 @@ import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
+import { isEncoded, keptEncodings, sourceBytes, textFiles } from "./lib/source-files";
+import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, refusedSpot } from "./components/action-readiness";
 import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
@@ -377,7 +379,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const liveRows = useLiveRowCount(deployedDatabase, shownSection === "preview" || shownSection === "code");
   const actionContract = useActionContract(project.files["actions.json"], project.files["schema.sql"], project);
   const contractOpen = activeFile === ACTION_CONTRACT_MARKDOWN;
-  const activeSource = contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : project.files[activeFile] ?? "";
+  const activeEncoded = !contractOpen && isEncoded(project, activeFile);
+  const activeSource = contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : activeEncoded ? "" : project.files[activeFile] ?? "";
   const activeMeta = fileMetaFor(activeFile);
   const lines = activeSource.split("\n").length;
 
@@ -489,11 +492,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const updateFile = (value: string) => {
     if (contractOpen) return;
-    setProject((current) => ({
+    setProject((current) => isEncoded(current, activeFile) ? current : {
       ...current,
       updatedAt: Date.now(),
       files: { ...current.files, [activeFile]: value },
-    }));
+    });
   };
 
   // Tree edits are computed before React sees them, because a throw inside a
@@ -506,7 +509,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     }
     try {
       const current = projectRef.current;
-      const tree = { files: current.files, directories: current.directories };
+      const tree = { files: current.files, directories: current.directories, encodings: current.encodings };
       const next = newEntry === "file" ? createFile(tree, newEntryPath) : createDirectory(tree, newEntryPath);
       const path = normalizeProjectPath(newEntryPath) ?? "";
       setProject({ ...current, ...next, updatedAt: Date.now() });
@@ -540,7 +543,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     try {
       const current = projectRef.current;
       const from = selectedPath;
-      const next = renamePath({ files: current.files, directories: current.directories }, from, renameValue);
+      const next = renamePath({ files: current.files, directories: current.directories, encodings: current.encodings }, from, renameValue);
       const to = normalizeProjectPath(renameValue) ?? from;
       const moved = (path: string) => path === from ? to : path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
       setProject({ ...current, ...next, updatedAt: Date.now() });
@@ -558,7 +561,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const current = projectRef.current;
     setProject({
       ...current,
-      ...removePath({ files: current.files, directories: current.directories }, path),
+      ...removePath({ files: current.files, directories: current.directories, encodings: current.encodings }, path),
       updatedAt: Date.now(),
     });
     if (activeFile === path || activeFile.startsWith(`${path}/`)) setActiveFile("app.js");
@@ -750,17 +753,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     // The Validation Gate is structural here, not just a disabled button in the
     // panel: the merge refuses a proposal whose untouched files have moved since
     // the gate saw them, because that combination was never validated.
-    const merge = mergeProposal(project.files, proposal);
+    // The agent saw the text files only, so the merge checks those and the files that are not text stay as they are.
+    const merge = mergeProposal(textFiles(project), proposal);
     if (!merge.ok) return false;
+    const files = { ...project.files, ...merge.files };
     const next: MiniAppProject = {
       ...project,
-      files: merge.files,
-      directories: [...new Set([...project.directories, ...directoriesForFiles(merge.files)])].sort(),
+      files,
+      encodings: keptEncodings(project.encodings, files, { replaced: merge.changedFiles }),
+      directories: [...new Set([...project.directories, ...directoriesForFiles(files)])].sort(),
       updatedAt: Date.now(),
     };
     setProject(next);
     setPreviewProject(next);
-    agentRef.current?.reseed(next.files);
+    agentRef.current?.reseed(next.files, next.encodings);
     if (merge.changedFiles[0] && isEditorFile(merge.changedFiles[0])) {
       setActiveFile(merge.changedFiles[0]);
     }
@@ -1182,7 +1188,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <select className={`file-switch ${compact && explorerFiles.length > 4 ? "is-overflow" : ""}`} aria-label="Open file" value={activeFile} onChange={(event) => { setActiveFile(event.target.value); setSelectedPath(event.target.value); }}>
           {explorerFiles.map((file) => <option key={file} value={file}>{file}</option>)}
         </select>
-        <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} action${listedActions(activeSource) === 1 ? "" : "s"}` : `${activeMeta.language} · ${lines} lines`}</span>
+        <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} action${listedActions(activeSource) === 1 ? "" : "s"}` : activeEncoded ? formatBytes(sourceBytes(project, activeFile).length) : `${activeMeta.language} · ${lines} lines`}</span>
         <button
           className={`file-list-toggle ${explorerOpen ? "is-open" : ""}`}
           aria-expanded={explorerOpen}
@@ -1217,7 +1223,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           )}
           {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} onJump={openRefusal} />}
           {activeFile !== "actions.json" && actionsRefusal && <Alert tone="danger" className="code-refusal" title="actions.json is refused" action={<Button size="sm" onClick={openRefusal}>{refusedLabel(project.files["actions.json"] ?? "", actionsRefusal)}</Button>}>{actionsRefusal}</Alert>}
-          {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
+          {contractOpen ? <ActionContractView state={actionContract} /> : activeEncoded ? <Alert className="code-not-text" title={`${activeFile} is not text`}>The editor saves its {formatBytes(sourceBytes(project, activeFile).length)} with the app as they are, and cannot change them.</Alert> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
             </div>
