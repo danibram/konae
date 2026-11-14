@@ -420,7 +420,8 @@ test("a private Invitation only app admits the person the owner invites from the
   const invitee = `guest-${crypto.randomUUID()}@example.test`;
   await users.getByLabel("Email addresses").fill(invitee);
   await users.getByRole("button", { name: "Send invitation", exact: true }).click();
-  await expect(users.getByRole("list", { name: "Invitation results" })).toContainText("Invitation email handed to mail.");
+  // The local stack writes mail to its mailbox, so the answer hands over the link.
+  await expect(users.getByRole("list", { name: "Invitation results" })).toContainText("Send this link to the person yourself");
   const invitations = users.getByRole("group", { name: "Invitations" });
   const row = invitations.getByRole("row").filter({ hasText: invitee });
   await expect(row).toContainText("Pending");
