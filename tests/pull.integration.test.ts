@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { McpClient } from "../src/mcp/client";
+import { McpClient, type Transfer } from "../src/mcp/client";
+import { readTar } from "../src/lib/tar";
 import { INIT_TEMPLATES, buildLocal, configOf, initLocal, localKernel, publishLocal, readSettings, resetData, setDevSecrets } from "../scripts/konae";
 import { pullLocal, readPulled } from "../scripts/pull";
 import { provideLocalAppDependencies } from "./local-app-deps";
@@ -206,4 +207,49 @@ describe("init, publish, pull, dev --reset", () => {
     const there = await member(released.local, hostOf(released), "login");
     expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Before the column", pinned: 0 }]);
   }, 120_000);
+});
+
+/** Every file under `directory` by its path inside it, as bytes. */
+async function filesOf(directory: string): Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>();
+  for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const full = path.join(entry.parentPath, entry.name);
+    files.set(path.relative(directory, full).split(path.sep).join("/"), new Uint8Array(await readFile(full)));
+  }
+  return files;
+}
+
+describe("a file of app/ that is not text", () => {
+  test("publish leaves every file of app/ in the installation byte for byte, the export carries them, and a build of the export gives the dist/ the installation serves", async () => {
+    const folder = path.join(root, "binary");
+    const born = configOf(await initLocal(folder, { name: "Binary folder", template: "tasks" }));
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff, 0xfe]);
+    await mkdir(path.join(folder, "app/public"), { recursive: true });
+    await writeFile(path.join(folder, "app/public/logo.png"), png);
+    await writeFile(path.join(folder, "app/public/icon.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+    await writeFile(path.join(folder, "app/public/site.webmanifest"), '\ufeff{"name":"Binary folder"}\n');
+    await writeFile(path.join(folder, "app/notes.md"), "Kept with the sources.\n");
+    const published = await publishLocal(folder, { ...born, url: origin.url }, origin.token, () => {});
+    const sources = await filesOf(path.join(folder, "app"));
+    expect(await filesOf(path.join(root, "origin", "apps", published.id, "app"))).toEqual(sources);
+
+    const client = new McpClient(`${origin.url}/mcp`, { token: origin.token });
+    const exported = await client.call<{ folder: Transfer; downloads: Record<string, Transfer>; sourcesAhead: boolean }>("project_export", { deploymentId: published.id });
+    let entries: ReturnType<typeof readTar>;
+    try { entries = readTar(await client.download(exported.folder)); }
+    finally { for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await client.cancel(transfer.transferId).catch(() => {}); }
+    expect(exported.sourcesAhead).toBe(false);
+    const copy = path.join(root, "binary-export");
+    for (const entry of entries) {
+      await mkdir(path.dirname(path.join(copy, entry.path)), { recursive: true });
+      await writeFile(path.join(copy, entry.path), entry.contents);
+    }
+    expect(await filesOf(path.join(copy, "app"))).toEqual(sources);
+    const served = await filesOf(path.join(copy, "dist"));
+    expect(served.get("logo.png")).toEqual(png);
+    await rm(path.join(copy, "dist"), { recursive: true });
+    await buildLocal(copy);
+    expect(await filesOf(path.join(copy, "dist"))).toEqual(served);
+  }, 60_000);
 });

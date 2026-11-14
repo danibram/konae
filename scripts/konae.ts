@@ -24,6 +24,7 @@ import {
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
+import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -416,16 +417,10 @@ async function credentials(root: string) {
 /** The folder's sources: `app/`. */
 export function appDir(root: string) { return path.join(root, SOURCES_FOLDER); }
 
-/** The text files of `app/`, which a release carries as the project's files. */
-async function sources(root: string, prefix = ""): Promise<Record<string, string>> {
-  const result: Record<string, string> = {};
-  for (const entry of await readdir(path.join(appDir(root), prefix), { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) Object.assign(result, await sources(root, relative));
-    else if (entry.isFile() && /\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(entry.name)) result[relative] = await readFile(path.join(appDir(root), relative), "utf8");
-  }
-  return result;
+/** Every file of `app/`, which a release carries as the project's files: text, or base64 that `encodings` names. */
+async function sources(root: string): Promise<SourceFiles> {
+  const paths = await capsulePaths(root);
+  return sourceFilesFrom(await Promise.all(paths.map(async (relative) => [relative, new Uint8Array(await readFile(path.join(appDir(root), relative)))] as const)));
 }
 
 /** Every file of `app/` the build may publish, text or binary. Dot folders and node_modules are skipped at any depth. */
@@ -533,10 +528,11 @@ async function quietly(command: string[], cwd: string) {
  * `development` asks that script for an unminified build, which `dev` serves.
  */
 export async function buildLocal(root: string, options: { development?: boolean } = {}) {
-  const files = await sources(root);
+  const source = await sources(root);
+  const files = textFiles(source);
   if (await hasPackageBuild(root)) {
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
-    const neverRuns = entryNeverRunsMessage(Object.keys(files), files);
+    const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
     if (neverRuns) throw Error(neverRuns);
     // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
     await refreshActionTypes(root);
@@ -544,7 +540,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
     const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };
-    return { artifact, files };
+    return { artifact, source };
   }
   const settings = await readSettings(root).catch(() => undefined);
   const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
@@ -562,7 +558,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
     warn: (message) => console.warn(`Warning: ${message}`),
   });
   await writeDist(root, artifact);
-  return { artifact, files };
+  return { artifact, source };
 }
 
 /**
@@ -582,9 +578,9 @@ export async function publishLocal(root: string, config: Config, token: string, 
     // project_inspect needs the project that project_create registers on a first publish.
     const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
     first = !remote.deployment;
-    const { artifact, files } = await buildLocal(root);
+    const { artifact, source } = await buildLocal(root);
     return {
-      project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
+      project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
       initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
     };
   }, confirm, (error) => console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
