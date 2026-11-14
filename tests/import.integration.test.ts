@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Transfer } from "../src/mcp/client";
+import { encodeBase64, type Transfer } from "../src/mcp/client";
 import type { PackageManifest } from "../src/lib/portable-package";
 import { account, buildKernel, release, runtime, startKernel, type Kernel } from "./kernel-harness";
 
@@ -78,7 +78,9 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   expect(await emails()).toEqual(["ana@import.test", "bo@import.test"]);
 
   // Sources only: a release that drops a column asks first and changes nothing.
-  const dropping = payload(id, slimmer, "v2");
+  const logo = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
+  const plain = payload(id, slimmer, "v2");
+  const dropping = { ...plain, project: { ...plain.project, files: { ...plain.project.files, "public/logo.png": encodeBase64(logo) }, encodings: { "public/logo.png": "base64" } } };
   const upload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(dropping)), id);
   const asked = await kernel.owner.call<{ imported: boolean; schema: { confirmation: string; losses: unknown[] } }>("project_import", { deploymentId, replace: "sources", transferId: upload.transferId });
   expect(asked.imported).toBe(false);
@@ -90,8 +92,11 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   // The editor opens the imported sources.
   const read = await kernel.owner.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId: id });
   expect(read.revision).toBeGreaterThan(0);
-  const saved = JSON.parse(new TextDecoder().decode(await kernel.owner.download(read.transfer))) as { files: Record<string, string> };
+  const saved = JSON.parse(new TextDecoder().decode(await kernel.owner.download(read.transfer))) as { files: Record<string, string>; encodings?: Record<string, string> };
   expect(saved.files["schema.sql"]).toBe(slimmer);
+  // A file that is not text arrives as its bytes and reads back as base64.
+  expect(saved.encodings).toEqual({ "public/logo.png": "base64" });
+  expect(new Uint8Array(await readFile(path.join(root, "data", "apps", id, "app", "public", "logo.png")))).toEqual(logo);
 
   // Both: the release's schema applies to the exported data before it serves.
   const again = await exportedPackage(deploymentId, id);
