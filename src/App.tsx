@@ -41,7 +41,7 @@ import { createAgentKeyStore } from "./agent/key-store";
 import { Alert, Button, Dialog, IconButton, LoadingBlock, Menu, TabBar, ToastRegion, type MenuItem, type TabBarItem, type ToastItem } from "./components/ui";
 import { AppStatus, UndeployedMarker } from "./components/AppStatus";
 import { accessNotDeployed, ownerStorage, releasedAt, sameAsDeployed } from "./deployments/deployed-changes";
-import { useSourceDigest } from "./deployments/source-digest";
+import { cachedSourceDigest, useSourceDigest } from "./deployments/source-digest";
 import { ProjectCrumb } from "./components/ProjectCrumb";
 import { switcherProjects } from "./components/project-list";
 import { suggestedChanges } from "./components/agent-suggestions";
@@ -212,6 +212,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   // Null follows the app: a published app opens Data on its live rows, a draft on the test rows.
   const [databaseChoice, setDatabaseTarget] = useState<"local" | "deployed" | null>(null);
   const [authView, setAuthView] = useState<"rules" | "users" | "integrations">("rules");
+  // Counts each request to put the cursor in Access > Users' invite field.
+  const [inviteFocus, setInviteFocus] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [deployError, setDeployError] = useState("");
@@ -359,6 +361,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, []);
   const activeDeployment = deployments[project.id] ?? null;
   const sourceDigest = useSourceDigest(activeDeployment ? project.files : null);
+  // Deploy stays quiet while a new app is still what New project wrote, since publishing the placeholder gives it a live address.
+  const createdDigest = activeDeployment ? null : readCreatedDigest(workspaceStorage, project.id);
+  const currentDigest = useSourceDigest(createdDigest ? project.files : null);
+  const asCreated = createdDigest !== null && (createdDigest === "pending" || currentDigest === null || currentDigest === createdDigest);
+  useEffect(() => {
+    // Once the app changes or deploys, it is no longer the placeholder, even if an edit is undone later.
+    if (createdDigest && createdDigest !== "pending" && (activeDeployment || (currentDigest !== null && currentDigest !== createdDigest))) forgetCreatedDigest(workspaceStorage, project.id);
+  }, [createdDigest, currentDigest, activeDeployment, workspaceStorage, project.id]);
   // True, false, or null when the release names no digest; null shows no marker and the dialog does not guess.
   const sameAsLive = sameAsDeployed(project, activeDeployment, sourceDigest);
   const undeployed = sameAsLive === false;
@@ -732,6 +742,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setStage("preview");
     setCompactPanel("preview");
     show(target);
+    // On a phone the composer would raise the keyboard, so a new app's Describe takes focus at its heading.
+    if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
   const applyAgentProposal = (proposal: AgentProposal): boolean => {
@@ -861,6 +873,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     pushRoute(next);
   };
 
+  // The app the owner last had open, so Projects can put focus back on its card.
+  const leftProject = useRef<string | undefined>(undefined);
+  if (route.screen === "editor") leftProject.current = route.projectId;
   const goToProjects = () => {
     const next = { screen: "projects" as const };
     setRoute(next);
@@ -888,6 +903,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (described) workspaceStorage.setItem(describeDraftKey(base.id), described);
     // "No template" is a private plain list titled with the name, whose page declares what the person wrote; only a template made for visitors starts public.
     const next = template === "scratch" ? plainListProject(base, described) : applyTemplate(base, template);
+    rememberCreatedDigest(workspaceStorage, next);
     setProjects((current) => [...current, next]);
     setProject(next);
     setPreviewProject(next);
@@ -996,7 +1012,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} modelConnected={agentThread.live} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
   }
 
   // A published app with no editor files opens on its data, accounts and activity.
@@ -1008,6 +1024,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const signInHref = platformAccessHref(window.location.pathname);
 
   const actionsRefusal = actionReadout(project.files["actions.json"] ?? "", project.manifest.visibility).refusal;
+  // While the description waits for a model and the app is the placeholder New project made, Describe is the next step, not Deploy.
+  const quietDeploy = asCreated && agentThread.draft.trim() !== "";
   const sections: { id: PanelId; label: string; icon: typeof Code2 }[] = [
     { id: "preview", label: "Preview", icon: Play },
     { id: "agent", label: "Describe", icon: Sparkles },
@@ -1048,11 +1066,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const editor = editorRef.current;
       if (!editor) return;
       editor.focus();
-      const at = spot?.index ?? 0;
-      editor.setSelectionRange(at, at);
-      const line = editor.value.slice(0, at).split("\n").length - 1;
-      const height = parseFloat(getComputedStyle(editor).lineHeight) || 20;
-      editor.scrollTop = Math.max(0, line * height - editor.clientHeight / 3);
+      // The caret waits at the statement's end, where a LIMIT goes, so typing adds to the query instead of replacing it.
+      const end = spot?.value?.end ?? spot?.index ?? 0;
+      editor.setSelectionRange(end, end);
+      const before = editor.value.slice(0, end).split("\n");
+      const style = getComputedStyle(editor);
+      const height = parseFloat(style.lineHeight) || 20;
+      editor.scrollTop = Math.max(0, (before.length - 1) * height - editor.clientHeight / 3);
+      const measure = document.createElement("canvas").getContext("2d");
+      if (measure) {
+        measure.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const endX = measure.measureText(before.at(-1) ?? "").width + (parseFloat(style.paddingLeft) || 0);
+        editor.scrollLeft = Math.max(0, endX - editor.clientWidth + 48);
+      }
     }));
   };
 
@@ -1250,6 +1276,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
           authView={authView}
           onAuthViewChange={setAuthView}
+          inviteFocus={inviteFocus}
           accessUndeployed={accessNotDeployed(project, activeDeployment)}
           onDeploy={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}
         />
@@ -1370,7 +1397,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             {saveError ? "Not saved" : "Saving"}
           </span>}
           {saveError && <Button onClick={retrySave} disabled={pendingSaves.current > 0}>Retry save</Button>}
-          <Button variant="primary" className="deploy-button" title={actionsRefusal ? `Deploy is refused: ${actionsRefusal}` : undefined} onClick={openDeploy}><Rocket size={15} aria-hidden="true" /> <span>Deploy{activeDeployment && <span className="deploy-more"> changes</span>}</span></Button>
+          <Button variant={quietDeploy ? "secondary" : "primary"} className={`deploy-button${quietDeploy ? " is-quiet" : ""}`} title={actionsRefusal ? `Deploy is refused: ${actionsRefusal}` : undefined} onClick={openDeploy}><Rocket size={15} aria-hidden="true" /> <span>{activeDeployment ? "Deploy changes" : "Deploy"}</span></Button>
           <Menu label="More" trigger={<><MoreHorizontal size={15} aria-hidden="true" /><span className="more-label">More</span></>} triggerClassName="more-button" items={moreItems} />
           <AccountChip session={ownerSession} href={signInHref} />
         </div>
@@ -1448,7 +1475,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
       {/* After the Deploy dialog, so it paints over it. */}
       {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 
@@ -1562,6 +1589,25 @@ function describeDelete(project: MiniAppProject, path: string | null): string {
   return count === 0
     ? `${path} is empty. Deleting it removes only the folder.`
     : `${path} and the ${count} file${count === 1 ? "" : "s"} inside it will be removed from the project.`;
+}
+
+type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+const createdDigestKey = (projectId: string) => `created-digest:${projectId}`;
+
+/** What New project wrote, by digest, so the workbench knows while the app is still that placeholder. "pending" until the digest is known. */
+function rememberCreatedDigest(storage: KeyStorage, project: MiniAppProject) {
+  try { storage.setItem(createdDigestKey(project.id), "pending"); } catch { return; }
+  void cachedSourceDigest(project.files).then((digest) => {
+    try { if (storage.getItem(createdDigestKey(project.id)) === "pending") storage.setItem(createdDigestKey(project.id), digest); } catch { /* the button just stays as it is */ }
+  }, () => forgetCreatedDigest(storage, project.id));
+}
+
+function readCreatedDigest(storage: KeyStorage, projectId: string): string | null {
+  try { return storage.getItem(createdDigestKey(projectId)); } catch { return null; }
+}
+
+function forgetCreatedDigest(storage: KeyStorage, projectId: string) {
+  try { storage.removeItem(createdDigestKey(projectId)); } catch { /* nothing to forget */ }
 }
 
 function AccountChip({ session, href }: { session: OwnerSession; href: string }) {

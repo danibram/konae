@@ -90,7 +90,8 @@ export function WhatHappenedView({ deployment, onOpen }: Props) {
               <option value="all">Everything</option>
               <option value="attention">Needs someone to act</option>
             </Select>
-            <Button size="sm" loading={loading} onClick={refresh}><RefreshCw size={13} /> Refresh</Button>
+            {/* The first read has its own loader below, so the button spins only for a refresh. */}
+            <Button size="sm" loading={loading && read !== null} onClick={refresh}><RefreshCw size={13} /> Refresh</Button>
           </div>
         </header>
         {!owner ? <p className="happened-note">Sign in with <a href={platformAccessHref(window.location.pathname)}>owner sign-in</a> to read what this app sent and ran.</p>

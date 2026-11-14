@@ -320,7 +320,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 
 .data-browser { min-width: 0; min-height: 0; display: grid; grid-template-columns: 170px minmax(0, 1fr); }
 .data-table-sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--ink); background: #e8e5db; }
-.data-sidebar-label { height: 34px; flex: 0 0 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--line); color: var(--muted); font: 11px "JetBrains Mono Variable"; letter-spacing: .1em; }
+.data-sidebar-label { height: 34px; flex: 0 0 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--line); color: var(--muted); font: 600 11px/1.4 var(--ds-font); letter-spacing: .06em; }
 .data-sidebar-label span:last-child { display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: #d0cdc2; color: var(--ink); font-size: 10px; }
 .data-sidebar-list { min-height: 0; overflow: auto; padding: 6px; }
 .data-sidebar-list > button { width: 100%; min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 5px; padding: 8px 6px; border: 1px solid transparent; background: transparent; text-align: left; cursor: pointer; }
@@ -357,9 +357,9 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .editable-table { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .table-toolbar { flex: 0 0 auto; min-height: 55px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: #f8f5ed; }
 .table-toolbar > div:first-child { display: grid; justify-items: start; gap: 2px; flex: 1 0 100%; min-width: 0; }
-.table-toolbar p { margin: 0; color: var(--muted); font: 10px "JetBrains Mono Variable"; letter-spacing: .1em; }
+.table-toolbar p { margin: 0; color: var(--muted); font: 600 11px/1.4 var(--ds-font); letter-spacing: .06em; }
 .table-toolbar h3 { margin: 0; overflow: visible; text-overflow: clip; white-space: normal; font-size: 19px; letter-spacing: -.035em; }
-.table-toolbar > div:first-child > span { color: var(--muted); font: 11px "JetBrains Mono Variable"; }
+.table-toolbar > div:first-child > span { color: var(--muted); font: 12px/1.45 var(--ds-font); }
 .table-toolbar-actions { display: flex; gap: 6px; }
 .table-toolbar-actions button, .insert-actions button, .table-pagination button, .studio-document-view header button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 9px; border: 1px solid var(--line); background: white; font-size: 11px; font-weight: 700; cursor: pointer; }
 .table-toolbar-actions button:hover, .table-pagination button:hover:not(:disabled), .studio-document-view header button:hover { border-color: var(--ink); }

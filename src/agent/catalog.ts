@@ -7,12 +7,17 @@ import type { AgentSessionConfig, ProviderConfig, ProviderId } from "./contracts
  *
  * Every id here was checked against the shipped 0.84.2 catalogs.
  * `supportsCustomModelId` is the escape hatch for everything else.
+ *
+ * Each `keyPage` is the page the provider's own docs link to for creating a key
+ * (docs.claude.com API overview, OpenAI's quickstart, OpenRouter's
+ * authentication guide); the pi-ai catalogs record only API endpoints.
  */
 export const PROVIDERS: readonly ProviderConfig[] = [
   {
     id: "anthropic",
     label: "Anthropic",
     needsKey: true,
+    keyPage: "https://platform.claude.com/settings/keys",
     supportsCustomModelId: true,
     defaultModels: [
       { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
@@ -24,6 +29,7 @@ export const PROVIDERS: readonly ProviderConfig[] = [
     id: "openai",
     label: "OpenAI",
     needsKey: true,
+    keyPage: "https://platform.openai.com/api-keys",
     supportsCustomModelId: true,
     defaultModels: [
       { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
@@ -35,6 +41,7 @@ export const PROVIDERS: readonly ProviderConfig[] = [
     id: "openrouter",
     label: "OpenRouter",
     needsKey: true,
+    keyPage: "https://openrouter.ai/keys",
     supportsCustomModelId: true,
     defaultModels: [
       { id: "anthropic/claude-sonnet-5", label: "Claude Sonnet 5" },

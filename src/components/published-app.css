@@ -18,6 +18,8 @@
 .published-app-command { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .published-app-command code { min-width: 0; overflow-x: auto; padding: 4px 8px; border: 1px solid var(--ds-border); background: var(--ds-field); color: var(--ds-text); font: 500 12px/1.4 var(--ds-mono); white-space: nowrap; }
 .published-app-command .ui-button { flex: none; min-height: 28px; box-shadow: none; }
+.published-app-live { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.published-app-live .ui-button { min-height: 28px; box-shadow: none; text-decoration: none; }
 
 /* One row of views, marked the way the rail marks its current item. */
 .published-app-tabs { display: flex; gap: 4px; margin: 0 0 -1px; padding: 0 16px; }
@@ -42,10 +44,9 @@
   .published-app-brand { min-height: 48px; }
   .published-app-title .project-crumb { flex: 1; }
   .published-app-title .project-crumb-home, .published-app-title .project-crumb-sep { display: none; }
-  .published-app-title .app-status { flex: none; margin-left: auto; }
-  .published-app-title .app-status-address, .published-app-title .app-status-time { display: none; }
-  .published-app-title .app-status-state { font-size: 0; gap: 0; }
-  .published-app-title .app-status-state::before { width: 8px; height: 8px; }
+  /* On a phone the state and its time read under the name, as in the editor; the address waits in "Edited in a folder". */
+  .published-app-title .app-status { flex: 1 0 100%; order: 3; padding: 0 0 8px 12px; }
+  .published-app-title .app-status-address { display: none; }
   .published-app-folder summary > span { display: none; }
   .published-app-folder li > span:first-child { min-width: 0; flex-basis: 100%; }
   .published-app-command { width: 100%; }
@@ -60,3 +61,6 @@
 /* The row numbers and the status line of the live data read at 4.5:1 or more in both themes, from tokens. */
 .published-app .editable-grid .grid-row-number { color: var(--ds-muted); }
 .published-app .database-statusbar { color: var(--ds-text); font: 500 12px/1.4 var(--ds-font); }
+/* Controls sit flat, as in the editor's panels (workbench.css); dialogs keep --ds-shadow-dialog. */
+.published-app-body { --ds-shadow-sm: none; --ds-shadow: none; --ds-shadow-lg: none; --ds-press: 0px; }
+.published-app-body :is(.data-sidebar-list > button.active, .table-toolbar-actions .insert-row-button, .insert-actions .primary) { box-shadow: none; }

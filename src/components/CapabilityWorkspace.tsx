@@ -45,6 +45,8 @@ type Props = {
   deployment?: { id: string; url: string };
   authView?: AuthView;
   onAuthViewChange?: (view: AuthView) => void;
+  /** Changes each time Users should open with the cursor in its invite field. */
+  inviteFocus?: number;
   /** The rules, who can open the app or who can read uploads differ from what the live app runs. */
   accessUndeployed?: boolean;
   onDeploy?: () => void;
@@ -130,7 +132,7 @@ function AuthPanel(props: Props) {
           { id: "integrations", label: "Integrations", icon: <Plug size={13} aria-hidden="true" /> },
         ]}
       />
-      {view === "users" && <AppUsersView projectId={props.projectId} deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} openAccess={false} />}
+      {view === "users" && <AppUsersView projectId={props.projectId} deploymentId={props.deployment?.id} visibility={props.visibility ?? "private"} openAccess={false} inviteFocus={props.inviteFocus} />}
       {view === "integrations" && props.projectId && <IntegrationsView projectId={props.projectId} deploymentId={props.deployment?.id} deploymentUrl={props.deployment?.url} actionsSource={props.actionsSource} />}
       {view === "rules" && <RulesView {...props} />}
     </section>

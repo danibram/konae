@@ -11,7 +11,7 @@ The editor opens on the owner sign-in page. Sign in, or press **Create owner acc
 ## Steps
 
 1. On the project list, press **New project**. The dialog asks **What should it do?** first. Write a sentence, open **Start from a template instead** and pick one, or both; each template runs as it is. A sentence with no template starts as a private list titled with the project's name, with your sentence at the top and on its card. The sentence waits in **Describe** until you send it, even if you leave the app or reload. The name is optional and comes from your first words.
-2. In the conversation panel, press **Connect a model** and paste an Anthropic, OpenAI or OpenRouter key. The key stays in this browser. Then describe the app in one sentence. The prompt box reads "Describe the app."
+2. In the conversation panel, press **Connect a model** and paste an Anthropic, OpenAI or OpenRouter key. The dialog links to the provider's page where you create one. The key stays in this browser, and the provider bills it for what Konae sends. Save closes the dialog, and the sentence from New project waits in the prompt box. Press **Send**, or write a sentence there first when you started from a template.
 3. Read the proposed change. The files stay as they are until you press **Apply**.
 4. Read the line above **Apply**. The Validation Gate, the editor's check, has read the change before it can reach the project, and shows "Validated. Schema, preview rows and actions hold." when it passes. A refusal names what to change instead. The Gate refuses the change when:
    - the schema is not valid;
@@ -21,7 +21,7 @@ The editor opens on the owner sign-in page. Sign in, or press **Create owner acc
 6. Press **Deploy** in the top bar. Once the app is published the same button reads **Deploy changes**. The dialog is headed **Deploy** followed by the app's name, and lists the address, who can open the app and what people can do. When something blocks the release it shows only the refusal, with a button to the file or the setting that clears it, and its Deploy button stays off.
 7. Choose who can open the app, **Public** (anyone can open it) or **Private** (people with an app account). Then choose who can create an app account. The dialog preselects Open for a public app and Invitation only for a private one. Later, who can open the app changes in Access > Rules and who can create an account in Access > Users.
 8. Confirm with the button that names your choice, **Deploy public** or **Deploy private**. The dialog then shows the Deployment URL and **Open the app**. When a republish removes a table or a column from the published database, or changes a column's type, a dialog titled **This publish deletes data** lists what goes first. **Keep the data** publishes nothing, and **Publish and delete** applies it.
-9. Open the Deployment URL and use the app once. That calls a Server Action on the Kernel. A private app asks for an app account first. Press **Invite people** on the dialog, or open Access > Users, and invite yourself. On `bun run dev:local` the invitation lands in `data/kernel-local/mailbox.jsonl`.
+9. Open the Deployment URL and use the app once. That calls a Server Action on the Kernel. A private app asks for an app account first. When the app has none, the dialog says so and offers **Invite yourself**, which invites your owner email in one press. **Invite people** opens Access > Users with the cursor in the invite field. On `bun run dev:local` the invitation lands in `data/kernel-local/mailbox.jsonl`.
 
 ## Check it worked
 

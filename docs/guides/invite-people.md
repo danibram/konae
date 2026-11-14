@@ -10,10 +10,10 @@ An invitation is the owner's offer of an account in one app to one email, sent a
 
 ## In the editor
 
-1. Open the project and go to Access > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people.
-2. Check the signup policy under "Who can create an app account" and change it if the app needs another one. Existing accounts keep working.
-3. Under Invite people, enter the email addresses and send. Invite only the people the owner asked for, because this sends email.
-4. Resend or revoke an invitation from the list of invitations below it. Under App accounts you can also suspend and resume an account. Suspension ends its sessions and keeps its rows.
+1. Open the project and go to Access > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people. After a deploy of a private app with no app account, it offers Invite yourself first, which invites the owner's email.
+2. Under Invite people, at the top, enter the email addresses and send. Invite only the people the owner asked for, because this sends email.
+3. Resend or revoke an invitation from the list of invitations below it. Under App accounts you can also suspend and resume an account. Suspension ends its sessions and keeps its rows.
+4. Below them, check the signup policy under "Who can create an app account" and change it if the app needs another one. Existing accounts keep working.
 
 ## Over MCP
 

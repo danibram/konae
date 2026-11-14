@@ -1,7 +1,7 @@
-import { ExternalLink, KeyRound, Rocket } from "lucide-react";
+import { ExternalLink, KeyRound, Rocket, Send } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { listSecrets, readContactEmail, readSignupPolicy, type ContactEmailState, type DeploymentReceipt, type SignupMode } from "../deployments/client";
+import { createAppInvitations, listAppInvitations, listAppUsers, listSecrets, readContactEmail, readMailStatus, readSignupPolicy, type ContactEmailState, type DeploymentReceipt, type MailStatus, type SignupMode } from "../deployments/client";
 import { missingContactSentence } from "./AppContactEmail";
 import { readDomain } from "../deployments/domains";
 import type { DeploymentVisibility } from "../deployments/manifest";
@@ -9,7 +9,7 @@ import { actionSentence, actionTitle, deployReadiness, ownerFixes, type ReleaseF
 import { hintOf, refusalCodes, type RefusalCode } from "../kernel/refusal";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
-import { defaultSignupMode, firstPublishModes, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
+import { defaultSignupMode, firstPublishModes, invitationResultMessage, mailReadiness, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
 import { Alert, Button, Dialog, Radio, Select } from "./ui";
 import "./app-access.css";
 
@@ -37,6 +37,8 @@ type Props = {
   onOpenActions?: () => void;
   /** True when the editor holds exactly what the published app runs, false when it differs, null when the release does not say. */
   unchanged?: boolean | null;
+  /** The signed-in owner's email, which the receipt invites when a private app has no accounts yet. */
+  ownerEmail?: string | null;
 };
 
 function republishSentence(unchanged: boolean | null) {
@@ -92,7 +94,7 @@ function setsSecret(code: string | undefined): boolean {
   return code !== undefined && refusalCodes().includes(code as RefusalCode) && hintOf(code as RefusalCode).tool === "secret_set";
 }
 
-export function DeployDialog({ project, deployment, publishing, error, errorCode, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings, onOpenActions, unchanged = null }: Props) {
+export function DeployDialog({ project, deployment, publishing, error, errorCode, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings, onOpenActions, unchanged = null, ownerEmail }: Props) {
   const republish = Boolean(current);
   const [chosenVisibility, setVisibility] = useState<DeploymentVisibility>(project.manifest.visibility);
   // A republish keeps who can join, set in Access > Users; only a first publish chooses here.
@@ -144,7 +146,7 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
       </>}
     >
       {deployment ? (
-        <PublishedState deployment={deployment} onClose={onClose} onOpenUsers={onOpenUsers} onOpenAppSettings={onOpenAppSettings} />
+        <PublishedState deployment={deployment} ownerEmail={ownerEmail} onClose={onClose} onOpenUsers={onOpenUsers} onOpenAppSettings={onOpenAppSettings} />
       ) : (
         <div className="ui-dialog-body publish-body">
           {refusal ? (
@@ -219,7 +221,29 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
   );
 }
 
-function PublishedState({ deployment, onClose, onOpenUsers, onOpenAppSettings }: { deployment: DeploymentReceipt; onClose: () => void; onOpenUsers?: () => void; onOpenAppSettings?: () => void }) {
+/**
+ * Whether the receipt should offer the owner an invitation to their own app.
+ * A private app with no active app account lets nobody in, the owner included.
+ * An invitation not yet accepted counts as no account, since its holder cannot
+ * sign in either. Null until both reads answer, or when either fails, so the
+ * receipt says nothing it has not read.
+ */
+function useSelfInvite(deploymentId: string, isPrivate: boolean, ownerEmail: string | null | undefined) {
+  const [state, setState] = useState<{ noAccounts: boolean; mail: MailStatus } | null>(null);
+  useEffect(() => {
+    if (!isPrivate || !ownerEmail) return;
+    let live = true;
+    Promise.all([listAppUsers(deploymentId, { limit: 1, state: "active" }), readMailStatus()]).then(([page, mail]) => {
+      if (live) setState({ noAccounts: page.users.length === 0, mail });
+    }, () => undefined);
+    return () => { live = false; };
+  }, [deploymentId, isPrivate, ownerEmail]);
+  return state;
+}
+
+type SelfInvite = { status: "idle" } | { status: "sending"; key: string } | { status: "sent"; text: string } | { status: "failed"; key: string; text: string };
+
+function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAppSettings }: { deployment: DeploymentReceipt; ownerEmail?: string | null; onClose: () => void; onOpenUsers?: () => void; onOpenAppSettings?: () => void }) {
   const isPrivate = deployment.manifest.visibility === "private";
   const policy = usePublishedPolicy(deployment.id);
   const [contact, setContact] = useState<ContactEmailState | null>(null);
@@ -229,16 +253,68 @@ function PublishedState({ deployment, onClose, onOpenUsers, onOpenAppSettings }:
     return () => { current = false; };
   }, [deployment.id]);
   const missingContact = missingContactSentence(contact);
+  const selfInviteFacts = useSelfInvite(deployment.id, isPrivate, ownerEmail);
+  const [invite, setInvite] = useState<SelfInvite>({ status: "idle" });
+  const offerSelfInvite = Boolean(ownerEmail && selfInviteFacts?.noAccounts && invite.status !== "sent");
+  const mail = mailReadiness(selfInviteFacts?.mail ?? null);
   const openRef = useRef<HTMLAnchorElement>(null);
+  const inviteRef = useRef<HTMLButtonElement>(null);
+  const resultRef = useRef<HTMLParagraphElement>(null);
+  const mailReasonId = useId();
   // The Deploy button that had focus is gone now; the way to the app takes it.
   useEffect(() => { openRef.current?.focus(); }, []);
+  // The invitation becomes the first step once the accounts read says nobody can sign in yet.
+  useEffect(() => {
+    if (offerSelfInvite && document.activeElement === openRef.current) inviteRef.current?.focus();
+  }, [offerSelfInvite]);
+  useEffect(() => { if (invite.status === "sent") resultRef.current?.focus(); }, [invite.status]);
+
+  const inviteSelf = async () => {
+    if (!ownerEmail || invite.status === "sending" || !mail.ready) return;
+    // A retry after a failure keeps its key, so the Kernel sends one email.
+    const key = invite.status === "failed" ? invite.key : `self-${crypto.randomUUID()}`;
+    setInvite({ status: "sending", key });
+    try {
+      const answer = await createAppInvitations(deployment.id, [ownerEmail], key);
+      const result = answer.results[0];
+      if (result && result.status !== "invited" && result.status !== "already-invited") {
+        setInvite({ status: "failed", key, text: invitationResultMessage(result).text });
+        return;
+      }
+      // Read the invitation back through the same door before saying it went out.
+      const listed = await listAppInvitations(deployment.id, { limit: 25 });
+      const mine = listed.invitations.find((row) => row.email.toLowerCase() === ownerEmail.toLowerCase() && row.status === "pending");
+      if (!mine) {
+        setInvite({ status: "failed", key, text: "The invitation does not show in Access > Users yet. Open Users and check it there." });
+        return;
+      }
+      const sent = result?.status === "already-invited"
+        ? `An invitation to ${ownerEmail} is already waiting. Open the link in that email, or resend it from Access > Users if it is lost.`
+        : mine.delivery === "queued"
+          ? `Invitation sent to ${ownerEmail}. Open the link in that email, choose a password, and the app opens.`
+          : `The invitation to ${ownerEmail} exists, but its email did not leave. Resend it from Access > Users.`;
+      setInvite({ status: "sent", text: sent });
+    } catch (cause) {
+      setInvite({ status: "failed", key, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const devMailbox = selfInviteFacts?.mail.transport === "development"
+    ? " This installation writes email to mailbox.jsonl in its data folder instead of sending it."
+    : "";
+
   return <div className="ui-dialog-body deploy-receipt">
     <a className="published-url" href={deployment.url} target="_blank" rel="noreferrer"><span>{deployment.url}</span><ExternalLink size={14} aria-hidden="true" /></a>
     <p className="receipt-policy">{isPrivate ? "Private. Visitors sign in to an app account before the app loads." : "Public. Anyone with the link can open it."}{policy.status === "ready" && ` New app accounts: ${signupModeCopy[policy.mode].label}.`}</p>
+    {offerSelfInvite && <p className="receipt-self-invite">You have no account in this app yet. Invite yourself, {ownerEmail}, to open it.</p>}
+    {invite.status === "sent" && <p className="receipt-self-invite" role="status" tabIndex={-1} ref={resultRef}>{invite.text}{devMailbox}</p>}
+    {invite.status === "failed" && <p className="deploy-contact-missing" role="alert">{invite.text}</p>}
+    {offerSelfInvite && !mail.ready && <p id={mailReasonId} className="publish-note">{mail.reason}</p>}
     {deployment.accessCode && <div className="receipt-code"><small>Private access code</small><code>{deployment.accessCode}</code><p>Keep it private. Anyone with this code can open this deployment.</p></div>}
     {missingContact && <p className="deploy-contact-missing" role="status">{missingContact}{onOpenAppSettings && <> <button type="button" className="link-button" onClick={onOpenAppSettings}>Set a contact email</button></>}</p>}
     <div className="receipt-actions">
-      <a ref={openRef} className="ui-button ui-button-md ui-button-primary published-open" href={deployment.url} target="_blank" rel="noreferrer"><ExternalLink size={14} aria-hidden="true" /> Open the app</a>
+      {offerSelfInvite && <Button ref={inviteRef} variant="primary" disabled={!mail.ready} aria-busy={invite.status === "sending" || undefined} aria-describedby={mail.ready ? undefined : mailReasonId} onClick={() => void inviteSelf()}>{invite.status === "sending" ? <><Loader2 className="spin" size={14} aria-hidden="true" /> Inviting…</> : <><Send size={14} aria-hidden="true" /> Invite yourself</>}</Button>}
+      <a ref={openRef} className={`ui-button ui-button-md ${offerSelfInvite ? "ui-button-secondary" : "ui-button-primary"} published-open`} href={deployment.url} target="_blank" rel="noreferrer"><ExternalLink size={14} aria-hidden="true" /> Open the app</a>
       {policy.status === "ready" && policy.mode === "invitation" && onOpenUsers && <Button onClick={onOpenUsers}>Invite people</Button>}
       <Button onClick={onClose}>Done</Button>
     </div>

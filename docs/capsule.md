@@ -54,7 +54,7 @@ A published app runs under the Kernel's Content Security Policy. Its own inline 
 
 ## Where the sources live
 
-The editor saves its sources into the app folder's `app/` on the installation, and a change there passes the Validation Gate before it is saved. `konae init` writes the same files into a folder on your machine, and `konae publish` sends them to the installation. A publish from a folder does not change the sources the editor opens, and an app first published from a folder shows on the project list under **Apps without editor files**. Its card opens the published app's database, app accounts and activity, and its files, actions and visibility still change in the folder.
+The editor saves its sources into the app folder's `app/` on the installation, and a change there passes the Validation Gate before it is saved. `konae init` writes the same files into a folder on your machine, and `konae publish` sends them to the installation. A publish from a folder does not change the sources the editor opens, and an app first published from a folder shows on the project list as **Edited in a folder**. Its card opens the published app's database, app accounts and activity, and its files, actions and visibility still change in the folder.
 
 ## Read next
 

@@ -26,6 +26,8 @@ export type ProviderConfig = {
   needsKey: boolean;
   defaultModels: ProviderModelOption[];
   supportsCustomModelId: boolean;
+  /** The provider's own page where a person creates an API key. */
+  keyPage?: string;
 };
 
 /**

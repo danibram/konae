@@ -125,11 +125,6 @@ export function DatabaseStudio({ host, onEditSchema, onExportDatabase, target = 
       {tab === "sql" && <SqlConsole host={host} tables={tables} onMutated={mutated} />}
       {tab === "schema" && <SchemaView tables={tables} onEdit={onEditSchema} />}
       {tab === "backups" && <BackupsView host={host} tables={tables} deployed={target === "deployed"} onExport={onExportDatabase} onRestored={mutated} />}
-
-      <footer className="database-statusbar">
-        <span><i /> {target === "deployed" ? "Live app" : "Test rows in this browser"}</span>
-        <span>{tables.length} table{tables.length === 1 ? "" : "s"}</span>
-      </footer>
     </section>
   );
 }
@@ -574,7 +569,7 @@ function EmptyColumns({ names }: { names: string[] }) {
       </table>
       <div className="empty-rows-invite">
         <strong>No rows yet.</strong>
-        <p>Insert a row to start. The list stops at 100.</p>
+        <p>Insert a row to start.</p>
       </div>
     </div>
   );

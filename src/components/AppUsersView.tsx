@@ -1,6 +1,6 @@
 import { platformAccessHref } from "./owner-session";
 import { MailWarning, RefreshCw, Send, TriangleAlert, Users } from "lucide-react";
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   createAppInvitations, listAppInvitations, listAppUsers, readMailStatus, readSignInMethods, readSignupPolicy, resendAppInvitation, resumeAppUser,
   revokeAppInvitation, enterAsAppUser, saveSignInMethods, saveSignupPolicy, setGoogleClientPart, signupModes, suspendAppUser, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
@@ -28,6 +28,8 @@ type Props = {
   onSetFileAccess?: (shared: boolean) => void;
   /** False when the caller shows who can open the app elsewhere, as the editor's Rules do. */
   openAccess?: boolean;
+  /** Changes each time the invite field should take the cursor, as Deploy's "Invite people" asks. */
+  inviteFocus?: number;
 };
 
 const PAGE = 25;
@@ -38,6 +40,11 @@ export const appliesOnDeploy = "It applies to the live app when you deploy.";
 /** Who can open the app and who can read its uploads: both reach the live app with a deploy. */
 export function OpenAccessFields({ visibility, onSetVisibility, fileAccess, onSetFileAccess }: Pick<Props, "visibility" | "onSetVisibility" | "fileAccess" | "onSetFileAccess">) {
   const folder = "It changes in the app's folder, with a publish.";
+  // An app edited in a folder offers no choice here, so its two rules read as text, as the rules of a private app do.
+  if (!onSetVisibility && !onSetFileAccess) return <>
+    <div className="rule-text"><strong>Who can open the app</strong><span>{visibilityCopy[visibility].sentence} {folder}</span></div>
+    <div className="rule-text"><strong>Who can read uploaded files</strong><span>{fileAccess === "app-users" ? "All signed-in app users" : "Each file's visibility"}. Only the uploader can delete a file. {folder}</span></div>
+  </>;
   return <>
     <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} ${onSetVisibility ? appliesOnDeploy : folder}`}>
       <Select value={visibility} disabled={!onSetVisibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
@@ -60,7 +67,7 @@ function SignedOut() {
 }
 
 /** App accounts, invitations and who may join, for the published app. Owners only. */
-export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, fileAccess, onSetFileAccess, openAccess = true }: Props) {
+export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, fileAccess, onSetFileAccess, openAccess = true, inviteFocus = 0 }: Props) {
   const [mail, setMail] = useState<MailStatus | null>(null);
   const [mailError, setMailError] = useState("");
   const [changed, setChanged] = useState(0);
@@ -83,6 +90,19 @@ export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibil
 
   return (
     <section className="access-view" aria-label="App users">
+      {/* Inviting and the accounts it makes come first, as the everyday work. The policy and the Google set-up follow. */}
+      {!deploymentId ? (
+        <Card className="access-card">
+          <EmptyState icon={<Users size={24} />} title="No app accounts yet" description="People create app accounts on the published app, never in this editor. Deploy the app to invite people and see their accounts here." />
+        </Card>
+      ) : ownerSignedOut ? null : (
+        <>
+          {!readiness.ready && <p className="access-mail" role="status"><MailWarning size={15} /><span>{readiness.reason}</span></p>}
+          <InviteForm deploymentId={deploymentId} mailReady={readiness.ready} mailReason={readiness.reason} onInvited={onChanged} onSignedOut={onSignedOut} focusRequest={inviteFocus} />
+          <InvitationList deploymentId={deploymentId} mailReady={readiness.ready} mailReason={readiness.reason} changed={changed} onChanged={onChanged} onSignedOut={onSignedOut} />
+          <AccountList deploymentId={deploymentId} changed={changed} onSignedOut={onSignedOut} />
+        </>
+      )}
       <Card className="access-card" role="group" aria-label={openAccess ? "Who can open and join" : "Who can join"}>
         <h3>{openAccess ? "Who can open and join" : "Who can join"}</h3>
         {openAccess && <OpenAccessFields visibility={visibility} onSetVisibility={onSetVisibility} fileAccess={fileAccess} onSetFileAccess={onSetFileAccess} />}
@@ -91,18 +111,6 @@ export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibil
           : <p className="access-note">You choose who can create an app account when you deploy. Invitation only is the choice for a private app.</p>}
       </Card>
       {deploymentId && projectId && !ownerSignedOut && <GoogleSignIn projectId={projectId} deploymentId={deploymentId} onSignedOut={onSignedOut} />}
-      {!deploymentId ? (
-        <Card className="access-card">
-          <EmptyState icon={<Users size={24} />} title="No app accounts yet" description="People create app accounts on the published app, never in this editor. Deploy the app to invite people and see their accounts here." />
-        </Card>
-      ) : ownerSignedOut ? null : (
-        <>
-          {!readiness.ready && <p className="access-mail" role="status"><MailWarning size={15} /><span>{readiness.reason}</span></p>}
-          <InviteForm deploymentId={deploymentId} mailReady={readiness.ready} mailReason={readiness.reason} onInvited={onChanged} onSignedOut={onSignedOut} />
-          <InvitationList deploymentId={deploymentId} mailReady={readiness.ready} mailReason={readiness.reason} changed={changed} onChanged={onChanged} onSignedOut={onSignedOut} />
-          <AccountList deploymentId={deploymentId} changed={changed} onSignedOut={onSignedOut} />
-        </>
-      )}
     </section>
   );
 }
@@ -271,10 +279,10 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
           <strong>Paste the client ID and secret Google shows you.</strong>
           <div className="access-form-row">
             <Field label="Client ID" help={clientIdSet ? "Set. Paste a new one to replace it." : "Ends with .apps.googleusercontent.com"}>
-              <Input value={clientId} aria-invalid={invalid === "clientId" || undefined} autoComplete="off" spellCheck={false} placeholder={clientIdSet ? "Set" : "123456-abc.apps.googleusercontent.com"} onChange={(event) => setClientId(event.target.value)} />
+              <Input value={clientId} aria-invalid={invalid === "clientId" || undefined} autoComplete="off" spellCheck={false} onChange={(event) => setClientId(event.target.value)} />
             </Field>
             <Field label="Client secret" help={clientSecretSet ? "Set. Paste a new one to replace it." : "Starts with GOCSPX- for a new client"}>
-              <Input type="password" value={clientSecret} aria-invalid={invalid === "clientSecret" || undefined} autoComplete="off" placeholder={clientSecretSet ? "Set" : "GOCSPX-..."} onChange={(event) => setClientSecret(event.target.value)} />
+              <Input type="password" value={clientSecret} aria-invalid={invalid === "clientSecret" || undefined} autoComplete="off" onChange={(event) => setClientSecret(event.target.value)} />
             </Field>
           </div>
           <div className="access-actions">
@@ -303,8 +311,20 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
   );
 }
 
-function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOut }: { deploymentId: string; mailReady: boolean; mailReason: string; onInvited: () => void; onSignedOut: () => void }) {
+function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOut, focusRequest = 0 }: { deploymentId: string; mailReady: boolean; mailReason: string; onInvited: () => void; onSignedOut: () => void; focusRequest?: number }) {
   const [text, setText] = useState("");
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  // Two frames, so a dialog that just closed has handed focus back before the field takes it.
+  useEffect(() => {
+    if (!focusRequest) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        fieldRef.current?.scrollIntoView({ block: "center" });
+        fieldRef.current?.focus({ preventScroll: true });
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest]);
   const [pending, setPending] = useState<PendingBatch | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -343,7 +363,7 @@ function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOu
     <Card className="access-card" role="group" aria-label="Invite people">
       <h3>Invite people</h3>
       <Field label="Email addresses" help={help}>
-        <Textarea rows={3} value={text} aria-invalid={batch.tooMany || undefined} placeholder="ana@example.com" onChange={(event) => setText(event.target.value)} />
+        <Textarea ref={fieldRef} rows={3} value={text} aria-invalid={batch.tooMany || undefined} placeholder="ana@example.com" onChange={(event) => setText(event.target.value)} />
       </Field>
       {error && <div className="access-error" role="alert">{error}{pending && " Sending the same addresses again is safe; nothing is sent twice."}</div>}
       <div className="access-actions">

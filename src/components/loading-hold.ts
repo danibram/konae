@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /** A loader that would show for less than this stays hidden. */
 export const LOADING_DELAY_MS = 250;
@@ -19,24 +19,30 @@ export function holdRemaining(startedAt: number, endedAt: number, delay = LOADIN
  * True while `pending` is true, and for as long after as the loader needs to
  * reach its minimum time on screen. `sinceNavigation` counts from the page
  * load, for the boot stages that remount the same skeleton one after another.
+ *
+ * The hold is decided in the same render that sees `pending` turn false, so
+ * the loader never leaves the tree for a render and comes back. A remounted
+ * loader would restart its fade from zero and blink out mid-hold.
  */
 export function useLoadingHold(pending: boolean, { sinceNavigation = false }: { sinceNavigation?: boolean } = {}): boolean {
   const startedAt = useRef<number | null>(null);
-  if (pending && startedAt.current === null) startedAt.current = sinceNavigation ? 0 : performance.now();
-  const [holding, setHolding] = useState(false);
-  // A layout effect, so the hold starts before the first paint that would have dropped the skeleton.
-  useLayoutEffect(() => {
-    if (pending) {
-      setHolding(false);
-      return;
-    }
-    if (startedAt.current === null) return;
-    const remaining = holdRemaining(startedAt.current, performance.now());
+  const holdUntil = useRef(0);
+  const [, release] = useState(0);
+  if (pending) {
+    if (startedAt.current === null) startedAt.current = sinceNavigation ? 0 : performance.now();
+    holdUntil.current = 0;
+  } else if (startedAt.current !== null) {
+    const now = performance.now();
+    const remaining = holdRemaining(startedAt.current, now);
     startedAt.current = null;
-    if (remaining <= 0) return;
-    setHolding(true);
-    const timer = window.setTimeout(() => setHolding(false), remaining);
+    holdUntil.current = remaining > 0 ? now + remaining : 0;
+  }
+  const holding = !pending && holdUntil.current > performance.now();
+  useEffect(() => {
+    if (!holding) return;
+    // The timer may fire a fraction of a millisecond early, so it ends the hold itself instead of asking the clock again.
+    const timer = window.setTimeout(() => { holdUntil.current = 0; release((count) => count + 1); }, Math.max(0, holdUntil.current - performance.now()));
     return () => window.clearTimeout(timer);
-  }, [pending]);
+  }, [holding]);
   return pending || holding;
 }

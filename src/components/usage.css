@@ -53,3 +53,6 @@
 .usage-main .usage-address { font-family: var(--ds-mono); overflow-wrap: normal; white-space: nowrap; }
 .usage-drafts { margin: 12px 0 0; color: var(--ds-muted); font: 400 13px/1.5 var(--ds-font); }
 .usage-drafts a { color: var(--ds-text); }
+/* An app's page keeps the title where Usage has it: the crumb sits in the top padding, not above it. */
+.usage-main > .ui-breadcrumb { padding-top: 12px; }
+.usage-main > .ui-breadcrumb + .usage-heading { padding-top: 2px; }

@@ -14,7 +14,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentSessionConfig } from "../agent/contracts";
 import { validationSummary, type ToolChip } from "./agent-thread-state";
 import type { AgentThread } from "./useAgentThread";
@@ -50,7 +50,22 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
   }, [state.messages, state.tools, footer.kind]);
 
   const model = sessionConfig.modelId || "no model";
-  const descriptionReady = state.messages.length === 0 && !live && Boolean(thread.draft.trim());
+  // Words wait in the composer before the first message: from New project, or typed here.
+  const waiting = state.messages.length === 0 && Boolean(thread.draft.trim());
+  const descriptionReady = waiting && !live;
+
+  // Saving a key closes the dialog and unmounts its opener, so focus goes to the words it will send,
+  // and the panel says what Send does with them. Typing on an app already connected keeps "What should change?".
+  const wasLive = useRef(live);
+  const [justConnected, setJustConnected] = useState(false);
+  useEffect(() => {
+    if (live && !wasLive.current && thread.draft.trim()) {
+      setJustConnected(true);
+      requestAnimationFrame(() => composerRef.current?.focus());
+    }
+    if (!live) setJustConnected(false);
+    wasLive.current = live;
+  }, [live]);
   const pick = (sentence: string) => {
     thread.setDraft(sentence);
     requestAnimationFrame(() => {
@@ -72,11 +87,14 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
         {state.messages.length === 0 && (
           <div className="agent-thread-empty">
             {descriptionReady ? <>
-              <h2>Your description is ready</h2>
+              <h2 id="agent-start" tabIndex={-1}>Your description is ready</h2>
               <p>Connect a model and Konae builds it from these words.</p>
               <Button variant="primary" className="agent-ready-connect" onClick={onOpenSettings}><Settings2 size={13} aria-hidden="true" /> Connect a model</Button>
+            </> : justConnected && waiting && live && !running ? <>
+              <h2 id="agent-start" tabIndex={-1}>Your description is ready</h2>
+              <p>Send it, and Konae builds the app from these words. You see the result in the preview and apply it when it looks right.</p>
             </> : <>
-            <h2>What should change?</h2>
+            <h2 id="agent-start" tabIndex={-1}>What should change?</h2>
             <p>{live
               ? "Describe it in one sentence. You see the change in the preview and apply it when it looks right."
               : "Describe it in one sentence. A model you connect makes the change, and you apply it after you see it."}</p>
@@ -85,7 +103,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
               <ExamplePrompts sentences={suggestions} onPick={pick} />
             </>}
             </>}
-            <p className="agent-empty-note">{live ? `${provider.label} uses your key, saved in this browser.` : "Your key stays in this browser."}</p>
+            {live && <p className="agent-empty-note">{provider.label} uses your key, saved in this browser.</p>}
           </div>
         )}
         {state.messages.map((message) => (

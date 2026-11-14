@@ -49,6 +49,9 @@
 .workshop .top-actions { flex: none; display: flex; align-items: center; gap: 8px; height: auto; margin-left: auto; padding: 0 12px 0 0; }
 .workshop .topbar .deploy-button { height: 36px; padding: 0 14px; border: 1px solid var(--ds-accent); background: var(--ds-accent); color: #171910; box-shadow: none; font: 700 13px/1 var(--ds-font); white-space: nowrap; }
 .workshop .topbar .deploy-button:hover { background: var(--ds-accent-hover); }
+/* While a new app is still its placeholder, Deploy waits beside More and Describe holds the lime call. */
+.workshop .topbar .deploy-button.is-quiet { border-color: #6b6f62; background: transparent; color: #f4f2ea; }
+.workshop .topbar .deploy-button.is-quiet:hover { background: #2c2f25; }
 .workshop .topbar .more-button { height: 36px; min-height: 36px; padding: 0 12px; border: 1px solid #6b6f62; background: transparent; color: #f4f2ea; box-shadow: none; font: 650 13px/1 var(--ds-font); }
 .workshop .topbar .more-button:hover:not(:disabled), .workshop .topbar .more-button[aria-expanded="true"] { background: #2c2f25; }
 .workshop .topbar .ui-menu-list { color: var(--ds-text); }
@@ -123,6 +126,8 @@
 .deploy-dialog .published-url { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 500 13px/1.4 var(--ds-mono); text-decoration: none; }
 .deploy-dialog .published-url span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .receipt-policy { margin: 0; font: 400 14px/1.5 var(--ds-font); }
+.receipt-self-invite { margin: 0; padding: 10px 12px; border-left: 3px solid var(--ds-accent); background: var(--ds-subtle); color: var(--ds-text); font: 500 14px/1.5 var(--ds-font); overflow-wrap: anywhere; }
+.receipt-self-invite:focus { outline: none; }
 .receipt-code { padding: 10px 12px; border: 1px dashed var(--ds-border); background: var(--ds-subtle); }
 .receipt-code small { display: block; color: var(--ds-muted); font: 600 12px var(--ds-font); }
 .receipt-code code { display: block; margin-top: 4px; font: 14px var(--ds-mono); }
@@ -153,7 +158,8 @@
 .workshop.is-compact .section-bar .ui-tablist [role="tab"] { padding: 0 10px; }
 @media (max-width: 420px) {
   .workshop .topbar .brand > span:not(.brand-mark) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .workshop.is-compact .topbar .deploy-button .deploy-more { display: none; }
+  /* "Deploy changes" keeps its words on a phone; the rocket gives the app's name the room instead. */
+  .workshop.is-compact .topbar .deploy-button svg { display: none; }
   .publish-facts > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
 /* The phone header gives the app name a full line and keeps the publication state readable below it. */
@@ -163,8 +169,11 @@
 .workshop .group-page .ui-empty { box-shadow: none; border: 1px solid var(--ds-border); background: var(--ds-surface); }
 .workshop .group-page .ui-empty-icon { box-shadow: none; }
 .workshop .group-page a:not(.ui-button) { color: inherit; text-underline-offset: 3px; }
-/* Toasts sit at the stage's bottom left, clear of the rule selects and buttons that line its right edge. */
-.workshop .ui-toasts { left: 20px; right: auto; }
+/* Toasts keep off the stage's controls. With the Describe rail open they sit inside it, under its heading row. Otherwise they take the bottom right, clear of the code editor, the Data switch and the What happened filters. */
+.workshop .ui-toasts { top: auto; right: 20px; bottom: 20px; left: auto; }
+.workshop.has-rail .ui-toasts { top: 104px; bottom: auto; width: min(340px, calc(100vw - 40px)); }
+/* On a phone they keep the bottom edge, full width. */
+.workshop.is-compact .ui-toasts { top: auto; bottom: 20px; left: 20px; right: 20px; width: auto; }
 
 /* The file toolbar starts at the panel's left edge at every width; the line count gives way first. */
 .workshop .group-tabs:has(.file-switch) .group-tabs-spacer { display: none; }

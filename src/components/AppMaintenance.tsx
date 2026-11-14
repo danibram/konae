@@ -1,6 +1,7 @@
 import { Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { readMaintenance, setMaintenance, type MaintenanceState } from "../deployments/client";
+import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, LoadingBlock } from "./ui";
 
@@ -43,12 +44,13 @@ export function AppMaintenance({ deploymentId, onSignedOut }: { deploymentId: st
   };
 
   const own = state && state.maintenance && !state.installation;
+  const pending = useLoadingHold(!state && !error);
   return <section className="domain-step" aria-label="Maintenance" aria-busy={busy || !state}>
     <header className="domain-heading"><Wrench size={20} /><h3>Maintenance</h3></header>
     {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
-    {!state && !error && <LoadingBlock label="Reading maintenance" rows={1} />}
+    {pending && <LoadingBlock label="Reading maintenance" rows={1} />}
     {!state && error && <Button onClick={() => setReload((value) => value + 1)}>Retry loading</Button>}
-    {state && <>
+    {state && !pending && <>
       <div className="domain-status"><Badge tone={state.maintenance ? "warning" : "success"}>{state.maintenance ? "In maintenance" : "Serving"}</Badge></div>
       {state.installation
         ? <p>{state.installation}</p>

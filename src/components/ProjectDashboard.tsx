@@ -1,4 +1,4 @@
-import { ArrowRight, BarChart3, Code2, Copy, Download, MoreHorizontal, Plus, RotateCcw, Search, Sparkles, Terminal, Trash2 } from "lucide-react";
+import { ArrowRight, BarChart3, Check, Code2, Copy, Download, MoreHorizontal, Plus, RotateCcw, Search, Sparkles, Terminal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Alert, Button, Dialog, EmptyState, Field, Input, Menu, Select, Textarea, ToastRegion, type MenuItem, type ToastItem } from "./ui";
 import type { DeploymentIndex } from "../lib/workspace";
@@ -36,12 +36,14 @@ type Props = {
   onCreateProject: (name: string, template: TemplateId | "scratch", description?: string) => void;
   /** A model is connected, so Describe can act on a description. New project says so when it cannot. */
   modelConnected?: boolean;
+  /** The project the owner just left; its card takes focus on arrival. Absent on a fresh load of the list. */
+  returnFocusTo?: string;
 };
 
 
 const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 
-export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onDeleteProject, onOpenProject, onOpenPublished, onCreateProject, modelConnected = false }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onDeleteProject, onOpenProject, onOpenPublished, onCreateProject, modelConnected = false, returnFocusTo }: Props) {
   const entries = useMemo(() => projectEntries(projects, missing, deployments), [projects, missing, deployments]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ProjectSort>("edited");
@@ -57,6 +59,12 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4000);
   };
   useEffect(() => { document.title = "Projects · Konae"; }, []);
+  // Back from an app, a keyboard user lands on that app's card, or on the heading when the card is gone.
+  useEffect(() => {
+    if (!returnFocusTo) return;
+    const card = document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(returnFocusTo)}"] .project-card-link`);
+    (card ?? document.querySelector<HTMLElement>(".project-list-head h1"))?.focus();
+  }, []);
   // A cached copy of a project the account already holds is not a copy outside the account: an agent or the CLI may simply have changed it since.
   const localCopies = drafts.map((draft, index) => ({ draft, index })).filter(({ draft }) => !missing.some((item) => item.id === draft.id) && !projects.some((item) => item.id === draft.id));
 
@@ -301,7 +309,7 @@ function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose
     </>}
   >
     <form id="new-project" className="new-project-body" onSubmit={(event) => { event.preventDefault(); create(); }}>
-      <Field label="What should it do?" help={tried && missingStart ? "Describe what it should do, or pick a template below." : "In plain words, the way you would tell a person."}>
+      <Field label="What should it do?" help={tried && missingStart ? "Describe what it should do, or pick a template below." : "In plain words, the way you would tell a person. For example, a sign-up sheet for Saturday football where people add their name and I see who is coming."}>
         <Textarea
           ref={describe}
           rows={4}
@@ -309,7 +317,6 @@ function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose
           aria-invalid={tried && missingStart ? true : undefined}
           onChange={(event) => setDescription(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); create(); } }}
-          placeholder="A sign-up sheet for Saturday football. People add their name, and I see who is coming."
           maxLength={2000}
         />
       </Field>
@@ -336,8 +343,29 @@ function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose
           ))}
         </fieldset>
       </details>
+      <FolderStart />
     </form>
   </Dialog>;
+}
+
+/** The developer's way in: the CLI commands that make an app folder and publish it to this installation. */
+function FolderStart() {
+  const [copied, setCopied] = useState<"" | "yes" | "no">("");
+  // The installation's own address, as the Owner account page prints it for `konae login`.
+  const commands = ["konae init --dir .", `konae login --dir . --url ${window.location.origin}`, "konae publish --dir ."].join("\n");
+  const copy = () => {
+    void navigator.clipboard?.writeText(commands).then(() => setCopied("yes"), () => setCopied("no"));
+    window.setTimeout(() => setCopied(""), 2500);
+  };
+  return <details className="ui-disclosure new-project-folder">
+    <summary>Work from a folder instead</summary>
+    <div className="new-project-folder-body">
+    <p>In an empty folder on your computer, run these with the konae command. Login reads your owner email and password from KONAE_EMAIL and KONAE_PASSWORD. After the publish, the app shows on Projects as edited in a folder.</p>
+    <pre><code>{commands}</code></pre>
+    <Button size="sm" onClick={copy}>{copied === "yes" ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}{copied === "yes" ? "Copied" : "Copy commands"}</Button>
+    </div>
+    <span className="sr-only" role="status">{copied === "yes" ? "Commands copied" : copied === "no" ? "Could not copy. Select the commands instead." : ""}</span>
+  </details>;
 }
 
 function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted, onExport, exporting = false, onCopyPull }: {

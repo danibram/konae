@@ -1,63 +1,22 @@
-/* Agent settings dialog — reuses .modal-backdrop, .eyebrow and .sr-only from styles.css. */
+/* Connect a model: the design system's Dialog and Field, with the key's help under it. */
 
-.agent-settings-backdrop { padding: 20px; background: #191a15d6; }
-.agent-settings {
-  position: relative;
-  width: min(520px, calc(100vw - 40px));
-  max-height: calc(100dvh - 40px);
-  overflow: auto;
-  border: 1px solid var(--ink);
-  background: #f2efe5;
-  box-shadow: 5px 5px 0 #11120f;
-  animation: publish-in .24s cubic-bezier(.2, .8, .2, 1);
-}
-.agent-settings::before { content: none; }
+.agent-settings.ui-dialog { width: min(520px, 100%); }
+.agent-settings-body { display: grid; gap: 18px; }
+/* Labels read in the body face at 13px, as every other form in the editor. */
+.agent-settings .ui-field > label { color: var(--ds-text); font: 600 13px/1.4 var(--ds-font); letter-spacing: 0; text-transform: none; }
+.agent-settings .ui-field small { font: 400 13px/1.5 var(--ds-font); }
+.agent-settings .ui-field small.is-error { color: var(--ds-danger); font-weight: 600; }
 
-.agent-settings-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) 31px; align-items: center; gap: 10px; padding: 17px 15px 15px; border-bottom: 1px solid var(--ink); background: #f7f4eb; }
-.agent-settings-mark { width: 30px; height: 38px; display: grid; place-items: center; border: 1px solid var(--ink); background: var(--acid); box-shadow: 2px 2px 0 var(--ink); }
-.agent-settings-head p { margin: 0 0 3px; font-size: 11px; }
-.agent-settings-head strong { font-size: 14px; letter-spacing: -.03em; }
-.agent-settings-close { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--line); background: transparent; cursor: pointer; }
-.agent-settings-close:hover { border-color: var(--ink); background: white; }
+.agent-settings-key { display: grid; gap: 8px; }
+/* The bar appears only after a Save that stored nothing. */
+.agent-settings-key.is-failed { padding-left: 12px; border-left: 3px solid var(--ds-danger); }
+.agent-settings-key .ui-input { font-family: var(--ds-mono); letter-spacing: .06em; }
 
-.agent-settings-body { display: grid; gap: 11px; padding: 15px; }
+.agent-settings-help,
+.agent-settings .agent-settings-note { margin: 0; color: var(--ds-muted); font: 400 13px/1.55 var(--ds-font); }
+.agent-settings-help a { display: inline-flex; align-items: center; gap: 3px; color: var(--ds-text); font-weight: 600; text-underline-offset: 3px; }
+.agent-settings-help a:focus-visible { outline: 2px solid var(--ds-blue); outline-offset: 2px; }
 
-.agent-field { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 10px; }
-.agent-field > span { color: var(--muted); font: 10px "JetBrains Mono Variable"; letter-spacing: .12em; }
-.agent-field select,
-.agent-field input { min-width: 0; height: 38px; padding: 0 8px; border: 1px solid var(--line); background: #fffdf7; outline: 0; color: var(--ink); font: 12px "JetBrains Mono Variable", monospace; }
-.agent-field select { cursor: pointer; }
-
-.agent-settings-key { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); background: #e8e5db; color: #4e5049; font-size: 12px; }
-.agent-settings-key > svg { flex: 0 0 auto; color: var(--muted); }
-.agent-settings-key.missing { border-left: 3px solid var(--orange); }
-.agent-settings-key.stored > svg { color: #5d8d18; }
-.agent-settings-key span { display: flex; align-items: center; gap: 5px; color: #45473f; font: 11px "JetBrains Mono Variable"; }
-.agent-settings-key input { flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--line); background: white; outline: 0; font: 12px "JetBrains Mono Variable", monospace; letter-spacing: .06em; }
-.agent-settings-key button { flex: 0 0 auto; height: 36px; padding: 0 10px; border: 1px solid var(--line); background: #fffdf7; font-size: 11px; font-weight: 750; cursor: pointer; }
-.agent-settings-key button:hover:not(:disabled) { border-color: var(--ink); }
-.agent-settings-key button.primary { border-color: var(--ink); background: var(--acid); box-shadow: 2px 2px 0 var(--ink); }
-.agent-settings-key button:disabled { opacity: .45; cursor: default; box-shadow: none; }
-.agent-settings-key.stored button:first-of-type { margin-left: auto; }
-
-.agent-settings-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-
-@media (max-width: 680px) {
-  .agent-settings-backdrop { padding: 0; }
-  .agent-settings { width: 100vw; height: auto; max-height: 100dvh; box-shadow: none; }
-  .agent-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-}
-
-@media (prefers-color-scheme: dark) {
-  .agent-field select,
-  .agent-field input,
-  .agent-settings-key input,
-  .agent-settings-key button {
-    background: var(--ds-surface);
-    color: var(--ds-text);
-    border-color: var(--ds-border);
-  }
-  .agent-settings-key { background: var(--ds-subtle); color: var(--ds-text); border-color: var(--ds-border); }
-  .agent-settings-key span { color: var(--ds-text); }
-  .agent-settings-key input::placeholder { color: var(--ds-muted); opacity: 1; }
-}
+.agent-settings-stored { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 500 13px/1.45 var(--ds-font); }
+.agent-settings-stored > span { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 220px; min-width: 0; }
+.agent-settings-stored > span svg { flex: none; color: var(--ds-success, currentColor); }

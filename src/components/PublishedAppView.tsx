@@ -1,6 +1,6 @@
 import { releasedAt } from "../deployments/deployed-changes";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { Activity, BarChart3, Box, Check, Copy, Database, UserRound } from "lucide-react";
+import { Activity, BarChart3, Box, Check, Copy, Database, ExternalLink, UserRound } from "lucide-react";
 import { HostedDatabaseClient, type DeploymentReceipt } from "../deployments/client";
 import { McpClient } from "../mcp/client";
 import type { ProjectMetadata } from "../lib/project-sources";
@@ -66,6 +66,7 @@ export function PublishedAppView({ app, deployment, ownerSession, projects, onBa
           <details className="published-app-folder ui-disclosure">
             <summary>Edited in a folder<span>In the app's folder</span></summary>
             <ul>
+              <li><span>The live app</span><span className="published-app-live"><a className="ui-button ui-button-secondary ui-button-sm" href={deployment.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={13} aria-hidden="true" />Open the app</a><CopyButton text={deployment.url} label="Copy address" done="Address copied" /></span></li>
               <li><span>Publish a change</span><Command text="konae publish --dir ." /></li>
               <li><span>Copy its data to the folder</span><Command text={pullCommand} /></li>
             </ul>
@@ -87,15 +88,23 @@ export function PublishedAppView({ app, deployment, ownerSession, projects, onBa
 
 /** One command to run in a terminal, with a button that copies it. */
 function Command({ text }: { text: string }) {
+  return <span className="published-app-command">
+    <code>{text}</code>
+    <CopyButton text={text} label="Copy" accessibleLabel={`Copy ${text}`} done="Command copied" />
+  </span>;
+}
+
+/** Copies one text; a polite status says whether it worked, since the button's own words change silently. */
+function CopyButton({ text, label, accessibleLabel, done }: { text: string; label: string; accessibleLabel?: string; done: string }) {
   const [copied, setCopied] = useState<"" | "yes" | "no">("");
   const copy = () => {
     void navigator.clipboard?.writeText(text).then(() => setCopied("yes"), () => setCopied("no"));
     window.setTimeout(() => setCopied(""), 2000);
   };
-  return <span className="published-app-command">
-    <code>{text}</code>
-    <Button size="sm" onClick={copy} aria-label={`Copy ${text}`}>{copied === "yes" ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}{copied === "yes" ? "Copied" : copied === "no" ? "Select it" : "Copy"}</Button>
-  </span>;
+  return <>
+    <Button size="sm" onClick={copy} aria-label={accessibleLabel}>{copied === "yes" ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}{copied === "yes" ? "Copied" : copied === "no" ? "Select it" : label}</Button>
+    <span className="sr-only" role="status">{copied === "yes" ? done : copied === "no" ? "Could not copy. Select the text instead." : ""}</span>
+  </>;
 }
 
 /** The owner's projects for the switcher: the ones given, or the installation's list. */

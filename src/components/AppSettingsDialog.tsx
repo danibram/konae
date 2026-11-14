@@ -8,6 +8,7 @@ import { checkPathName } from "../lib/path-name";
 import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
+import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Dialog, Field, Input, LoadingBlock, Switch, TabBar } from "./ui";
 import "./app-settings.css";
@@ -38,7 +39,9 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   const [section, setSection] = useState<Section>("addresses");
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
-  const [loading, setLoading] = useState(Boolean(deploymentId));
+  const [reading, setLoading] = useState(Boolean(deploymentId));
+  // The loader follows the hold. A quick read shows none, and once shown it stays 400 ms.
+  const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [inputError, setInputError] = useState("");
@@ -263,7 +266,8 @@ type PathConfirmation = { kind: "accept"; change: PathChange; message: string } 
 /** The path address of the app: its switch, its addresses and its name. Each change reads the path back before it reports success. */
 function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: string; signInHref: string; onSignedOut: () => void }) {
   const [view, setView] = useState<PathView | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [reading, setLoading] = useState(true);
+  const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");

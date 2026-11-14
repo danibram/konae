@@ -1,6 +1,7 @@
 import { Mail } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { readContactEmail, setContactEmail, type ContactEmailState } from "../deployments/client";
+import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Field, Input, LoadingBlock } from "./ui";
 
@@ -51,7 +52,7 @@ export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: s
       if (!alive.current) return;
       setState(readBack);
       setEmail(readBack.contactEmail ?? "");
-      setNotice(readBack.contactEmail ? `Notices to the owner go to ${readBack.contactEmail}.` : "Contact email removed.");
+      setNotice(readBack.contactEmail ? "Saved." : "Contact email removed.");
     } catch (cause) {
       if (!alive.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -66,23 +67,25 @@ export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: s
   };
 
   const missing = missingContactSentence(state);
+  const pending = useLoadingHold(!state && !error);
+  const kept = "It is kept in konae.json, so an export carries it.";
   return <section className="domain-step" aria-label="Contact email" aria-busy={busy || !state}>
     <header className="domain-heading"><Mail size={20} /><h3>Contact email</h3></header>
     {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
-    {!state && !error && <LoadingBlock label="Reading the contact email" rows={1} />}
+    {pending && <LoadingBlock label="Reading the contact email" rows={1} />}
     {!state && error && <Button onClick={() => setReload((value) => value + 1)}>Retry loading</Button>}
-    {state && <>
-      {missing
-        ? <div className="domain-status"><Badge tone="warning">Notices not sent</Badge></div>
-        : state.contactEmail && <div className="domain-status"><Badge tone="success">Set</Badge></div>}
-      <p>{missing ?? "Where the app sends a notice to its owner. It is kept in konae.json, so an export carries it."}</p>
+    {state && !pending && <>
+      {missing && <div className="domain-status"><Badge tone="warning">Notices not sent</Badge></div>}
+      <p>{missing ?? (state.contactEmail ? `Notices to the owner go to ${state.contactEmail}. ${kept}` : `Where the app sends a notice to its owner. ${kept}`)}</p>
       <form onSubmit={submit} className="domain-form">
         <Field label="Email" help="Publishing keeps this address, unless the folder you publish from names another in konae.json. Without one, Konae uses your owner email when it knows it.">
           <Input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setNotice(""); setError(""); }} autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="email" placeholder="owner@example.org" disabled={busy} />
         </Field>
-        <Button type="submit" variant="primary" loading={busy} disabled={!email.trim() || email.trim() === state.contactEmail}>{state.contactEmail ? "Change email" : "Save email"}</Button>
+        <div className="domain-actions">
+          <Button type="submit" variant="primary" loading={busy} disabled={!email.trim() || email.trim() === state.contactEmail}>{state.contactEmail ? "Change email" : "Save email"}</Button>
+          {state.contactEmail && <Button variant="danger" disabled={busy} onClick={() => void save(null)}>Remove email</Button>}
+        </div>
       </form>
-      {state.contactEmail && <Button variant="danger" disabled={busy} onClick={() => void save(null)}>Remove email</Button>}
       {notice && <p className="domain-notice" role="status">{notice}</p>}
     </>}
   </section>;
