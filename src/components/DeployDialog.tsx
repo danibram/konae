@@ -9,7 +9,7 @@ import { actionSentence, actionTitle, deployReadiness, ownerFixes, type ReleaseF
 import { hintOf, refusalCodes, type RefusalCode } from "../kernel/refusal";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
-import { defaultSignupMode, firstPublishModes, invitationResultMessage, mailReadiness, republishAccessNote, signupModeCopy, visibilityCopy } from "./app-access";
+import { defaultSignupMode, firstPublishModes, mailReadiness, republishAccessNote, selfInviteOutcome, signupModeCopy, visibilityCopy } from "./app-access";
 import { Alert, Button, Dialog, Radio, Select } from "./ui";
 import "./app-access.css";
 
@@ -277,23 +277,11 @@ function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAp
     try {
       const answer = await createAppInvitations(deployment.id, [ownerEmail], key);
       const result = answer.results[0];
-      if (result && result.status !== "invited" && result.status !== "already-invited") {
-        setInvite({ status: "failed", key, text: invitationResultMessage(result).text });
-        return;
-      }
       // Read the invitation back through the same door before saying it went out.
-      const listed = await listAppInvitations(deployment.id, { limit: 25 });
-      const mine = listed.invitations.find((row) => row.email.toLowerCase() === ownerEmail.toLowerCase() && row.status === "pending");
-      if (!mine) {
-        setInvite({ status: "failed", key, text: "The invitation does not show in Access > Users yet. Open Users and check it there." });
-        return;
-      }
-      const sent = result?.status === "already-invited"
-        ? `An invitation to ${ownerEmail} is already waiting. Open the link in that email, or resend it from Access > Users if it is lost.`
-        : mine.delivery === "queued"
-          ? `Invitation sent to ${ownerEmail}. Open the link in that email, choose a password, and the app opens.`
-          : `The invitation to ${ownerEmail} exists, but its email did not leave. Resend it from Access > Users.`;
-      setInvite({ status: "sent", text: sent });
+      const created = result && (result.status === "invited" || result.status === "already-invited") && result.acceptable;
+      const listed = created ? (await listAppInvitations(deployment.id, { limit: 25 })).invitations.find((row) => row.email.toLowerCase() === ownerEmail.toLowerCase() && row.status === "pending") : undefined;
+      const outcome = selfInviteOutcome(result, listed, ownerEmail);
+      setInvite(outcome.sent ? { status: "sent", text: outcome.text } : { status: "failed", key, text: outcome.text });
     } catch (cause) {
       setInvite({ status: "failed", key, text: cause instanceof Error ? cause.message : String(cause) });
     }

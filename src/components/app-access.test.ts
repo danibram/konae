@@ -7,6 +7,7 @@ import {
   apiKeyProblem, batchKey, googleRefusal, redirectUriLabel, revokedKeyNotes, defaultSignupMode, expiryText, fileCurl, firstPublishModes, invitationResultMessage, invitationView,
   mailReadiness, parseEmailBatch, republishAccessNote, routeActions, routeCurl, secretProblem, secretUsage, signupModeCopy,
   userStateView, visibilityCopy,
+  selfInviteOutcome,
 } from "./app-access";
 
 const routes = JSON.stringify({
@@ -238,5 +239,25 @@ describe("redirectUriLabel", () => {
     expect(redirectUriLabel("https://notes-1.konae.es/_konae/auth/google/callback", 0)).toBe("Redirect URI");
     expect(redirectUriLabel("https://notes.example.org/_konae/auth/google/callback", 1)).toBe("Redirect URI for your custom domain");
     expect(redirectUriLabel("https://konae.es/p/0b6c/_konae/auth/google/callback", 1)).toBe("Redirect URI for the path address");
+  });
+});
+
+describe("selfInviteOutcome", () => {
+  const email = "owner@example.test";
+  test("an invitation the allowlist refuses is not access", () => {
+    const outcome = selfInviteOutcome({ email, status: "invited", invitationId: "i", expiresAt: 1, acceptable: false, delivery: "queued" }, { delivery: "queued" }, email);
+    expect(outcome.sent).toBe(false);
+    expect(outcome.text).toContain("does not accept that address");
+    const again = selfInviteOutcome({ email, status: "already-invited", invitationId: "i", acceptable: false }, { delivery: "queued" }, email);
+    expect(again.sent).toBe(false);
+  });
+  test("an accepted invitation says the app opens, and the development mailbox hands over the link", () => {
+    expect(selfInviteOutcome({ email, status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "queued" }, { delivery: "queued" }, email)).toEqual({ sent: true, text: `Invitation sent to ${email}. Open the link in that email, choose a password, and the app opens.` });
+    const local = selfInviteOutcome({ email, status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "local-mailbox", acceptUrl: "https://n.test/_konae/invitation#invitation=t" }, { delivery: "queued" }, email);
+    expect(local.sent).toBe(true);
+    expect(local.text).toContain("https://n.test/_konae/invitation#invitation=t");
+  });
+  test("a read-back that misses the invitation does not claim it went out", () => {
+    expect(selfInviteOutcome({ email, status: "invited", invitationId: "i", expiresAt: 1, acceptable: true, delivery: "queued" }, undefined, email).sent).toBe(false);
   });
 });

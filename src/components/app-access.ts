@@ -138,6 +138,23 @@ export function invitationResultMessage(result: InvitationResult): { label: stri
   }
 }
 
+/**
+ * What the Deploy receipt says after the owner invites their own email. An
+ * invitation the Signup Policy will not accept is not access, so it says what
+ * blocks it instead of promising the app opens. `listed` is the invitation as
+ * app_invitations_list reads it back, or undefined when the read-back missed it.
+ */
+export function selfInviteOutcome(result: InvitationResult | undefined, listed: Pick<AppInvitation, "delivery"> | undefined, email: string): { sent: boolean; text: string } {
+  if (!result) return { sent: false, text: "The invitation call answered nothing. Open Access > Users and check it there." };
+  if (result.status !== "invited" && result.status !== "already-invited") return { sent: false, text: invitationResultMessage(result).text };
+  if (!result.acceptable) return { sent: false, text: `The invitation to ${email} exists, but this app's Signup Policy does not accept that address, so its link will not open the app. In Access > Users, add ${email} to the allowlist or choose Invitation only.` };
+  if (!listed) return { sent: false, text: "The invitation does not show in Access > Users yet. Open Users and check it there." };
+  if (result.status === "already-invited") return { sent: true, text: `An invitation to ${email} is already waiting. Open the link in that email, or resend it from Access > Users if it is lost.` };
+  if (result.delivery === "local-mailbox") return { sent: true, text: `No email left this server. Open this link, choose a password, and the app opens: ${result.acceptUrl ?? "resend from Access > Users to get it again"}` };
+  if (result.delivery === "queued") return { sent: true, text: `Invitation sent to ${email}. Open the link in that email, choose a password, and the app opens.` };
+  return { sent: false, text: `The invitation to ${email} exists, but its email did not leave. Resend it from Access > Users.` };
+}
+
 /** Whether the installation can send account email now, and why not. */
 export function mailReadiness(status: MailStatus | null): { ready: boolean; reason: string } {
   if (!status) return { ready: false, reason: "Checking whether this installation can send email." };
