@@ -109,8 +109,12 @@ export type AppInvitation = {
   createdAt: number; expiresAt: number; acceptedAt: number | null; revokedAt: number | null;
   delivery: InvitationDelivery; sends: number;
 };
+/**
+ * An invite's answer. `local-mailbox` means the development transport wrote
+ * the email to the server's mailbox file, so the answer carries `acceptUrl`.
+ */
 export type InvitationResult =
-  | { email: string; status: "invited"; invitationId: string; expiresAt: number; acceptable: boolean; delivery: InvitationDelivery }
+  | { email: string; status: "invited"; invitationId: string; expiresAt: number; acceptable: boolean; delivery: InvitationDelivery | "local-mailbox"; acceptUrl?: string }
   | { email: string; status: "already-invited"; invitationId: string; acceptable: boolean }
   | { email: string; status: "already-member" | "suspended" | "invalid-email" };
 

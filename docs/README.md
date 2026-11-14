@@ -58,7 +58,7 @@ If you do not write code, stay in the editor. Create a project, press **Connect 
 
 ### 3. Or work from a folder with the CLI
 
-Run the commands from the Konae repository. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, and asks for either one that is unset when it runs in a terminal. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE` for a later owner. A token cannot widen itself, so one `login` asks for `--manage-users` and `--export-data` up front.
+Run the commands from the Konae repository. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, and asks for either one that is unset when it runs in a terminal. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE` for a later owner. A token cannot widen itself, so one `login` asks for `--manage-users` and `--export-data` up front. `login --browser` signs in through the browser instead, with no password in the shell.
 
 ```sh
 bun run konae -- init --dir ./my-app --name 'My app' --template tasks

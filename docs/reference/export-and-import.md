@@ -21,8 +21,8 @@ Export the app folder to take one app's accounts, data and rules to another mach
     ],
     "excluded": ["app sessions", "verification, recovery and invitation links", "…"]
   },
-  "downloads": { "database": { "transferId": "…", "size": 268435456, "sha256": "…", "chunkBytes": 65536, "expiresAt": 0 } },
-  "folder": { "transferId": "…", "size": 40960, "sha256": "…", "chunkBytes": 65536, "expiresAt": 0 },
+  "downloads": { "database": { "transferId": "…", "size": 268435456, "sha256": "…", "chunkBytes": 4194304, "expiresAt": 0 } },
+  "folder": { "transferId": "…", "size": 40960, "sha256": "…", "chunkBytes": 4194304, "expiresAt": 0 },
   "sourcesAhead": false
 }
 ```

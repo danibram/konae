@@ -22,8 +22,13 @@ Run `bun run dev:local`, open `http://localhost:4173/_konae/owner/login` and sig
 | --- | --- | --- |
 | A token from the owner sign-in page | `read` alone, or `read`, `write` and `publish` | 24 hours |
 | `token_create`, from the owner's browser session | Any of `read`, `write`, `publish`, `manage_users` and `export_data` | Up to 30 days, one hour on an installation that signs owners in through Clerk |
-| `konae login` | `read`, `write` and `publish`, plus `--manage-users` and `--export-data` | 24 hours |
-| An OAuth client | `read`, `write`, `publish` and `manage_users`. Asking for `export_data` answers `Invalid scope.` | One hour, with no refresh token |
+| `konae login`, with a password or with `--browser` | `read`, `write` and `publish`, plus `--manage-users` and `--export-data` | 24 hours |
+| An OAuth client that redirects to `http://127.0.0.1`, `localhost` or `[::1]` | `read`, `write`, `publish`, `manage_users` and `export_data` | 24 hours, with no refresh token |
+| Any other OAuth client | `read`, `write`, `publish` and `manage_users`. Asking for `export_data` answers `Invalid scope.` | One hour, with no refresh token |
+
+Under Clerk every token lasts one hour, whatever its row says. When the agent has no password, `bun run konae -- login --browser` prints an address for the owner to open on the same machine and saves the token without it passing through the agent ([CLI](../cli.md#login)). Set a secret with `bun run konae -- secret set <name>`, which reads the value from stdin, rather than with `secret_set` and the value in the agent's transcript ([CLI](../cli.md#secret)).
+
+An expired token answers 401 with the time it expired and the way back, where a missing or unknown token gets the plain 401.
 
 The owner's browser session holds every permission. A delegated token cannot create tokens or add a permission to itself, so ask `login` for every permission the work needs. The setup key never authenticates a tool, and Konae refuses to start on a reachable address while the key is the development default ([Before a Kernel is reachable](../operate.md#before-a-kernel-is-reachable)).
 

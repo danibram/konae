@@ -6,7 +6,7 @@ You describe an app to an agent in the editor, or write its files in a folder. E
 
 ## Two halves
 
-Konae is the platform. It holds the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. It is the `konae` binary in `kernel-rs/konae` and the `konae` CLI in `scripts/konae.ts`.
+Konae is the platform. It holds the editor, the build agent, owner accounts, the owner's MCP on `/mcp` and the project list. It is the editor in `src/`, the `konae` binary in `kernel-rs/konae`, which serves the built editor next to the owner's MCP, and the `konae` CLI in `scripts/konae.ts`.
 
 The Kernel runs apps. It answers Server Actions, keeps each app's accounts, files, schedule, notices, routes, calls and Usage, and serves the built pages under a Content Security Policy. It is a Rust library and the `kernel` binary in `kernel-rs/kernel`, which serves a directory of app folders with no Konae around it. Konae links the Kernel, and `konae dev` runs the `kernel` binary on one folder.
 
@@ -57,7 +57,7 @@ bun run dev:local
 
 `dev:local` compiles and starts Konae, with its Kernel, on port `8790` and the editor on port `4173`. `KONAE_KERNEL_PORT` and `KONAE_EDITOR_PORT` change the ports. Open [http://localhost:4173](http://localhost:4173). It opens on the owner sign-in page. Press **Create owner account**, enter an email and a password, and keep the setup key the page fills in for this computer.
 
-Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothing sends real email locally. Account links and invitations land in `data/kernel-local/mailbox.jsonl`.
+Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothing sends real email locally. Account links and invitations land in `data/kernel-local/mailbox.jsonl`, and an app invitation also hands its link to the owner who sent it.
 
 `docker compose up --build` runs the complete stack, with a gateway and an S3 store, at [http://app.localhost:8080](http://app.localhost:8080). [Operate an installation](./docs/operate.md) covers it, along with every environment variable, copies and restores, email, and what to set before a Kernel is reachable from outside.
 
@@ -100,12 +100,16 @@ bun run konae -- publish --dir /tmp/my-list
 
 An app published from a folder appears on the editor's project list beside the others, marked **Edited in a folder**. Its files stay in the folder, and you publish its changes from there. Its card opens its database, its app accounts and what it did.
 
-To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Nothing travels back:
+`login --browser` signs in through the browser and needs no password in the shell. `hostname --set <name>` moves the app to another generated name, and `secret set <name>` reads a secret's value from stdin, so it stays out of argv.
+
+To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Neither changes the published app:
 
 ```sh
 bun run konae -- pull --dir /tmp/my-list
 bun run konae -- dev --dir /tmp/my-list --reset
 ```
+
+`push --yes` sends the local `data/` back and replaces the published data with it, after a backup.
 
 [Edit files with the CLI](./docs/guides/edit-files-with-the-cli.md) explains each step, and [the CLI reference](./docs/cli.md) covers `sql`, `events`, `contract` and `conform`.
 
@@ -167,6 +171,7 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 - [`examples/probes`](./examples/probes/README.md) has small Capsules that each prove one capability.
 - [`examples/docs-site`](./examples/docs-site/README.md) is the docs site.
 - [`examples/home`](./examples/home/README.md) is the page an installation answers on its bare domain once an app's path address is named `konae-home`.
+- [`examples/invitation`](./examples/invitation/README.md) is the public form where a visitor asks the operator for an invitation code, at `<domain>/p/invitation/`.
 - [`examples/politica-de-privacidad`](./examples/politica-de-privacidad/README.md) and [`examples/terminos-y-condiciones`](./examples/terminos-y-condiciones/README.md) are the legal pages at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`.
 - [`examples/architecture-map`](./examples/architecture-map/README.md) is a map of the system.
 

@@ -26,8 +26,9 @@ pub(super) const TOPICS: [&str; 10] = [
 const SCOPES: [&str; 5] = ["read", "write", "publish", "manage_users", "export_data"];
 
 /// How to observe the effect of a write through the same door. A write with
-/// no entry here must be listed in [`READ_BACK_GAPS`]. Staging transfers are
-/// outside the rule until `transfer_complete` or a publish that consumes them.
+/// no entry here must be listed in [`READ_BACK_IN_ANSWER`] or
+/// [`READ_BACK_GAPS`]. Staging transfers are outside the rule until
+/// `transfer_complete` or a publish that consumes them.
 pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("project_create", "project_inspect"),
     ("project_sources_save", "project_sources_read"),
@@ -37,7 +38,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("secret_delete", "secrets_list"),
     ("api_keys_create", "api_keys_list"),
     ("api_keys_revoke", "api_keys_list"),
-    ("release_plan", "release_plan"),
     ("release_apply", "project_inspect"),
     ("signup_policy_set", "signup_policy_read"),
     ("sign_in_methods_set", "sign_in_methods_read"),
@@ -55,7 +55,6 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("maintenance_set", "maintenance_read"),
     ("contact_email_set", "contact_email_read"),
     ("transfer_begin", "transfer_status"),
-    ("transfer_write", "transfer_status"),
     ("transfer_complete", "transfer_status"),
     ("transfer_cancel", "transfer_status"),
     ("project_export", "transfer_read"),
@@ -71,6 +70,23 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("files_update", "files_list"),
     ("files_delete", "files_list"),
     ("actions_invoke", "actions_invoke"),
+];
+
+/// The tag `konae build` puts in a whole-document page's head to load the
+/// SDK, as `runtimeLoaderScript` in src/lib/static-artifact.js writes it.
+const SDK_LOADER: &str = r#"<script>(function(){var m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);document.write('<script src="'+(m?'/p/'+m[1]:'')+'/runtime.js"><\/script>')})();</script>"#;
+
+/// Writes whose own answer is the observation, so a second call would only
+/// repeat it. Each entry says what in the answer to read.
+pub(super) const READ_BACK_IN_ANSWER: &[(&str, &str)] = &[
+    ("transfer_write", "Its nextOffset is where the next block starts. Write the next block there; call transfer_status only to resume after an interrupted call, and transfer_complete checks the whole upload."),
+    ("release_plan", "It changes nothing live. Its planId, expectedRevision and schema are the plan; pass that planId to release_apply. Calling release_plan again makes another plan with a new planId."),
+];
+
+/// What a read-back answers when the write worked, where that answer looks
+/// like a refusal.
+pub(super) const READ_BACK_EXPECT: &[(&str, &str)] = &[
+    ("transfer_cancel", "transfer_status answers \"Transfer not found or expired.\" That answer is the cancel confirmed: the transfer and its bytes are gone."),
 ];
 
 /// Writes whose effect this door cannot re-read yet. Each entry names what
@@ -98,19 +114,21 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "after": "If the first run grows past these steps, the product got harder. Prefer fixing the path over adding a guide page."
             },
             "readBack": {
-                "rule": "Every tool that writes has a tool that observes its effect through the same door. After a write, call that read-back before retrying or telling the owner it worked. A service_timeout or interrupted call must be verified the same way.",
+                "rule": "Every tool that writes has a way to observe its effect through the same door. map names the tool to call after the write, before retrying or telling the owner it worked; inAnswer names the writes whose own answer is the observation, so no second call follows them. A service_timeout or interrupted call must be verified the same way.",
                 "map": Value::Object(READ_BACK.iter().map(|(write, read)| ((*write).to_owned(), json!(*read))).collect()),
+                "inAnswer": Value::Object(READ_BACK_IN_ANSWER.iter().map(|(write, read)| ((*write).to_owned(), json!(*read))).collect()),
+                "expect": Value::Object(READ_BACK_EXPECT.iter().map(|(write, answer)| ((*write).to_owned(), json!(*answer))).collect()),
                 "gaps": Value::Object(READ_BACK_GAPS.iter().map(|(write, close)| ((*write).to_owned(), json!(*close))).collect()),
-                "staging": "Bytes in an open transfer are not a Deployment. transfer_status is the read-back of staging; project_inspect is the read-back of a release that consumed them."
+                "staging": "Bytes in an open transfer are not a Deployment. An upload is transfer_begin, one transfer_write per block of chunkBytes, then transfer_complete, whose read-back is transfer_status. project_inspect is the read-back of a release that consumed them."
             },
             "capabilities": "session_inspect answers can for the scopes this credential holds, and createTokens when it is the owner's browser session. Decide from can, not from memory of which flag login took.",
             "divergences": [
-                {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers and other-origin fetches can still run there; a published app refuses them. Attach listeners in JavaScript and keep scripts and fetches on the app's own origin."},
+                {"where": "editor preview vs published Deployment", "fact": "The preview applies no Content Security Policy. Inline event handlers, other-origin fetches and WebAssembly can still run there; a published app and bun run konae -- dev refuse them. Its script-src is 'self' plus the hash of each inline script, with no 'wasm-unsafe-eval' and no 'unsafe-eval', so WebAssembly.compile and WebAssembly.instantiate fail with \"Compiling or instantiating WebAssembly module violates the following Content Security policy directive\", and eval and new Function fail too. Attach listeners in JavaScript, keep scripts and fetches on the app's own origin, and pick libraries that run without WebAssembly or eval."},
                 {"where": "editor preview vs Deployment", "fact": "The preview has no HTTP routes, no schedule timer, no notice email, no Usage store and no call outbox. Try those on bun run konae -- dev or on a published Deployment."},
                 {"where": "editor preview vs Kernel", "fact": "The editor preview refuses a file over 2 MiB. A Kernel refuses at its own KONAE_FILE_MAX_BYTES, 2 MiB unless the operator raised it, and names the number. konae dev applies the same 2 MiB per file, and KONAE_FILE_MAX_BYTES raises it there. Its quota for all files is 1 TiB unless KONAE_FILES_QUOTA_BYTES names another."},
                 {"where": "editor preview vs Deployment", "fact": "The editor preview has no Google sign-in. miniapp.auth.signInWithGoogle() refuses there; try it on a published Deployment once the owner has set the app's Google client and turned Google on."},
                 {"where": "editor build vs konae build", "fact": "The editor's build reads npm packages from esm.sh; konae build and an app folder's npm run build read them from node_modules. Both use the exact versions in package.json, but the bundles are not byte-identical."},
-                {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema and actions.json. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."},
+                {"where": "Validation Gate vs publish builders", "fact": "The Gate checks schema, actions.json and manifest.fileAccess, and refuses a Capsule whose pages are all whole documents that load no script, as the build does. A page that names a missing file fails at build or release, not at validate_capsule. Check every path you write."},
                 {"where": "editor preview vs Kernel", "fact": "The editor preview re-runs schema.sql on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When the preview lacks a table or column schema.sql declares, the Gate warns and passes. Try such a change on bun run konae -- dev or a published Deployment."},
                 {"where": "konae dev vs Deployment", "fact": "konae dev sends no email. Account email and notices land in .konae/kernel/mailbox.jsonl, and bun run konae -- events lists them."}
             ]
@@ -127,27 +145,33 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 {"need": "Another service calls this app", "use": "http on an anonymous action with callers / signature / key", "not": "A call action (that is outbound)"},
                 {"need": "This app calls another host", "use": "kind: call", "not": "fetch of a secret from the browser"},
                 {"need": "Uploaded files", "use": "miniapp.files", "not": "Large bytes in a SQLite column"},
+                {"need": "Every signed-in user reads every uploaded file", "use": "manifest.fileAccess set to app-users", "not": "Each upload as public"},
                 {"need": "Who may create an app account", "use": "Signup Policy and invitations", "not": "A homemade users table that bypasses Runtime Actor"},
                 {"need": "An administrator inside the app", "use": "A role column in the app's own table, checked in SQL", "not": "An owner account inside the app"},
                 {"need": "A short link on the installation's domain", "use": "path address (path_set)", "not": "A custom domain when DNS is not yours"},
                 {"need": "Take the app elsewhere", "use": "export and import of the app folder", "not": "Copy (moves the installation)"},
                 {"need": "Debug, or try the next version, on what the published app holds", "use": "konae pull (an export of the data) + dev --reset (its import)", "not": "Publishing to find out"},
+                {"need": "Put data from the folder, or from another system, into the published app", "use": "konae push (an import of the folder's data/, after a backup)", "not": "A migration script that drives transfers and imports by hand"},
                 {"need": "See the email, calls, scheduled runs and Signals of a local run", "use": "konae events", "not": "Reading the Kernel's files by hand"}
             ],
             "unit": "The app folder is the app: konae.json, app/, dist/ and data/ with its database, accounts, files and Usage. The Kernel keeps it under apps/<id>/, and an export hands the same folder over."
         }),
         "credentials" => json!({
-            "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+            "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish, and the installation's address, in <folder>/.konae/credentials.json, which publish, pull, push, secret, domain, hostname, tool, export --with-data, and sql and events with --prod read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
+            "browser": "When nobody has the owner's password, run bun run konae -- login --browser --dir <folder> --url <installation URL>, with the same flags. It prints an address and opens it; hand the address to the owner, who opens it in a browser on the same machine, signs in and allows access within 5 minutes. It saves the same 24-hour token in the same file, one hour under Clerk. No password or token passes through the terminal or the agent.",
+            "secrets": "bun run konae -- secret set <name> --dir <folder> [--use route|call|google] reads the value from stdin, so it stays out of the agent's context and argv. The owner pipes it in or types it at the hidden prompt. It reads the name back with secrets_list. secret list prints names and uses, never values. Prefer it to secret_set with the value as an argument.",
             "flags": {"--manage-users": "adds manage_users", "--export-data": "adds export_data"},
-            "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
+            "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. A client that redirects to http://127.0.0.1, localhost or [::1] gets a 24-hour token and may also ask for export_data; any other client gets a one-hour token without export_data. Under Clerk every token lasts one hour. There is no refresh token.",
             "permissions": {
+                "none": "platform_describe, platform_guide, session_inspect and mail_status",
                 "read": "projects_list, project_inspect, project_sources_read, signup_policy_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_read, signals_read, usage_summary, usage_overview, calls_read, notices_read and database_execute reads",
                 "write": "project_create, project_sources_save, project_delete and database_execute changes",
                 "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
                 "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
-                "export_data": "project_export"
+                "export_data": "project_export and reading its downloads",
+                "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter"
             },
-            "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
+            "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds. An expired token answers 401 with the time it expired. One from OAuth says to run konae login --browser for the CLI or reconnect the MCP client. Any other says how long tokens from konae login last on this installation and to run konae login again."
         }),
         "development" => json!({
             "commands": [
@@ -155,16 +179,19 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "bun run konae -- dev --dir /tmp/my-app [--reset]",
                 "bun run konae -- build --dir /tmp/my-app",
                 "bun run konae -- contract --dir /tmp/my-app",
-                "bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 [--export-data]",
+                "bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 [--browser] [--manage-users] [--export-data]",
+                "bun run konae -- secret set <name> --dir /tmp/my-app [--use route|call|google], with the value on stdin",
                 "bun run konae -- publish --dir /tmp/my-app",
+                "bun run konae -- hostname --dir /tmp/my-app --deployment <id> [--set <name>]",
                 "bun run konae -- pull --dir /tmp/my-app",
+                "bun run konae -- push --dir /tmp/my-app [--yes]",
                 "bun run konae -- sql --dir /tmp/my-app [--prod] '<statement>'",
                 "bun run konae -- events --dir /tmp/my-app [--follow] [--json] [--prod]",
                 "bun run konae -- tool <name> ['<json arguments>'] [--stdin <key>] --dir /tmp/my-app",
                 "bun run konae -- conform --url <app URL> --contract /tmp/my-app/action-contract.json --token <app session> --key <API key> --secret <name>=<value>"
             ],
-            "credentials": "init, dev, build and contract, and sql and events without --prod, need no credential. login saves the credential and the installation's address in the folder, and publish, pull, sql, domain and tool read it from there or from KONAE_MCP_TOKEN. tool <name> calls any owner tool by name and prints its answer, and --stdin <key> reads one argument from standard input, for a secret's value. domain and tool talk to --url or the installation login saved, as publish does. The first publish registers the project with project_create. The credentials topic lists the permissions. Never put a token in app source.",
-            "liveData": "pull is an export of the published app's data (database, accounts, files, Usage) into .konae/pull/data and needs export_data. dev --reset imports it into the folder's data/ with the kernel binary's import command, after a backup in .konae/backups. Nothing travels back to the published app. The Kernel brings data/ to app/schema.sql when it starts, so a column the next version adds is tried on the published rows first. sql and events read the folder's data/ through the kernel binary's commands, and the published Deployment only with --prod.",
+            "credentials": "init, dev, build and contract, and sql and events without --prod, need no credential. login saves the credential and the installation's address in the folder, and every other command but conform and export without --with-data reads it from there or from KONAE_MCP_TOKEN. tool <name> calls any owner tool by name and prints its answer, and --stdin <key> reads one argument from standard input, for a secret's value. domain and tool talk to --url or the installation login saved, as publish does. The first publish registers the project with project_create. The credentials topic lists the permissions. Never put a token in app source.",
+            "liveData": "pull is an export of the published app's data (database, accounts, files, Usage) into .konae/pull/data and needs export_data. dev --reset imports it into the folder's data/ with the kernel binary's import command, after a backup in .konae/backups. push sends the folder's data/ back and replaces the published data with project_import replace data, after a backup. It needs --yes. The Kernel brings data/ to app/schema.sql when it starts, so a column the next version adds is tried on the published rows first. sql and events read the folder's data/ through the kernel binary's commands, and the published Deployment only with --prod.",
             "events": "events lists what the local app did besides answer its page: email with its recipient and text (nothing is sent; it lands in .konae/kernel/mailbox.jsonl), calls to other services, scheduled runs, routes and Signals. dev serves the same list as a page on the port after the app's. Run events with --json after calling an action to check a notify, a call or a signal did what the Capsule declares, and with --follow to watch.",
             "start": "In an empty folder, either run init, or call project_create with a name and an optional template and write the files it returns into app/ plus konae.json {id, name, slug, visibility, signupPolicy, signInMethods, kernel, manifest}. Both give the same files. init also writes AGENTS.md, action-contract.md, compose.yaml, .env.example and a package.json whose npm run build writes dist/. Then dev runs it locally and publish sends it to the installation.",
             "isolation": "dev runs the kernel binary on the folder with its own data/, no owner and no MCP, and does not proxy production. It keeps the Signup Policy konae.json names; on an app that is not Open and holds no account, dev invites test@example.com and prints the link that opens the invitation. For another address, use the kernel binary's invite command, as dev prints it.",
@@ -176,20 +203,30 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
         "publishing" => json!({
             "steps": [
-                "Create project identity with project_create. Keep its id, slug and manifest locally.",
+                "With a shell, run bun run konae -- publish --dir <folder> in the app folder and stop there. It registers the project, builds app/ into dist/ with the SDK, uploads the release, plans and applies it, and saves the plan and the receipt in .konae/. The steps below are the same work as tool calls, for a client without a shell.",
+                "Create project identity with project_create { projectId, name, slug, manifest }. Keep its id, slug and manifest locally.",
                 "Set every secret an action's http signature names with secret_set { projectId, name, value }. A release that signs with an unset secret is refused and names each one.",
-                "Build static HTML/CSS/JS locally. Inject the SDK using the local builder.",
-                "Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.",
-                "Call release_plan with transferId, inspect its planId, expectedRevision and schema, then call release_apply with planId.",
+                "Write the release JSON that payload describes, with the SDK that sdk describes.",
+                "Upload it: transfer_begin { size, sha256, projectId } with the byte size and SHA-256 of the UTF-8 JSON answers transferId and chunkBytes. Call transfer_write { transferId, offset, data } with base64 blocks of at most chunkBytes, each at the nextOffset the previous write answered, then transfer_complete { transferId }. A release smaller than chunkBytes is one write. Call transfer_status only to resume an interrupted upload.",
+                "Call release_plan { transferId } once, inspect its planId, expectedRevision and schema, then call release_apply { planId }. A second release_plan makes another plan with a new planId; it is not a read-back.",
                 "schema is the change the Kernel derived from schema.sql to the live database, with statements, losses and confirmation. A new table, column or index applies. When losses is not empty (a dropped table, a dropped column, a changed column type), show the owner each loss's sentence and pass confirmation as confirmSchema only after the owner agrees. Without it release_apply refuses with schema.confirmation-required and changes nothing.",
-                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
+                "Save the receipt and transfer_cancel the upload; transfer_status then answers \"Transfer not found or expired.\", which confirms the cancel. Read the live Deployment with project_inspect."
             ],
+            "payload": {
+                "shape": {"project": {"id": "<projectId>", "name": "<name>", "slug": "<slug>", "files": {"actions.json": "<text>", "schema.sql": "<text>", "index.html": "<text>"}, "manifest": {"version": 1, "visibility": "private"}}, "visibility": "private", "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<!doctype html>...", "runtime.js": "<the SDK>", "logo.png": "<base64>"}, "encodings": {"logo.png": "base64"}}, "initialSignupPolicy": {"mode": "invitation", "allowlist": []}},
+                "project": "id, name and slug as project_create answered them. files holds the Capsule's sources, the text files of app/ by their path inside app/ (.html, .css, .js, .jsx, .ts, .tsx, .json and .sql) as UTF-8 text, never base64. actions.json is required, and the Kernel derives the schema change from schema.sql here. manifest is konae.json's manifest without signupPolicy, such as routing, fileAccess and connects.",
+                "visibility": "public or private.",
+                "artifact": "What the Deployment serves, dist/ after a build: version 1, entrypoint index.html, and files by their path inside dist/. index.html is required. A file that is UTF-8 text is its text; any other file, such as an image, is base64 and encodings names it with the value base64, the only encoding. Omit encodings when every file is text. At most 1000 files and 16 MiB once base64 is decoded. A path under _konae/, oauth/ or .well-known/, or the path mcp, is refused.",
+                "optional": "initialSignupPolicy {mode, allowlist} on the first release only; contactEmail, the address notify to owner reaches; initialPackage on a first release that imports an export.",
+                "limit": "The JSON is at most 26 MB."
+            },
+            "sdk": format!("The Kernel does not add the SDK; the artifact carries it. konae build inlines Konae's src/mcp/runtime.js in a script tag with the data-konae-runtime attribute on a fragment page, and a whole-document page loads /runtime.js, an artifact file with the same source. Without a shell, put that file at runtime.js in artifact.files, taken from the Konae version the installation runs, and load it in each page's head before the page's own scripts with the loader konae build writes, which finds runtime.js on the app's hostname and on a path address alike: {SDK_LOADER}"),
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
             "access": "A first release may add initialSignupPolicy {mode, allowlist} with mode open, invitation, closed or allowlist; the Kernel installs it before the app serves. When the owner's request leaves access open for an app with accounts, propose visibility private and mode invitation. Later changes need manage_users and signup_policy_set. Invite people with app_invitations_create only when the owner asks, because it sends email.",
             "import": "A first release may also carry initialPackage to start the Deployment with an exported app's data. project_import replaces an existing app's sources, data or both; the portability topic has the steps.",
             "domain": "domain_set { deploymentId, hostname } adds a custom domain next to the generated hostname and needs publish. Its first answer names a TXT record, _konae.<hostname>, and the token it must hold. Once the record is at the DNS provider and the hostname points at the installation's proxy, which terminates TLS and forwards Host unchanged, call domain_set again: the Kernel looks the record up and the alias serves. domain_read shows the state and domain_clear removes it. bun run konae -- domain runs the same steps.",
-            "hostname": "hostname_set { deploymentId, name } moves the generated hostname to <name>.<app suffix> when no other app on the installation holds or held it, and needs publish. The old name answers with a 308 redirect to the same path on the new one and stays the app's. App users sign in again on the new name, and an app with Google sign-in registers the googleCallback the answer names. project_inspect shows the new url.",
+            "hostname": "Konae names every app under the app suffix. The first release takes <slug>.<app suffix>, or <slug>-<code>.<app suffix> when another app holds the slug, and later releases keep it. release_plan answers that name as hostname and url, with firstRelease true, before the first release; show it to the owner before they configure Google or DNS. domain_set refuses any name under the suffix. hostname_set { deploymentId, name } moves the generated hostname to <name>.<app suffix> when no other app on the installation holds or held it, and needs publish. The old name answers with a 308 redirect to the same path on the new one and stays the app's. App users sign in again on the new name, and an app with Google sign-in registers https://<name>.<app suffix>/_konae/auth/google/callback, the googleCallback the answer names, in its Google client. Services that call the app's HTTP routes need the new address. project_inspect shows the new url. The name belongs to the installation and does not travel in an export.",
             "maintenance": "maintenance_set { deploymentId, on } puts the app in maintenance or takes it out and needs publish. Paused, the app serves a maintenance page, refuses writes, signups and sign-ins, and holds its email, calls and schedule; owner tools that would change it are refused except maintenance_set and project_import. maintenance_read { deploymentId } answers { maintenance, since, unreadable, installation }. Move an app with no lost write by putting it in maintenance, exporting it, and importing the folder elsewhere.",
             "path": "path_set { deploymentId, enabled, name?, acceptSharedOrigin? } answers the app on <domain>/p/<id>, and on <domain>/p/<name> once it has a name. The domain is KONAE_DOMAIN. An app with accounts or a private app needs acceptSharedOrigin true, because every path and the home share one origin, and any other app on the domain can use the sessions of this app's users. The app whose enabled path holds the name konae-home also answers <domain>/ and every path there outside /p/; with none, <domain>/ answers not found. path_read returns the state and the addresses; path_clear turns the path off and removes the name. Both need publish. Read back with path_read after a change."
         }),
@@ -198,8 +235,8 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "policy": "signup_policy_set { deploymentId, mode } with open, invitation, closed or allowlist and allowlist entries. A publish never changes it after the first release.",
             "google": "Each app has its own Google OAuth client, which the owner makes in their own Google console. sign_in_methods_read { deploymentId } returns redirectUris, the callbacks to register in that client: the app's own host, a verified custom domain, and <domain>/p/<id> while the path address is on (the name address uses the id's callback; the home address offers no Google), and googleClient { clientIdSet, clientSecretSet }. secret_set { projectId, name: \"google_client_id\" or \"google_client_secret\", value, use: \"google\" } sets each half; the value is never returned and no route or call reads it. Then sign_in_methods_set { deploymentId, methods: [\"password\", \"google\"] } adds Continue with Google to the sign-in page; [\"password\"] removes it. Password cannot be turned off. While either half is unset it refuses with \"Set this app's Google client ID and client secret before turning Google on.\", and while Google is on secret_delete refuses either half. A Google sign-in reaches the app account that holds the same email, made with a password or with Google, and Signup Policy decides whether an email without an account gets one. Google proves only an address it manages: a gmail.com address, or one whose Workspace domain the token names in hd; any other address is refused and signs in with email and password. An active account whose email nobody proved is taken back for the person Google vouches for: its password and sessions stop working. An export carries signInMethods and the accounts, never the client: on another installation the owner sets the two secrets and registers that host's redirect URI, and until then the sign-in page offers only email and password and sign_in_methods_read returns a notice.",
             "invite": [
-                "Call mail_status: inviting needs sending true.",
-                "app_invitations_create { deploymentId, emails, idempotencyKey } emails each address a seven-day link to /_konae/invitation#invitation=<token> on the app's host. Call it only when the owner asked for those invitations.",
+                "Call mail_status: inviting needs sending true. When it answers delivery local-mailbox, the transport is development and no email leaves the server.",
+                "app_invitations_create { deploymentId, emails, idempotencyKey } emails each address a seven-day link to /_konae/invitation#invitation=<token> on the app's host. Call it only when the owner asked for those invitations. Under the development transport each result answers delivery local-mailbox and the link as acceptUrl, once; hand it to the person. A retry with the same key and app_invitations_list say queued and carry no link, and app_invitation_resend issues a new one.",
                 "The person opens the link and chooses a password; the page posts it to /_konae/auth/accept and signs them in.",
                 "app_invitations_list shows each invitation's status; app_invitation_resend sends a new link and app_invitation_revoke ends one."
             ],
@@ -381,9 +418,20 @@ mod tests {
             .chain(runtime_tools())
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        let mapped: Vec<&str> = READ_BACK.iter().map(|(w, _)| *w).chain(READ_BACK_GAPS.iter().map(|(w, _)| *w)).collect();
+        let mapped: Vec<&str> = READ_BACK
+            .iter()
+            .chain(READ_BACK_IN_ANSWER)
+            .chain(READ_BACK_GAPS)
+            .map(|(w, _)| *w)
+            .collect();
         for write in &writes {
-            assert!(mapped.contains(&write.as_str()), "write tool {write} has no read-back and no gap");
+            assert_eq!(mapped.iter().filter(|w| *w == write).count(), 1, "write tool {write} needs exactly one read-back, answer or gap");
+        }
+        for (write, _) in READ_BACK_IN_ANSWER {
+            assert!(writes.iter().any(|s| s == *write), "inAnswer names {write}, which is not a write tool");
+        }
+        for (write, _) in READ_BACK_EXPECT {
+            assert!(READ_BACK.iter().any(|(w, _)| w == write), "expect names {write}, which has no read-back tool");
         }
         for (write, read) in READ_BACK {
             assert!(served.iter().any(|s| s == *write), "read-back map names {write}, which the Kernel does not serve");
@@ -427,6 +475,13 @@ mod tests {
         assert!(!actions_rules.contains("id'}}"), "{actions_rules}");
         assert_eq!(actions_rules.matches("to answer on that path").count(), 1);
         assert_eq!(rules["readBack"]["map"]["release_apply"], "project_inspect");
+        // A block's answer carries nextOffset and a plan's answer is the plan,
+        // so neither sends the agent to a second call.
+        for write in ["transfer_write", "release_plan"] {
+            assert!(rules["readBack"]["map"].get(write).is_none(), "{write}");
+            assert!(rules["readBack"]["inAnswer"][write].is_string(), "{write}");
+        }
+        assert!(rules["readBack"]["expect"]["transfer_cancel"].as_str().unwrap().contains("Transfer not found or expired."));
         assert!(rules["divergences"].as_array().unwrap().len() >= 3);
         let pieces = topic("pieces").unwrap();
         assert!(pieces["choose"].as_array().unwrap().len() >= 8);

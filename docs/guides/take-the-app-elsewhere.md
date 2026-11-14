@@ -44,7 +44,7 @@ my-app/
 
 ## Export the app
 
-1. Log in with `export_data`, unless the login saved in the folder already has it. `tool session_inspect` shows it in the `can` map. An OAuth client never gets `export_data`. Use a CLI login or a token the owner creates in their browser session with that permission.
+1. Log in with `export_data`, unless the login saved in the folder already has it. `tool session_inspect` shows it in the `can` map. Only an OAuth client on this machine, such as `login --browser --export-data`, gets `export_data`. Otherwise use a password login or a token the owner creates in their browser session with that permission.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
@@ -181,11 +181,11 @@ Into a new app over MCP:
 3. Upload the release JSON built from `app/` and `dist/`, with `initialPackage` holding the `manifest` and a `components` map of part name to `transferId`. Then call `release_plan` and `release_apply`. An import installs only into a project that has no Deployment yet. The same data imported again returns the first import.
 4. Issue new API keys. `api_keys_list` shows each key revoked at import.
 
-`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull/data`, and `dev --reset` imports it into the folder's `data/` with the `kernel` binary's `import` command, after a backup.
+`konae pull` and `konae dev --reset` are the same export and import for a laptop. `pull` exports the published app's data into `.konae/pull/data`, and `dev --reset` imports it into the folder's `data/` with the `kernel` binary's `import` command, after a backup. `konae push` goes the other way and imports the folder's `data/` into the published app with `project_import`, after a backup. [Bring existing data](./bring-existing-data.md) shows it.
 
 ## Check it worked
 
 - After `project_export`, the read-back is `transfer_read`. Verify the size and SHA-256 of every download.
-- After `transfer_begin`, `transfer_write` or `transfer_complete`, the read-back is `transfer_status`. Bytes in an open transfer are not a Deployment.
+- After `transfer_begin` or `transfer_complete`, the read-back is `transfer_status`. `transfer_write` answers `nextOffset`, the start of the next block, so it needs none. Bytes in an open transfer are not a Deployment.
 - After `release_apply` on the destination, the read-back is `project_inspect`.
 - On the destination, sign in with an existing password and open one row the app owned.

@@ -83,6 +83,7 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: "action-contract.md", contents: renderActionContractMarkdown(contract) },
     { path: ACTION_TYPES_FILE, contents: renderActionTypes(contract) },
     { path: "package.json", contents: packageManifest(settings) },
+    { path: "tsconfig.json", contents: tsconfig },
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
     { path: "scripts/runtime.js", contents: input.runtime },
@@ -139,9 +140,31 @@ function packageManifest(settings: AppSettings) {
     private: true,
     type: "module",
     scripts: { build: "node scripts/build.mjs" },
-    devDependencies: { esbuild: "0.25.12" },
+    devDependencies: { esbuild: "0.25.12", typescript: "5.9.3" },
   }, null, 2)}\n`;
 }
+
+/**
+ * What `npm run build` type-checks a TypeScript app against: app/src/, the
+ * files it imports, and actions.d.ts. A script beside the app, such as a
+ * replay script at the root of app/, stays out. Not strict, so a type that is only implicit passes; a call
+ * to an action that does not exist, or with an input it does not take, fails.
+ */
+const tsconfig = `${JSON.stringify({
+  compilerOptions: {
+    target: "ES2022",
+    lib: ["ES2022", "DOM", "DOM.Iterable"],
+    module: "ESNext",
+    moduleResolution: "Bundler",
+    jsx: "react-jsx",
+    allowImportingTsExtensions: true,
+    resolveJsonModule: true,
+    isolatedModules: true,
+    skipLibCheck: true,
+    noEmit: true,
+  },
+  include: ["app/src", ACTION_TYPES_FILE],
+}, null, 2)}\n`;
 
 function agentsGuide(settings: AppSettings, secrets: string[]) {
   return `# ${settings.name}
@@ -151,18 +174,18 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 ## Layout
 
 - \`konae.json\`: the app's name, visibility (${settings.visibility}), Signup Policy, sign-in methods, contact email and the Kernel version.
-- \`app/\`: the sources. \`index.html\`, \`app.js\` or \`src/main.ts\`, \`styles.css\`, \`actions.json\` and \`schema.sql\`.
+- \`app/\`: the sources. \`index.html\`, \`app.js\`, \`src/main.ts\` or \`src/main.tsx\`, \`styles.css\`, \`actions.json\` and \`schema.sql\`.
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
 - \`action-contract.md\`: every Server Action with its inputs and the columns it returns.
-- \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call.
+- \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call. When \`app/src/\` holds TypeScript, \`npm run build\` checks it, and what it imports, against them with \`tsconfig.json\` and stops on an error.
 
 ## Rules the Kernel checks
 
 - The page talks to the database only through the named Server Actions in \`app/actions.json\`. \`action-contract.md\` lists them.
 - A query that reads rows names a LIMIT.
 - \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table, column or index on the next publish or start, and a change that drops or retypes one only with the confirmation it names.
-- A page loads no script from another origin and uses no inline event handler.
+- A page loads no script from another origin, uses no inline event handler, and runs no WebAssembly or \`eval\`. It fetches only from its own origin and the origins \`manifest.connects\` in \`konae.json\` names.
 
 ## Rules nothing checks
 
@@ -173,10 +196,10 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 1. To write \`dist/\`, run \`npm install\` once, then \`npm run build\`, which bundles \`app/\` with esbuild. From a Konae checkout, \`bun run konae -- build --dir <this folder>\` and \`dev\` write it without \`npm install\`. They use the checkout's bundler until \`node_modules\` exists, then run \`npm run build\`. An exported folder already carries a built \`dist/\`.
 2. On this machine, from a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
-4. To publish on a Konae installation: \`bun run konae -- login --dir <this folder> --url <installation>\`, then \`bun run konae -- publish --dir <this folder>\`.
+4. To publish on a Konae installation: \`bun run konae -- login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`bun run konae -- publish --dir <this folder>\`. \`bun run konae -- push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so, after a backup.
 
 At startup the Kernel checks the folder as Konae checks a release. It refuses a folder whose \`dist/\` breaks the publishing rules, whose actions break a rule above, or whose \`schema.sql\` drops or retypes a column, and says which. To apply a change that loses data, start it once with the \`KONAE_CONFIRM_SCHEMA\` value it names.
-${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`secret_set\` on Konae. The Kernel does not serve the app until each is set.\n` : ""}
+${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`bun run konae -- secret set <name> --dir <this folder>\` on Konae, which reads the value from standard input. The Kernel does not serve the app until each is set.\n` : ""}
 ## Commands
 
 Outside Konae, the Kernel's commands manage the app. Each refuses with the same words as the tool in Konae's editor, and prints the answer as JSON. Under Compose, run each as \`docker compose exec kernel kernel <command>\`. All but \`import\` work while the Kernel serves.
@@ -199,18 +222,24 @@ Add \`--app ${settings.id}\` when the Kernel serves more than one app.
 
 // Builds app/ into dist/ by the rules in static-artifact.mjs, which the
 // editor and `konae build` run too.
-const buildScript = `import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+// A release build is minified with NODE_ENV "production"; konae dev passes
+// --dev for a readable one. TypeScript sources are type-checked first.
+const buildScript = `import { spawnSync } from 'node:child_process';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { assembleStaticArtifact } from './static-artifact.mjs';
+import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
 const dist = path.join(root, 'dist');
+const development = process.argv.includes('--dev');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));
 const runtime = await readFile(path.join(root, 'scripts/runtime.js'), 'utf8');
 const paths = await walk('');
+if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,
   read: async (file) => {
@@ -218,8 +247,8 @@ const artifact = await assembleStaticArtifact({
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return new Uint8Array(bytes); }
   },
   compile: async () => {
-    const entry = paths.includes('src/main.ts') ? 'src/main.ts' : 'app.js';
-    if (!paths.includes(entry)) throw new Error('Expected app/src/main.ts or app/app.js.');
+    const entry = appEntry(paths);
+    if (entry === null) throw new Error('Expected ' + appEntries.map((file) => 'app/' + file).join(', ') + '.');
     const { script, styles } = await bundle(entry);
     const sourceStyles = paths.includes('styles.css') ? await readFile(path.join(app, 'styles.css'), 'utf8') : '';
     return { script, styles: [sourceStyles, styles].filter(Boolean).join('\\n') };
@@ -238,10 +267,25 @@ for (const [file, contents] of Object.entries(artifact.files)) {
 console.log('Built dist/');
 
 async function bundle(entry) {
-  const result = await build({ entryPoints: [path.join(app, entry)], absWorkingDir: app, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', outdir: 'out' });
+  const result = await build({
+    entryPoints: [path.join(app, entry)], absWorkingDir: app, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', outdir: 'out', jsx: 'automatic',
+    minify: !development, define: { 'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production') },
+  });
   const script = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
   if (script === undefined) throw new Error('The app build did not produce JavaScript.');
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '' };
+}
+
+// tsconfig.json includes app/src/ and actions.d.ts, which types miniapp.actions.call for each action.
+function typecheck() {
+  let tsc;
+  try { tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc'); }
+  catch { throw new Error('app/ holds TypeScript, and the build checks its types with the typescript package, which is not installed. Run npm install, then build again.'); }
+  const checked = spawnSync(process.execPath, [tsc, '--noEmit', '--pretty', 'false', '-p', path.join(root, 'tsconfig.json')], { cwd: root, stdio: 'inherit' });
+  if (checked.status !== 0) {
+    console.error('The type check failed, so dist/ is unchanged. Fix the errors above. A call to miniapp.actions.call must match an action in actions.d.ts, which konae dev and konae contract write from app/actions.json.');
+    process.exit(1);
+  }
 }
 
 async function walk(prefix) {

@@ -20,7 +20,7 @@ curl -s http://localhost:4173/mcp \
 
 From a folder you logged in to, `bun run konae -- tool session_inspect --dir ./my-app` makes the same call with the saved token. See [`tool` in the CLI](./cli.md#tool).
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `export_data`. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
+OAuth offers `read`, `write`, `publish` and `manage_users`, and `export_data` only to a client that redirects to this machine, such as `konae login --browser --export-data`. A client that redirects to this machine gets a 24-hour token, any other one hour. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
 
 ## platform_guide topics
 
@@ -30,11 +30,11 @@ OAuth offers `read`, `write`, `publish` and `manage_users`. It does not offer `e
 | --- | --- |
 | `rules` | The yardstick, the first run, the read-back after every write, and the named divergences between preview and published app. |
 | `pieces` | Which Capsule declaration to use for a need. See [Pick the smallest piece](./pieces.md). |
-| `credentials` | `konae login` and its flags, OAuth, what each permission allows, and the refusal a missing permission gives. |
-| `development` | The CLI cycle: `init`, `dev`, `pull`, `sql`, `events`, `contract` and `conform`. |
+| `credentials` | `konae login` and its flags, `login --browser`, `konae secret set`, OAuth, what each permission allows, and the refusal a missing permission gives. |
+| `development` | The CLI cycle: `init`, `dev`, `build`, `publish`, `pull`, `push`, `sql`, `events`, `secret`, `hostname`, `contract` and `conform`. |
 | `actions` | The `actions.json` format and its rules. |
 | `sdk` | The `window.miniapp` modules, rendered from `src/sdk/contract.ts`. |
-| `publishing` | The release steps as MCP calls, the schema change, the first Signup Policy, custom domain, path address and maintenance. |
+| `publishing` | `konae publish`, then the same release steps as MCP calls, the schema change, the first Signup Policy, the generated hostname, custom domain, path address and maintenance. |
 | `users` | Signup Policy, Google sign-in, invitations, app accounts, entering as a user, and roles inside an app. |
 | `portability` | Export, running the folder on a `kernel` binary without Konae, and import into a new or an existing app. |
 | `refusals` | Every code a refused Capsule answers, with who fixes it and a one-line remedy. |
@@ -89,7 +89,9 @@ The app runtime and app account tools run on an app's runtime endpoint, `/_konae
 
 ## Read back after every write
 
-Every tool that writes has a tool that observes its effect through the same door. After a write, call the read-back before retrying or telling the owner it worked. Verify a `service_timeout` or an interrupted call the same way. Bytes in an open transfer are not a Deployment. `transfer_status` reads staging, and `project_inspect` reads a release that consumed them.
+Every tool that writes has a way to observe its effect through the same door. After a write, call the read-back before retrying or telling the owner it worked. Verify a `service_timeout` or an interrupted call the same way. Bytes in an open transfer are not a Deployment. `transfer_status` reads staging, and `project_inspect` reads a release that consumed them.
+
+Two writes answer with their own observation, so no second call follows them. `transfer_write` answers `nextOffset`, where the next block starts; call `transfer_status` only to resume after an interrupted call. `release_plan` changes nothing live, and its answer is the plan; pass its `planId` to `release_apply`, because another `release_plan` makes a new plan with a new `planId`. After `transfer_cancel`, `transfer_status` answers `Transfer not found or expired.`, and that answer is the cancel confirmed.
 
 | Write | Read-back |
 | --- | --- |
@@ -101,7 +103,6 @@ Every tool that writes has a tool that observes its effect through the same door
 | `secret_delete` | `secrets_list` |
 | `api_keys_create` | `api_keys_list` |
 | `api_keys_revoke` | `api_keys_list` |
-| `release_plan` | `release_plan` |
 | `release_apply` | `project_inspect` |
 | `signup_policy_set` | `signup_policy_read` |
 | `sign_in_methods_set` | `sign_in_methods_read` |
@@ -119,7 +120,6 @@ Every tool that writes has a tool that observes its effect through the same door
 | `maintenance_set` | `maintenance_read` |
 | `contact_email_set` | `contact_email_read` |
 | `transfer_begin` | `transfer_status` |
-| `transfer_write` | `transfer_status` |
 | `transfer_complete` | `transfer_status` |
 | `transfer_cancel` | `transfer_status` |
 | `project_export` | `transfer_read` |

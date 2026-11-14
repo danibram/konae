@@ -29,7 +29,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     ```
 
     `conform` runs each mutation once, so point it at a test Deployment.
-5. Log in. This saves a 24-hour token with `read`, `write` and `publish` in `<folder>/.konae/credentials.json`, and the installation's address. `--url` is the editor's origin. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE`. A token cannot widen itself, so ask for `--manage-users` and `--export-data` now, or a second login comes before `pull`, `export --with-data`, `signup_policy_set` or `app_invitations_create`. Keep `.konae` out of Git. `KONAE_MCP_TOKEN` overrides the file. In a terminal, `login` asks for `KONAE_EMAIL` or `KONAE_PASSWORD` when it is unset, and does not echo the password. The form below is for scripts, which have no terminal and fail without both.
+5. Log in. This saves a 24-hour token with `read`, `write` and `publish` in `<folder>/.konae/credentials.json`, and the installation's address. `--url` is the editor's origin. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE`. A token cannot widen itself, so ask for `--manage-users` and `--export-data` now, or a second login comes before `pull`, `export --with-data`, `signup_policy_set` or `app_invitations_create`. Keep `.konae` out of Git. `KONAE_MCP_TOKEN` overrides the file. In a terminal, `login` asks for `KONAE_EMAIL` or `KONAE_PASSWORD` when it is unset, and does not echo the password. The form below is for scripts, which have no terminal and fail without both. `login --browser` instead prints an address the owner opens in a browser on the same machine, so no password passes through the terminal or an agent.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... KONAE_SETUP_KEY=local-development-key \
@@ -66,7 +66,7 @@ Do not treat the URL `publish` printed as proof. Read the Deployment back throug
 
 ## What differs from the editor preview
 
-`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema and `actions.json` only, so a page that names a missing file fails at build or publish.
+`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema, `actions.json`, `manifest.fileAccess` and whether any page runs the app, so a page that names a missing file fails at build or publish.
 
 ## Read next
 

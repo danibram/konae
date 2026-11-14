@@ -234,6 +234,12 @@ pub trait Transport: Send + Sync {
     }
 }
 
+/// The file in the data directory the development transport writes.
+pub const MAILBOX_FILE: &str = "mailbox.jsonl";
+
+/// What health and `mail_status` say while the development transport runs.
+pub const LOCAL_MAILBOX: &str = "With KONAE_MAIL_TRANSPORT=development no email leaves this server. The Kernel writes every message, account links included, to mailbox.jsonl in its data directory. Set KONAE_MAIL_TRANSPORT to resend or smtp to send email.";
+
 /// The development mailbox as a transport: each message is one line of
 /// `mailbox.jsonl`, and writing it counts as delivery.
 struct DevelopmentTransport(DevelopmentMailbox);
@@ -512,7 +518,7 @@ fn transport_from_env(data_root: &Path) -> Result<Option<(Arc<dyn Transport>, St
     let optional = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let transport: Arc<dyn Transport> = match std::env::var("KONAE_MAIL_TRANSPORT").as_deref() {
         Err(_) | Ok("") => return Ok(None),
-        Ok("development") => Arc::new(DevelopmentTransport(DevelopmentMailbox::new(data_root.join("mailbox.jsonl")))),
+        Ok("development") => Arc::new(DevelopmentTransport(DevelopmentMailbox::new(data_root.join(MAILBOX_FILE)))),
         Ok("resend") => {
             let secret = match optional("KONAE_RESEND_WEBHOOK_SECRET") {
                 Some(value) => Some(webhook_key(&value)?),
@@ -825,6 +831,12 @@ impl MailQueue {
 
     pub fn preflight(&self) -> Preflight {
         self.preflight.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+
+    /// The mailbox file mail goes to instead of leaving the server, when the
+    /// transport is the development one.
+    pub fn local_mailbox(&self) -> Option<PathBuf> {
+        (self.transport.name() == "development").then(|| self.data_root.join(MAILBOX_FILE))
     }
 
     fn set_preflight(&self, result: PreflightResult) {
@@ -1254,20 +1266,25 @@ impl MailQueue {
     pub fn health(&self) -> Value {
         let preflight = self.preflight();
         let queue = self.counts().unwrap_or_else(|_| json!({"depth": null}));
-        json!({
+        let mut health = json!({
             "transport": self.transport.name(),
             "sending": preflight.state == "ready",
             "preflight": preflight.state,
             "depth": queue["depth"],
             "lastFailure": queue["lastFailure"],
-        })
+        });
+        if self.local_mailbox().is_some() {
+            health["delivery"] = json!("local-mailbox");
+            health["warning"] = json!(LOCAL_MAILBOX);
+        }
+        health
     }
 
     /// The operator's view for the `mail_status` tool.
     pub fn status(&self) -> Result<Value> {
         let preflight = self.preflight();
         let queue = self.counts()?;
-        Ok(json!({
+        let mut status = json!({
             "transport": self.transport.name(),
             "from": self.from,
             "sending": preflight.state == "ready",
@@ -1275,7 +1292,13 @@ impl MailQueue {
             "queue": queue,
             "limits": self.limits,
             "providerEvents": self.transport.webhook_secret().is_some(),
-        }))
+        });
+        if let Some(mailbox) = self.local_mailbox() {
+            status["delivery"] = json!("local-mailbox");
+            status["warning"] = json!(LOCAL_MAILBOX);
+            status["mailbox"] = json!(mailbox.display().to_string());
+        }
+        Ok(status)
     }
 }
 

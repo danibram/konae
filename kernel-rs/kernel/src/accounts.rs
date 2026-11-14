@@ -134,6 +134,51 @@ const LINK_SENT: &str = "If this email can use the app, a link is on its way. Op
 /// for the same email on this app. It keeps the 401 and the first sentence.
 pub const SIGNUP_HINT: &str = "Email or password is incorrect. If you signed up with this email in this browser, open the link we emailed to choose your password first.";
 
+/// [`SIGNUP_HINT`] on an installation whose development transport sends no
+/// email: the link went to the server's mailbox file, so "we emailed" would be false.
+pub const SIGNUP_HINT_LOCAL: &str = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.";
+
+/// The signup hint this installation can truthfully give.
+pub fn signup_hint(state: &AppState) -> &'static str {
+    if state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some()) { SIGNUP_HINT_LOCAL } else { SIGNUP_HINT }
+}
+
+/// Why a pending account may not sign in yet, said to a caller who proved
+/// the password or the identity. With a transport that sends email it stays
+/// the sentence clients know. The development transport sends nothing, so
+/// the sentence says where the link went instead of "the link we sent". An
+/// invitation waiting for this email is named, because that link, not a
+/// confirmation, activates the account.
+pub fn pending_message(state: &AppState, invited: bool) -> String {
+    let local = state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some());
+    match (invited, local) {
+        (false, false) => AuthError::AccountPending.to_string(),
+        (true, false) => "An invitation to this app is waiting for this email. Open the link in the invitation email to choose your password, or ask the app's owner to resend it.".into(),
+        (true, true) => "An invitation to this app is waiting for this email. This installation sends no email, so the invitation link is in the mailbox.jsonl file on its server. Ask the app's owner for the link; resending the invitation hands it to them.".into(),
+        (false, true) => "Confirm your email before signing in. This installation sends no email, so confirmation links go to the mailbox.jsonl file on its server, not to you. Ask for a new link, then ask the installation's operator to read it from that file.".into(),
+    }
+}
+
+/// Whether an invitation for `email` is waiting on this Deployment. A store
+/// without invitations reads as none.
+pub async fn invitation_pending(state: &AppState, deployment: &Deployment, email: &str) -> bool {
+    let Ok(email) = auth::normalize_email(email) else { return false };
+    let auth = app_store(state, deployment);
+    tokio::task::spawn_blocking(move || {
+        auth.and_then(|auth| {
+            auth.read(|db| {
+                Ok(db
+                    .query_row("SELECT 1 FROM app_invitations WHERE email = ?1 AND state = 'pending'", [&email], |_| Ok(()))
+                    .optional()?
+                    .is_some())
+            })
+        })
+        .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// The cookie a browser keeps after it asks for a signup link, so a sign-in
 /// that fails before the link is opened can say why. It holds a hash of the
 /// Deployment and the email the person typed, never the email.
@@ -696,6 +741,11 @@ pub mod tests {
             (message.purpose, token)
         }
 
+        /// The whole link of the last message, page and fragment.
+        pub fn last_url(&self) -> String {
+            self.mailbox.0.lock().unwrap().last().expect("a message was sent").link.clone()
+        }
+
         pub fn sent(&self) -> usize {
             self.mailbox.0.lock().unwrap().len()
         }
@@ -863,6 +913,64 @@ pub mod tests {
         let cara = cookie_of(&over_mcp).unwrap();
         assert!(cara.starts_with("konae_signup="));
         assert_eq!(app_login_with(&fixture, APP_HOST, &cara, "cara@example.test", PASSWORD).await, hinted);
+    }
+
+    /// Stands in for the development transport, which only writes a file.
+    struct Development;
+
+    impl mail::Transport for Development {
+        fn name(&self) -> &'static str {
+            "development"
+        }
+        fn send<'a>(&'a self, _email: &'a mail::OutgoingEmail) -> std::pin::Pin<Box<dyn std::future::Future<Output = mail::SendOutcome> + Send + 'a>> {
+            Box::pin(async { mail::SendOutcome::Accepted { provider_id: None, delivered: true } })
+        }
+        fn preflight<'a>(&'a self, _sender: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = mail::PreflightResult> + Send + 'a>> {
+            Box::pin(async { mail::PreflightResult::Ready })
+        }
+    }
+
+    /// A pending account that proved its password hears why it waits. With
+    /// the development transport nothing was sent, so the answer never says
+    /// "the link we sent", and a waiting invitation is named.
+    #[tokio::test]
+    async fn a_pending_sign_in_says_where_the_link_went() {
+        let mut fixture = fixture(Verification::Local, true);
+        assert_eq!(app_signup(&fixture, APP_HOST, "ana@example.test").await.status(), StatusCode::OK);
+        let app = fixture.app(APP_HOST).await;
+        let db = Connection::open(crate::layout::identity(&fixture.root, &app.id)).unwrap();
+        // As the switch to required verification leaves an unverified account.
+        db.execute("UPDATE app_users SET state = 'pending' WHERE email = 'ana@example.test'", []).unwrap();
+        async fn refused(fixture: &Fixture) -> (StatusCode, String) {
+            app_login_with(fixture, APP_HOST, "other=1", "ana@example.test", PASSWORD).await
+        }
+        assert_eq!(refused(&fixture).await, (StatusCode::FORBIDDEN, AuthError::AccountPending.to_string()));
+
+        let queue = mail::MailQueue::open(&fixture.root, Arc::new(Development), "Konae <konae@localhost>",
+            "a mail secret that is long enough for tests", mail::Limits::default(), std::time::Duration::from_millis(50)).unwrap();
+        fixture.state.accounts.queue = Some(Arc::new(queue));
+        let (status, local) = refused(&fixture).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(local.starts_with("Confirm your email before signing in. This installation sends no email"), "{local}");
+        assert!(local.contains("mailbox.jsonl") && !local.contains("we sent"), "{local}");
+
+        db.execute_batch("CREATE TABLE IF NOT EXISTS app_invitations (email TEXT NOT NULL COLLATE NOCASE, state TEXT NOT NULL);
+            INSERT INTO app_invitations (email, state) VALUES ('Ana@Example.test', 'pending');").unwrap();
+        let (_, invited) = refused(&fixture).await;
+        assert!(invited.starts_with("An invitation to this app is waiting for this email."), "{invited}");
+        assert!(invited.contains("mailbox.jsonl"), "{invited}");
+    }
+
+    /// The signup hint says "we emailed" only when the installation sends email.
+    #[tokio::test]
+    async fn the_signup_hint_never_says_we_emailed_when_nothing_was_sent() {
+        let mut fixture = fixture(Verification::Required, true);
+        assert_eq!(signup_hint(&fixture.state), SIGNUP_HINT);
+        let queue = mail::MailQueue::open(&fixture.root, Arc::new(Development), "Konae <konae@localhost>",
+            "a mail secret that is long enough for tests", mail::Limits::default(), std::time::Duration::from_millis(50)).unwrap();
+        fixture.state.accounts.queue = Some(Arc::new(queue));
+        assert_eq!(signup_hint(&fixture.state), SIGNUP_HINT_LOCAL);
+        assert!(!SIGNUP_HINT_LOCAL.contains("we emailed") && SIGNUP_HINT_LOCAL.starts_with("Email or password is incorrect."));
     }
 
     #[tokio::test]

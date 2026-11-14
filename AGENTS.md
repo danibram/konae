@@ -33,11 +33,13 @@ After any write through MCP or the editor, observe the effect through the same d
 | Another service calls this app | `http` on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | This app calls another host | `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
+| Every signed-in user reads every uploaded file | `manifest.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | export and import of the app folder | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` (an export of the data) + `dev --reset` (its import) | Publishing to find out |
+| Put data from the folder, or from another system, into the published app | `konae push` (an import of the folder's `data/`, after a backup) | A migration script that drives transfers and imports by hand |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
 
 Prefer a declaration inside the Capsule over a new platform resource. Topic `pieces` of `platform_guide` is the same table for agents.
@@ -54,12 +56,12 @@ Keep this path short. If it grows, fix the path before adding docs.
 
 These are not bugs to paper over. Say them when they matter.
 
-- The editor preview applies no Content Security Policy. Inline handlers and other-origin fetches can still run there; a published app refuses them.
+- The editor preview applies no Content Security Policy. Inline handlers, other-origin fetches and WebAssembly can still run there; a published app and `konae dev` refuse them. Their `script-src` is `'self'` plus each inline script's hash, with no `'wasm-unsafe-eval'` or `'unsafe-eval'`, so a library that compiles WebAssembly or calls `eval` fails there.
 - The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or a published Deployment.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number. `konae dev` applies the same 2 MiB per file, and `KONAE_FILE_MAX_BYTES` raises it there. Its quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
 - The editor's build reads npm packages from esm.sh; `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
-- The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`.
+- The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
 - The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes. Try such a change on `konae dev` or a published Deployment.
 - `konae dev` sends no email. Account email and notices land in `.konae/kernel/mailbox.jsonl`, and `konae events` lists them.
 
@@ -68,7 +70,7 @@ These are not bugs to paper over. Say them when they matter.
 - `src/` is the editor. `src/components/ProjectDashboard.tsx` is the project list, `src/components/AgentPanel.tsx` is the conversation, and `src/App.tsx` is the file editor.
 - `src/agent/system-prompt.ts` is what the build agent is told. `src/agent/gate.ts` is the Validation Gate. `src/lib/query-bound.ts` is the row limit both doors share.
 - `kernel-rs/kernel` is the Kernel: a library and the `kernel` binary, which serves app folders alone. `layout.rs` names every path of an app folder, and `operator.rs` holds the `kernel` commands.
-- `kernel-rs/konae` is the `konae` binary, which links the Kernel and adds owners, the owner's MCP and the project list. `guide.rs` is what `platform_guide` answers, including `rules` and `pieces`.
+- `kernel-rs/konae` is the `konae` binary, which links the Kernel and adds owners, the owner's MCP and the project list. `guide.rs` is what `platform_guide` answers, including `rules` and `pieces`. `editor.rs` serves the built editor that `KONAE_EDITOR_DIR` names on the editor host.
 - `src/kernel/actions.ts` parses `actions.json` for the editor. `kernel-rs/kernel/src/action_shape.rs` parses it again for every Deployment, including one served from an export. The case files beside it hold the rules both run.
 - `scripts/konae.ts` is the `konae` CLI. Its remote commands are calls to the owner's MCP, and `src/deployments/release.ts` holds the publish sequence the editor runs too. `src/lib/app-folder.ts` writes the files every app folder carries, its own `AGENTS.md` among them.
 - `CONTEXT.md` holds the language. `docs/adr/` holds the decisions. `docs/architecture.md` is the shape. `examples/product-fit/` is the set of apps used to see what the Kernel can publish.

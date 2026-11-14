@@ -75,7 +75,7 @@ In local verification mode, Konae does not verify email addresses. Whoever signs
 Every app account can sign in with email and password. The owner can add Google for one app, with that app's own Google OAuth client. The installation holds no Google client.
 
 1. Make a Web application client in your Google Cloud console.
-2. Set its two halves as the signing secrets `google_client_id` and `google_client_secret`, with `secret_set` and `use: "google"`, or in the editor's Access > Users view.
+2. Set its two halves as the signing secrets `google_client_id` and `google_client_secret`, with `secret_set` and `use: "google"`, with `konae secret set <name> --dir <folder>`, which reads the value from stdin and gives these two names use google, or in the editor's Access > Users view.
 3. Register the redirect URIs that `sign_in_methods_read` lists in that client.
 4. Turn Google on with `sign_in_methods_set` and `["password", "google"]`, which needs `manage_users`.
 
@@ -87,13 +87,14 @@ An invitation offers one email an account on one Deployment. The link lasts seve
 
 - `app_invitations_create` sends the email. Call it only when the owner asked for those invitations.
 - Check `mail_status` first. Inviting needs `sending: true`.
+- With `KONAE_MAIL_TRANSPORT=development`, as on `bun run dev:local`, no email leaves the server. `mail_status` reports `delivery: "local-mailbox"`, and each new or resent invitation answers `delivery: "local-mailbox"` with its `acceptUrl` once, for the owner to pass on. A retry with the same `idempotencyKey` answers `queued` without the link. On `konae dev`, `kernel invite` answers the same way.
 - `app_invitations_list` shows each status. `app_invitation_resend` sends a new link. `app_invitation_revoke` ends one.
 
 An invitation never changes an active account's password or resumes a suspended one. An export and a restore keep the invitation as history without its link, and the owner resends it.
 
 ## Suspending and resuming
 
-An account is pending until it proves control of its email, active, or suspended. Only an active account gets a session. `app_user_suspend` ends sessions and keeps the account's ID and rows. `app_user_resume` returns it to `active` if it ever verified, otherwise `pending`. `app_users_list` shows each account's state and whether it verified its email.
+An account is pending until it proves control of its email, active, or suspended. Only an active account gets a session. A pending account that signs in with its password or with Google is told to confirm its email first, or that an invitation waits for it. A wrong password answers `Email or password is incorrect.`, and in a browser that signed up with that email it adds a hint to open the confirmation link. When the installation sends no email, both answers say the link is in the `mailbox.jsonl` file on its server, never that it was sent. `app_user_suspend` ends sessions and keeps the account's ID and rows. `app_user_resume` returns it to `active` if it ever verified, otherwise `pending`. `app_users_list` shows each account's state and whether it verified its email.
 
 ## Entering as a user
 

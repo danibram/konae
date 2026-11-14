@@ -223,13 +223,13 @@ describe("the MCP walkthrough", () => {
 
   test("3. an OAuth credential for a throwaway client", async () => {
     r.step("oauth-register");
-    const registration = await http("POST", a, "/oauth/register", { headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "Walkthrough agent", redirect_uris: ["http://127.0.0.1:9999/callback"] }) });
+    const registration = await http("POST", a, "/oauth/register", { headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "Walkthrough agent", redirect_uris: ["https://agent.example/callback"] }) });
     const client = JSON.parse(registration.text);
     r.name(client.client_id, "<client id>");
     const verifier = "walkthrough-verifier-0123456789-0123456789-0123456789";
     const challenge = Buffer.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)))).toString("base64url");
     r.name(challenge, "<code challenge>");
-    const args = { client_id: client.client_id, redirect_uri: "http://127.0.0.1:9999/callback", response_type: "code", code_challenge_method: "S256", code_challenge: challenge, scope: "read write publish manage_users", resource: `${a.url}/mcp`, state: "walkthrough" };
+    const args = { client_id: client.client_id, redirect_uri: "https://agent.example/callback", response_type: "code", code_challenge_method: "S256", code_challenge: challenge, scope: "read write publish manage_users", resource: `${a.url}/mcp`, state: "walkthrough" };
 
     r.step("oauth-authorize");
     await http("GET", a, `/oauth/authorize?${new URLSearchParams(args)}`);
@@ -257,7 +257,7 @@ describe("the MCP walkthrough", () => {
 
     r.step("oauth-scope");
     const refused = await http("GET", a, `/oauth/authorize?${new URLSearchParams({ ...args, scope: "read export_data" })}`, { headers: { cookie }, shownHeaders: { cookie: "konae_owner_session=<owner session>" } });
-    expect(JSON.parse(refused.text).error_description).toBe("Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it.");
+    expect(JSON.parse(refused.text).error_description).toBe("Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. Only a client that redirects to this machine, such as konae login --browser --export-data, may ask for export_data.");
   }, 60_000);
 
   test("4. init", async () => {
@@ -453,7 +453,7 @@ describe("the MCP walkthrough", () => {
     for (const [name, transfer] of Object.entries(result.downloads)) r.name(transfer.transferId, `<${name} download>`);
     const first = await callTool(`${a.url}/mcp`, { authorization: `Bearer ${s.token}` }, "transfer_read", { transferId: result.downloads.identity.transferId, offset: 0 });
     r.json({ name: "transfer_read", arguments: { transferId: result.downloads.identity.transferId, offset: 0 } });
-    r.json({ result: { ...(first.result as object), data: "<base64 of the first 65536 bytes>" } });
+    r.json({ result: { ...(first.result as object), data: `<base64 of the first ${(first.result as any).nextOffset} bytes>` } });
     const source = new McpClient(`${a.url}/mcp`, { token: s.token });
     const components: Record<string, Uint8Array> = {};
     for (const [name, transfer] of Object.entries(result.downloads)) components[name] = await source.download(transfer);
@@ -481,10 +481,11 @@ describe("the MCP walkthrough", () => {
       const begun = await tool("transfer_begin", { size: bytes.length, sha256, projectId: s.projectId, component: name }, { token: s.tokenB, kernel: b });
       uploads[name] = (begun.result as any).transferId;
       r.name(uploads[name], `<${name} upload>`);
-      for (let offset = 0; offset < bytes.length; offset += 65536) {
-        const written = await client.call<object>("transfer_write", { transferId: uploads[name], offset, data: encodeBase64(bytes.subarray(offset, offset + 65536)) });
+      const chunkBytes = (begun.result as any).chunkBytes as number;
+      for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+        const written = await client.call<object>("transfer_write", { transferId: uploads[name], offset, data: encodeBase64(bytes.subarray(offset, offset + chunkBytes)) });
         if (offset === 0) {
-          r.json({ name: "transfer_write", arguments: { transferId: uploads[name], offset: 0, data: "<base64 of up to 65536 bytes from offset 0>" } });
+          r.json({ name: "transfer_write", arguments: { transferId: uploads[name], offset: 0, data: `<base64 of up to ${chunkBytes} bytes from offset 0>` } });
           r.json({ result: written });
         }
       }

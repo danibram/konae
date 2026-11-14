@@ -427,7 +427,7 @@ try {
   assert.equal(wrongRecord, `The TXT record at ${claim.record.name} holds "konae-verify-copied-from-another-app", not this Deployment's token. Set it to ${claim.record.value} and call domain_set again.`);
   refused(`domain_set ${studioDomain} while ${claim.record.name} holds another value`, wrongRecord);
   const underSuffix = await errorText(owner.call("domain_set", { deploymentId: receipt.id, hostname: "gallery.localhost" }));
-  assert.equal(underSuffix, "gallery.localhost is under this installation's app suffix localhost, where Konae names apps itself. Name a hostname outside it.");
+  assert.equal(underSuffix, "gallery.localhost is under this installation's app suffix localhost, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.");
   refused("domain_set gallery.localhost", underSuffix);
   dns.txt(claim.record.name, [claim.record.value]);
   const proved = await owner.call<{ status: string; url: string }>("domain_set", { deploymentId: receipt.id, hostname: studioDomain });

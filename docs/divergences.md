@@ -4,14 +4,16 @@ These are known differences between the places an app runs. They are not bugs to
 
 ## Preview and published app
 
-The editor preview applies no Content Security Policy. Inline handlers and other-origin fetches can still run there. A published app refuses them.
+The editor preview applies no Content Security Policy. Inline handlers, other-origin fetches and WebAssembly can still run there. A published app and `konae dev` refuse them.
 
-Attach listeners in JavaScript, and keep scripts and fetches on the app's own origin.
+Attach listeners in JavaScript, and keep scripts and fetches on the app's own origin. A fetch may also reach an origin that `manifest.connects` names.
 
 ```html
 <!-- Runs in the preview, refused once published -->
 <button onclick="save()">Save</button>
 ```
+
+The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It names neither `'wasm-unsafe-eval'` nor `'unsafe-eval'`, so a published app and `konae dev` refuse WebAssembly, `eval` and `new Function`. A library that compiles WebAssembly, such as a PDF renderer, works in the preview and then fails in the browser console with `Compiling or instantiating WebAssembly module violates the following Content Security policy directive`. Pick a library that runs without WebAssembly, or do that work outside the app.
 
 ## What the preview lacks
 
@@ -39,7 +41,7 @@ The editor preview re-runs `schema.sql` on its own test rows and never changes a
 
 ## Gate and publish builders
 
-The Validation Gate checks schema and `actions.json`. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
+The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script, as the build does. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
 
 ## Read next
 

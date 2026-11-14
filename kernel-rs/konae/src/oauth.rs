@@ -123,6 +123,23 @@ fn valid_redirect(value: &str) -> bool {
                 && [Some("127.0.0.1"), Some("localhost"), Some("[::1]")].contains(&url.host_str())))
 }
 
+/// Whether a redirect lands on the machine that runs the browser, as a native
+/// client's does (RFC 8252). `valid_redirect` allows plain http only there.
+fn is_loopback(redirect: &str) -> bool {
+    url::Url::parse(redirect).is_ok_and(|url| {
+        url.scheme() == "http"
+            && [Some("127.0.0.1"), Some("localhost"), Some("[::1]")].contains(&url.host_str())
+    })
+}
+
+/// How long a token lasts. One sent to a loopback redirect stays on the
+/// owner's machine and lasts 24 hours, as one from `konae login` does. Any
+/// other lasts an hour, and so does every token under Clerk, as in token_create.
+fn token_lifetime_ms(redirect: &str) -> Result<u64> {
+    let clerk = super::clerk::ClerkConfig::from_env()?.is_some();
+    Ok(if is_loopback(redirect) && !clerk { 86_400_000 } else { 3_600_000 })
+}
+
 async fn register(
     State(state): State<Konae>,
     peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
@@ -243,15 +260,25 @@ fn authorization(
         "Resource must match this MCP endpoint."
     );
     let scopes = get("scope").split_whitespace().collect::<Vec<_>>();
+    // export_data downloads accounts and data, so only a token that stays on
+    // the owner's machine may hold it.
+    let loopback = is_loopback(get("redirect_uri"));
     anyhow::ensure!(
         !scopes.is_empty()
-            && scopes
-                .iter()
-                .all(|s| ["read", "write", "publish", "manage_users"].contains(s)),
-        "Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it."
+            && scopes.iter().all(|s| {
+                ["read", "write", "publish", "manage_users"].contains(s)
+                    || (loopback && *s == "export_data")
+            }),
+        "Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. Only a client that redirects to this machine, such as konae login --browser --export-data, may ask for export_data."
     );
     anyhow::ensure!(get("state").len() <= 2048, "State is too large.");
     Ok(client)
+}
+
+/// Where an owner signs in on this installation: the editor's page when
+/// Clerk holds owner identity, Konae's own page otherwise.
+pub(super) fn owner_login_path() -> &'static str {
+    if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" }
 }
 
 async fn authorize_page(
@@ -279,7 +306,7 @@ async fn authorize_page(
             let query = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("returnTo", &target)
                 .finish();
-            let login = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" };
+            let login = owner_login_path();
             return (
                 StatusCode::SEE_OTHER,
                 [(header::LOCATION, format!("{login}?{query}"))],
@@ -313,6 +340,11 @@ async fn authorize_page(
     // origin-specific policy blocks. default-src 'none' keeps scripts out;
     // the POST target and redirect_uri stay server-chosen.
     let pub_origin = origin(&state, &headers);
+    let lifetime = match token_lifetime_ms(a.get("redirect_uri").map(String::as_str).unwrap_or("")) {
+        Ok(86_400_000) => "24 hours",
+        Ok(_) => "One hour",
+        Err(e) => return oauth_error("server_error", &e.to_string()),
+    };
     let body = consent_page(&Consent {
         client: client["client_name"].as_str().unwrap(),
         destination: &destination,
@@ -322,6 +354,7 @@ async fn authorize_page(
         authorize: &format!("{pub_origin}/oauth/authorize"),
         fields: &fields,
         csrf: &csrf,
+        lifetime,
     });
     // The page runs no script. Its one inline stylesheet is allowed by hash
     // and its typefaces come from this origin.
@@ -394,6 +427,8 @@ struct Consent<'a> {
     /// Hidden inputs, already escaped.
     fields: &'a str,
     csrf: &'a str,
+    /// How long the token lasts, as the page says it.
+    lifetime: &'a str,
 }
 
 /// What each OAuth scope lets the client do, in the owner's words.
@@ -405,6 +440,7 @@ fn scope_meaning(scope: &str) -> (&'static str, &'static str) {
         "write" => ("Edit", "Change project files and data"),
         "publish" => ("Publish", "Publish and roll back your apps"),
         "manage_users" => ("Manage users", "Decide who may sign in to your apps"),
+        "export_data" => ("Export data", "Download each app's accounts, rows and files"),
         _ => ("", ""),
     }
 }
@@ -417,7 +453,7 @@ fn consent_page(c: &Consent) -> String {
             let (word, meaning) = scope_meaning(scope);
             format!(
                 "<li><code{}>{}</code><span>{}</span></li>",
-                if matches!(scope, "publish" | "manage_users") { " class=risk" } else { "" },
+                if matches!(scope, "publish" | "manage_users" | "export_data") { " class=risk" } else { "" },
                 word,
                 meaning
             )
@@ -435,7 +471,7 @@ fn consent_page(c: &Consent) -> String {
         ("a server on the internet", "<small>Allow only if you recognise this address.</small>")
     };
     format!(
-        "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><meta name=referrer content=same-origin><title>Allow {destination}, {gloss}, to use your Konae projects?</title>{icon}<style>{css}</style><body>{header}<main class=main><div class=\"card card-wide\"><p class=kicker>Connect an agent · {installation}</p><h1>Allow {destination}, {gloss}, to use your Konae projects?</h1><p class=lead>Allowing sends it an access token. Only continue if you started this sign-in from an agent you trust.</p><dl class=consent><div><dt>Client</dt><dd><strong>{client}</strong> <span class=\"badge badge-warning\">Name not verified</span><small>Clients name themselves when they register, so Konae cannot confirm this one.</small></dd></div><div><dt>Token goes to</dt><dd><code>{destination}</code>{where_note}</dd></div><div><dt>It may</dt><dd><ul class=scopes>{scopes}</ul></dd></div><div><dt>For</dt><dd><span>One hour. After that it must ask again. You can revoke it sooner on <a href=/_konae/owner/login target=_blank rel=noopener>your owner page</a>.</span></dd></div><div><dt>On</dt><dd><span><strong>All of your projects</strong> on {installation}</span></dd></div><div><dt>It cannot</dt><dd><span>See your password or create more tokens</span></dd></div></dl><form class=\"actions decide\" method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button class=\"button button-primary\">Allow access</button><a class=button href=/_konae/owner/login>Cancel</a>{account}</form></div></main></body></html>",
+        "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><meta name=referrer content=same-origin><title>Allow {destination}, {gloss}, to use your Konae projects?</title>{icon}<style>{css}</style><body>{header}<main class=main><div class=\"card card-wide\"><p class=kicker>Connect an agent · {installation}</p><h1>Allow {destination}, {gloss}, to use your Konae projects?</h1><p class=lead>Allowing sends it an access token. Only continue if you started this sign-in from an agent you trust.</p><dl class=consent><div><dt>Client</dt><dd><strong>{client}</strong> <span class=\"badge badge-warning\">Name not verified</span><small>Clients name themselves when they register, so Konae cannot confirm this one.</small></dd></div><div><dt>Token goes to</dt><dd><code>{destination}</code>{where_note}</dd></div><div><dt>It may</dt><dd><ul class=scopes>{scopes}</ul></dd></div><div><dt>For</dt><dd><span>{lifetime}. After that it must ask again. You can revoke it sooner on <a href=/_konae/owner/login target=_blank rel=noopener>your owner page</a>.</span></dd></div><div><dt>On</dt><dd><span><strong>All of your projects</strong> on {installation}</span></dd></div><div><dt>It cannot</dt><dd><span>See your password or create more tokens</span></dd></div></dl><form class=\"actions decide\" method=post action=\"{authorize}\">{fields}<input type=hidden name=csrf value=\"{csrf}\"><button class=\"button button-primary\">Allow access</button><a class=button href=/_konae/owner/login>Cancel</a>{account}</form></div></main></body></html>",
         css = super::owner_page::CSS,
         header = super::owner_page::HEADER,
         icon = super::owner_page::ICON,
@@ -445,6 +481,7 @@ fn consent_page(c: &Consent) -> String {
         fields = c.fields,
         csrf = c.csrf,
         installation = escape(c.installation),
+        lifetime = c.lifetime,
     )
 }
 
@@ -568,7 +605,8 @@ async fn token(
             .unwrap()
             .split_whitespace()
             .collect::<Vec<_>>();
-        tx.execute("INSERT INTO credentials(hash,owner,scopes,projects,expires,audience,client) VALUES(?1,?2,?3,'[]',?4,?5,?6)",params![crate::digest(token.as_bytes()),code["owner"].as_str().unwrap(),serde_json::to_string(&scopes)?,now_ms()+3_600_000,get("resource"),get("client_id")])?;
+        let lifetime = token_lifetime_ms(get("redirect_uri"))?;
+        tx.execute("INSERT INTO credentials(hash,owner,scopes,projects,expires,audience,client) VALUES(?1,?2,?3,'[]',?4,?5,?6)",params![crate::digest(token.as_bytes()),code["owner"].as_str().unwrap(),serde_json::to_string(&scopes)?,now_ms()+lifetime,get("resource"),get("client_id")])?;
         tx.execute(
             "UPDATE oauth_clients SET last_used=?2 WHERE id=?1",
             params![get("client_id"), now_ms()],
@@ -579,7 +617,7 @@ async fn token(
         )?;
         tx.commit()?;
         Ok(
-            json!({"access_token":token,"token_type":"Bearer","expires_in":3600,"scope":scopes.join(" ")}),
+            json!({"access_token":token,"token_type":"Bearer","expires_in":lifetime / 1000,"scope":scopes.join(" ")}),
         )
     })();
     let mut response = match result {
@@ -709,6 +747,76 @@ mod tests {
         assert_eq!(format!("{}{}", location.origin().ascii_serialization(), location.path()), callback);
         assert!(location.query_pairs().any(|(key, value)| key == "state" && value == "cursor-state"));
         assert!(location.query_pairs().any(|(key, value)| key == "code" && !value.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn a_loopback_client_gets_a_day_long_token_and_may_ask_for_export_data() {
+        use super::super::accounts::tests::{cookie_of, fixture, request, PASSWORD};
+        use tower::ServiceExt;
+
+        let fixture = fixture(auth::Verification::Local, false);
+        let state = Konae::for_test(fixture.state.clone());
+        let signup = mcp::owner_signup(
+            State(state.clone()),
+            request("POST", "localhost", "/_konae/owner/signup", json!({
+                "email": "owner@example.test", "password": PASSWORD, "setupKey": "test-admin"
+            })),
+        ).await;
+        let cookie = cookie_of(&signup).unwrap();
+        let loopback = "http://127.0.0.1:49152/callback";
+        let remote = "https://client.example/callback";
+        for (id, redirect) in [("cli", loopback), ("remote", remote)] {
+            mcp::store(&state).unwrap().execute(
+                "INSERT INTO oauth_clients(id,body,created) VALUES (?1,?2,?3)",
+                params![id, json!({"client_name":id, "redirect_uris":[redirect]}).to_string(), now_ms()],
+            ).unwrap();
+        }
+        let verifier = "v".repeat(43);
+        let challenge = encode_base64(&Sha256::digest(verifier.as_bytes()))
+            .trim_end_matches('=').replace('+', "-").replace('/', "_");
+        let query = |client: &str, redirect: &str| url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs([
+                ("client_id", client), ("redirect_uri", redirect), ("response_type", "code"),
+                ("code_challenge_method", "S256"), ("code_challenge", &challenge),
+                ("scope", "read export_data"), ("resource", "http://localhost/mcp"), ("state", "s"),
+            ]).finish();
+        let router = routes().with_state(state.clone());
+        let page = |query: String| Request::builder().uri(format!("/oauth/authorize?{query}"))
+            .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
+            .body(Body::empty()).unwrap();
+        let refused = router.clone().oneshot(page(query("remote", remote))).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "only a loopback client may ask for export_data");
+
+        let consent = router.clone().oneshot(page(query("cli", loopback))).await.unwrap();
+        assert_eq!(consent.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            axum::body::to_bytes(consent.into_body(), usize::MAX).await.unwrap().to_vec(),
+        ).unwrap();
+        assert!(html.contains("for 24 hours") && html.contains("downloads each app's accounts"), "{html}");
+        let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();
+        let allowed = router.clone().oneshot(Request::builder().method("POST").uri("/oauth/authorize")
+            .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(format!("{}&csrf={csrf}", query("cli", loopback)))).unwrap()).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::SEE_OTHER);
+        let location = url::Url::parse(allowed.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let code = location.query_pairs().find(|(key, _)| key == "code").unwrap().1.into_owned();
+        let exchange = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs([
+                ("grant_type", "authorization_code"), ("code", &code), ("client_id", "cli"),
+                ("redirect_uri", loopback), ("resource", "http://localhost/mcp"), ("code_verifier", &verifier),
+            ]).finish();
+        let token = router.oneshot(Request::builder().method("POST").uri("/oauth/token")
+            .header(header::HOST, "localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(exchange)).unwrap()).await.unwrap();
+        assert_eq!(token.status(), StatusCode::OK);
+        let token: Value = serde_json::from_slice(&axum::body::to_bytes(token.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(token["expires_in"], 86_400);
+        assert_eq!(token["scope"], "read export_data");
+        let expires: u64 = mcp::store(&state).unwrap()
+            .query_row("SELECT expires FROM credentials WHERE client='cli'", [], |r| r.get(0)).unwrap();
+        assert!(expires > now_ms() + 86_000_000);
     }
 
     #[test]

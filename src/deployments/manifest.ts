@@ -1,4 +1,5 @@
 import { checkConnects } from "../kernel/calls";
+import { MAX_ACTIONS } from "../kernel/actions";
 export type DeploymentVisibility = "public" | "private";
 export const fileAccessMessage = 'manifest.fileAccess must be "app-users" when set.';
 
@@ -152,7 +153,7 @@ function normalizeAction(value: unknown): RuntimeActionDeclaration[] {
 }
 
 function assertActions(actions: RuntimeActionDeclaration[]) {
-  if (actions.length > 50) throw new Error("A deployment may declare at most 50 runtime actions.");
+  if (actions.length > MAX_ACTIONS) throw new Error(`A deployment may declare at most ${MAX_ACTIONS} runtime actions.`);
   if (new Set(actions.map((action) => action.name)).size !== actions.length) {
     throw new Error("Runtime action names must be unique.");
   }

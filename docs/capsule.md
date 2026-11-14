@@ -12,7 +12,7 @@ app/
 ├── pages/            # more pages, published without the prefix
 ├── public/           # published as they are
 ├── styles.css
-├── app.js            # or src/main.ts
+├── app.js            # or src/main.ts, src/main.tsx
 ├── src/
 │   └── feature.ts
 ├── package.json      # optional, the npm packages the app imports
@@ -20,14 +20,14 @@ app/
 └── actions.json
 ```
 
-`konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email and its manifest, which sets the routing.
+`konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email and its manifest, which sets the routing, the origins a page may fetch (`connects`) and who reads uploaded files (`fileAccess`).
 
 ## What each file does
 
 | File | Role |
 | --- | --- |
-| `app.js` or `src/main.ts` | The entrypoint. The build bundles its relative imports and the npm packages it imports by name. |
-| `index.html`, other `.html` | Pages. Every `.html` at the root and under `pages/` is a page. Pages under `pages/` publish without the prefix. |
+| `app.js`, `src/main.ts` or `src/main.tsx` | The entrypoint, the first of `src/main.tsx`, `src/main.ts` and `app.js` held. The build bundles its relative imports and the npm packages it imports by name. |
+| `index.html`, other `.html` | Pages. Every `.html` at the root and under `pages/` is a page. Pages under `pages/` publish without the prefix. A page without a doctype or `<html>` is a fragment, and the build puts the entrypoint into it. A whole document keeps its own body and runs only the scripts it names. |
 | `styles.css` | Styles the pages load. |
 | `schema.sql` | The only model of the database. It states what the database should be. It may only create tables and indexes, and it must be safe to run twice, because the editor preview runs it again each time it opens. At publish, at import and when the `kernel` binary starts the folder, the Kernel compares it with the live database and derives the schema change. A new table, column or index applies. A dropped table, a dropped column or a changed column type shows the owner what it deletes and applies only once the owner confirms. |
 | `package.json` | The npm packages the app imports, under `dependencies` with exact versions. A version range is refused. The editor's build reads them from esm.sh, and `konae build` reads them from `node_modules`. The published app holds their code and loads nothing from another origin. |
@@ -43,10 +43,13 @@ A Deployment serves the Build Artifact built from the Capsule, not the Capsule. 
 - The files the pages load, and `public/`, are included.
 - Binary files travel as base64, named in `encodings`.
 - A build that names a file the Capsule does not hold is refused.
+- A Capsule that holds an entrypoint is refused when every page is a whole document that loads no script, because the entrypoint would never run. The build and the Validation Gate answer with one sentence, such as `index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.`
 
 The routing mode is `pages` by default. A path the artifact does not hold answers 404 with its `404.html`. In `spa` mode such a path serves `index.html`. The builders and the Kernel refuse any other mode with the same words.
 
-The Gate checks the schema and `actions.json`. A page that names a missing file passes the Gate and fails at build or release. See [Named divergences](./divergences.md).
+`konae build` and `konae publish` minify the bundle with `NODE_ENV` set to `production`, and `konae dev` builds it readable. In a folder from `konae init` or `konae export`, they run its `npm run build`, after one `npm install` when `node_modules` is missing. That build type-checks `app/src/` against `actions.d.ts` when it holds TypeScript, so a call to an action that does not exist, or with an input it does not take, stops the build before `dist/` changes.
+
+The Gate checks the schema, `actions.json` and that a page runs the entrypoint. A page that names a missing file passes the Gate and fails at build or release. See [Named divergences](./divergences.md).
 
 ## What the published page may do
 

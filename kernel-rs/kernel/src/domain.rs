@@ -90,7 +90,7 @@ pub fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<String, R
     }
     if !rules.suffix.is_empty() && (hostname == rules.suffix || hostname.ends_with(&format!(".{}", rules.suffix))) {
         return Err(refuse("domain.app-suffix", format!(
-            "{hostname} is under this installation's app suffix {}, where Konae names apps itself. Name a hostname outside it.",
+            "{hostname} is under this installation's app suffix {}, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.",
             rules.suffix
         )));
     }
@@ -590,7 +590,7 @@ mod tests {
         // A name under the installation's suffix is refused before anything is stored.
         assert_eq!(
             set(&notes.id, "notes.apps.example.com").await.unwrap_err().to_string(),
-            "notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Name a hostname outside it."
+            "notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix."
         );
         assert!(read_record(&state, &notes.id).is_none());
 

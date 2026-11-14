@@ -94,12 +94,31 @@ The page never talks to the file store. The Kernel takes the upload, checks it, 
     }
     ```
 
+## Share every file with the app's users
+
+`manifest.fileAccess` decides who reads files across the whole app. It has one value, `"app-users"`. Leave it out to keep each file's own visibility. A release with any other value is refused with `manifest.fileAccess must be "app-users" when set.`, in the editor and on the Kernel.
+
+```json
+{ "manifest": { "fileAccess": "app-users" } }
+```
+
+Put it in `konae.json`, or pick "All signed-in app users" under "Who can read uploaded files" in the editor's Users view. It takes effect at the next publish.
+
+- Every person signed in to this app lists and reads every file, including files uploaded before the policy. A signed-out visitor reads none, even on a public app.
+- An API key reads no file of the app.
+- An upload may omit `visibility` or pass `"app-users"`. `"private"` or `"public"` is refused with `File visibility is fixed to app-users by this app.`
+- Only the uploader still deletes a file.
+- Files list with `visibility: "app-users"`. Each file keeps the visibility it was stored with, and a file uploaded under the policy is stored as private. Removing the policy and publishing again gives every file that stored visibility back, so files uploaded under the policy become private to their uploader.
+- An app with this policy has accounts, so its path address needs `acceptSharedOrigin`.
+
 ## Refusals you may meet
 
 - `authentication-required` when nobody is signed in.
 - `Files must be between 1 byte and 2 MiB.` when the file is empty or too large.
 - `This deployment has reached its 20 MiB file quota.`
 - `Only the person who uploaded this file may change or delete it.`
+- `File visibility is fixed to app-users by this app.` when the app sets `fileAccess` and the upload or change asks for `"private"` or `"public"`.
+- `File visibility must be private or public.` when the visibility is unknown, or asks for `"app-users"` in an app without the policy.
 
 ## Check it worked
 

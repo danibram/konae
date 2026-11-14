@@ -124,7 +124,7 @@ export function parseServerActionSource(source: string): ServerActionProgram {
 }
 
 // kernel-rs/kernel/src/action-cases.json holds the shape cases both test suites run.
-const MAX_ACTIONS = 100;
+export const MAX_ACTIONS = 100;
 const MAX_ACTION_NAME = 100;
 const ACTION_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 const MAX_STATEMENT_BYTES = 20_000;

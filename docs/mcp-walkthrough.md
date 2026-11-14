@@ -87,7 +87,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```json
 {
   "result": {
-    "chunkBytes": 65536,
+    "chunkBytes": 4194304,
     "files": {
       "maxFileBytes": 2097152,
       "quotaBytes": 20971520
@@ -125,9 +125,9 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "a credential: platform_guide topic credentials",
       "project_create",
       "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-      "build locally",
-      "transfer_begin/write/complete",
-      "release_plan",
+      "build locally, or write the release JSON of the publishing topic",
+      "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
+      "release_plan once",
       "release_apply",
       "project_inspect"
     ],
@@ -150,6 +150,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```json
 {
   "result": {
+    "browser": "When nobody has the owner's password, run bun run konae -- login --browser --dir <folder> --url <Kernel URL>, with the same flags. It prints an address and opens it; hand the address to the owner, who opens it in a browser on the same machine, signs in and allows access within 5 minutes. It saves the same 24-hour token in the same file, one hour under Clerk. No password or token passes through the terminal or the agent.",
     "flags": {
       "--export-data": "adds export_data",
       "--manage-users": "adds manage_users"
@@ -157,13 +158,14 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "login": "bun run konae -- login --dir <folder> --url <installation URL> reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset when it runs in a terminal. Add KONAE_INVITATION_CODE, the code the operator issued with konae owner-code-create, to create the account, or KONAE_SETUP_KEY for an installation's first owner. It saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json, which publish, pull, sql and export read. KONAE_MCP_TOKEN overrides that file. On a Kernel that verifies email, creating the account sends a link; on a Kernel on the same machine, --verify-from <data folder>/mailbox.jsonl answers it with KONAE_PASSWORD in the same run.",
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. The token lasts one hour and there is no refresh token. OAuth does not offer export_data.",
     "permissions": {
-      "export_data": "project_export",
+      "export_data": "project_export and reading its downloads",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
       "read": "projects_list, project_inspect, project_sources_read, signup_policy_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_read, signals_read, usage_summary, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
-    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds."
+    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds. An expired token answers 401 with the time it expired. One from OAuth says to run konae login --browser for the CLI or reconnect the MCP client. Any other says how long tokens from konae login last on this installation and to run konae login again.",
+    "secrets": "bun run konae -- secret set <name> --dir <folder> [--use route|call|google] reads the value from stdin, so it stays out of the agent's context and argv. The owner pipes it in or types it at the hidden prompt. It reads the name back with secrets_list. secret list prints names and uses, never values. Prefer it to secret_set with the value as an argument."
   }
 }
 ```
@@ -175,14 +177,14 @@ An MCP client that speaks OAuth registers itself, sends the owner to the consent
 
 <!-- walkthrough:oauth-register -->
 ```sh
-curl -i -X POST 'http://localhost:4173/oauth/register' -H 'content-type: application/json' --data '{"client_name":"Walkthrough agent","redirect_uris":["http://127.0.0.1:9999/callback"]}'
+curl -i -X POST 'http://localhost:4173/oauth/register' -H 'content-type: application/json' --data '{"client_name":"Walkthrough agent","redirect_uris":["https://agent.example/callback"]}'
 ```
 
 ```text
 HTTP 201
 content-type: application/json
 
-{"client_id":"<client id>","client_name":"Walkthrough agent","grant_types":["authorization_code"],"redirect_uris":["http://127.0.0.1:9999/callback"],"response_types":["code"],"token_endpoint_auth_method":"none"}
+{"client_id":"<client id>","client_name":"Walkthrough agent","grant_types":["authorization_code"],"redirect_uris":["https://agent.example/callback"],"response_types":["code"],"token_endpoint_auth_method":"none"}
 ```
 <!-- /walkthrough:oauth-register -->
 
@@ -190,7 +192,7 @@ A signed-out owner is sent to sign in first, and `returnTo` brings them back. Si
 
 <!-- walkthrough:oauth-authorize -->
 ```sh
-curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+write+publish+manage_users&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough'
+curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=https%3A%2F%2Fagent.example%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+write+publish+manage_users&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough'
 ```
 
 ```text
@@ -220,7 +222,7 @@ curl -i -X POST 'http://localhost:4173/oauth/authorize' -H 'cookie: konae_owner_
 
 ```text
 HTTP 303
-location: http://127.0.0.1:9999/callback?code=<authorization code>&state=walkthrough&iss=http%3A%2F%2Flocalhost%3A4173
+location: https://agent.example/callback?code=<authorization code>&state=walkthrough&iss=http%3A%2F%2Flocalhost%3A4173
 ```
 <!-- /walkthrough:oauth-authorize -->
 
@@ -228,7 +230,7 @@ The client exchanges the code with its verifier:
 
 <!-- walkthrough:oauth-token -->
 ```sh
-curl -i -X POST 'http://localhost:4173/oauth/token' -H 'content-type: application/x-www-form-urlencoded' --data 'grant_type=authorization_code&client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&code=<authorization code>&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&code_verifier=walkthrough-verifier-0123456789-0123456789-0123456789'
+curl -i -X POST 'http://localhost:4173/oauth/token' -H 'content-type: application/x-www-form-urlencoded' --data 'grant_type=authorization_code&client_id=<client id>&redirect_uri=https%3A%2F%2Fagent.example%2Fcallback&code=<authorization code>&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&code_verifier=walkthrough-verifier-0123456789-0123456789-0123456789'
 ```
 
 ```text
@@ -271,18 +273,18 @@ content-type: application/json
 ```
 <!-- /walkthrough:oauth-token -->
 
-OAuth offers `read`, `write`, `publish` and `manage_users`. Exporting needs a token from `konae login`:
+A client that redirects to another machine gets `read`, `write`, `publish` and `manage_users`. Exporting needs a token from `konae login`, with a password or with `--browser`:
 
 <!-- walkthrough:oauth-scope -->
 ```sh
-curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+export_data&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough' -H 'cookie: konae_owner_session=<owner session>'
+curl -i 'http://localhost:4173/oauth/authorize?client_id=<client id>&redirect_uri=https%3A%2F%2Fagent.example%2Fcallback&response_type=code&code_challenge_method=S256&code_challenge=<code challenge>&scope=read+export_data&resource=http%3A%2F%2Flocalhost%3A4173%2Fmcp&state=walkthrough' -H 'cookie: konae_owner_session=<owner session>'
 ```
 
 ```text
 HTTP 400
 content-type: application/json
 
-{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. OAuth does not offer export_data; run konae login with --export-data for a token that holds it."}
+{"error":"invalid_request","error_description":"Invalid scope. Request one or more of read, write, publish and manage_users, separated by spaces. Only a client that redirects to this machine, such as konae login --browser --export-data, may ask for export_data."}
 ```
 <!-- /walkthrough:oauth-scope -->
 
@@ -336,6 +338,7 @@ compose.yaml
 konae.json
 package.json
 scripts
+tsconfig.json
 
 actions.json
 app.js
@@ -702,11 +705,13 @@ Check that the installation sends email, then invite. Call `app_invitations_crea
     "policy": "invitation",
     "results": [
       {
+        "acceptUrl": "http://orders.localhost:4173/_konae/invitation#invitation=<invitation token>",
         "acceptable": true,
-        "delivery": "queued",
+        "delivery": "local-mailbox",
         "email": "member@walkthrough.test",
         "expiresAt": <unix seconds>,
         "invitationId": "<invitation id>",
+        "note": "No email left this server. The development mail transport writes the invitation to mailbox.jsonl in the Kernel's data directory instead of sending it. Send acceptUrl to the person yourself; it works once.",
         "status": "invited"
       }
     ]
@@ -1262,28 +1267,28 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
   "result": {
     "downloads": {
       "database": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 12288,
         "transferId": "<database download>"
       },
       "files": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 3072,
         "transferId": "<files download>"
       },
       "identity": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 118784,
         "transferId": "<identity download>"
       },
       "usage": {
-        "chunkBytes": 65536,
+        "chunkBytes": 4194304,
         "expiresAt": <time ms>,
         "sha256": "<sha256>",
         "size": 65536,
@@ -1291,7 +1296,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       }
     },
     "folder": {
-      "chunkBytes": 65536,
+      "chunkBytes": 4194304,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
       "size": 26112,
@@ -1363,8 +1368,8 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
 ```json
 {
   "result": {
-    "data": "<base64 of the first 65536 bytes>",
-    "nextOffset": 65536,
+    "data": "<base64 of the first 118784 bytes>",
+    "nextOffset": 118784,
     "offset": 0,
     "sha256": "<sha256>",
     "size": 118784
@@ -1452,7 +1457,7 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
 ```json
 {
   "result": {
-    "chunkBytes": 65536,
+    "chunkBytes": 4194304,
     "expiresAt": <time ms>,
     "sha256": "<sha256>",
     "size": 12288,
@@ -1467,7 +1472,7 @@ Upload each component with `transfer_begin` and its `component` name, so the upl
   "arguments": {
     "transferId": "<database upload>",
     "offset": 0,
-    "data": "<base64 of up to 65536 bytes from offset 0>"
+    "data": "<base64 of up to 4194304 bytes from offset 0>"
   }
 }
 ```
@@ -1552,6 +1557,8 @@ Built /tmp/orders/dist
     "artifactSha256": "<sha256>",
     "expectedRevision": 0,
     "expiresAt": <time ms>,
+    "firstRelease": true,
+    "hostname": "orders.localhost",
     "planId": "<plan id>",
     "projectId": "<project id>",
     "schema": {
@@ -1559,6 +1566,7 @@ Built /tmp/orders/dist
       "losses": [],
       "statements": []
     },
+    "url": "http://orders.localhost:4174",
     "visibility": "private"
   }
 }

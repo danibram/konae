@@ -57,7 +57,7 @@ A Server Action is the only way a page reaches the database. It runs one SQL sta
     const rows = await miniapp.actions.call("notes.list");
     ```
 
-6. Apply the change in the editor, or save the files and run `bun run konae -- dev --dir <folder>`. The Validation Gate and the Kernel refuse a bad statement, name, access, kind or binding with the same words. A project declares at most 100 actions.
+6. Apply the change in the editor, or save the files and run `bun run konae -- dev --dir <folder>`. The Validation Gate and the Kernel refuse a bad statement, name, access, kind or binding with the same words. A project declares at most 100 actions. When `app/src/` holds TypeScript, the folder's build checks each `miniapp.actions.call` against `actions.d.ts`, which `dev` and `contract` write, and stops on a name or input the action does not have.
 
 ## Check it worked
 

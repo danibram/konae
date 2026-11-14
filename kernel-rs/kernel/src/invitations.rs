@@ -26,6 +26,8 @@ pub const MAX_BATCH: usize = 50;
 pub const MAX_PAGE: usize = 100;
 /// How long the answer stored for an idempotency key is kept.
 const IDEMPOTENCY_SECONDS: i64 = 7 * 24 * 60 * 60;
+/// Beside an invitation's link when the development transport kept its email.
+pub const LOCAL_MAILBOX_INVITATION: &str = "No email left this server. The development mail transport writes the invitation to mailbox.jsonl in the Kernel's data directory instead of sending it. Send acceptUrl to the person yourself; it works once.";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -380,11 +382,22 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
             // message then goes through the account mail outbox and its budgets.
             let page = format!("{}/_konae/invitation", super::domain::app_url(state, deployment));
             let invited_by = sender.email.clone();
+            // With the development transport the message only reaches the
+            // server's mailbox file, so the caller, who holds manage_users,
+            // gets the acceptance link it carries.
+            let local_mailbox = state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some());
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
+            let mut links: HashMap<String, String> = HashMap::new();
             for (invitation, challenge) in issued {
                 let scope = challenge.scope.clone();
+                let link = format!("{page}#{}={}", challenge.purpose.as_str(), challenge.token);
                 let delivery = match accounts::deliver_issued(state, deployment, challenge, page.clone(), None, invited_by.clone()).await {
-                    Ok(()) => "queued",
+                    Ok(()) => {
+                        if local_mailbox {
+                            links.insert(invitation.clone(), link);
+                        }
+                        "queued"
+                    }
                     Err(error_value) => {
                         eprintln!("Invitation email for {scope} failed: {error_value}");
                         "failed"
@@ -401,7 +414,21 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
                 Some(results) => results.iter_mut().for_each(mark),
                 None => mark(&mut response),
             }
+            // The stored answer replays a retry with the same key. It keeps
+            // `queued` and no link, so the live token stays out of the
+            // identity database and its exports.
             let stored = response.clone();
+            let link = |entry: &mut Value| {
+                if let Some(url) = entry["invitationId"].as_str().and_then(|id| links.get(id)) {
+                    entry["delivery"] = json!("local-mailbox");
+                    entry["acceptUrl"] = json!(url);
+                    entry["note"] = json!(LOCAL_MAILBOX_INVITATION);
+                }
+            };
+            match response.get_mut("results").and_then(Value::as_array_mut) {
+                Some(results) => results.iter_mut().for_each(link),
+                None => link(&mut response),
+            }
             off(move || {
                 auth.transaction(|tx| {
                     for (invitation, delivery) in &outcomes {
@@ -941,6 +968,48 @@ mod tests {
             &json!({"emails": ["ben@example.test"], "idempotencyKey": "inviter-key-2"})).await.unwrap();
         assert_eq!(queue.run_once().await.unwrap(), 1);
         assert_eq!(transport.0.lock().unwrap()[1].subject, "You are invited to Invitation test");
+    }
+
+    /// Stands in for the development transport, which only writes a file.
+    struct Development;
+
+    impl mail::Transport for Development {
+        fn name(&self) -> &'static str {
+            "development"
+        }
+        fn send<'a>(&'a self, _email: &'a mail::OutgoingEmail) -> std::pin::Pin<Box<dyn std::future::Future<Output = mail::SendOutcome> + Send + 'a>> {
+            Box::pin(async { mail::SendOutcome::Accepted { provider_id: None, delivered: true } })
+        }
+        fn preflight<'a>(&'a self, _sender: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = mail::PreflightResult> + Send + 'a>> {
+            Box::pin(async { mail::PreflightResult::Ready })
+        }
+    }
+
+    /// With the development transport no email leaves, so the inviter gets
+    /// the acceptance link. A retry with the same key replays the stored
+    /// answer, which never held the link.
+    #[tokio::test]
+    async fn the_development_transport_hands_the_link_to_the_inviter() {
+        let mut fixture = fixture(SignupMode::Invitation);
+        let queue = Arc::new(
+            mail::MailQueue::open(&fixture.root, Arc::new(Development), "Konae <konae@localhost>",
+                "a mail secret that is long enough for tests", mail::Limits::default(), std::time::Duration::from_millis(50))
+            .unwrap(),
+        );
+        queue.run_preflight().await;
+        fixture.state.accounts = AccountSettings { verification: Verification::Required, mail: None, queue: Some(queue), google: Arc::new(crate::google::Google::real()) };
+
+        let answer = fixture.invite(&["ana@example.test"], "local-key").await;
+        let result = &answer["results"][0];
+        assert_eq!(result["delivery"], "local-mailbox");
+        assert_eq!(result["note"], LOCAL_MAILBOX_INVITATION);
+        let url = result["acceptUrl"].as_str().unwrap();
+        let token = url.strip_prefix(&format!("http://{APP_HOST}/_konae/invitation#invitation=")).expect(url);
+        let replay = fixture.invite(&["ana@example.test"], "local-key").await;
+        assert_eq!(replay["results"][0]["delivery"], "queued");
+        assert!(replay["results"][0].get("acceptUrl").is_none());
+        assert_eq!(fixture.answer(APP_HOST, token, PASSWORD).await.status(), StatusCode::OK);
+        assert_eq!(fixture.accounts_named("ana@example.test").await[0].1, "active");
     }
 
     #[tokio::test]

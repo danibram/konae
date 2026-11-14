@@ -25,7 +25,7 @@ A Deployment can answer on one hostname its owner controls, such as `notes.examp
 | --- | --- |
 | A name that is not a DNS name, such as a URL, a port, `_` or `*` | `<name> is not a valid DNS name. Use labels of letters, digits and hyphens, 1 to 63 characters each, that do not start or end with a hyphen.` |
 | One label, an IP address, a local name | `<name> needs at least two labels, such as notes.example.org.` / `<name> is an IP address. Name a hostname under a domain you control.` / `<name> is a local name. …` |
-| A name under the installation's suffix | `<name> is under this installation's app suffix <suffix>, where Konae names apps itself. Name a hostname outside it.` |
+| A name under the installation's suffix | `<name> is under this installation's app suffix <suffix>, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.` |
 | The editor's or the MCP host | `<name> is this installation's own host. Name a hostname no Konae host uses.` |
 | A TXT record that holds another value | `The TXT record at _konae.<name> holds "<value>", not this Deployment's token. Set it to <token> and call domain_set again.` |
 | A name another Deployment serves | `<name> already serves another Deployment on this installation. Clear it there with domain_clear first.` |
@@ -34,7 +34,7 @@ An export carries the hostname without its token. The import creates a pending c
 
 ## Generated hostname
 
-The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` when another app holds the slug or the name is one of the installation's own hosts, such as `app.<domain>`, and later releases keep that name. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
+The first publish names a Deployment `<slug>.<suffix>`, or `<slug>-<code>.<suffix>` with a code from the app's ID when another app holds the slug or the name is one of the installation's own hosts, such as `app.<domain>`, and later releases keep that name. `release_plan` answers the name as `hostname` and `url`, with `firstRelease` true before the first release; both are null in the rare case that the slug and its coded name are taken, and the release then picks a random code. `hostname_set { deploymentId, name }` moves it to another name under the same suffix and needs `publish`. `name` is one label, such as `notes`, or the whole hostname.
 
 ```json
 { "deploymentId": "…", "hostname": "notes.example.com", "url": "https://notes.example.com", "changed": true,

@@ -17,11 +17,13 @@ This is the table the `pieces` topic of `platform_guide` returns, and the one in
 | Another service calls this app | `http` on an anonymous action with callers, signature or key | A call action (that is outbound) |
 | This app calls another host | `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
+| Every signed-in user reads every uploaded file | `manifest.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
 | A short link on the installation's domain | Path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | Export and import of the app folder | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` (an export of the data) + `dev --reset` (its import) | Publishing to find out |
+| Put data from the folder, or from another system, into the published app | `konae push` (an import of the folder's `data/`, after a backup) | A migration script that drives transfers and imports by hand |
 | See the email, calls, scheduled runs and Signals of a local run | `konae events` | Reading the Kernel's files by hand |
 
 ## The unit
@@ -33,6 +35,7 @@ The app folder is the app: `konae.json`, `app/`, `dist/` and `data/` with its da
 - `guard`, `notify`, `schedule`, `signal`, `http` and `kind: call` are on [Server Actions](./server-actions.md).
 - Signup Policy, invitations and roles kept by the app are on [Accounts and access](./accounts-and-access.md).
 - Export and import are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
+- `miniapp.files` and `manifest.fileAccess` are in the [upload files](./guides/upload-files.md) guide.
 
 ## Read next
 

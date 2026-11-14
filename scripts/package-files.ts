@@ -1,15 +1,14 @@
-// Streams the parts of an export between MCP transfers and files in fixed
-// blocks, so a 256 MiB database never sits in memory.
+// Streams the parts of an export between MCP transfers and files in blocks of
+// the transfer's chunkBytes, so a 256 MiB database never sits in memory.
 import { createHash } from "node:crypto";
 import { open, rm } from "node:fs/promises";
-import { decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
+import { blockLimit, decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeArchivePath, tarHeader, tarPadding, type TarEntry } from "../src/lib/tar";
-
-const block = 64 * 1024;
 
 /** Reads a download transfer into `file`, checks size and SHA-256, and releases the transfer. */
 export async function downloadToFile(client: McpClient, transfer: Transfer, file: string) {
   if (!Number.isSafeInteger(transfer.size) || transfer.size < 0) throw new McpError("Invalid MCP download size.");
+  const block = blockLimit(transfer);
   const hash = createHash("sha256");
   const output = await open(file, "wx", 0o600);
   try {
@@ -29,6 +28,55 @@ export async function downloadToFile(client: McpClient, transfer: Transfer, file
   } finally {
     await output.close();
     await client.cancel(transfer.transferId).catch(() => {});
+  }
+}
+
+/** Size and SHA-256 of `file`, read in 1 MiB blocks. */
+export async function checksumFile(file: string) {
+  const hash = createHash("sha256");
+  const input = await open(file, "r");
+  const buffer = new Uint8Array(1024 * 1024);
+  let size = 0;
+  try {
+    for (;;) {
+      const { bytesRead } = await input.read(buffer, 0, buffer.length, size);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      size += bytesRead;
+    }
+  } finally {
+    await input.close();
+  }
+  return { size, sha256: hash.digest("hex") };
+}
+
+/**
+ * Uploads `file` as one owner transfer, in blocks of the `chunkBytes` that
+ * transfer_begin answers, and completes it. `component` names the part of
+ * an export it carries. A failed upload is cancelled.
+ */
+export async function uploadFromFile(client: McpClient, file: string, sized: { size: number; sha256: string }, args: { projectId: string; component: string }, begun?: (transfer: Transfer) => void): Promise<Transfer> {
+  const transfer = await client.call<Transfer>("transfer_begin", { size: sized.size, sha256: sized.sha256, ...args });
+  begun?.(transfer);
+  try {
+    if (!Number.isSafeInteger(transfer.chunkBytes) || transfer.chunkBytes <= 0) throw new McpError("transfer_begin answered no valid chunkBytes.");
+    const input = await open(file, "r");
+    try {
+      const buffer = new Uint8Array(transfer.chunkBytes);
+      for (let offset = 0; offset < sized.size;) {
+        const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, sized.size - offset), offset);
+        if (bytesRead === 0) throw new Error(`${file} is shorter than ${sized.size} bytes.`);
+        await client.call("transfer_write", { transferId: transfer.transferId, offset, data: Buffer.from(buffer.subarray(0, bytesRead)).toString("base64") });
+        offset += bytesRead;
+      }
+    } finally {
+      await input.close();
+    }
+    await client.call("transfer_complete", { transferId: transfer.transferId });
+    return transfer;
+  } catch (error) {
+    await client.cancel(transfer.transferId).catch(() => {});
+    throw error;
   }
 }
 

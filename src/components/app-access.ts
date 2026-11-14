@@ -121,8 +121,10 @@ export function invitationView(invitation: Pick<AppInvitation, "status" | "deliv
 export function invitationResultMessage(result: InvitationResult): { label: string; text: string; tone: Tone } {
   switch (result.status) {
     case "invited": {
-      const sent = result.delivery === "queued" ? "Invitation email handed to mail." : result.delivery === "failed" ? "The invitation exists but its email failed. Resend it." : "The invitation exists but no email left. Resend it.";
-      const ok = result.delivery === "queued" && result.acceptable;
+      const sent = result.delivery === "queued" ? "Invitation email handed to mail."
+        : result.delivery === "local-mailbox" ? `No email left the server; this installation writes mail to its mailbox file. Send this link to the person yourself: ${result.acceptUrl ?? ""}`
+        : result.delivery === "failed" ? "The invitation exists but its email failed. Resend it." : "The invitation exists but no email left. Resend it.";
+      const ok = (result.delivery === "queued" || result.delivery === "local-mailbox") && result.acceptable;
       return { label: ok ? "Invited" : "Check", text: result.acceptable ? sent : `${sent} The allowlist does not include this address; add it or choose Invitation only.`, tone: ok ? "success" : "warning" };
     }
     case "already-invited":

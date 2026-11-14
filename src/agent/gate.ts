@@ -2,7 +2,7 @@ import type { Database, SqlJsStatic } from "sql.js";
 import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
 import { contractFromProgram } from "../lib/action-contract";
-import { rootRelativeWarnings } from "../lib/static-artifact.js";
+import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artifact.js";
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkFileAccess } from "../deployments/manifest";
@@ -180,6 +180,9 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
+    // The build refuses with the same words. Of the sources, the Kernel's release check reads only actions.json and schema.sql, so it has no check to match.
+    const neverRuns = entryNeverRunsMessage(Object.keys(files), files);
+    if (neverRuns) errors.push({ stage: "actions", message: neverRuns });
     // A root-relative URL leaves the app's path address. The build warns with the same words, and the Kernel has no release warning to match.
     warnings.push(...rootRelativeWarnings(files).map(({ message }) => ({ stage: "actions" as const, message })));
     return { ok: errors.length === 0, errors, checked, ...(warnings.length > 0 ? { warnings } : {}) };

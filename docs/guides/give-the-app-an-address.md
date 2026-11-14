@@ -12,9 +12,21 @@ A Deployment always answers on the hostname the Kernel generated for it. It can 
 
 The generated hostname keeps answering when you add either of the others.
 
+## The generated hostname
+
+Konae names every app under the installation's app suffix, `KONAE_HOST_SUFFIX`. The first publish takes `<slug>.<suffix>` when no other app holds it, and `<slug>-<code>.<suffix>` otherwise, with a code from the app's ID. Every later release keeps that name. `release_plan` answers it as `hostname` and `url` before the first release, with `firstRelease: true`, and `konae publish` prints it then. Read it before you register Google sign-in or share links.
+
+A name under the suffix is never a custom domain. `domain_set`, and `konae domain --set`, refuse it with:
+
+```
+notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.
+```
+
+The name belongs to the installation, and the app folder does not carry it. An export leaves it behind, and an import on another installation gets a name under that installation's suffix by the same rule.
+
 ## Move the generated hostname
 
-Call `hostname_set` with the `deploymentId` and the new `name`, one label such as `notes`, for example `bun run konae -- tool hostname_set '{"deploymentId":"<id>","name":"notes"}' --dir ./my-app`. The app answers on `notes.<suffix>` at once, and its old name redirects there, so links already sent keep working. App users sign in again on the new name. If the app offers Google sign-in, register the `googleCallback` from the answer in its Google client first. A service that calls the app's HTTP routes may not follow the redirect, so give it the new address. A name another app holds, or held before, is refused. For a hostname outside the installation's suffix, add a custom domain instead.
+Call `hostname_set` with the `deploymentId` and the new `name`, one label such as `notes`, or from the app folder with `bun run konae -- hostname --dir ./my-app --set notes`, which takes the Deployment's ID from `konae.json`. Without `--set` the command prints the current address. The app answers on `notes.<suffix>` at once, and its old name redirects there, so links already sent keep working. App users sign in again on the new name. If the app offers Google sign-in, register the `googleCallback` from the answer in its Google client first. A service that calls the app's HTTP routes may not follow the redirect, so give it the new address. A name another app holds, or held before, is refused. For a hostname outside the installation's suffix, add a custom domain instead.
 
 ## Add a custom domain
 

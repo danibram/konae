@@ -15,6 +15,7 @@
 use super::refusal::{refuse, Refusal};
 use super::*;
 use axum::middleware::Next;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 pub const RECORD_FILE: &str = "hostname.json";
@@ -145,6 +146,99 @@ fn is_installation_host(state: &AppState, hostname: &str) -> bool {
     domain::Rules::of(state).installation_hosts.iter().any(|host| host.eq_ignore_ascii_case(hostname.trim_end_matches('.')))
 }
 
+// ---------------------------------------------------------------------------
+// Taking a name
+
+/// Names a first publish or a move is taking right now, per data directory.
+/// A first publish chooses its name before it stages the release and serves
+/// on it only at the end, so without this a move and a first publish, or two
+/// first publishes of one slug, could both take one name.
+static TAKING: OnceLock<std::sync::Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+
+fn taking_set() -> std::sync::MutexGuard<'static, HashSet<(PathBuf, String)>> {
+    TAKING.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A name a first publish or a move holds until it serves on it. Dropping it
+/// lets the name go.
+pub struct Taking {
+    key: (PathBuf, String),
+}
+
+impl Drop for Taking {
+    fn drop(&mut self) {
+        taking_set().remove(&self.key);
+    }
+}
+
+fn take(state: &AppState, hostname: &str) -> Option<Taking> {
+    let key = (state.data_root.clone(), hostname.to_owned());
+    // Build the Taking only when this call inserted the name. Dropping one
+    // frees the name, which would release another caller's hold.
+    let inserted = taking_set().insert(key.clone());
+    if inserted { Some(Taking { key }) } else { None }
+}
+
+/// Whether an app other than `id` answers on `hostname`, held it before, or
+/// claims it as a custom domain.
+async fn held_by_other(state: &AppState, hostname: &str, id: &str) -> bool {
+    state.deployments.read().await.get(hostname).is_some_and(|holder| holder.id != id)
+        || held_by(state, hostname).is_some_and(|holder| holder != id)
+        || domain::claimed(state, hostname)
+}
+
+/// Free for `id`: not the installation's own host or the path host, and not
+/// held by another app.
+async fn free_for(state: &AppState, hostname: &str, id: &str) -> bool {
+    let path_host = crate::path::path_host(state);
+    !is_installation_host(state, hostname)
+        && !path_host.is_some_and(|host| host.eq_ignore_ascii_case(hostname))
+        && !held_by_other(state, hostname, id).await
+}
+
+fn stem(slug: &str) -> String {
+    Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into())
+}
+
+/// The names a first publish of `slug` tries, in order: `<slug>.<suffix>`,
+/// then `<slug>-<code>.<suffix>` with a code from the app's ID, so
+/// `release_plan` can name the address before the release takes it.
+fn candidates(state: &AppState, slug: &str, id: &str) -> [String; 2] {
+    let stem = stem(slug);
+    let code = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(id.as_bytes()));
+    [format!("{stem}.{}", state.host_suffix), format!("{stem}-{}.{}", &code[..6], state.host_suffix)]
+}
+
+/// The generated hostname a first publish of the app `id` would take now, as
+/// `release_plan` shows it. None when both names are taken; the release then
+/// takes one with a random code.
+pub async fn planned(state: &AppState, slug: &str, id: &str) -> Option<String> {
+    for name in candidates(state, slug, id) {
+        let busy = taking_set().contains(&(state.data_root.clone(), name.clone()));
+        if !busy && free_for(state, &name, id).await {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// The generated hostname for a first publish of the app `id`, held until
+/// the caller serves on it. It is the first of `candidates` that is free and not
+/// the installation's own host, else one with a random code.
+pub async fn choose(state: &AppState, slug: &str, id: &str) -> (String, Taking) {
+    let mut names: Vec<String> = candidates(state, slug, id).into_iter().rev().collect();
+    loop {
+        let name = names.pop().unwrap_or_else(|| {
+            let code = Uuid::new_v4().simple().to_string();
+            format!("{}-{}.{}", stem(slug), &code[..6], state.host_suffix)
+        });
+        let Some(taking) = take(state, &name) else { continue };
+        if free_for(state, &name, id).await {
+            return (name, taking);
+        }
+    }
+}
+
 /// Frees a deleted Deployment's previous names.
 pub async fn forget(state: &AppState, id: &str) -> Result<()> {
     let _names = database_lock(state, "hostnames").await;
@@ -184,11 +278,12 @@ pub async fn set(state: &AppState, id: &str, raw: &str) -> Result<Value> {
     if current.hostname == hostname {
         return Ok(view(state, &current, false));
     }
-    let taken_now = state.deployments.read().await.get(&hostname).is_some_and(|holder| holder.id != current.id);
-    let held_before = held_by(state, &hostname).is_some_and(|holder| holder != current.id);
-    check_free(&hostname, &domain::Rules::of(state).installation_hosts, taken_now || held_before || domain::claimed(state, &hostname))?;
+    // A first publish that is choosing this name right now counts as another app.
+    let taking = take(state, &hostname);
+    check_free(&hostname, &domain::Rules::of(state).installation_hosts, taking.is_none() || held_by_other(state, &hostname, &current.id).await)?;
 
-    let mut record = read_record(state, &current.id);
+    let before = read_record(state, &current.id);
+    let mut record = before.clone();
     record.previous.retain(|name| name != &hostname && name != &current.hostname);
     record.previous.push(current.hostname.clone());
     write_record(state, &current.id, &record).await?;
@@ -196,7 +291,11 @@ pub async fn set(state: &AppState, id: &str, raw: &str) -> Result<Value> {
     let mut updated = current.clone();
     updated.url = deployment_url(&state.public_origin, &hostname);
     updated.hostname = hostname;
-    persist_deployment(state, &updated).await?;
+    if let Err(error_value) = persist_deployment(state, &updated).await {
+        // The app still answers on its old name, so that name is not a previous one.
+        write_record(state, &current.id, &before).await?;
+        return Err(error_value);
+    }
     {
         let mut deployments = state.deployments.write().await;
         deployments.remove(&current.hostname);
@@ -279,6 +378,47 @@ mod tests {
                 crate::refusal::assert_case(case, outcome);
             }
         }
+    }
+
+    /// release_plan's name is the one the first publish takes, a first publish
+    /// never takes the installation's own host, and a move cannot take a name
+    /// a first publish is choosing.
+    #[tokio::test]
+    async fn a_first_publish_takes_the_planned_name_and_holds_it_against_a_move() {
+        let root = std::env::temp_dir().join(format!("konae-hostname-plan-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState { own_origins: vec!["https://app.apps.example.com".into()], ..test_state(&root) };
+
+        assert_eq!(planned(&state, "Notes", "notes").await.as_deref(), Some("notes.apps.example.com"));
+        let notes = publish(&state, "notes").await;
+        assert_eq!(notes.hostname, "notes.apps.example.com");
+
+        // The slug is taken, so the plan names the coded name and the publish takes it.
+        let planned_again = planned(&state, "notes", "again").await.unwrap();
+        assert!(planned_again.starts_with("notes-"), "{planned_again}");
+        let body = json!({
+            "project": {"id": "again", "name": "again", "slug": "notes", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        assert_eq!(deployment_by_id(&state, "again").await.unwrap().hostname, planned_again);
+
+        // The editor's host is not a slug's address.
+        let (name, taking) = choose(&state, "app", "editor-like").await;
+        assert!(name.starts_with("app-") && name != "app.apps.example.com", "{name}");
+        drop(taking);
+
+        // While a first publish holds a name, a move to it is refused; then it is free.
+        let (held, taking) = choose(&state, "journal", "pending").await;
+        assert_eq!(held, "journal.apps.example.com");
+        let refused = set(&state, &notes.id, "journal").await.unwrap_err();
+        assert_eq!(crate::refusal::of(&refused).unwrap().code, "hostname.taken");
+        assert_eq!(planned(&state, "journal", "other").await.map(|name| name.starts_with("journal-")), Some(true));
+        drop(taking);
+        assert_eq!(set(&state, &notes.id, "journal").await.unwrap()["hostname"], "journal.apps.example.com");
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     /// The app answers on the new name, its old name redirects there and

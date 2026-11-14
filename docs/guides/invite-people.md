@@ -26,7 +26,7 @@ A project published from a folder with the CLI shows on the project list with th
     bun run konae -- login --dir <folder> --url http://localhost:4173 --manage-users
     ```
 
-    The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
+    To sign in through the browser without putting the password in the shell, run `login --browser` with the same flags instead. The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
 2. Set the policy if the app needs another one. Call `signup_policy_set` with `deploymentId` and a `mode` of `open`, `invitation`, `closed` or `allowlist`, plus the allowlist entries for `allowlist`. The Deployment's ID is the `id` in `konae.json`.
 
     ```sh
@@ -41,7 +41,7 @@ A project published from a folder with the CLI shows on the project list with th
     ```
 
 5. The person opens the link and chooses a password, and the page signs them in.
-6. `app_invitation_resend` sends a new link that replaces the earlier one. `app_invitation_revoke` ends an invitation and removes the pending account it created, if nobody used it.
+6. `app_invitation_resend` sends a new link that replaces the earlier one. On the development transport, which sends no email, `app_invitations_create` and `app_invitation_resend` answer `delivery: "local-mailbox"` and the link as `acceptUrl`, once, for the owner to hand over. `app_invitation_revoke` ends an invitation and removes the pending account it created, if nobody used it.
 
 ## Where the email lands while you try it
 

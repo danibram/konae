@@ -80,14 +80,14 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `usage.rs` | Usage and Signals |
 | `file_store.rs` | Where file bytes live (`LocalFolder`, `S3Store`), the S3 settings, the quotas, `files-migrate` and `files-reconcile` |
 | `files.rs` | Changing a file's visibility and deleting it |
-| `transfers.rs` | Chunked transfers in 64 KiB blocks, an app user's upload body in one request, and file upload receipts |
+| `transfers.rs` | Chunked transfers, in 4 MiB blocks for an owner, an app user's upload body in one request, and file upload receipts |
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
 | `package.rs` | The export of one app and the import of its data |
 | `import.rs` | Import into an existing app, after a backup |
 | `sources.rs` | The editor's saved sources as the files of `app/` |
 | `maintenance.rs` | The maintenance state and its guard |
 | `hosts.rs` | The hosts an installation answers on |
-| `hostname.rs` | Moving a Deployment to another generated hostname, and the redirect from the names it held |
+| `hostname.rs` | The generated hostname: the name a first publish takes and holds until it serves, `hostname_set`, and the redirect from the names it held |
 | `domain.rs` | Custom domains and their TXT proof |
 | `path.rs`, `path_name.rs` | Path addresses and their names |
 | `security.rs` | The response headers of every host |
@@ -111,6 +111,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `owner_page.rs` | The look of owner sign-in on `/_konae/owner/login` and of OAuth consent |
 | `editor.rs` | The built editor on the editor host, when `KONAE_EDITOR_DIR` names it |
 | `guide.rs` | What `platform_guide` answers |
+| `editor.rs` | The built editor, served on the editor host from `KONAE_EDITOR_DIR` |
 | `state.rs` | Konae's state beside the Kernel's: the setup key, the MCP origin and the owner verification mode |
 
 ## The app folder
@@ -128,7 +129,8 @@ apps/<id>/
 │   ├── usage.sqlite    # Usage, Signals, and the schedule's slots and runs
 │   ├── files/          # index.json, and the uploads unless a bucket holds them
 │   └── secrets.sqlite  # signing secrets and the Google client
-├── actions.d.ts, action-contract.md, AGENTS.md, compose.yaml, .env.example, package.json
+├── actions.d.ts, action-contract.md, AGENTS.md, compose.yaml, .env.example, .gitignore
+├── package.json, tsconfig.json, scripts/   # npm run build type-checks app/src/ and writes dist/
 └── .konae/             this installation's part, never exported
     ├── deployment.json # hostname, release and the published actions.json
     ├── sources.json    # the editor's name, manifest and folders of app/
@@ -176,7 +178,7 @@ With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation
 
 A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, and when the `kernel` binary starts a folder. Both refuse with the same code and sentence, and each rule has one case file in `kernel-rs/kernel/src` that both test suites run, such as `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json` ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other.
 
-An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
+An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. It refuses a Capsule with an entry (`src/main.tsx`, `src/main.ts` or `app.js`) whose pages are all whole documents that load no script, because that entry would never run, and the Validation Gate refuses it with the same sentence. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
 
 ## The editor preview
 
@@ -229,7 +231,7 @@ The browser never receives a database credential, the SQLite file, a generic SQL
 
 The owner side is a different trust domain. SQL on the live database, backups, export and import go through the owner's MCP, with the owner's permissions and Konae's audit log. An app session never authorizes an owner tool. A path under `/_konae/` that names no route of the Kernel answers 410 and points to the owner's MCP.
 
-An upload is private to the app user who uploaded it unless the upload sets it public. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in app user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. Only the uploader changes a file's visibility or deletes it. Nothing is served from the bucket, and no bucket URL reaches the browser.
+An upload is private to the app user who uploaded it unless the upload sets it public. With `manifest.fileAccess` set to `"app-users"` in `konae.json`, every signed-in user of the app may read every upload, no upload can be public, and only the uploader deletes one. `GET /_konae/files/<id>` serves a file to a caller allowed to read it: a signed-in app user from the app's own origin, a visitor for a public file of a public Deployment, or an API key that names the file's visibility. Only the uploader changes a file's visibility or deletes it. Nothing is served from the bucket, and no bucket URL reaches the browser.
 
 Every verification, recovery and invitation link leaves through the queue in `mail.sqlite` ([ADR-0012](./adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md)). The transaction that issues a challenge writes its email job too, and a worker in the Kernel sends due jobs, retrying a provider outage for about two hours. While the sender preflight refuses, signup and recovery answer 503 and nothing is queued.
 
@@ -252,7 +254,7 @@ connect-src 'self'; form-action 'self'; frame-ancestors 'none';
 object-src 'none'; base-uri 'none'
 ```
 
-A fragment page in a Build Artifact inlines the runtime and the compiled module. A whole-document page loads the runtime from `/runtime.js` and its modules from the app's origin. The Kernel hashes every inline `<script>` of each HTML response and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, Blob scripts and scripts from other origins do not run.
+A fragment page in a Build Artifact inlines the runtime and the compiled module. A whole-document page loads the runtime from `/runtime.js` and its modules from the app's origin. The Kernel hashes every inline `<script>` of each HTML response and lists those hashes, so exactly the scripts in the published file run. Inline event handler attributes, `eval`, `new Function`, WebAssembly, Blob scripts and scripts from other origins do not run, because `script-src` names neither `'unsafe-eval'` nor `'wasm-unsafe-eval'`.
 
 - Styles allow `'unsafe-inline'` because apps write `style="..."` attributes through `innerHTML` and the artifact inlines `styles.css`. Google Fonts is the only other origin, because the templates import it. Neither font host can read app data.
 - Images and media accept `blob:` and `data:` so a page can show bytes it built itself, such as a generated PDF or an image preview before upload.

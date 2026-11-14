@@ -3,7 +3,7 @@ import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
 import { normalizeProjectPath } from "../lib/project-files";
 import { hostedRuntime, type BuildArtifact } from "./artifact";
-import { assembleStaticArtifact } from "../lib/static-artifact.js";
+import { appEntry, assembleStaticArtifact } from "../lib/static-artifact.js";
 
 let initialized: Promise<void> | undefined;
 
@@ -17,16 +17,17 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
   return assembleStaticArtifact({
     paths: Object.keys(project.files),
     read: async (path) => project.files[path],
-    compile: () => compileProjectInBrowser(project),
-    bundle: async (path) => bundleInBrowser(project.files, path),
+    // A Deploy minifies with NODE_ENV production, as konae build does; the preview stays readable, as konae dev does.
+    compile: () => compileProjectInBrowser(project, { release: true }),
+    bundle: async (path) => bundleInBrowser(project.files, path, true),
     runtime: hostedRuntime,
     routing: project.manifest.routing,
   });
 }
 
-export async function compileProjectInBrowser(project: MiniAppProject): Promise<{ body: string; styles: string; script: string }> {
-  const entrypoint = project.files["src/main.ts"] !== undefined ? "src/main.ts" : "app.js";
-  const { script, styles: importedCss } = await bundleInBrowser(project.files, entrypoint);
+export async function compileProjectInBrowser(project: MiniAppProject, options: { release?: boolean } = {}): Promise<{ body: string; styles: string; script: string }> {
+  const entrypoint = appEntry(Object.keys(project.files)) ?? "app.js";
+  const { script, styles: importedCss } = await bundleInBrowser(project.files, entrypoint, options.release ?? false);
   return {
     body: project.files["index.html"] ?? "<main id=app></main>",
     styles: [project.files["styles.css"] ?? "", importedCss].filter(Boolean).join("\n"),
@@ -34,7 +35,7 @@ export async function compileProjectInBrowser(project: MiniAppProject): Promise<
   };
 }
 
-async function bundleInBrowser(files: Record<string, string>, entrypoint: string): Promise<{ script: string; styles: string }> {
+async function bundleInBrowser(files: Record<string, string>, entrypoint: string, release = false): Promise<{ script: string; styles: string }> {
   // A failed start (a wasm fetch that dropped, say) is not cached, or every later build would fail too.
   initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
     initialized = undefined;
@@ -49,6 +50,8 @@ async function bundleInBrowser(files: Record<string, string>, entrypoint: string
     platform: "browser",
     target: "es2022",
     outdir: "out",
+    minify: release,
+    define: { "process.env.NODE_ENV": JSON.stringify(release ? "production" : "development") },
     plugins: [projectFilesPlugin(files), packagesPlugin(declaredPackages(files))],
   });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
@@ -62,7 +65,8 @@ function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === "package") return undefined;
-        if (!args.importer) return { path: requireProjectFile(args.path), namespace: "konae" };
+        // esbuild names an entry ./<path> when a file of that name sits in its working directory, as src/main.tsx does in this checkout.
+        if (!args.importer) return { path: requireProjectFile(args.path.replace(/^\.\//, "")), namespace: "konae" };
         if (!args.path.startsWith(".")) return undefined;
         const parent = args.importer.includes("/") ? args.importer.slice(0, args.importer.lastIndexOf("/")) : "";
         const candidate = normalizeRelative(`${parent}/${args.path}`);

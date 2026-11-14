@@ -18,7 +18,8 @@ The build agent needs an API key from Anthropic, OpenAI or OpenRouter, and the p
 4. Read the line above **Apply**. The Validation Gate, the editor's check, has read the change before it can reach the project, and shows "Validated. Schema, preview rows and actions hold." when it passes. A refusal names what to change instead. The Gate refuses the change when:
    - the schema is not valid;
    - a Server Action's SQL does not run against the schema;
-   - a query reads rows without a LIMIT.
+   - a query reads rows without a LIMIT;
+   - every page is a whole document that loads no script, so the app's entrypoint, `app.js`, `src/main.ts` or `src/main.tsx`, would never run.
 5. Press **Apply**, then try the app in the preview. Ask for changes in the same panel and apply each one.
 6. Press **Deploy** in the top bar. Once the app is published the same button reads **Deploy changes**. The dialog is headed **Deploy** followed by the app's name, and lists the address, who can open the app and what people can do. When something blocks the release it shows only the refusal, with a button to the file or the setting that clears it, and its Deploy button stays off.
 7. Choose who can open the app, **Public** (anyone can open it) or **Private** (people with an app account). Then choose who can create an app account. The dialog preselects Open for a public app and Invitation only for a private one. Later, who can open the app changes in Access > Rules and who can create an account in Access > Users.
@@ -52,7 +53,7 @@ The editor preview is not a Deployment. It applies no Content Security Policy, s
 - Google sign-in
 - the installation's file limit, which the preview fixes at 2 MiB, where `konae dev` and a Deployment refuse at `KONAE_FILE_MAX_BYTES`, 2 MiB unless raised
 
-The Gate checks the schema and `actions.json`. A page that names a missing file fails at build or release, not at the Gate, so check every path you write.
+The Gate checks the schema, `actions.json` and that a page runs the app's entrypoint. A page that names a missing file fails at build or release, not at the Gate, so check every path you write.
 
 ## Take it with you
 

@@ -740,6 +740,7 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
         Ok(identity) => identity,
         Err(message) => return login_link_page(StatusCode::FORBIDDEN, message),
     };
+    let email = identity.email.clone();
     match sign_in(state, deployment, flow.intent, identity).await {
         Ok(signed) => {
             let operation = if signed.outcome == IdentityOutcome::Created { usage::Operation::Signup } else { usage::Operation::Login };
@@ -748,6 +749,11 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
             let session_cookie = crate::app_cookie_name(state, &deployment.id, headers);
             response.headers_mut().insert(header::SET_COOKIE, accounts::app_session_cookie(&session_cookie, &signed.session));
             response
+        }
+        // Google proved the email, so a waiting invitation may be named.
+        Err(AuthError::AccountPending) => {
+            let invited = accounts::invitation_pending(state, deployment, &email).await;
+            login_link_page(StatusCode::FORBIDDEN, &accounts::pending_message(state, invited))
         }
         Err(error_value) => {
             let status = match &error_value {

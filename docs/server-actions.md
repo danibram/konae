@@ -56,7 +56,7 @@ Bindings fill `?1`, `?2` and so on, in order. A binding takes its value from one
 | Source | Fields | Value |
 | --- | --- | --- |
 | `input` | `key`, `type`, `maxLength`, `nullable` | What the caller sent. `nullable: true` binds an omitted value or an explicit null as SQL NULL. |
-| `actor` | `field` of `id` | The app user's ID or the API key's ID, and null for a visitor or a schedule's run. Roles live in the app's own tables. See [Accounts and access](./accounts-and-access.md). |
+| `actor` | `field` of `id` | The app user's ID or the API key's ID. A call without one, such as a visitor's, is refused with `This action requires an authenticated actor.`, and a schedule's run binds null. Roles live in the app's own tables. See [Accounts and access](./accounts-and-access.md). |
 | `kernel` | `field` of `now` | The time of the call. |
 
 A fourth form, `{ "source": "literal", "value": ... }`, binds a constant string, number or null.

@@ -675,6 +675,12 @@ async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static st
     if let Some(deployment) = state.deployments.read().await.get(&host).cloned() {
         return Ok(Target::App(deployment));
     }
+    // A name the app held before hostname_set reaches it, as the 308 does for a browser.
+    if let Some(id) = super::hostname::held_by(state, &host) {
+        if let Some(deployment) = super::deployment_by_id(state, &id).await {
+            return Ok(Target::App(deployment));
+        }
+    }
     if installation_host(&rules, &host) {
         return Err(("app-not-found", false));
     }
@@ -1677,5 +1683,26 @@ mod tests {
         let started = std::time::Instant::now();
         assert_eq!(send_outside(&plain, address, "GET", &[], b"").await, Err(("timeout", true)));
         assert!(started.elapsed() < TIMEOUT + Duration::from_secs(2));
+    }
+
+    /// A call to the name an app held before hostname_set reaches that app in process.
+    #[tokio::test]
+    async fn a_call_to_a_previous_hostname_reaches_the_moved_app() {
+        let root = std::env::temp_dir().join(format!("konae-call-moved-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState { public_origin: "https://konae.example.com".into(), host_suffix: "apps.example.com".into(), ..AppState::for_test(&root) };
+        let body = serde_json::json!({
+            "project": {"id": "notes", "name": "notes", "slug": "notes", "manifest": {},
+                "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
+            "visibility": "public",
+            "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}
+        });
+        assert_eq!(crate::deploy(&state, body.to_string().as_bytes()).await.status(), axum::http::StatusCode::OK);
+        crate::hostname::set(&state, "notes", "journal").await.unwrap();
+        for host in ["journal.apps.example.com", "notes.apps.example.com"] {
+            let url = url::Url::parse(&format!("https://{host}/api")).unwrap();
+            assert!(matches!(target(&state, &url).await, Ok(Target::App(app)) if app.id == "notes" && app.hostname == "journal.apps.example.com"), "{host}");
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 }

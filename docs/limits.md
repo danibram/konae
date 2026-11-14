@@ -101,19 +101,20 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 | API keys per Deployment | 50 live keys |
 | `konae login` token, or one from the owner sign-in page | 24 hours |
 | `token_create` | Up to 30 days, or one hour under Clerk |
-| OAuth token | One hour, no refresh token |
+| OAuth token | 24 hours for a client that redirects to `127.0.0.1` or `localhost`, one hour otherwise or under Clerk, no refresh token |
 | Owner invitation code | 14 days by default, `1h` to `90d` |
 
 ## Transfers and publishing
 
 | Limit | Value |
 | --- | --- |
-| Transfer chunk | At most 64 KiB, base64 |
+| Transfer block | At most `chunkBytes`, which `transfer_begin` answers: 4 MiB for an owner, 64 KiB for an app user or visitor, base64 |
+| MCP request | 200,000 bytes, except an owner's `transfer_write` at 5,657,944 bytes |
 | Owner transfers | Expire after one hour, eight at a time per owner, 128 per installation |
 | App user transfers | Expire after 10 minutes, two at a time per app user, 32 per Deployment |
 | Visitor transfers | Two at a time per client address, 16 per public Deployment |
 | Owner transfer size | Up to 32 MiB, or an export component's limit |
-| Publishing payload | 26 MB, with its artifact at most 16 MiB after base64 is decoded |
+| Publishing payload | 26 MB, with its artifact at most 1000 files and 16 MiB after base64 is decoded |
 | Export components | Database 256 MiB, accounts 64 MiB, Usage 128 MiB, files within the destination's quota |
 
 ## Usage store
