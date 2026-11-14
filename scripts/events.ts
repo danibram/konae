@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import type { McpClient } from "../src/mcp/client";
 import { usageRange, type UsageSummary } from "../src/lib/usage";
-import { whatHappened, type Call, type Notice, type Signal } from "../src/lib/what-happened";
+import { whatHappened, type Call, type Notice, type Signal, type Sources } from "../src/lib/what-happened";
 
 /** One line of the feed. `mail` exists only for the local app, whose mailbox is a file that names the recipient and holds the text. */
 export type AppEvent = {
@@ -48,26 +48,37 @@ export function mailEvents(mailbox: string, deploymentId: string, seen = new Map
   return events;
 }
 
+/** The Kernel's own record of a range of days: Usage, calls, notices and Signals. */
+export type ReadRecord = (range: { from: string; to: string }) => Promise<Sources>;
+
+/** The published Deployment's record, read with the four owner tools at once. */
+export function deploymentRecord(client: Pick<McpClient, "call">, deploymentId: string): ReadRecord {
+  return async (range) => {
+    const [summary, calls, notices, signals] = await Promise.all([
+      client.call<UsageSummary>("usage_summary", { deploymentId, ...range }),
+      client.call<{ calls: Call[] }>("calls_read", { deploymentId }),
+      client.call<{ notices: Notice[] }>("notices_read", { deploymentId }),
+      client.call<{ signals: Signal[] }>("signals_read", { deploymentId }),
+    ]);
+    return { summary, calls: calls.calls, notices: notices.notices, signals: signals.signals };
+  };
+}
+
 /** The Kernel's own record: notices, calls, scheduled runs, routes and Signals of the last `days` days. */
-export async function kernelEvents(client: Pick<McpClient, "call">, deploymentId: string, days = 7, mailboxShowsDelivered = false): Promise<AppEvent[]> {
-  const [summary, calls, notices, signals] = await Promise.all([
-    client.call<UsageSummary>("usage_summary", { deploymentId, ...usageRange(days) }),
-    client.call<{ calls: Call[] }>("calls_read", { deploymentId }),
-    client.call<{ notices: Notice[] }>("notices_read", { deploymentId }),
-    client.call<{ signals: Signal[] }>("signals_read", { deploymentId }),
-  ]);
+export async function kernelEvents(read: ReadRecord, days = 7, mailboxShowsDelivered = false): Promise<AppEvent[]> {
+  const record = await read(usageRange(days));
   // Locally a delivered notice is a line of the mailbox, which names its recipient and text, so it is listed once, as mail.
-  const listed = mailboxShowsDelivered ? notices.notices.filter((notice) => notice.state !== "delivered") : notices.notices;
-  return whatHappened({ summary, calls: calls.calls, notices: listed, signals: signals.signals }).map((entry) => ({
+  const notices = mailboxShowsDelivered ? record.notices.filter((notice) => notice.state !== "delivered") : record.notices;
+  return whatHappened({ ...record, notices }).map((entry) => ({
     id: entry.id, at: entry.at, kind: entry.kind, title: entry.title, detail: entry.detail, outcome: entry.outcome.words,
     ...(entry.outcome.fix ? { fix: entry.outcome.fix.what } : {}),
   }));
 }
 
 /** Everything, oldest first, so a terminal and a --follow read downwards. */
-export async function readEvents(client: Pick<McpClient, "call">, deploymentId: string, options: { mailbox?: string; days?: number; seen?: Map<number, number> } = {}): Promise<AppEvent[]> {
+export async function readEvents(read: ReadRecord, deploymentId: string, options: { mailbox?: string; days?: number; seen?: Map<number, number> } = {}): Promise<AppEvent[]> {
   const mailbox = options.mailbox ? await readFile(options.mailbox, "utf8").catch(() => "") : "";
-  const events = [...await kernelEvents(client, deploymentId, options.days, options.mailbox !== undefined), ...mailEvents(mailbox, deploymentId, options.seen)];
+  const events = [...await kernelEvents(read, options.days, options.mailbox !== undefined), ...mailEvents(mailbox, deploymentId, options.seen)];
   return events.sort((a, b) => a.at - b.at);
 }
 
@@ -166,7 +177,7 @@ export const EVENTS_PAGE = `<!doctype html>
  * mailbox line once a second, so a mail's time is when it was written to
  * within a second, also for a later `konae events`, which reads from here.
  */
-export function serveEvents(client: Pick<McpClient, "call">, deploymentId: string, mailbox: string, port: number) {
+export function serveEvents(read: ReadRecord, deploymentId: string, mailbox: string, port: number) {
   const seen = new Map<number, number>();
   const stamp = async () => { mailEvents(await readFile(mailbox, "utf8").catch(() => ""), deploymentId, seen); };
   const timer = setInterval(() => void stamp(), 1000);
@@ -178,7 +189,7 @@ export function serveEvents(client: Pick<McpClient, "call">, deploymentId: strin
       if (url.pathname !== "/events.json") return new Response("Not found", { status: 404 });
       const days = Number(url.searchParams.get("days") ?? 7);
       try {
-        return Response.json(await readEvents(client, deploymentId, { mailbox, seen, days: Number.isInteger(days) && days >= 1 && days <= 400 ? days : 7 }));
+        return Response.json(await readEvents(read, deploymentId, { mailbox, seen, days: Number.isInteger(days) && days >= 1 && days <= 400 ? days : 7 }));
       } catch (error) {
         return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 });
       }

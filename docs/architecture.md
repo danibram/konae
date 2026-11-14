@@ -47,7 +47,7 @@ kernel-rs/
 
 `konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
 
-The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the owner's MCP. `konae dev` talks to neither: it builds the folder and runs the `kernel` binary on it.
+The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the owner's MCP. Both publish through `publishProject` in `src/deployments/release.ts`, and `konae tool <name>` calls any owner tool by name, so a new tool needs no new command. `konae dev` talks to neither: it builds the folder and runs the `kernel` binary on it.
 
 ### Modules of `kernel`
 

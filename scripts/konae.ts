@@ -6,16 +6,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { createInterface } from "node:readline/promises";
-import { McpClient, type Transfer } from "../src/mcp/client";
+import { McpClient } from "../src/mcp/client";
 import { packageComponentFiles, type PackageComponentName } from "../src/lib/portable-package";
-import { usageRange } from "../src/lib/usage";
 import {
   DATA_FOLDER, DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, generatedFiles, gitignore,
   type AppSettings, type FolderEntry,
 } from "../src/lib/app-folder";
-import { describeSchemaChange, release, type ConfirmSchema } from "../src/deployments/release";
+import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src/deployments/release";
 import { PROJECT_TEMPLATES_FILE, type ProjectTemplates } from "./project-templates";
-import type { AppEvent } from "./events";
+import type { AppEvent, ReadRecord } from "./events";
 import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
@@ -135,7 +134,7 @@ contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its sch
           actions.d.ts, which types miniapp.actions.call.
 publish   --dir <folder> [--url <Kernel URL>] [--confirm-schema <confirmation>]
           Builds and publishes to --url or the installation login saved. Set each signing secret
-          with secret_set first. The Kernel changes the database to what schema.sql states. A
+          with tool secret_set first. The Kernel changes the database to what schema.sql states. A
           change that drops a table or a column, or changes a column's type, prints its plan and
           asks; without a terminal, pass the plan's confirmation.
 conform   --url <app URL> --contract <file> [--token <app session>] [--key <API key>]
@@ -146,12 +145,16 @@ export    --dir <folder> --out <empty folder> [--with-data]
           Writes the app folder: konae.json, app/, a fresh dist/ and the files every app folder
           carries. --with-data adds the published app's data/ and needs a credential from
           login --export-data. Secrets never go with it.
-domain    --deployment <id> [--set <hostname> | --clear] [--url <Kernel URL>]
+domain    --deployment <id> [--set <hostname> | --clear] [--dir <folder>] [--url <Kernel URL>]
           Shows, sets or clears the app's custom domain. --set prints the TXT record that proves you
           control the hostname; run it again once the record is at your DNS provider.
+tool      <name> ['<json arguments>'] [--stdin <key>] [--dir <folder>] [--url <Kernel URL>]
+          Calls one tool of the owner's MCP and prints its answer as JSON. The arguments are one JSON
+          object and default to {}. --stdin <key> reads that argument from standard input, so a
+          secret's value stays off the command line. A refusal prints the tool's own words.
 
 init, build, contract, dev, and sql and events without --prod need no credential. Every other command but login reads it from
-<folder>/.konae/credentials.json or KONAE_MCP_TOKEN.`;
+<folder>/.konae/credentials.json or KONAE_MCP_TOKEN, and talks to --url or the installation login saved in that file.`;
 
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
@@ -367,27 +370,20 @@ export async function publishLocal(root: string, config: Config, token: string, 
   // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
   const { signupPolicy: _, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
-  await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest });
-  const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
-  const first = !remote.deployment;
-  const { artifact, files } = await buildLocal(root);
-  const payload = {
-    project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
-    ...(first && wanted ? { initialSignupPolicy: wanted } : {}),
-    ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}),
-  };
-  let receipt: { id: string; url: string };
-  let transfer: Transfer | undefined;
-  try {
-    transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
-    const released = await release<{ id: string; url: string }>(client, transfer.transferId, confirm);
-    await mkdir(path.join(root, ".konae"), { recursive: true });
-    await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(released.plan, null, 2));
-    receipt = released.receipt;
-    await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
-  } finally {
-    if (transfer) try { await client.cancel(transfer.transferId); } catch (error) { console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`); }
-  }
+  let first = false;
+  const { plan, receipt } = await publishProject<{ id: string; url: string }>(client, project, async () => {
+    // project_inspect needs the project that project_create registers on a first publish.
+    const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
+    first = !remote.deployment;
+    const { artifact, files } = await buildLocal(root);
+    return {
+      project: { ...project, files }, visibility: manifest.visibility ?? "private", artifact,
+      initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
+    };
+  }, confirm, (error) => console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`));
+  await mkdir(path.join(root, ".konae"), { recursive: true });
+  await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
+  await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
   if (!first && wanted) {
     // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
     const current = await client.call<{ mode: SignupMode; allowlist?: string[] }>("signup_policy_read", { deploymentId: receipt.id }).catch(() => undefined);
@@ -640,26 +636,9 @@ export async function setDevSecrets(root: string, kernel: Pick<LocalKernel, "run
   return lines;
 }
 
-/**
- * The Kernel's record of the local app, as the four tools `events` reads
- * answer it. One `kernel events` run answers the four calls of one read.
- */
-export function localRecord(kernel: Pick<LocalKernel, "run">): Pick<McpClient, "call"> {
-  let range: { from: string; to: string } | undefined;
-  let pending: Promise<Record<string, unknown>> | undefined;
-  const read = () => pending ??= (async () => {
-    const { from, to } = range ?? usageRange(7);
-    try { return JSON.parse(await kernel.run(["events", "--from", from, "--to", to])); } finally { pending = undefined; }
-  })();
-  return {
-    async call<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
-      if (name === "usage_summary") range = { from: String(args.from), to: String(args.to) };
-      const record = await read();
-      const answers: Record<string, unknown> = { usage_summary: record.summary, calls_read: { calls: record.calls }, notices_read: { notices: record.notices }, signals_read: { signals: record.signals } };
-      if (!(name in answers)) throw Error(`The local Kernel does not answer ${name}.`);
-      return answers[name] as T;
-    },
-  } as Pick<McpClient, "call">;
+/** The local app's record of a range, from one run of the kernel binary's events command. */
+export function kernelRecord(kernel: Pick<LocalKernel, "run">): ReadRecord {
+  return async ({ from, to }) => JSON.parse(await kernel.run(["events", "--from", from, "--to", to]));
 }
 
 /**
@@ -711,6 +690,22 @@ export async function domainLocal(client: Pick<McpClient, "call">, deploymentId:
   ];
 }
 
+/**
+ * The arguments `tool` sends: a JSON object, or {} when none is given.
+ * `piped` is the one argument `--stdin <key>` reads from standard input,
+ * without its final line break, as `kernel secret set` reads a value.
+ */
+export function toolArguments(text?: string, piped?: { key: string; value: string }): Record<string, unknown> {
+  let value: unknown = {};
+  if (text !== undefined) {
+    try { value = JSON.parse(text); } catch { value = undefined; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`The arguments must be one JSON object, such as '{"projectId":"app_1"}', not ${text}.`);
+  }
+  const arguments_ = value as Record<string, unknown>;
+  if (piped) arguments_[piped.key] = piped.value.replace(/[\r\n]+$/, "");
+  return arguments_;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv[0] === "--") argv.shift();
@@ -719,7 +714,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -759,21 +754,30 @@ async function main() {
     process.exitCode = await conformFromCli(args);
     return;
   }
-  if (command === "domain") {
-    const deploymentId = option("deployment");
-    if (!deploymentId) throw Error("Name the Deployment with --deployment <id>. project_inspect shows its ID.");
-    const saved = process.env.KONAE_MCP_TOKEN ? undefined : await json<{ url: string; token: string }>(path.join(root, ".konae/credentials.json"));
-    const url = option("url", saved?.url ?? process.env.KONAE_URL ?? "http://localhost:4173")!;
-    for (const line of await domainLocal(new McpClient(endpoint(url), { token: process.env.KONAE_MCP_TOKEN ?? saved!.token }), deploymentId, { set: option("set"), clear: args.includes("--clear") })) console.log(line);
-    return;
-  }
-  const config = configOf(await readSettings(root));
-  // The installation: --url, then the one login saved beside the token it would send.
+  // The installation every remote command talks to: --url, then the one login saved beside the token it would send.
   const installation = async () => {
     const url = option("url") ?? (await json<{ url?: string }>(path.join(root, ".konae/credentials.json")).catch(() => undefined))?.url;
     if (!url) throw Error(NO_INSTALLATION);
     return url;
   };
+  // The owner's MCP on that installation, with KONAE_MCP_TOKEN or the token login saved.
+  const ownerClient = async () => new McpClient(endpoint(await installation()), { token: await credentials(root) });
+  if (command === "domain") {
+    const deploymentId = option("deployment");
+    if (!deploymentId) throw Error("Name the Deployment with --deployment <id>. project_inspect shows its ID.");
+    for (const line of await domainLocal(await ownerClient(), deploymentId, { set: option("set"), clear: args.includes("--clear") })) console.log(line);
+    return;
+  }
+  if (command === "tool") {
+    // The name and the JSON are the two words that are neither a flag nor a flag's value.
+    const [name, text] = args.filter((arg, i) => !arg.startsWith("--") && !["--dir", "--url", "--stdin"].includes(args[i - 1]));
+    if (!name) throw Error("Name the tool: tool <name> ['<json arguments>']. docs/mcp-tools.md lists the tools, and tool session_inspect shows what this credential may call.");
+    const key = option("stdin");
+    const piped = key === undefined ? undefined : { key, value: await Bun.stdin.text() };
+    console.log(JSON.stringify(await (await ownerClient()).call(name, toolArguments(text, piped)), null, 2));
+    return;
+  }
+  const config = configOf(await readSettings(root));
   if (command === "export") {
     const out = option("out");
     if (!out) throw Error("Name an empty folder for the export with --out <folder>.");
@@ -788,14 +792,14 @@ async function main() {
     return;
   }
   // sql and events read the local app through the Kernel's commands, and the published Deployment only with --prod.
-  const target = async (): Promise<{ client: Pick<McpClient, "call">; deploymentId: string; local?: LocalKernel; feed?: string }> => {
+  const target = async (): Promise<{ deploymentId: string; feed?: string } & ({ local: LocalKernel; client?: undefined } | { client: McpClient; local?: undefined })> => {
     if (!args.includes("--prod")) {
       const settings = await readSettings(root);
       const local = await localKernel(root, settings, { build: false });
       const session = await json<{ events?: string }>(path.join(root, DEV_SESSION)).catch(() => undefined);
-      return { client: localRecord(local), deploymentId: settings.id, local, feed: session?.events };
+      return { deploymentId: settings.id, local, feed: session?.events };
     }
-    const client = new McpClient(endpoint(await installation()), { token: await credentials(root) });
+    const client = await ownerClient();
     const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: config.project.id });
     if (!remote.deployment) throw Error("This project has no Deployment yet. Publish it first.");
     return { client, deploymentId: remote.deployment.id };
@@ -806,14 +810,16 @@ async function main() {
     const inline = args.find((arg, i) => !arg.startsWith("--") && !["--dir", "--url", "--file"].includes(args[i - 1]));
     const sql = file ? await readFile(path.resolve(file), "utf8") : inline;
     if (!sql?.trim()) throw Error("Give the statement in quotes or with --file <file.sql>.");
-    const { client, deploymentId, local } = await target();
-    const answer = local ? JSON.parse(await local.run(["sql", sql])) : await client.call("database_execute", { deploymentId, operation: "sql", input: { sql } });
+    const found = await target();
+    const answer = found.local ? JSON.parse(await found.local.run(["sql", sql])) : await found.client.call("database_execute", { deploymentId: found.deploymentId, operation: "sql", input: { sql } });
     console.log(JSON.stringify(answer, null, 2));
     return;
   }
   if (command === "events") {
-    const { formatEvent, readEvents } = await import("./events");
-    const { client, deploymentId, local, feed } = await target();
+    const { deploymentRecord, formatEvent, readEvents } = await import("./events");
+    const found = await target();
+    const { deploymentId, local, feed } = found;
+    const record = found.local ? kernelRecord(found.local) : deploymentRecord(found.client, deploymentId);
     const days = Number(option("days", "7"));
     if (!Number.isInteger(days) || days < 1 || days > 400) throw Error("--days takes a whole number from 1 to 400.");
     const asJson = args.includes("--json");
@@ -823,7 +829,7 @@ async function main() {
       // Only the local Kernel has a mailbox this machine can read.
       // dev's events page stamps each mail when it is written, so its answer is preferred to a read from here.
       const served = feed ? await fetch(`${feed}/events.json?days=${days}`).then((response) => response.ok ? response.json() as Promise<AppEvent[]> : undefined).catch(() => undefined) : undefined;
-      const events = served ?? await readEvents(client, deploymentId, { days, seen, mailbox: local ? path.join(local.data, "mailbox.jsonl") : undefined });
+      const events = served ?? await readEvents(record, deploymentId, { days, seen, mailbox: local ? path.join(local.data, "mailbox.jsonl") : undefined });
       for (const event of events) {
         // A notice or a call changes state, so the same event prints again when its outcome does.
         const key = `${event.id}:${event.outcome}`;
@@ -900,7 +906,7 @@ async function main() {
       // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
       const { serveEvents } = await import("./events");
       const eventsPort = Number(option("events-port", String(Number(port) + 1)));
-      try { feed = serveEvents(localRecord(kernel), settings.id, path.join(kernel.data, "mailbox.jsonl"), eventsPort); }
+      try { feed = serveEvents(kernelRecord(kernel), settings.id, path.join(kernel.data, "mailbox.jsonl"), eventsPort); }
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
       const policy = settings.signupPolicy.mode;

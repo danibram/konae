@@ -70,7 +70,7 @@ These are not bugs to paper over. Say them when they matter.
 - `kernel-rs/kernel` is the Kernel: a library and the `kernel` binary, which serves app folders alone. `layout.rs` names every path of an app folder, and `operator.rs` holds the `kernel` commands.
 - `kernel-rs/konae` is the `konae` binary, which links the Kernel and adds owners, the owner's MCP and the project list. `guide.rs` is what `platform_guide` answers, including `rules` and `pieces`.
 - `src/kernel/actions.ts` parses `actions.json` for the editor. `kernel-rs/kernel/src/action_shape.rs` parses it again for every Deployment, including one served from an export. The case files beside it hold the rules both run.
-- `scripts/konae.ts` is the `konae` CLI. `src/lib/app-folder.ts` writes the files every app folder carries, its own `AGENTS.md` among them.
+- `scripts/konae.ts` is the `konae` CLI. Its remote commands are calls to the owner's MCP, and `src/deployments/release.ts` holds the publish sequence the editor runs too. `src/lib/app-folder.ts` writes the files every app folder carries, its own `AGENTS.md` among them.
 - `CONTEXT.md` holds the language. `docs/adr/` holds the decisions. `docs/architecture.md` is the shape. `examples/product-fit/` is the set of apps used to see what the Kernel can publish.
 - `docs/` is the documentation, in markdown, and its only source. `docs/site.json` is the navigation of the docs site. `bun run docs:site` copies the pages into `examples/docs-site`, the app that renders them, and `scripts/docs-site.test.ts` checks every link.
 - `examples/home` is the page an installation answers on its bare domain, once its path holds the name `konae-home`. `bun run ui:render` writes its `styles.css` from the design system.

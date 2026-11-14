@@ -4,7 +4,7 @@ import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
 import { platformMcp, type Transfer } from "../mcp/client";
-import { release, type ConfirmSchema } from "./release";
+import { publishProject, type ConfirmSchema } from "./release";
 
 export type DeploymentReceipt = DeploymentRecord & { accessCode?: string };
 
@@ -14,13 +14,7 @@ export type DeploymentReceipt = DeploymentRecord & { accessCode?: string };
  * installs it before the app serves, and refuses it on a republish.
  */
 export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">): Promise<DeploymentReceipt> {
-  await platformMcp.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
-  const transfer = await platformMcp.upload(new TextEncoder().encode(JSON.stringify({ project, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}) })), project.id);
-  try {
-    return (await release<DeploymentReceipt>(platformMcp, transfer.transferId, confirmSchema)).receipt;
-  } finally {
-    await platformMcp.cancel(transfer.transferId).catch(() => {});
-  }
+  return (await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy }), confirmSchema)).receipt;
 }
 
 /**

@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
-import { formatEvent, mailEvents, serveEvents } from "./events";
-import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, isLoopbackUrl, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning } from "./konae";
+import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
+import { usageRange } from "../src/lib/usage";
+import type { Sources } from "../src/lib/what-happened";
+import { HELP, INIT_TEMPLATES, NO_INSTALLATION, VERIFY_BY_LINK, creatorVerificationToken, domainLocal, ignoreInGit, isLoopbackUrl, kernelRecord, loginScopes, manifestSignupPolicy, publishLocal, signupPolicyWarning, toolArguments } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -159,7 +161,7 @@ describe("konae CLI", () => {
   });
 
   test("help names every command and every login flag, and an unknown command prints it", async () => {
-    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template"]) expect(HELP).toContain(word);
+    for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template", "tool"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");
@@ -344,6 +346,21 @@ describe("konae CLI", () => {
     const empty = cli("sql", "--dir", directory);
     expect(await empty.exited).toBe(1);
     expect(await new Response(empty.stderr).text()).toContain("Give the statement in quotes or with --file");
+    // events --prod reads the Deployment's record with the four owner tools.
+    answers.usage_summary = { usage: { days: [] }, metrics: [], actions: [] };
+    answers.calls_read = { calls: [] };
+    answers.notices_read = { notices: [] };
+    answers.signals_read = { signals: [{ name: "order.placed", at: 5, properties: { total: 3 } }] };
+    calls.length = 0;
+    const events = cli("events", "--dir", directory, "--prod", "--json", "--days", "3");
+    expect(await events.exited).toBe(0);
+    expect(JSON.parse(await new Response(events.stdout).text())).toMatchObject({ kind: "signal", title: "Signal order.placed" });
+    expect(calls.filter((call) => call.name !== "project_inspect")).toEqual(expect.arrayContaining([
+      { name: "usage_summary", arguments: { deploymentId: "dep_1", ...usageRange(3) } },
+      { name: "calls_read", arguments: { deploymentId: "dep_1" } },
+      { name: "notices_read", arguments: { deploymentId: "dep_1" } },
+      { name: "signals_read", arguments: { deploymentId: "dep_1" } },
+    ]));
   });
 
   test("events lists a development mailbox line as mail, with its recipient and text, and only the Deployment's own", () => {
@@ -366,11 +383,12 @@ describe("konae CLI", () => {
   test("the events page answers on this machine with the mail and the Kernel's own record, and names a Kernel that fails", async () => {
     const mailbox = path.join(directory, "mailbox.jsonl");
     await writeFile(mailbox, `${JSON.stringify({ to: "owner@app.test", purpose: "notify", scope: "deployment:dep_1", action: "messages.send", subject: "New message", text: "<b>Hola</b>" })}\n`);
-    const kernel = { failing: false, async call(name: string) {
-      if (this.failing) throw Error("The Kernel stopped.");
-      return ({ usage_summary: { usage: { days: [] }, metrics: [], actions: [] }, calls_read: { calls: [] }, notices_read: { notices: [] }, signals_read: { signals: [{ name: "order.placed", at: 5, properties: { total: 3 } }] } } as Record<string, unknown>)[name];
-    } };
-    const feed = serveEvents(kernel as never, "dep_1", mailbox, 0);
+    let failing = false;
+    const read: ReadRecord = async () => {
+      if (failing) throw Error("The Kernel stopped.");
+      return { summary: { usage: { days: [] }, metrics: [], actions: [] }, calls: [], notices: [], signals: [{ name: "order.placed", at: 5, properties: { total: 3 } }] } as unknown as Sources;
+    };
+    const feed = serveEvents(read, "dep_1", mailbox, 0);
     try {
       expect(new URL(feed.url).hostname).toBe("localhost");
       const page = await fetch(feed.url);
@@ -380,12 +398,97 @@ describe("konae CLI", () => {
       const events = await (await fetch(`${feed.url}/events.json`)).json() as { kind: string; title: string; mail?: { text: string } }[];
       expect(events.map((event) => event.kind)).toEqual(["signal", "mail"]);
       expect(events[1]).toMatchObject({ title: "Email from messages.send to owner@app.test", mail: { text: "<b>Hola</b>" } });
-      kernel.failing = true;
+      failing = true;
       const failed = await fetch(`${feed.url}/events.json`);
       expect(failed.status).toBe(502);
       expect(await failed.json()).toEqual({ error: "The Kernel stopped." });
       expect((await fetch(`${feed.url}/other`)).status).toBe(404);
     } finally { feed.stop(); }
+  });
+
+  test("kernelEvents lists the same events from a record as from the four owner tools", async () => {
+    const notice = (noticeId: string, state: "delivered" | "failed") => ({ noticeId, action: "orders.create", state, attempts: 1, errorKind: state === "failed" ? "rejected" : null, createdAt: 10, updatedAt: 11, nextAttemptAt: null });
+    const record = {
+      summary: { usage: { days: [], scheduled: [{ action: "digest.send", at: 20, outcome: "ok", changes: 2 }] }, metrics: [], actions: [] },
+      calls: [{ callId: "c1", action: "orders.ship", state: "failed", attempts: 3, method: "POST", url: "https://api.example.test/ship", status: 500, error: "Server error", answer: null, createdAt: 30, updatedAt: 31, nextAttemptAt: null, then: null }],
+      notices: [notice("n1", "delivered"), notice("n2", "failed")],
+      signals: [{ name: "order.placed", at: 40, properties: { total: 3 } }],
+    } as unknown as Sources;
+    const asked: Array<{ name: string; input: Record<string, unknown> }> = [];
+    const client = { async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
+      asked.push({ name, input });
+      return ({ usage_summary: record.summary, calls_read: { calls: record.calls }, notices_read: { notices: record.notices }, signals_read: { signals: record.signals } } as Record<string, unknown>)[name] as T;
+    } };
+    const ranges: Array<{ from: string; to: string }> = [];
+    const fromRecord: ReadRecord = async (range) => { ranges.push(range); return record; };
+
+    for (const mailboxShowsDelivered of [false, true]) {
+      const events = await kernelEvents(fromRecord, 3, mailboxShowsDelivered);
+      expect(await kernelEvents(deploymentRecord(client, "dep_1"), 3, mailboxShowsDelivered)).toEqual(events);
+      expect(events.map((event) => event.id)).toEqual(["signal:40:order.placed:0", "call:c1", "scheduled:20:digest.send:0", ...(mailboxShowsDelivered ? [] : ["notice:n1"]), "notice:n2"]);
+    }
+    expect(ranges).toEqual([usageRange(3), usageRange(3)]);
+    expect(asked.slice(0, 4)).toEqual([
+      { name: "usage_summary", input: { deploymentId: "dep_1", ...usageRange(3) } },
+      { name: "calls_read", input: { deploymentId: "dep_1" } },
+      { name: "notices_read", input: { deploymentId: "dep_1" } },
+      { name: "signals_read", input: { deploymentId: "dep_1" } },
+    ]);
+    // Locally one run of the kernel binary's events command answers the range.
+    const runs: string[][] = [];
+    expect(await kernelRecord({ async run(args) { runs.push(args); return JSON.stringify(record); } })(usageRange(3))).toEqual(record);
+    expect(runs).toEqual([["events", "--from", usageRange(3).from, "--to", usageRange(3).to]]);
+  });
+
+  test("tool calls one owner tool with its JSON arguments and prints the answer", async () => {
+    answers.project_inspect = { deployment: { id: "dep_1" } };
+    const run = cli("tool", "project_inspect", '{"projectId":"app_test"}', "--dir", directory, "--url", origin());
+    expect(await run.exited).toBe(0);
+    expect(await new Response(run.stdout).text()).toBe(`${JSON.stringify({ deployment: { id: "dep_1" } }, null, 2)}\n`);
+    expect(calls).toEqual([{ name: "project_inspect", arguments: { projectId: "app_test" } }]);
+
+    expect(await cli("tool", "--url", origin(), "session_inspect").exited).toBe(0);
+    expect(calls.at(-1)).toEqual({ name: "session_inspect", arguments: {} });
+
+    failing.add("secret_set");
+    const refused = cli("tool", "secret_set", '{"projectId":"app_test","name":"hook","value":"v"}', "--url", origin());
+    expect(await refused.exited).toBe(1);
+    expect(await new Response(refused.stderr).text()).toBe("secret_set failed\n");
+
+    const unnamed = cli("tool", "--url", origin());
+    expect(await unnamed.exited).toBe(1);
+    expect(await new Response(unnamed.stderr).text()).toContain("Name the tool");
+    expect(HELP).toContain("tool secret_set");
+  });
+
+  test("tool --stdin reads one argument from standard input, so a secret stays off the command line", async () => {
+    const piped = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "tool", "secret_set", '{"projectId":"app_test","name":"hook"}', "--stdin", "value", "--url", origin()], {
+      env: { ...process.env, KONAE_MCP_TOKEN: "token" }, stdin: new Blob(["whsec_piped\n"]), stdout: "pipe", stderr: "pipe",
+    });
+    expect(await piped.exited).toBe(0);
+    expect(calls).toEqual([{ name: "secret_set", arguments: { projectId: "app_test", name: "hook", value: "whsec_piped" } }]);
+  });
+
+  test("tool and domain talk to --url or the installation login saved, as publish does", async () => {
+    // Nothing names the installation: the same refusal publish gives, not a default port.
+    for (const run of [cli("tool", "session_inspect", "--dir", directory), cli("domain", "--deployment", "dep_1", "--dir", directory)]) {
+      expect(await run.exited).toBe(1);
+      expect(await new Response(run.stderr).text()).toBe(`${NO_INSTALLATION}\n`);
+    }
+    expect(calls).toEqual([]);
+    // login saved the installation: tool reads it from the folder.
+    await mkdir(path.join(directory, ".konae"));
+    await writeFile(path.join(directory, ".konae/credentials.json"), JSON.stringify({ url: origin(), token: "saved" }));
+    expect(await cli("tool", "session_inspect", "--dir", directory).exited).toBe(0);
+    expect(calls).toEqual([{ name: "session_inspect", arguments: {} }]);
+  });
+
+  test("tool takes one JSON object as its arguments", () => {
+    expect(toolArguments()).toEqual({});
+    expect(toolArguments('{"deploymentId":"dep_1"}')).toEqual({ deploymentId: "dep_1" });
+    expect(toolArguments('{"projectId":"app_1","name":"hook"}', { key: "value", value: "whsec_1\r\n" })).toEqual({ projectId: "app_1", name: "hook", value: "whsec_1" });
+    expect(toolArguments(undefined, { key: "value", value: "v" })).toEqual({ value: "v" });
+    for (const text of ["[1]", "null", "3", "{deploymentId}"]) expect(() => toolArguments(text)).toThrow(`The arguments must be one JSON object, such as '{"projectId":"app_1"}', not ${text}.`);
   });
 
   test("ignoreInGit adds an entry once", async () => {
