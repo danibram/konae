@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
+import { sourceBytes, type SourceFiles } from "../lib/source-files";
 
 /**
  * The digest of an app's sources, the same one the Kernel stores on the
  * Deployment as `sourceDigest` (kernel-rs/kernel/src/sources.rs `digest`).
  * SHA-256 in lowercase hex over the files sorted by the UTF-8 bytes of their
- * path. Each file adds its path, a NUL, its length in UTF-8 bytes as decimal
- * digits, a NUL and its bytes. kernel-rs/kernel/src/source-digest-cases.json
- * holds the cases both sides run.
+ * path. Each file adds its path, a NUL, its length in bytes as decimal
+ * digits, a NUL and its bytes, which for a file `encodings` names are the
+ * decoded base64. kernel-rs/kernel/src/source-digest-cases.json holds the
+ * cases both sides run.
  */
-export async function sourceDigest(files: Record<string, string>): Promise<string> {
+export async function sourceDigest(source: SourceFiles): Promise<string> {
   const encoder = new TextEncoder();
-  const entries = Object.entries(files).map(([path, text]) => [encoder.encode(path), encoder.encode(text)] as const);
+  const entries = Object.keys(source.files).map((path) => [encoder.encode(path), sourceBytes(source, path)] as const);
   entries.sort(([a], [b]) => compareBytes(a, b));
   const parts: Uint8Array[] = [];
   for (const [path, bytes] of entries) parts.push(path, nul, encoder.encode(String(bytes.length)), nul, bytes);
@@ -32,36 +34,38 @@ function compareBytes(a: Uint8Array, b: Uint8Array) {
   return a.length - b.length;
 }
 
-// One digest per files object. The editor replaces the object on every edit, so a stale entry is never read.
+// One digest per files object. The editor replaces the object on every edit,
+// and a change of encodings comes with new files, so a stale entry is never read.
 const digests = new WeakMap<Record<string, string>, Promise<string>>();
 
-export function cachedSourceDigest(files: Record<string, string>): Promise<string> {
-  let digest = digests.get(files);
+export function cachedSourceDigest(source: SourceFiles): Promise<string> {
+  let digest = digests.get(source.files);
   if (!digest) {
-    digest = sourceDigest(files);
-    digests.set(files, digest);
+    digest = sourceDigest(source);
+    digests.set(source.files, digest);
   }
   return digest;
 }
 
-/** The digest of `files`, or null until it is known. */
-export function useSourceDigest(files: Record<string, string> | null | undefined): string | null {
+/** The digest of `source`, or null until it is known. */
+export function useSourceDigest(source: SourceFiles | null | undefined): string | null {
+  const files = source?.files;
   const [known, setKnown] = useState<{ files: Record<string, string>; digest: string } | null>(null);
   useEffect(() => {
-    if (!files) return;
+    if (!source || !files) return;
     let current = true;
-    cachedSourceDigest(files).then((digest) => { if (current) setKnown({ files, digest }); }, () => {});
+    cachedSourceDigest(source).then((digest) => { if (current) setKnown({ files, digest }); }, () => {});
     return () => { current = false; };
   }, [files]);
   return files && known?.files === files ? known.digest : null;
 }
 
 /** The digest of each project's files by project ID, filled in as each one is known. */
-export function useSourceDigests(projects: { id: string; files: Record<string, string> }[]): ReadonlyMap<string, string> {
+export function useSourceDigests(projects: (SourceFiles & { id: string })[]): ReadonlyMap<string, string> {
   const [known, setKnown] = useState<ReadonlyMap<string, { files: Record<string, string>; digest: string }>>(new Map());
   useEffect(() => {
     let current = true;
-    void Promise.all(projects.map(async (project) => [project.id, { files: project.files, digest: await cachedSourceDigest(project.files) }] as const))
+    void Promise.all(projects.map(async (project) => [project.id, { files: project.files, digest: await cachedSourceDigest(project) }] as const))
       .then((entries) => { if (current) setKnown(new Map(entries)); }, () => {});
     return () => { current = false; };
   }, [projects]);

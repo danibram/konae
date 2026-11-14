@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -157,7 +157,7 @@ describe("authenticated MCP", () => {
     const project = { id, name: "Atomic", slug: "atomic", files: { "index.html": "first" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const args = { projectId: id, name: project.name };
     const invalid = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": 123 } })));
-    await expect(alice.call("project_create", { ...args, sourcesTransferId: invalid.transferId })).rejects.toThrow("Invalid project files");
+    await expect(alice.call("project_create", { ...args, sourcesTransferId: invalid.transferId })).rejects.toThrow("The sources' files must map each path to a string.");
     const listed = await alice.call<{ projects: { project: { id: string } }[] }>("projects_list");
     expect(listed.projects.some(({ project }) => project.id === id)).toBe(false);
     await alice.cancel(invalid.transferId);
@@ -189,7 +189,7 @@ describe("authenticated MCP", () => {
     expect(saved.revision).toBe(1);
     expect(JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)))).toEqual(project);
     const invalidUpload = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": 123 } })), id);
-    await expect(alice.call("project_sources_save", { projectId: id, transferId: invalidUpload.transferId, expectedRevision: 1 })).rejects.toThrow("Invalid project files");
+    await expect(alice.call("project_sources_save", { projectId: id, transferId: invalidUpload.transferId, expectedRevision: 1 })).rejects.toThrow("The sources' files must map each path to a string.");
     await alice.cancel(invalidUpload.transferId);
     const unchanged = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
     expect(unchanged.revision).toBe(1);
@@ -213,6 +213,54 @@ describe("authenticated MCP", () => {
     const reader = new McpClient(`${url}/mcp`, { token: readGrant.token });
     await expect(reader.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 3 })).rejects.toThrow("Unknown tool");
 
+  });
+
+  test("the editor saves a file that is not text as its bytes, and reads it back as base64", async () => {
+    const proxy = Bun.serve({ port: 0, fetch: async (request) => fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body: await request.text() }) });
+    try {
+      const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff, 0xfe]);
+      const base = createWorkspaceProject("Binary sources", []);
+      const project = { ...base, files: { ...base.files, "public/logo.png": encodeBase64(png) }, encodings: { "public/logo.png": "base64" as const }, directories: ["public"] };
+      await sources.save(project);
+      const onDisk = path.join(root, "apps", project.id, "app/public/logo.png");
+      expect(new Uint8Array(await readFile(onDisk))).toEqual(png);
+      const edited = { ...project, files: { ...project.files, "styles.css": "p { margin: 0; }" }, updatedAt: project.updatedAt + 1 };
+      await sources.save(edited);
+      const loaded = await new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`).load();
+      expect(loaded.projects.find((item) => item.id === project.id)).toEqual(edited);
+      expect(new Uint8Array(await readFile(onDisk))).toEqual(png);
+
+      const { encodings: _, ...textOnly } = edited;
+      const removed = { ...textOnly, files: Object.fromEntries(Object.entries(edited.files).filter(([file]) => file !== "public/logo.png")), updatedAt: edited.updatedAt + 1 };
+      await sources.save(removed);
+      expect(await Bun.file(onDisk).exists()).toBe(false);
+      const reloaded = await new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`).load();
+      expect(reloaded.projects.find((item) => item.id === project.id)).toEqual(removed);
+    } finally {
+      await proxy.stop(true);
+    }
+  });
+
+  test("a saved document past a limit is refused with a sentence that names the file and the limit", async () => {
+    const id = "sources_limits";
+    await alice.call("project_create", { projectId: id, name: "Limits" });
+    const base = { id, name: "Limits", slug: "limits", directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
+    const save = async (document: object) => {
+      const upload = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...base, ...document })), id);
+      try {
+        return await alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 }).then(() => "saved", (error: Error) => error.message);
+      } finally {
+        await alice.cancel(upload.transferId);
+      }
+    };
+    expect(await save({ files: Object.fromEntries(Array.from({ length: 1001 }, (_, index) => [`f${index}.txt`, ""])) })).toContain("The sources hold 1001 files. A project holds at most 1000.");
+    expect(await save({ files: { "public/.env": "x" } })).toContain("app/public/.env is not a path the sources can hold.");
+    expect(await save({ files: { "a.png": "AA==" }, encodings: { "b.png": "base64" } })).toContain("The sources name an encoding for app/b.png, which they do not hold.");
+    expect(await save({ files: { "a.png": "AA==" }, encodings: { "a.png": "gzip" } })).toContain("The sources encode app/a.png as gzip. The only encoding is base64.");
+    expect(await save({ files: { "a.png": "not base64!" }, encodings: { "a.png": "base64" } })).toContain("app/a.png is marked base64 but is not valid base64.");
+    const saved = await alice.call<{ revision: number }>("project_sources_read", { projectId: id });
+    expect(saved.revision).toBe(0);
   });
 
   test("the account usage monitor isolates owners and paginates accessible projects", async () => {

@@ -680,6 +680,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     // The limit counts the bytes the Kernel stores, after base64 is decoded.
     let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
     anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
+    input.project.sources().map_err(anyhow::Error::msg)?;
     let program = super::action_shape::read(
         input
             .project

@@ -179,6 +179,39 @@ describe("chunked package", () => {
     expect(await ahead()).toBe(false);
   });
 
+  test("an export carries a saved file that is not text byte for byte, and compares its bytes with the release", async () => {
+    const id = "pkg_binary_sources";
+    const request = payload(id);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff, 0xfe]);
+    const files = { ...request.project.files, "index.html": "<main><img src=\"logo.png\" alt=\"\"></main>", "public/logo.png": encodeBase64(png) };
+    const encodings = { "public/logo.png": "base64" };
+    const manifest = { ...request.project.manifest, runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "optional" }, files: { access: "deployment" } } };
+    const source = { ...request.project, manifest, files, encodings, directories: [], updatedAt: 1 };
+    await owner.call("project_create", { projectId: id, name: source.name });
+    const upload = await owner.upload(new TextEncoder().encode(JSON.stringify(source)), id);
+    try { await owner.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 }); }
+    finally { await owner.cancel(upload.transferId); }
+    const artifact = { ...request.artifact, files: { ...request.artifact.files, "logo.png": encodeBase64(png) }, encodings: { "logo.png": "base64" } };
+    const { receipt } = await release(owner, { ...request, project: source, artifact }, id);
+    const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+    try {
+      expect(exported.sourcesAhead).toBe(false);
+      const folder = new Map(readTar(await owner.download(exported.folder)).map((entry) => [entry.path, entry.contents]));
+      expect(folder.get("app/public/logo.png")).toEqual(png);
+      expect(folder.get("dist/logo.png")).toEqual(png);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+    }
+
+    const { "public/logo.png": _logo, ...withoutLogo } = files;
+    const next = await owner.upload(new TextEncoder().encode(JSON.stringify({ ...source, files: withoutLogo, encodings: undefined, updatedAt: 2 })), id);
+    try { await owner.call("project_sources_save", { projectId: id, transferId: next.transferId, expectedRevision: 1 }); }
+    finally { await owner.cancel(next.transferId); }
+    const after = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+    for (const transfer of [after.folder, ...Object.values(after.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+    expect(after.sourcesAhead).toBe(true);
+  });
+
   test("moves rows, accounts and files into a new app, drops sessions, and a repeated apply returns its receipt", async () => {
     const directory = await mkdtemp(path.join(root, "export-"));
     const { source, cookie, fileId, key, exported, files } = await sourcePackage("pkg_source", directory);

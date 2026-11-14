@@ -431,6 +431,9 @@ async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
     }
 }
 
+/// The most files the editor's saved sources hold.
+const MAX_SOURCE_FILES: usize = 1_000;
+
 fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
     // A name starting with a dot is a temporary file to the Kernel, which a copy leaves behind.
@@ -440,8 +443,14 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
         && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
         && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
-    let files = source["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project files."))?;
-    anyhow::ensure!(files.len() <= 1_000 && files.iter().all(|(name, body)| path(name) && string(body, MAX_TRANSFER)), "Invalid project files.");
+    let files = source["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project files. Send files as an object of each path inside app/ and its contents."))?;
+    anyhow::ensure!(files.len() <= MAX_SOURCE_FILES, "The sources hold {} files. A project holds at most {MAX_SOURCE_FILES}.", files.len());
+    for name in files.keys() {
+        anyhow::ensure!(path(name), "app/{} is not a path the sources can hold. A path is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot.", name.escape_debug());
+    }
+    for (name, bytes) in super::sources::decode_document(source)? {
+        anyhow::ensure!(bytes.len() <= MAX_TRANSFER, "app/{name} is {} bytes. A saved file holds at most {} MiB.", bytes.len(), MAX_TRANSFER / (1024 * 1024));
+    }
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
     anyhow::ensure!(directories.len() <= 1_000 && directories.iter().all(|entry| entry.as_str().is_some_and(path)), "Invalid project directories.");
     let manifest = &source["manifest"];
@@ -1718,10 +1727,13 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         }
         let receipt = response_value(deploy(state, payload.to_string().as_bytes()).await).await?;
         // The editor opens the imported sources, not the ones it saved before.
-        let saved = json!({
+        let mut saved = json!({
             "id": project, "name": input.project.name, "slug": input.project.slug, "files": input.project.files,
             "directories": [], "manifest": input.project.manifest, "updatedAt": now_ms(),
         });
+        if !input.project.encodings.is_empty() {
+            saved["encodings"] = json!(input.project.encodings);
+        }
         super::sources::write(&state.data_root, &project, &saved).await?;
         store(state)?.execute(
             "UPDATE projects SET revision=revision+1, sources=sources+1, body=?3 WHERE id=?1 AND revision=?2",
@@ -2508,6 +2520,16 @@ mod tests {
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
         assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
+        let big = |s: &mut Value| {
+            s["files"]["public/big.bin"] = json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0xffu8; MAX_TRANSFER + 1]));
+            s["encodings"] = json!({"public/big.bin": "base64"});
+        };
+        assert_eq!(refusal(&big), "app/public/big.bin is 33554433 bytes. A saved file holds at most 32 MiB.", "a file that is not text counts its decoded bytes");
+        let with_png = |s: &mut Value| { s["files"]["public/logo.png"] = json!("iVBORw0KGgo="); s["encodings"] = json!({"public/logo.png": "base64"}); };
+        let mut binary = base.clone();
+        with_png(&mut binary);
+        assert!(validate_sources(&binary, "app_a").is_ok());
+        assert_eq!(refusal(&|s| { with_png(s); s["encodings"] = json!({"public/logo.png": 1}); }), "The sources' encodings must map each path to \"base64\".");
     }
 
     /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every

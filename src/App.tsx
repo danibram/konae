@@ -360,10 +360,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return () => window.clearTimeout(timer);
   }, []);
   const activeDeployment = deployments[project.id] ?? null;
-  const sourceDigest = useSourceDigest(activeDeployment ? project.files : null);
+  const sourceDigest = useSourceDigest(activeDeployment ? project : null);
   // Deploy stays quiet while a new app is still what New project wrote, since publishing the placeholder gives it a live address.
   const createdDigest = activeDeployment ? null : readCreatedDigest(workspaceStorage, project.id);
-  const currentDigest = useSourceDigest(createdDigest ? project.files : null);
+  const currentDigest = useSourceDigest(createdDigest ? project : null);
   const asCreated = createdDigest !== null && (createdDigest === "pending" || currentDigest === null || currentDigest === createdDigest);
   useEffect(() => {
     // Once the app changes or deploys, it is no longer the placeholder, even if an edit is undone later.
@@ -1601,7 +1601,7 @@ const createdDigestKey = (projectId: string) => `created-digest:${projectId}`;
 /** What New project wrote, by digest, so the workbench knows while the app is still that placeholder. "pending" until the digest is known. */
 function rememberCreatedDigest(storage: KeyStorage, project: MiniAppProject) {
   try { storage.setItem(createdDigestKey(project.id), "pending"); } catch { return; }
-  void cachedSourceDigest(project.files).then((digest) => {
+  void cachedSourceDigest(project).then((digest) => {
     try { if (storage.getItem(createdDigestKey(project.id)) === "pending") storage.setItem(createdDigestKey(project.id), digest); } catch { /* the button just stays as it is */ }
   }, () => forgetCreatedDigest(storage, project.id));
 }

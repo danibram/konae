@@ -261,8 +261,10 @@ pub async fn export(
         if let Some(released) = deployment.source_digest.as_deref() {
             // Saved editor files can include paths that a folder publish skips.
             let saved = match crate::sources::read(&state.data_root, &deployment.id).await? {
-                Some(source) => crate::sources::digest(source["files"].as_object().context("Saved sources have no files.")?.iter()
-                    .map(|(path, text)| (path.as_str(), text.as_str().unwrap_or_default().as_bytes()))),
+                Some(source) => {
+                    let files = crate::sources::decode_document(&source)?;
+                    crate::sources::digest(files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())))
+                }
                 None => crate::sources::digest_folder(&app_sources).await?,
             };
             sources_ahead |= saved != released;

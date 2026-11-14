@@ -1,5 +1,5 @@
 {
-  "comment": "The digest of an app's sources. kernel-rs/kernel/src/sources.rs `digest` and src/deployments/source-digest.ts `sourceDigest` must both give `digest` for `files`.",
+  "comment": "The digest of an app's sources. kernel-rs/kernel/src/sources.rs `digest` and src/deployments/source-digest.ts `sourceDigest` must both give `digest` for `files`. A path `encodings` names is base64, and the digest covers its decoded bytes.",
   "cases": [
     {
       "files": {
@@ -15,6 +15,17 @@
     {
       "files": {},
       "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "files": {
+        "index.html": "<img src=\"/logo.png\">\n",
+        "public/logo.png": "iVBORw0KGgoA//6A",
+        "public/site.webmanifest": "\ufeff{\"name\":\"A\"}\n"
+      },
+      "encodings": {
+        "public/logo.png": "base64"
+      },
+      "digest": "c6f7502bd45efbf3dc3025e4df518633ae3696c6b6c2851ede72477465212882"
     }
   ]
 }

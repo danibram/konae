@@ -9,7 +9,7 @@ const project = (files: Record<string, string> = {}, visibility: "public" | "pri
   files: { "actions.json": actions, "index.html": "<p>one</p>", ...files },
   manifest: withVisibility(createDefaultManifest(), visibility),
 });
-const live = { manifest: withVisibility(createDefaultManifest(), "public"), actions, sourceDigest: await sourceDigest(project().files) };
+const live = { manifest: withVisibility(createDefaultManifest(), "public"), actions, sourceDigest: await sourceDigest(project()) };
 
 describe("changes not deployed", () => {
   test("reads the release time, or the first publish from an older Kernel", () => {
@@ -26,7 +26,7 @@ describe("changes not deployed", () => {
     const changed = project({ "actions.json": actions.replace("{}", '{"a":{}}') });
     expect(accessNotDeployed(project(), live)).toBe(false);
     expect(accessNotDeployed(changed, live)).toBe(true);
-    expect(changesNotDeployed(changed, live, await sourceDigest(changed.files))).toBe(true);
+    expect(changesNotDeployed(changed, live, await sourceDigest(changed))).toBe(true);
   });
 
   test("who can open the app and who can read uploads count", () => {
@@ -38,19 +38,19 @@ describe("changes not deployed", () => {
   });
 
   test("other files compare against the digest the release names", async () => {
-    expect(sameAsDeployed(project(), live, await sourceDigest(project().files))).toBe(true);
+    expect(sameAsDeployed(project(), live, await sourceDigest(project()))).toBe(true);
     const edited = project({ "index.html": "<p>two</p>" });
-    expect(changesNotDeployed(edited, live, await sourceDigest(edited.files))).toBe(true);
+    expect(changesNotDeployed(edited, live, await sourceDigest(edited))).toBe(true);
     expect(accessNotDeployed(edited, live)).toBe(false);
     // A reverted edit is no change.
-    expect(changesNotDeployed(project(), live, await sourceDigest({ ...project().files }))).toBe(false);
+    expect(changesNotDeployed(project(), live, await sourceDigest({ files: { ...project().files } }))).toBe(false);
   });
 
   test("a release without a digest, or a digest not computed yet, says nothing", async () => {
     const edited = project({ "index.html": "<p>two</p>" });
     const { sourceDigest: _, ...old } = live;
-    expect(sameAsDeployed(edited, old, await sourceDigest(edited.files))).toBeNull();
-    expect(changesNotDeployed(edited, old, await sourceDigest(edited.files))).toBe(false);
+    expect(sameAsDeployed(edited, old, await sourceDigest(edited))).toBeNull();
+    expect(changesNotDeployed(edited, old, await sourceDigest(edited))).toBe(false);
     expect(sameAsDeployed(edited, live, null)).toBeNull();
   });
 });

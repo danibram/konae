@@ -78,6 +78,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
             name: settings.name.clone(),
             slug: settings.slug.clone(),
             files: HashMap::from([("actions.json".to_owned(), actions.clone()), ("schema.sql".to_owned(), schema.clone())]),
+            encodings: HashMap::new(),
             manifest,
         },
         visibility: settings.visibility.clone(),

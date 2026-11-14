@@ -423,8 +423,18 @@ pub struct ProjectInput {
     pub id: String,
     pub name: String,
     pub slug: String,
+    /// The files of `app/` by path. A path `encodings` names is base64.
     pub files: HashMap<String, String>,
+    #[serde(default)]
+    pub encodings: HashMap<String, String>,
     pub manifest: Value,
+}
+
+impl ProjectInput {
+    /// The bytes of each file of `app/` the release carries.
+    pub fn sources(&self) -> Result<sources::Files, String> {
+        sources::decode(&self.files, &self.encodings)
+    }
 }
 
 #[derive(Deserialize)]
@@ -777,6 +787,10 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             "Visibility must be public or private.",
         );
     }
+    let release_sources = match input.project.sources() {
+        Ok(files) => files,
+        Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
     let actions = match input.project.files.get("actions.json") {
         Some(value) => value.clone(),
         None => return error(StatusCode::BAD_REQUEST, "actions.json is required."),
@@ -876,7 +890,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             .map(|item| item.created_at)
             .unwrap_or_else(now_ms),
         released_at: now_ms(),
-        source_digest: Some(sources::digest(input.project.files.iter().map(|(path, text)| (path.as_str(), text.as_bytes())))),
+        source_digest: Some(sources::digest(release_sources.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())))),
         manifest,
         hostname: hostname.clone(),
         actions,
@@ -1016,7 +1030,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         remove_database_files(&replaced);
     }
     // An app the editor never saved keeps the release's sources in app/, so its folder is whole.
-    if let Err(error_value) = sources::write_release(&state.data_root, &id, &input.project.files).await {
+    if let Err(error_value) = sources::write_release(&state.data_root, &id, &release_sources).await {
         eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
     }
     http::routes_published(&deployment);
