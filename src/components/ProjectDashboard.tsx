@@ -95,17 +95,15 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
     setExporting(entry.id);
     toast(`Exporting ${entry.name}…`, "info");
     try {
-      const [{ createProjectExport }, { buildProjectInBrowser }] = await Promise.all([import("../lib/export-project"), import("../runtime/browser-build")]);
-      const result = await createProjectExport(project, await buildProjectInBrowser(project), entry.deployment?.id);
+      const { createProjectExport, exportedMessage } = await import("../lib/export-project");
+      const result = await createProjectExport(project, entry.deployment?.id);
       const url = URL.createObjectURL(result.blob);
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = result.filename;
       anchor.click();
       URL.revokeObjectURL(url);
-      toast(entry.deployment
-        ? `${result.filename} saved. It holds the app's files, accounts, rows and rules.${result.sourcesAhead ? " The published app runs older files than the editor holds; deploy, then export again, to make them match." : ""}`
-        : `${result.filename} saved. It holds the app's files. A draft has no accounts or rows yet.`);
+      toast(exportedMessage(result.filename, Boolean(entry.deployment), result.sourcesAhead));
     } catch (error) {
       toast(`Export failed: ${error instanceof Error ? error.message : String(error)}`, "danger");
     } finally {

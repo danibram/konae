@@ -813,16 +813,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setOperationError("");
     setExportAhead(false);
     try {
-      const { createProjectExport } = await import("./lib/export-project");
-      const artifact = await buildProjectInBrowser(project);
-      const result = await createProjectExport(project, artifact, activeDeployment?.id);
+      const { createProjectExport, exportedMessage } = await import("./lib/export-project");
+      const result = await createProjectExport(project, activeDeployment?.id);
       downloadBlob(result.blob, result.filename);
       // The editor saves between releases, so the published app may run older sources than app/ holds.
-      toast(!activeDeployment
-        ? `${result.filename} saved. It holds the app's files. A draft has no accounts or rows yet.`
-        : result.sourcesAhead
-          ? `${result.filename} saved. It holds your edits, and an app started from it runs your last deploy.`
-          : `${result.filename} saved. It holds the app's files, accounts, rows and rules.`);
+      toast(exportedMessage(result.filename, Boolean(activeDeployment), result.sourcesAhead));
       if (result.sourcesAhead) setExportAhead(true);
     } catch (error) {
       setOperationError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
