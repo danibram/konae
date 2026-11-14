@@ -22,10 +22,6 @@ export async function deployProject(project: MiniAppProject, visibility: Deploym
  * sources, as after `konae publish` from an app folder. The Kernel decides it
  * when it applies each release.
  */
-export async function readSourcesDiffer(projectId: string): Promise<boolean> {
-  const inspected = await platformMcp.call<{ sourcesDiffer?: boolean }>("project_inspect", { projectId });
-  return inspected.sourcesDiffer === true;
-}
 
 /**
  * Who may create an account on a deployed app, in the order the editor offers
@@ -160,7 +156,7 @@ export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "c
 
 /**
  * The project's signing secrets. The app's Google client (`use` "google")
- * is left out: no route or call reads it, and Auth > Users shows it.
+ * is left out: no route or call reads it, and Access > Users shows it.
  */
 export async function listSecrets(projectId: string) {
   const answer = await platformMcp.call<{ projectId: string; secrets: Array<Omit<ProjectSecret, "use"> & { use: ProjectSecret["use"] | "google" }> }>("secrets_list", { projectId });

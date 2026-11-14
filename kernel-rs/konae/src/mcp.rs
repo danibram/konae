@@ -204,15 +204,6 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_detail {
         db.execute("ALTER TABLE audit ADD COLUMN detail TEXT", [])?;
     }
-    let has_sources_differ: bool = db
-        .prepare("PRAGMA table_info(projects)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .iter()
-        .any(|name| name == "sources_differ");
-    if !has_sources_differ {
-        db.execute("ALTER TABLE projects ADD COLUMN sources_differ INTEGER NOT NULL DEFAULT 0", [])?;
-    }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
     install_imports(&db)?;
@@ -488,7 +479,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ),
         tool(
             "project_inspect",
-            "Inspect a project and its deployed revision. sourcesDiffer is true when the running release came with actions other than the editor's saved sources, as after konae publish from an app folder.",
+            "Inspect a project and its deployed revision.",
             json!({"projectId":text}),
             &["projectId"],
             true,
@@ -1244,9 +1235,8 @@ async fn admin_call(
             let id = a["projectId"].as_str().unwrap();
             let (project, revision) = owned_project(state, owner, id, "read")?;
             let deployment = find_project_deployment(&*state.deployments.read().await, id);
-            let (sources_revision, differ): (u64, bool) = store(state)?.query_row("SELECT sources, sources_differ FROM projects WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            let sources_differ = deployment.is_some() && differ;
-            Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"sourcesDiffer":sources_differ,"deployment":deployment}))
+            let sources_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
+            Ok(json!({"project":project,"revision":revision,"sourcesRevision":sources_revision,"deployment":deployment}))
         }
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
@@ -1549,10 +1539,9 @@ async fn admin_call(
                 deploy(state, payload.to_string().as_bytes()).await,
             )
             .await?;
-            let differ = sources_differ(state, &row.0, &payload).await;
             let mut db = store(state)?;
             let tx = db.transaction()?;
-            tx.execute("UPDATE projects SET revision=revision+1,body=?4,sources_differ=?5 WHERE id=?1 AND owner=?2 AND revision=?3",params![row.0,owner.id,revision,metadata.to_string(),differ])?;
+            tx.execute("UPDATE projects SET revision=revision+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3",params![row.0,owner.id,revision,metadata.to_string()])?;
             tx.execute(
                 "UPDATE plans SET receipt=?1 WHERE id=?2",
                 params![receipt.to_string(), id],
@@ -1595,16 +1584,6 @@ const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
 /// the data as `package { manifest, components }`. When the schema change
 /// loses data and `confirmSchema` does not match its plan, it answers the
 /// plan with `imported: false` and changes nothing.
-/// Whether the release in `payload` runs actions other than the ones in the
-/// editor's saved app/actions.json. A release never rewrites sources the editor
-/// saved, so a publish from an app folder leaves the two apart until the editor
-/// releases again. It is decided at release time, because the editor's saves
-/// between releases part the two on purpose.
-async fn sources_differ(state: &Konae, project: &str, payload: &Value) -> bool {
-    let saved = tokio::fs::read_to_string(crate::layout::sources(&state.data_root, project).join("actions.json")).await.ok();
-    saved.is_some_and(|saved| payload["project"]["files"]["actions.json"].as_str() != Some(saved.as_str()))
-}
-
 async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
     use super::import::{Outcome, Target};
     let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "publish").await?;
@@ -1680,7 +1659,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         });
         super::sources::write(&state.data_root, &project, &saved).await?;
         store(state)?.execute(
-            "UPDATE projects SET revision=revision+1, sources=sources+1, sources_differ=0, body=?3 WHERE id=?1 AND revision=?2",
+            "UPDATE projects SET revision=revision+1, sources=sources+1, body=?3 WHERE id=?1 AND revision=?2",
             params![project, revision, metadata.to_string()],
         )?;
         answer["deployment"] = receipt;
@@ -2208,67 +2187,6 @@ mod tests {
 
     /// A publish from an app folder runs actions the editor never saved, and
     /// project_inspect says so until the editor releases its own sources.
-    #[tokio::test]
-    async fn project_inspect_says_when_the_release_did_not_come_from_the_editors_sources() {
-        let root = std::env::temp_dir().join(format!("konae-sources-differ-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
-        let state = Konae::for_test(AppState::for_test(&root));
-        let owner = Owner { id: "ana".into(), display: None, scopes: vec!["read".into(), "write".into(), "publish".into()], projects: vec![], session: false };
-        let call = |name: &'static str, a: Value| { let (state, owner) = (state.clone(), owner.clone()); async move { admin_call(&state, &owner, "owner:ana", name, a).await.unwrap() } };
-        let upload = |body: Value, project: Value| {
-            let state = state.clone();
-            async move {
-                let upload = super::super::transfers::new_transfer(&state, "owner:ana", json!({"direction": "upload", "size": 0, "sha256": "", "complete": true, "projectId": project})).await.unwrap();
-                let id = upload["transferId"].as_str().unwrap().to_owned();
-                tokio::fs::write(transfer_path(&state, &id).unwrap(), serde_json::to_vec(&body).unwrap()).await.unwrap();
-                id
-            }
-        };
-        let manifest = |name: &str| json!({"version": 1, "visibility": "public", "runtime": {"database": {"mode": "declared-actions", "actions": [{"name": name, "kind": "query", "access": "anonymous"}]}, "auth": {"mode": "optional"}, "files": {"access": "deployment"}}});
-        let action = |name: &str| format!(r#"{{"version":1,"actions":{{"{name}":{{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}}}}"#);
-        let files = |name: &str| json!({"actions.json": action(name), "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);", "index.html": "<main></main>"});
-        let source = |name: &str| json!({"id": "app_differ", "name": "Differ", "slug": "differ", "files": files(name), "directories": [], "manifest": manifest(name), "updatedAt": 1});
-        let release = |name: &'static str| {
-            let (call, upload, manifest, files) = (&call, &upload, manifest(name), files(name));
-            async move {
-                let body = json!({"project": {"id": "app_differ", "name": "Differ", "slug": "differ", "manifest": manifest, "files": files},
-                    "visibility": "public", "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}});
-                let plan = call("release_plan", json!({"transferId": upload(body, json!("app_differ")).await})).await;
-                call("release_apply", json!({"planId": plan["planId"]})).await;
-            }
-        };
-        let differ = || async { call("project_inspect", json!({"projectId": "app_differ"})).await["sourcesDiffer"].clone() };
-
-        let created = upload(source("notes.list"), Value::Null).await;
-        call("project_create", json!({"projectId": "app_differ", "name": "Differ", "slug": "differ", "manifest": manifest("notes.list"), "sourcesTransferId": created})).await;
-        assert_eq!(differ().await, false, "no Deployment yet");
-        release("notes.list").await;
-        assert_eq!(differ().await, false, "the editor released what it saved");
-
-        // The editor saves a new action between releases. That is not a foreign release.
-        let saved = upload(source("notes.recent"), json!("app_differ")).await;
-        call("project_sources_save", json!({"projectId": "app_differ", "transferId": saved, "expectedRevision": 1})).await;
-        assert_eq!(differ().await, false, "a save alone changes nothing");
-
-        // konae publish from an exported folder whose actions.json changed.
-        release("notes.everything").await;
-        assert_eq!(differ().await, true, "the release came from elsewhere");
-        let kept = tokio::fs::read_to_string(crate::layout::sources(&root, "app_differ").join("actions.json")).await.unwrap();
-        assert_eq!(kept, action("notes.recent"), "the release left the editor's sources alone");
-
-        release("notes.recent").await;
-        assert_eq!(differ().await, false, "the editor's Deploy replaced it");
-
-        // Import of the folder's sources brings them into the editor, so the two agree again.
-        release("notes.everything").await;
-        assert_eq!(differ().await, true);
-        let body = json!({"project": {"id": "app_differ", "name": "Differ", "slug": "differ", "manifest": manifest("notes.everything"), "files": files("notes.everything")},
-            "visibility": "public", "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>"}}});
-        let imported = call("project_import", json!({"deploymentId": "app_differ", "replace": "sources", "transferId": upload(body, json!("app_differ")).await})).await;
-        assert_eq!(imported["imported"], true, "{imported}");
-        assert_eq!(differ().await, false, "the editor now holds the folder's sources");
-        let _ = tokio::fs::remove_dir_all(root).await;
-    }
 
     #[tokio::test]
     async fn one_owner_cannot_give_two_apps_the_same_route_secret() {

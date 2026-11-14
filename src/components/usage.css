@@ -1,12 +1,12 @@
-.usage-main { min-width: 0; overflow-y: auto; padding: 36px var(--workspace-gutter) 60px; color: var(--ds-text); }
-.usage-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
-.usage-heading h1 { font-size: clamp(28px, 3vw, 42px); letter-spacing: -.04em; margin: 8px 0; }
-.usage-heading p { margin: 0; }
-.usage-controls { display: flex; align-items: end; gap: 10px; flex-shrink: 0; }
-.usage-controls label { display: grid; gap: 6px; font-size: 12px; }
-.usage-controls .ui-select { width: auto; min-width: 150px; }
+.usage-main { min-width: 0; overflow-y: auto; padding: 0 var(--workspace-gutter) 60px; color: var(--ds-text); }
+/* The same header as Projects: a 28px title with its controls on one line beside it. */
+.usage-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; padding: 32px 0 8px; }
+.usage-heading h1 { margin: 0; color: var(--ds-text); font: 700 28px/1.2 var(--ds-font); letter-spacing: -.03em; }
+.usage-controls { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.usage-period { display: inline-flex; align-items: center; gap: 8px; color: var(--ds-muted); font: 500 13px/1.4 var(--ds-font); }
+.usage-controls .ui-select { width: auto; min-width: 140px; font-size: 14px; }
 .usage-app-link a { display: inline-flex; align-items: center; gap: 5px; color: inherit; text-underline-offset: 3px; }
-.usage-range { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 18px 0; margin-bottom: 24px; border-bottom: 1px solid var(--ds-text); color: var(--muted); font-size: 12px; }
+.usage-range { margin: 0 0 8px; color: var(--ds-muted); font: 400 14px/1.5 var(--ds-font); }
 .usage-main section { margin: 30px 0; }
 .usage-main h2 { margin: 0 0 12px; font-size: 22px; letter-spacing: -.025em; }
 .usage-app-link { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
@@ -24,15 +24,13 @@
 .usage-footnote { margin-top: 40px; }
 .usage-empty { margin: 30px 0; border: 1px dashed var(--line); }
 @media (max-width: 760px) {
-  .usage-heading { align-items: start; flex-direction: column; gap: 18px; }
-  .usage-heading h1 { font-size: 30px; }
+  .usage-heading { padding-top: 20px; }
+  .usage-heading h1 { font-size: 24px; }
   .usage-controls { width: 100%; justify-content: space-between; }
-  .usage-main { padding-top: 22px; }
   .usage-signals li { flex-wrap: wrap; gap: 8px; }
   .usage-delivery > div { grid-template-columns: 1fr; gap: 6px; }
 }
 .usage-main { color: var(--ds-text); background: inherit; }
-.usage-main .usage-heading { padding-block: 18px; }
 .usage-main h2 { color: var(--ds-text); }
 .usage-overview-results { display: grid; gap: 3px; min-width: 100px; font-variant-numeric: tabular-nums; }
 .usage-main .usage-failure { color: var(--ds-danger); }
@@ -44,3 +42,17 @@
 .usage-chart-card { min-width: 0; padding: 18px; border: var(--ds-bw, 1px) solid var(--line); background: var(--ds-surface); }
 .usage-chart-card .ui-barlist a { color: inherit; text-underline-offset: 3px; }
 .usage-chart-tools { display: flex; margin-bottom: 14px; }
+/* A heading breaks between words, never inside one; a size and a link keep to one line. */
+.usage-main .ui-table thead th { overflow-wrap: normal; word-break: normal; hyphens: none; }
+.usage-main .ui-table td a, .usage-main .ui-table td[data-label="Storage"] { white-space: nowrap; }
+.usage-main .usage-footnote { margin: 40px 0 4px; }
+.usage-main .ui-disclosure { max-width: 78ch; }
+.usage-main .ui-disclosure p { margin: 0 0 8px; }
+/* Labels on Usage read in the body face; mono stays for addresses. */
+.usage-main .ui-table thead th, .usage-main .ui-stats dt { font: 600 12px/1.4 var(--ds-font); letter-spacing: 0; text-transform: none; }
+.usage-main .usage-address { font-family: var(--ds-mono); overflow-wrap: normal; white-space: nowrap; }
+.usage-drafts { margin: 12px 0 0; color: var(--ds-muted); font: 400 13px/1.5 var(--ds-font); }
+.usage-drafts a { color: var(--ds-text); }
+/* An app's page keeps the title where Usage has it: the crumb sits in the top padding, not above it. */
+.usage-main > .ui-breadcrumb { padding-top: 12px; }
+.usage-main > .ui-breadcrumb + .usage-heading { padding-top: 2px; }

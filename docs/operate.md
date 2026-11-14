@@ -108,7 +108,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_MAIL_LIMIT_INSTALLATION_PER_DAY` | `1000` | Emails of every kind, account email and notices, the installation may queue per 24 hours. Keep it at or below the provider's contracted limit. |
 | `KONAE_MAIL_LIMIT_CLIENT_PER_HOUR` | `20` | Account email requests one client address may make per hour. |
 | `KONAE_MAIL_LIMIT_NOTIFY_APP_PER_DAY` | `200` | Notices one Deployment may queue per 24 hours. |
-| `KONAE_MAIL_LIMIT_NOTIFY_OWNER_PER_DAY` | `500` | Notices the apps of one owner may queue per 24 hours. `kernel` does not apply it. |
+| `KONAE_MAIL_LIMIT_NOTIFY_OWNER_PER_DAY` | `500` | Notices the apps of one owner may queue per 24 hours. `kernel` does not apply it. The old names `KONAE_MAIL_LIMIT_CREATOR_PER_DAY` and `KONAE_MAIL_LIMIT_NOTIFY_CREATOR_PER_DAY` are refused at startup with the new one. |
 | `KONAE_MAIL_LIMIT_NOTIFY_RECIPIENT_PER_DAY` | `50` | Notices one address may receive from one Deployment per 24 hours. |
 | `KONAE_MAIL_WORKER_INTERVAL_MS` | `5000` | How often the mail worker looks for due jobs. A new job also wakes it. |
 | `KONAE_CALLS_PER_MINUTE` | `20` | Calls one app's call actions may queue in any 60 seconds, from 1 to 10000. The Kernel sends them from `calls.sqlite`; see [Calls between apps](./reference/routes-and-calls.md#calls-between-apps). |
@@ -134,7 +134,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_DNS_RESOLVER` | the first `nameserver` in `/etc/resolv.conf` | The resolver, as an IP address with an optional port, that the Kernel asks for a custom domain's TXT record `_konae.<hostname>` (ADR-0014). |
 | `KONAE_SCHEDULE_MIN_SECONDS` | unset | For tests only. Runs every scheduled action once every this many seconds, 1 to 300, instead of at its declared times, so a test can watch a run. The Kernel refuses to start with it unless `KONAE_BIND` is a loopback address. |
 | `KONAE_CLERK_ISSUER`, `KONAE_CLERK_JWKS_FILE`, `KONAE_CLERK_AUTHORIZED_ORIGINS`, `KONAE_CLERK_BETA_SUBJECTS`, `KONAE_CLERK_PUBLISHABLE_KEY` | unset | `konae` only. The optional Clerk sign-in for owners. Unset keeps it off. [Owner sign-in with Clerk](./clerk-owner-access.md) describes each. |
-| `KONAE_GOOGLE_CLIENT_ID`, `KONAE_GOOGLE_CLIENT_SECRET` | unset | Not read. A Kernel that finds either set prints a warning and starts. Each app's owner sets the app's own Google client in Auth > Users or with `secret_set` and `use: "google"`. |
+| `KONAE_GOOGLE_CLIENT_ID`, `KONAE_GOOGLE_CLIENT_SECRET` | unset | Not read. A Kernel that finds either set prints a warning and starts. Each app's owner sets the app's own Google client in Access > Users or with `secret_set` and `use: "google"`. |
 | `KONAE_GOOGLE_TEST_ISSUER` | unset | Points Google sign-in at a local fake issuer (`<base>/authorize`, `/token`, `/jwks`) for development; `bun run scripts/fake-google.ts` is one. Only a development build with a local HTTP public origin reads it, and a release build refuses to start with it set. |
 
 Konae refuses to start when `KONAE_SETUP_KEY` is unset or equal to `local-development-key` and either `KONAE_BIND` is not a loopback address (`localhost`, `127.0.0.1`, `::1` or another loopback IP) or the host in `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` is not `localhost`, a `*.localhost` name or a loopback IP, unless `KONAE_ALLOW_DEFAULT_KEY=1`.

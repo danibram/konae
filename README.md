@@ -98,7 +98,7 @@ bun run konae -- login --dir /tmp/my-list --url http://localhost:4173 --manage-u
 bun run konae -- publish --dir /tmp/my-list
 ```
 
-An app published from a folder appears on the editor's project list under **Apps without editor files**. Its files stay in the folder, and you publish its changes from there. **Open data and users** on its card opens its database, its app accounts and what it did.
+An app published from a folder appears on the editor's project list beside the others, marked **Edited in a folder**. Its files stay in the folder, and you publish its changes from there. Its card opens its database, its app accounts and what it did.
 
 To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Nothing travels back:
 

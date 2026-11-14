@@ -59,11 +59,34 @@ export const panelLabels: Record<PanelId, string> = {
   code: "Files",
   data: "Data",
   files: "Uploads",
-  auth: "Auth",
+  auth: "Access",
   activity: "What happened",
   preview: "Preview",
   agent: "Describe",
 };
+
+/** What the stage can show, in the order the section nav lists them. */
+export const stagePanels: PanelId[] = ["preview", "agent", "code", "data", "auth", "files", "activity"];
+
+/**
+ * The workbench as a stage. Files has a column of its own on the left, and one
+ * group on the right holds every other panel, showing the chosen one. The
+ * membership of both never changes, so choosing a section only switches a tab:
+ * no panel unmounts, and the preview keeps running behind Data or Access. While
+ * Files is not chosen the right group shows it, and the shell hides the Files
+ * column; while Files is chosen the right group shows the preview beside it.
+ * With `rail`, Describe lives outside the stage, beside it.
+ */
+export function stageLayout(active: PanelId, { rail, codeShare = 50 }: { rail: boolean; codeShare?: number }): LayoutState {
+  const rest = stagePanels.filter((panel) => panel !== "code" && !(rail && panel === "agent"));
+  const shown = active === "code" || !rest.includes(active) ? "preview" : active;
+  const share = Math.min(Math.max(codeShare, 20), 80);
+  return {
+    root: split("row", [stack(["code"]), stack(rest, rest.indexOf(shown))], [share, round(100 - share)]),
+    closed: rail ? ["explorer", "agent"] : ["explorer"],
+    focused: active === "code" ? "code" : shown,
+  };
+}
 
 /** Panels that behave like documents: opening one goes to the focused group. */
 export const editorPanels: PanelId[] = ["code", "data", "files", "auth", "activity"];

@@ -1,11 +1,13 @@
 import {
   Activity,
+  BarChart3,
   Box,
   ChevronDown,
   CircleAlert,
   Code2,
   Database,
   Download,
+  ExternalLink,
   FileCode2,
   FilePlus2,
   FileJson2,
@@ -15,6 +17,8 @@ import {
   FolderTree,
   Laptop,
   MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
   Pencil,
   Play,
   RefreshCw,
@@ -34,12 +38,19 @@ import { mergeProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
 import type { KonaeAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
-import { Button, Dialog, LoadingBlock } from "./components/ui";
+import { Alert, Button, Dialog, IconButton, LoadingBlock, Menu, TabBar, ToastRegion, type MenuItem, type TabBarItem, type ToastItem } from "./components/ui";
+import { AppStatus, UndeployedMarker } from "./components/AppStatus";
+import { accessNotDeployed, ownerStorage, releasedAt, sameAsDeployed } from "./deployments/deployed-changes";
+import { cachedSourceDigest, useSourceDigest } from "./deployments/source-digest";
+import { ProjectCrumb } from "./components/ProjectCrumb";
+import { switcherProjects } from "./components/project-list";
+import { suggestedChanges } from "./components/agent-suggestions";
+import "./components/workbench.css";
 import { AgentPanel } from "./components/AgentPanel";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
-import { useAgentThread } from "./components/useAgentThread";
+import { describeDraftKey, useAgentThread } from "./components/useAgentThread";
 import { focusPanelTab, WorkbenchLayout, type PanelRender } from "./components/WorkbenchLayout";
-import { closePanel, isOpen, isVisible, loadLayout, movePanel, openPanel, panelIds, resetLayout, saveLayout, stack, togglePanel, type LayoutState, type PanelId } from "./ui/layout";
+import { panelIds, stack, stageLayout, type LayoutState, type PanelId } from "./ui/layout";
 import { inTextEntry, shortcutFor } from "./ui/shortcuts";
 import { DeployDialog } from "./components/DeployDialog";
 import { SchemaChangeDialog } from "./components/SchemaChangeDialog";
@@ -52,6 +63,7 @@ import { isSignedOutError, ownerInitials, platformAccessHref, useOwnerSession, t
 import { PlatformAccess } from "./components/PlatformAccess";
 import { BootShell } from "./components/BootShell";
 import { useLoadingHold } from "./components/loading-hold";
+import { heldLazy } from "./components/held-lazy";
 import { filesUnder, renamePath } from "./components/project-tree";
 import { usePreviewProblems } from "./components/usePreviewProblems";
 import { ProjectDashboard } from "./components/ProjectDashboard";
@@ -65,23 +77,19 @@ import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
 import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
-import { cloneStarter } from "./lib/starter";
+import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
-import { actionReadout } from "./components/action-readiness";
+import { actionReadout, refusedSpot } from "./components/action-readiness";
 import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
 import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
 
-const WhatHappenedView = lazy(() =>
-  import("./components/WhatHappenedView").then((module) => ({ default: module.WhatHappenedView })),
-);
-const CapabilityWorkspace = lazy(() =>
-  import("./components/CapabilityWorkspace").then((module) => ({ default: module.CapabilityWorkspace })),
-);
-const AppSettingsDialog = lazy(() => import("./components/AppSettingsDialog").then((module) => ({ default: module.AppSettingsDialog })));
+const WhatHappenedView = heldLazy(() => import("./components/WhatHappenedView").then((module) => module.WhatHappenedView));
+const CapabilityWorkspace = heldLazy(() => import("./components/CapabilityWorkspace").then((module) => module.CapabilityWorkspace));
+const AppSettingsDialog = heldLazy(() => import("./components/AppSettingsDialog").then((module) => module.AppSettingsDialog));
 
 type EditorFile = string;
 
@@ -151,10 +159,7 @@ function CardForPlatformError({ message, onRetry }: { message: string; onRetry: 
 }
 
 function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { ownerSession: Extract<OwnerSession, { state: "signed-in" }>; refreshOwnerSession: () => void; sources: ProjectSources; loaded: { projects: MiniAppProject[]; missing: ProjectMetadata[]; deployments: Record<string, DeploymentReceipt> } }) {
-  const workspaceStorage = useMemo(() => ({
-    getItem: (key: string) => localStorage.getItem(`konae:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`),
-    setItem: (key: string, value: string) => localStorage.setItem(`konae:owner:${encodeURIComponent(ownerSession.ownerId)}:${key}`, value),
-  }), [ownerSession.ownerId]);
+  const workspaceStorage = useMemo(() => ownerStorage(ownerSession.ownerId), [ownerSession.ownerId]);
   const [initialWorkspace] = useState(() => {
     const cached = loadWorkspaceState(workspaceStorage);
     return { projects: loaded.projects, deployments: loaded.deployments, activeProjectId: loaded.projects.some((item) => item.id === cached.activeProjectId) ? cached.activeProjectId : loaded.projects[0]?.id ?? "" };
@@ -186,7 +191,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [routeNotice, setRouteNotice] = useState("");
   const explainMissingRoute = () => {
     window.history.replaceState({}, "", "/");
-    setRouteNotice("That app has no editor files in this account and is not published. See Apps without editor files below.");
+    setRouteNotice("That app is edited in a folder and is not published yet, so it has no page here.");
   };
   useEffect(() => {
     const requested = parseRoute(window.location.pathname);
@@ -204,8 +209,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [viewport, setViewport] = useState<"desktop" | "mobile">("desktop");
   const [deployOpen, setDeployOpen] = useState(false);
   const [deployment, setDeployment] = useState<DeploymentReceipt | null>(null);
-  const [databaseTarget, setDatabaseTarget] = useState<"local" | "deployed">("local");
+  // Null follows the app: a published app opens Data on its live rows, a draft on the test rows.
+  const [databaseChoice, setDatabaseTarget] = useState<"local" | "deployed" | null>(null);
   const [authView, setAuthView] = useState<"rules" | "users" | "integrations">("rules");
+  // Counts each request to put the cursor in Access > Users' invite field.
+  const [inviteFocus, setInviteFocus] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [deployError, setDeployError] = useState("");
@@ -233,8 +241,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
   const projectRef = useRef(project);
   const demoProject = useRef<MiniAppProject | null>(null);
-  const projectMenu = useRef<HTMLDetailsElement>(null);
-  const switcherRef = useRef<HTMLDetailsElement>(null);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
   const pendingSaves = useRef(0);
@@ -261,66 +267,39 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const keyStore = useMemo(() => createAgentKeyStore(localStorage, ownerSession.ownerId), [ownerSession.ownerId]);
-  // The file list lives inside Files now. A layout saved while it was a panel of its own drops it.
-  const [layout, setLayout] = useState<LayoutState>(() => {
-    const saved = loadLayout();
-    return isOpen(saved, "explorer") ? closePanel(saved, "explorer") : saved;
-  });
   const [explorerOpen, setExplorerOpen] = useState(false);
-  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 900px)").matches);
+  // Three widths: a phone shows one section at a time; a wide window keeps
+  // Describe in a rail beside the stage; in between, Describe is a section.
+  const compact = useMediaQuery("(max-width: 900px)");
+  const wide = useMediaQuery("(min-width: 1200px)");
+  // On a wide window Describe keeps a rail; the person can fold it to a strip and give the stage its width.
+  const [railOpen, setRailOpen] = useState(() => localStorage.getItem("konae:describe-rail") !== "closed");
+  const rail = wide && !compact && railOpen;
+  const railFolded = wide && !compact && !railOpen;
+  const foldRail = (open: boolean) => {
+    setRailOpen(open);
+    try { localStorage.setItem("konae:describe-rail", open ? "open" : "closed"); } catch { /* The choice lasts this visit. */ }
+    // Focus stays on the control that took the place of the one pressed.
+    requestAnimationFrame(() => document.getElementById(open ? "describe-rail-fold" : "describe-rail-open")?.focus());
+  };
   const [compactPanel, setCompactPanel] = useState<PanelId>("preview");
-  // A window that crosses the breakpoint, such as a rotated tablet, keeps the section it showed.
-  const shownPanel = useRef({ compactPanel, focused: layout.focused });
-  shownPanel.current = { compactPanel, focused: layout.focused };
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 900px)");
-    const follow = () => {
-      const next = media.matches;
-      setCompact(next);
-      if (next) {
-        setCompactPanel(shownPanel.current.focused ?? "preview");
-        return;
-      }
-      setLayout((current) => {
-        const shown = openPanel(current, shownPanel.current.compactPanel);
-        saveLayout(shown);
-        return shown;
-      });
-    };
-    media.addEventListener("change", follow);
-    return () => media.removeEventListener("change", follow);
-  }, []);
-
-  useEffect(() => {
-    const closeMenus = () => {
-      projectMenu.current?.removeAttribute("open");
-      switcherRef.current?.removeAttribute("open");
-    };
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") closeMenus(); };
-    const onPointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (projectMenu.current?.open && !projectMenu.current.contains(target)) projectMenu.current.removeAttribute("open");
-      if (switcherRef.current?.open && !switcherRef.current.contains(target)) switcherRef.current.removeAttribute("open");
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointer);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointer);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (deployOpen || resetOpen || settingsOpen || appSettingsOpen || platformConfirmation) {
-      projectMenu.current?.removeAttribute("open");
-      switcherRef.current?.removeAttribute("open");
-    }
-  }, [deployOpen, resetOpen, settingsOpen, appSettingsOpen, platformConfirmation]);
+  // The section on the stage. Choosing another never closes what the person opened.
+  const [stage, setStage] = useState<PanelId>("preview");
+  const [codeShare, setCodeShare] = useState(() => Number(localStorage.getItem("konae:code-share")) || 50);
+  // A panel mounts the first time it is shown and stays mounted, so a section keeps its state.
+  const [visited, setVisited] = useState<ReadonlySet<PanelId>>(() => new Set<PanelId>(["preview", "agent"]));
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [exportAhead, setExportAhead] = useState(false);
+  const toast = (message: string, tone: ToastItem["tone"] = "success") => {
+    const id = Date.now() + Math.random();
+    setToasts((current) => [...current, { id, tone, message }]);
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 7000);
+  };
 
   useEffect(() => {
     setAppSettingsOpen(false);
     setPlatformConfirmation(null);
+    setExportAhead(false);
     return () => {
       resolvePlatformConfirmation.current?.(false);
       resolvePlatformConfirmation.current = null;
@@ -329,17 +308,36 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     };
   }, [project.id]);
 
+  const shownSection: PanelId = compact ? compactPanel : stage === "agent" && wide ? "preview" : stage;
+  const displayedLayout: LayoutState = compact
+    ? { root: stack(workbenchPanels, workbenchPanels.indexOf(compactPanel)), closed: [], focused: compactPanel }
+    : stageLayout(shownSection, { rail, codeShare });
+  /** The only change the stage takes from the frame is the width of the Files column. */
   const updateLayout = (next: LayoutState) => {
     if (compact) {
       if (next.focused) setCompactPanel(next.focused);
       return;
     }
-    setLayout(next);
-    saveLayout(next);
+    if (next.root?.type === "split" && next.root.sizes[0] !== codeShare) {
+      setCodeShare(next.root.sizes[0]);
+      localStorage.setItem("konae:code-share", String(next.root.sizes[0]));
+    }
   };
-  const displayedLayout: LayoutState = compact
-    ? { root: stack(workbenchPanels, workbenchPanels.indexOf(compactPanel)), closed: [], focused: compactPanel }
-    : layout;
+  /** Shows a section: on the stage, in the compact view, or, for Describe beside a stage, its composer. */
+  const show = (panel: PanelId) => {
+    if (panel === "explorer") return;
+    setVisited((current) => current.has(panel) ? current : new Set(current).add(panel));
+    if (compact) {
+      setCompactPanel(panel);
+      return;
+    }
+    if (panel === "agent" && wide) {
+      if (!rail) foldRail(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-composer")?.focus()));
+      return;
+    }
+    setStage(panel);
+  };
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
   const hostRef = useRuntimeBridge(previewFrame, project.id, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess);
   const previewProblems = usePreviewProblems(hostRef, project.id);
@@ -351,8 +349,32 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
    * A new document gets a new iframe instead.
    */
   const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
+  // Data, Uploads, Access, What happened and App settings load while the browser is idle, so their first open shows no loader.
+  useEffect(() => {
+    const preload = () => { for (const panel of [CapabilityWorkspace, WhatHappenedView, AppSettingsDialog]) panel.preload().catch(() => {}); };
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(preload, { timeout: 3000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = window.setTimeout(preload, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
   const activeDeployment = deployments[project.id] ?? null;
+  const sourceDigest = useSourceDigest(activeDeployment ? project.files : null);
+  // Deploy stays quiet while a new app is still what New project wrote, since publishing the placeholder gives it a live address.
+  const createdDigest = activeDeployment ? null : readCreatedDigest(workspaceStorage, project.id);
+  const currentDigest = useSourceDigest(createdDigest ? project.files : null);
+  const asCreated = createdDigest !== null && (createdDigest === "pending" || currentDigest === null || currentDigest === createdDigest);
+  useEffect(() => {
+    // Once the app changes or deploys, it is no longer the placeholder, even if an edit is undone later.
+    if (createdDigest && createdDigest !== "pending" && (activeDeployment || (currentDigest !== null && currentDigest !== createdDigest))) forgetCreatedDigest(workspaceStorage, project.id);
+  }, [createdDigest, currentDigest, activeDeployment, workspaceStorage, project.id]);
+  // True, false, or null when the release names no digest; null shows no marker and the dialog does not guess.
+  const sameAsLive = sameAsDeployed(project, activeDeployment, sourceDigest);
+  const undeployed = sameAsLive === false;
   const deployedDatabase = useMemo(() => activeDeployment ? new HostedDatabaseClient(activeDeployment.id) : undefined, [activeDeployment]);
+  const databaseTarget = deployedDatabase ? databaseChoice ?? "deployed" : "local";
+  const liveRows = useLiveRowCount(deployedDatabase, shownSection === "preview" || shownSection === "code");
   const actionContract = useActionContract(project.files["actions.json"], project.files["schema.sql"], project);
   const contractOpen = activeFile === ACTION_CONTRACT_MARKDOWN;
   const activeSource = contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : project.files[activeFile] ?? "";
@@ -436,20 +458,34 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         toggleExplorer({ focus: true });
         return;
       }
-      if (compact) {
-        setCompactPanel(action.panel);
-        requestAnimationFrame(() => focusPanelTab(action.panel));
-        return;
-      }
-      const next = action.kind === "reveal" ? openPanel(layout, action.panel) : togglePanel(layout, action.panel);
-      updateLayout(next);
-      // Focus follows the keyboard: revealing a panel hides whatever was in front
+      // A fold of the section on stage goes back to the preview; anything else is shown.
+      const target = action.kind === "fold" && shownSection === action.panel && action.panel !== "preview" ? "preview" : action.panel;
+      show(target);
+      // Focus follows the keyboard: showing a section hides whatever was in front
       // of it, and leaving focus on that hidden body drops the next keystrokes.
-      if (isOpen(next, action.panel)) requestAnimationFrame(() => focusPanelTab(action.panel));
+      if (!(target === "agent" && rail)) requestAnimationFrame(() => focusPanelTab(target));
     };
     window.addEventListener("keydown", shortcut);
     return () => window.removeEventListener("keydown", shortcut);
   });
+
+  // The sections that load on first open are fetched once the workbench settles,
+  // so opening one shows it at once instead of a loader that flashes for a few frames.
+  useEffect(() => {
+    if (screen !== "editor") return;
+    const timer = window.setTimeout(() => {
+      void import("./components/WhatHappenedView");
+      void import("./components/CapabilityWorkspace");
+      void import("./components/AppSettingsDialog");
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [screen]);
+
+  // On a phone the open file is a chip in a row that scrolls; keep it in view.
+  useEffect(() => {
+    if (!compact || shownSection !== "code") return;
+    document.querySelector(".compact-file-list [aria-current='page']")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [compact, shownSection, activeFile]);
 
   const updateFile = (value: string) => {
     if (contractOpen) return;
@@ -535,7 +571,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
    * beside Files when Files is showing, so the person sees what the edit did.
    * A failed build shows nothing new; the "Build failed" alert says why.
    */
-  const runPreview = ({ show = false }: { show?: boolean } = {}) => {
+  const runPreview = ({ show: reveal = false }: { show?: boolean } = {}) => {
     setOperationError("");
     void compileProjectInBrowser(project)
       .then((compiled) => {
@@ -544,16 +580,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           files: { ...project.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
         });
         setPreviewEpoch((value) => value + 1);
-        if (!show) return;
-        if (compact) {
-          setCompactPanel("preview");
-          return;
-        }
-        setLayout((current) => {
-          const next = withPreviewShowing(current);
-          saveLayout(next);
-          return next;
-        });
+        // Files already stands beside the preview; elsewhere the preview comes forward.
+        if (reveal && shownSection !== "code") show("preview");
       })
       .catch((error) => setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`));
   };
@@ -576,6 +604,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, [project.id]);
 
   projectRef.current = project;
+
+  useEffect(() => {
+    if (route.screen === "editor" && projects.some((item) => item.id === route.projectId)) document.title = `${project.name} · Konae`;
+  }, [route, project.name, projects]);
+
+  // The sections load their code while the person reads the preview, so opening one shows it at once.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void import("./components/CapabilityWorkspace");
+      void import("./components/WhatHappenedView");
+      void import("./components/AppSettingsDialog");
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   /**
    * ADR-0007 lever 7: pi-agent-core, the provider catalogs and sql.js are imported
@@ -683,7 +725,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     // The open file belongs to the project being left; typing would create it in this one.
     setActiveFile("app.js");
     setSelectedPath("app.js");
-    setDatabaseTarget("local");
+    setDatabaseTarget(null);
   }, [route, projects, project.id]);
 
   const arrival = useRef<PanelId>("preview");
@@ -697,12 +739,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     seenProject.current = route.projectId;
     const target = arrival.current;
     arrival.current = "preview";
-    setCompactPanel(target === "preview" ? "preview" : target);
-    setLayout((current) => {
-      const next = focusRunningApp(current, target);
-      saveLayout(next);
-      return next;
-    });
+    setStage("preview");
+    setCompactPanel("preview");
+    show(target);
+    // On a phone the composer would raise the keyboard, so a new app's Describe takes focus at its heading.
+    if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
   const applyAgentProposal = (proposal: AgentProposal): boolean => {
@@ -744,6 +785,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setPreviewProject(next);
     },
     providers: PROVIDERS,
+    // An unsent draft waits per project in this browser, so a description typed in New project survives leaving and a reload.
+    draftKey: project.id,
+    draftStorage: workspaceStorage,
   });
 
   /** Offline fallback: the scripted demo proposes a change and waits to apply it. */
@@ -767,13 +811,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const exportProject = async () => {
     setExporting(true);
     setOperationError("");
+    setExportAhead(false);
     try {
       const { createProjectExport } = await import("./lib/export-project");
       const artifact = await buildProjectInBrowser(project);
       const result = await createProjectExport(project, artifact, activeDeployment?.id);
       downloadBlob(result.blob, result.filename);
       // The editor saves between releases, so the published app may run older sources than app/ holds.
-      if (result.sourcesAhead) setOperationError("Exported. The folder's app/actions.json differs from the actions the published app runs, so app/ is ahead of dist/ and data/. Publish, then export again, to make them match.");
+      toast(!activeDeployment
+        ? `${result.filename} saved. It holds the app's files. A draft has no accounts or rows yet.`
+        : result.sourcesAhead
+          ? `${result.filename} saved. It holds your edits, and an app started from it runs your last deploy.`
+          : `${result.filename} saved. It holds the app's files, accounts, rows and rules.`);
+      if (result.sourcesAhead) setExportAhead(true);
     } catch (error) {
       setOperationError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -802,7 +852,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
       const record = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy);
-      setProject((current) => ({ ...current, manifest: record.manifest, updatedAt: Date.now() }));
+      // Taking the release's manifest is not an edit of the person's, so "Edited" keeps its time.
+      setProject((current) => ({ ...current, manifest: record.manifest }));
+      setExportAhead(false);
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
@@ -825,6 +877,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     pushRoute(next);
   };
 
+  // The app the owner last had open, so Projects can put focus back on its card.
+  const leftProject = useRef<string | undefined>(undefined);
+  if (route.screen === "editor") leftProject.current = route.projectId;
   const goToProjects = () => {
     const next = { screen: "projects" as const };
     setRoute(next);
@@ -840,28 +895,26 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setThreadResetToken((token) => token + 1);
     setActiveFile(entry === "code" ? "app.js" : "index.html");
     setSelectedPath(entry === "code" ? "app.js" : "index.html");
-    setDatabaseTarget("local");
-    const target = entry === "code" ? "code" : entry;
-    setCompactPanel(target);
-    if (!compact) updateLayout(focusRunningApp(layout, target));
+    setDatabaseTarget(null);
     openEditorRoute(next.id);
   };
 
-  const createProject = (name: string, template: TemplateId | "scratch" = defaultTemplate) => {
-    arrival.current = template === "scratch" ? "agent" : "preview";
+  const createProject = (name: string, template: TemplateId | "scratch" = defaultTemplate, description?: string) => {
+    const described = description?.trim() ?? "";
+    arrival.current = template === "scratch" || described ? "agent" : "preview";
     const base = createWorkspaceProject(name, projects);
-    // A project described from scratch keeps the private default; only a template made for visitors starts public.
-    const next = template === "scratch" ? base : applyTemplate(base, template);
+    // What the person wrote in the New project dialog waits as this project's unsent draft, and Describe opens on it.
+    if (described) workspaceStorage.setItem(describeDraftKey(base.id), described);
+    // "No template" is a private plain list titled with the name, whose page declares what the person wrote; only a template made for visitors starts public.
+    const next = template === "scratch" ? plainListProject(base, described) : applyTemplate(base, template);
+    rememberCreatedDigest(workspaceStorage, next);
     setProjects((current) => [...current, next]);
     setProject(next);
     setPreviewProject(next);
     setThreadResetToken((token) => token + 1);
     setActiveFile("app.js");
     setSelectedPath("app.js");
-    setDatabaseTarget("local");
-    const target = template === "scratch" ? "agent" : "preview";
-    setCompactPanel(target);
-    if (!compact) updateLayout(focusRunningApp(layout, target));
+    setDatabaseTarget(null);
     openEditorRoute(next.id);
   };
 
@@ -889,6 +942,22 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       return rest;
     });
     // A local copy of a deleted app would otherwise come back as an import.
+    const copies = drafts.filter((draft) => draft.id === item.id);
+    if (copies.length) {
+      dismissDrafts(workspaceStorage, copies);
+      setDrafts((current) => current.filter((draft) => draft.id !== item.id));
+    }
+  };
+
+  /** Deletes an editable project; it leaves the lists at once, so a pending save cannot bring it back. */
+  const deleteEditableProject = async (item: ProjectMetadata, name: string) => {
+    await sources.deleteProject(item.id, name);
+    synchronized.current.delete(item.id);
+    setProjects((current) => current.filter((entry) => entry.id !== item.id));
+    setDeployments((current) => {
+      const { [item.id]: _removed, ...rest } = current;
+      return rest;
+    });
     const copies = drafts.filter((draft) => draft.id === item.id);
     if (copies.length) {
       dismissDrafts(workspaceStorage, copies);
@@ -947,36 +1016,77 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
   }
 
   // A published app with no editor files opens on its data, accounts and activity.
   const published = missing.find((item) => item.id === route.projectId);
   if (published && deployments[published.id]) {
-    return <PublishedAppView app={published} deployment={deployments[published.id]} ownerSession={ownerSession} projectCount={projects.length + missing.length} onBack={goToProjects} />;
+    return <PublishedAppView app={published} deployment={deployments[published.id]} ownerSession={ownerSession} projectCount={projects.length + missing.length} projects={switcherProjects(projects, missing, deployments)} onBack={goToProjects} />;
   }
 
   const signInHref = platformAccessHref(window.location.pathname);
 
+  const actionsRefusal = actionReadout(project.files["actions.json"] ?? "", project.manifest.visibility).refusal;
+  // While the description waits for a model and the app is the placeholder New project made, Describe is the next step, not Deploy.
+  const quietDeploy = asCreated && agentThread.draft.trim() !== "";
   const sections: { id: PanelId; label: string; icon: typeof Code2 }[] = [
     { id: "preview", label: "Preview", icon: Play },
     { id: "agent", label: "Describe", icon: Sparkles },
-    { id: "auth", label: "Auth", icon: UserRound },
     { id: "code", label: "Files", icon: Code2 },
     { id: "data", label: "Data", icon: Database },
+    { id: "auth", label: "Access", icon: UserRound },
     { id: "files", label: "Uploads", icon: FolderOpen },
     { id: "activity", label: "What happened", icon: Activity },
   ];
+  const navItems: TabBarItem<PanelId>[] = sections
+    .filter((section) => !(section.id === "agent" && wide))
+    .map((section) => {
+      const Icon = section.icon;
+      return {
+        id: section.id,
+        label: section.label,
+        icon: <Icon size={14} aria-hidden="true" />,
+        tabId: `section-${section.id}`,
+        badge: section.id === "code" && actionsRefusal ? "refused" : undefined,
+      };
+    });
+  const usageHref = activeDeployment ? `/usage?deployment=${encodeURIComponent(activeDeployment.id)}` : "/usage";
 
-  const reveal = (panel: PanelId) => {
-    if (compact) {
-      setCompactPanel(panel);
-      return;
-    }
-    updateLayout(focusRunningApp(layout, panel));
+  const reveal = show;
+
+  /**
+   * Opens actions.json in Files with the caret on what the refusal names, and
+   * moves focus there, so a keyboard user lands on the line to fix.
+   */
+  const openRefusal = () => {
+    const source = projectRef.current.files["actions.json"] ?? "";
+    const spot = refusedSpot(source, actionReadout(source, projectRef.current.manifest.visibility).refusal);
+    setActiveFile("actions.json");
+    setSelectedPath("actions.json");
+    reveal("code");
+    // Wait two frames, so Files has rendered and a closing dialog has handed focus back.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      // The caret waits at the statement's end, where a LIMIT goes, so typing adds to the query instead of replacing it.
+      const end = spot?.value?.end ?? spot?.index ?? 0;
+      editor.setSelectionRange(end, end);
+      const before = editor.value.slice(0, end).split("\n");
+      const style = getComputedStyle(editor);
+      const height = parseFloat(style.lineHeight) || 20;
+      editor.scrollTop = Math.max(0, (before.length - 1) * height - editor.clientHeight / 3);
+      const measure = document.createElement("canvas").getContext("2d");
+      if (measure) {
+        measure.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const endX = measure.measureText(before.at(-1) ?? "").width + (parseFloat(style.paddingLeft) || 0);
+        editor.scrollLeft = Math.max(0, endX - editor.clientWidth + 48);
+      }
+    }));
   };
 
-  const filesShowing = compact ? compactPanel === "code" : isVisible(layout, "code");
+  const filesShowing = shownSection === "code";
 
   /** The File list is part of Files: opening it shows Files, and it stays until closed. */
   const toggleExplorer = ({ focus = false }: { focus?: boolean } = {}) => {
@@ -1061,7 +1171,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         activeFile={activeFile}
         selectedPath={selectedPath}
         iconFor={(path) => fileMetaFor(path).icon}
-        noteFor={(path) => path === "actions.json" ? "returns at most 100" : path === "schema.sql" ? "kernel runs this" : path === ACTION_CONTRACT_MARKDOWN ? "generated" : ""}
+        noteFor={(path) => path === "actions.json" ? "who may read and write" : path === "schema.sql" ? "the tables" : path === ACTION_CONTRACT_MARKDOWN ? "generated" : ""}
         onSelect={setSelectedPath}
         onOpenFile={(file) => { setActiveFile(file); setSelectedPath(file); }}
       />
@@ -1077,7 +1187,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <select className={`file-switch ${compact && explorerFiles.length > 4 ? "is-overflow" : ""}`} aria-label="Open file" value={activeFile} onChange={(event) => { setActiveFile(event.target.value); setSelectedPath(event.target.value); }}>
           {explorerFiles.map((file) => <option key={file} value={file}>{file}</option>)}
         </select>
-        <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} actions.` : `${activeMeta.language} · ${lines} lines`}</span>
+        <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} action${listedActions(activeSource) === 1 ? "" : "s"}` : `${activeMeta.language} · ${lines} lines`}</span>
         <button
           className={`file-list-toggle ${explorerOpen ? "is-open" : ""}`}
           aria-expanded={explorerOpen}
@@ -1110,7 +1220,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               ))}
             </ul>
           )}
-          {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} />}
+          {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} onJump={openRefusal} />}
+          {activeFile !== "actions.json" && actionsRefusal && <Alert tone="danger" className="code-refusal" title="actions.json is refused" action={<Button size="sm" onClick={openRefusal}>{refusedLabel(project.files["actions.json"] ?? "", actionsRefusal)}</Button>}>{actionsRefusal}</Alert>}
           {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
@@ -1147,9 +1258,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     id,
     title: label,
     icon,
-    body: (
-      <Suspense fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}>
+    body: visited.has(id) && (
         <CapabilityWorkspace
+          fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}
           view={id === "data" ? "database" : id}
           host={hostRef.current}
           onEditSchema={() => { setActiveFile("schema.sql"); reveal("code"); }}
@@ -1169,8 +1280,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
           authView={authView}
           onAuthViewChange={setAuthView}
+          inviteFocus={inviteFocus}
+          accessUndeployed={accessNotDeployed(project, activeDeployment)}
+          onDeploy={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}
         />
-      </Suspense>
     ),
   });
 
@@ -1178,34 +1291,38 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     id: "activity",
     title: "What happened",
     icon: <Activity size={11} />,
-    body: (
-      <Suspense fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}>
+    body: visited.has("activity") && (
         <WhatHappenedView
+          fallback={<LoadingBlock label="Loading this panel" rows={4} className="panel-loading" />}
           deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
-          onDeploy={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}
           onOpen={(place) => {
             if (place === "capsule") { setActiveFile("actions.json"); reveal("code"); return; }
             setAuthView(place);
             reveal("auth");
           }}
         />
-      </Suspense>
     ),
   };
+
+  const previewTools = (
+    <div className="preview-tools" role="group" aria-label="Preview">
+      <IconButton label="Desktop preview" aria-pressed={viewport === "desktop"} onClick={() => setViewport("desktop")}><Laptop size={14} /></IconButton>
+      <IconButton label="Mobile preview" aria-pressed={viewport === "mobile"} onClick={() => setViewport("mobile")}><Smartphone size={14} /></IconButton>
+      <IconButton label="Reload preview" onClick={() => runPreview()}><RefreshCw size={14} /></IconButton>
+    </div>
+  );
 
   const previewPanel: PanelRender = {
     id: "preview",
     title: project.name,
     icon: <Play size={12} />,
-    actions: (
-      <>
-        <button className={viewport === "desktop" ? "active" : ""} title="Desktop" aria-label="Desktop preview" aria-pressed={viewport === "desktop"} onClick={() => setViewport("desktop")}><Laptop size={12} /></button>
-        <button className={viewport === "mobile" ? "active" : ""} title="Mobile" aria-label="Mobile preview" aria-pressed={viewport === "mobile"} onClick={() => setViewport("mobile")}><Smartphone size={12} /></button>
-        <button title="Reload preview" aria-label="Reload preview" onClick={() => runPreview()}><RefreshCw size={11} /></button>
-      </>
-    ),
     body: (
       <div className="preview-panel-body">
+        <p className="preview-caption">
+          {activeDeployment
+            ? <>This preview uses test rows. The live app has {liveRows === null ? "its own rows" : `${liveRows} row${liveRows === 1 ? "" : "s"}`}. <button type="button" className="link-button" onClick={() => { setDatabaseTarget("deployed"); show("data"); }}>See live rows</button></>
+            : <>This preview uses test rows. Deploy to give the app its own address and rows.</>}
+        </p>
         {previewProblems.length > 0 && (
           <section className="preview-problems" aria-label="Preview problems" aria-live="polite">
             <header>
@@ -1232,38 +1349,54 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   };
 
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",
     icon: <Sparkles size={12} />,
-    actions: (
-      <button title="Agent settings" onClick={() => setSettingsOpen(true)}><Settings2 size={11} /></button>
-    ),
-    body: <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} />,
+    body: agentBody,
   };
+  const describedRefusal = agentThread.footer.kind === "blocked" && !(rail || shownSection === "agent");
+  const openDeploy = () => {
+    setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession();
+    // A publish from an app folder changes the Deployment behind the editor's back, so read it again before the dialog compares.
+    if (activeDeployment) void platformMcp.call<{ deployment: DeploymentReceipt | null }>("project_inspect", { projectId: project.id })
+      .then((inspected) => { if (inspected.deployment) setDeployments((current) => ({ ...current, [project.id]: inspected.deployment! })); }, () => {});
+  };
+  const moreItems: MenuItem[] = [
+    ...(compact && activeDeployment ? [{ label: "Open the app", icon: <ExternalLink size={14} />, onSelect: () => { window.open(activeDeployment.url, "_blank", "noopener,noreferrer"); } }] : []),
+    { label: exporting ? "Exporting…" : "Export", icon: <Download size={14} />, disabled: exporting, onSelect: () => void exportProject() },
+    { label: "App settings", icon: <Settings2 size={14} />, onSelect: () => setAppSettingsOpen(true) },
+    { label: ownerSession.state === "signed-in" ? "Owner account" : "Owner sign-in", icon: <UserRound size={14} />, onSelect: () => { window.location.href = signInHref; } },
+    { label: "Start over…", icon: <RotateCcw size={14} />, danger: true, onSelect: () => setResetOpen(true) },
+  ];
+  const crumbProjects = switcherProjects(projects, missing, deployments);
 
   return (
-    <div className={`workshop ${compact ? "is-compact" : ""} ${isVisible(displayedLayout, "code") ? "is-code-open" : ""} ${operationError || agentThread.footer.kind === "blocked" || (agentThread.footer.kind === "validated" && agentThread.footer.owner) ? "has-error" : ""}`}>
+    <div className={`workshop ${compact ? "is-compact" : ""} ${rail ? "has-rail" : ""} ${railFolded ? "has-rail-strip" : ""} stage-${shownSection}`}>
       <header className="topbar">
-        <button className="brand" aria-label="Konae home" onClick={() => goToProjects()}>
+        <a className="brand" href="/" aria-label="Konae, projects" onClick={(event) => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          goToProjects();
+        }}>
           <span className="brand-mark"><Box size={17} strokeWidth={2.4} /></span>
           <span>konae</span>
-        </button>
+        </a>
 
-        <details className="project-switcher" ref={switcherRef} onToggle={(event) => { if (event.currentTarget.open) projectMenu.current?.removeAttribute("open"); }}>
-          <summary>
-            <strong title={project.name}>{project.name}</strong>
-            <ChevronDown size={14} />
-          </summary>
-          <div>
-            {projects.map((item) => (
-              <button key={item.id} aria-current={item.id === project.id ? "true" : undefined} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); openProject(item.id); }}>{item.name}</button>
-            ))}
-            <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); goToProjects(); }}>All projects</button>
-          </div>
-        </details>
+        <div className="topbar-place">
+          <ProjectCrumb
+            current={{ id: project.id, name: project.name }}
+            projects={crumbProjects}
+            onProjects={goToProjects}
+            onOpen={(id) => projects.some((item) => item.id === id) ? openProject(id) : openEditorRoute(id)}
+          />
+          <AppStatus className="topbar-status" url={activeDeployment?.url} publishedAt={activeDeployment ? releasedAt(activeDeployment) : undefined} />
+          {undeployed && <UndeployedMarker className="topbar-changes" onDeploy={openDeploy} />}
+        </div>
 
         <div className="top-actions">
+          {exporting && <span className="save-state" role="status"><RefreshCw size={12} className="spin" /> Exporting</span>}
           {!saved && <span
             className={`save-state ${saveError ? "is-failed" : ""}`}
             title={saveError || undefined}
@@ -1273,74 +1406,66 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             {saveError ? "Not saved" : "Saving"}
           </span>}
           {saveError && <Button onClick={retrySave} disabled={pendingSaves.current > 0}>Retry save</Button>}
-          <div className="take-actions" role="group" aria-label="Take it with you">
-            <Button className="export-button" aria-label={exporting ? "Exporting" : "Export"} disabled={exporting} onClick={() => void exportProject()}><Download size={14} /> <span>{exporting ? "Exporting…" : "Export"}</span></Button>
-            <Button variant="primary" className="deploy-button" aria-label="Deploy" onClick={() => { setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession(); }}><Rocket size={15} /> <span>Deploy</span></Button>
-          </div>
-          <details className="mobile-project-actions" ref={projectMenu} onToggle={(event) => { if (event.currentTarget.open) switcherRef.current?.removeAttribute("open"); }}>
-            <summary>More</summary>
-            <div>
-              <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAppSettingsOpen(true); }}>App settings</button>
-              <button onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); updateLayout(resetLayout()); }}>Reset layout</button>
-              <a href={signInHref}>{ownerSession.state === "signed-in" ? "Owner account" : "Owner sign-in"}</a>
-              <button className="is-danger" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setResetOpen(true); }}><RotateCcw size={15} /> Reset project data…</button>
-            </div>
-          </details>
+          <Button variant={quietDeploy ? "secondary" : "primary"} className={`deploy-button${quietDeploy ? " is-quiet" : ""}`} title={actionsRefusal ? `Deploy is refused: ${actionsRefusal}` : undefined} onClick={openDeploy}><Rocket size={15} aria-hidden="true" /> <span>{activeDeployment ? "Deploy changes" : "Deploy"}</span></Button>
+          <Menu label="More" trigger={<><MoreHorizontal size={15} aria-hidden="true" /><span className="more-label">More</span></>} triggerClassName="more-button" items={moreItems} />
           <AccountChip session={ownerSession} href={signInHref} />
         </div>
       </header>
 
-      {operationError && <div className="operation-error" role="alert">{operationError}<button onClick={() => setOperationError("")}>Dismiss</button></div>}
-      {agentThread.footer.kind === "blocked" && (
-        <div className="gate-refusal" role="alert">
-          <div>
-            <strong>A check refused this change</strong>
-            <span>{agentThread.footer.message}</span>
-            {agentThread.footer.detail && <span className="gate-refusal-detail">{agentThread.footer.detail}</span>}
-          </div>
-          <button type="button" onClick={() => reveal("agent")}>Open Describe</button>
-        </div>
-      )}
-      {agentThread.footer.kind === "validated" && agentThread.footer.owner && (
-        <div className="gate-refusal is-owner" role="status">
-          <div>
-            <strong>Apply works. Deploy waits for a secret</strong>
-            <span>{agentThread.footer.owner.message}</span>
-            {agentThread.footer.owner.detail && <span className="gate-refusal-detail">{agentThread.footer.owner.detail}</span>}
-          </div>
-          <button type="button" onClick={() => { setAuthView("integrations"); reveal("auth"); }}>Open Auth &gt; Integrations</button>
-        </div>
-      )}
-      <nav className="section-nav" aria-label="Workspace sections">
-        <a className="usage-open-link" href={activeDeployment ? `/usage?deployment=${encodeURIComponent(activeDeployment.id)}` : "/usage"}>Usage</a>
-        {sections.filter((section) => !compact || section.id === "preview" || section.id === "agent").map((section) => {
-          const Icon = section.icon;
-          const door = section.id === "preview" || section.id === "agent";
-          const pressed = compact ? compactPanel === section.id : isVisible(layout, section.id);
-          return (
-            <button
-              key={section.id}
-              className={`${door ? "section-door" : "section-tool"} ${pressed ? "active" : ""}`}
-              aria-pressed={pressed}
-              onClick={() => reveal(section.id)}
-            >
-              <Icon size={13} /> {section.label}
-            </button>
-          );
-        })}
-        {compact && sections.filter((section) => section.id !== "preview" && section.id !== "agent").map((section) => (
-          <button
-            key={section.id}
-            className={`section-tool ${compactPanel === section.id ? "active" : ""}`}
-            aria-pressed={compactPanel === section.id}
-            onClick={() => reveal(section.id)}
-          >
-            {section.label}
-          </button>
-        ))}
+      <nav className="section-bar" aria-label="Workspace sections">
+        <TabBar
+          label="Sections"
+          items={compact ? navItems.filter((item) => item.id === "preview" || item.id === "agent" || item.id === compactPanel) : navItems}
+          value={shownSection}
+          onChange={(id) => show(id)}
+          end={<>
+            {!compact && (shownSection === "preview" || shownSection === "code") && previewTools}
+            {compact
+              ? <Menu label="Tools" align="end" triggerClassName="tools-button" trigger={<><FolderTree size={14} aria-hidden="true" /> Tools</>} items={[
+                ...sections.filter((section) => section.id !== "preview" && section.id !== "agent").map((section) => ({ label: section.label, current: compactPanel === section.id, onSelect: () => show(section.id) })),
+                { label: "Usage", onSelect: () => { window.location.href = usageHref; } },
+              ]} />
+              : <a className="usage-link" href={usageHref}><BarChart3 size={14} aria-hidden="true" /> Usage</a>}
+          </>}
+        />
       </nav>
 
-      <WorkbenchLayout layout={displayedLayout} compact={compact} onLayoutChange={updateLayout} panels={[codePanel, capabilityPanel("data", "Data", <Database size={11} />), capabilityPanel("files", "Uploads", <FolderOpen size={11} />), capabilityPanel("auth", "Auth", <UserRound size={11} />), activityPanel, previewPanel, agentPanel]} />
+      <div className="stage-notices">
+        {operationError && <Alert tone="danger" action={<Button size="sm" onClick={() => setOperationError("")}>Dismiss</Button>}>{operationError}</Alert>}
+        {exportAhead && <Alert tone="warning" title="The export runs your last deploy" action={<Button size="sm" onClick={() => setExportAhead(false)}>Dismiss</Button>}>The folder holds your saved files. An app started from it runs your last deploy. Deploy changes, then export again, to make them match.</Alert>}
+        {describedRefusal && agentThread.footer.kind === "blocked" && (
+          <Alert tone="danger" title="A check refused the proposed change" action={<Button size="sm" onClick={() => show("agent")}>Open Describe</Button>}>
+            {agentThread.footer.message}{agentThread.footer.detail && <span className="gate-refusal-detail">{agentThread.footer.detail}</span>}
+          </Alert>
+        )}
+        {agentThread.footer.kind === "validated" && agentThread.footer.owner && (
+          <Alert tone="warning" title="Apply works. Deploy waits for a secret" action={<Button size="sm" onClick={() => { setAuthView("integrations"); show("auth"); }}>Open Access &gt; Integrations</Button>}>
+            {agentThread.footer.owner.message}{agentThread.footer.owner.detail && <span className="gate-refusal-detail">{agentThread.footer.owner.detail}</span>}
+          </Alert>
+        )}
+      </div>
+
+      <WorkbenchLayout layout={displayedLayout} compact={compact} onLayoutChange={updateLayout} panels={[codePanel, capabilityPanel("data", "Data", <Database size={11} />), capabilityPanel("files", "Uploads", <FolderOpen size={11} />), capabilityPanel("auth", "Access", <UserRound size={11} />), activityPanel, previewPanel, ...(rail ? [] : [agentPanel])]} />
+
+      {rail && (
+        <aside className="describe-rail" aria-labelledby="describe-rail-title">
+          <header className="describe-rail-head">
+            <h2 id="describe-rail-title"><Sparkles size={14} aria-hidden="true" /> Describe</h2>
+            <span className="describe-rail-tools">
+              <IconButton label="Model settings" onClick={() => setSettingsOpen(true)}><Settings2 size={14} /></IconButton>
+              <IconButton id="describe-rail-fold" label="Fold Describe" aria-expanded onClick={() => foldRail(false)}><PanelRightClose size={14} /></IconButton>
+            </span>
+          </header>
+          {agentBody}
+        </aside>
+      )}
+      {railFolded && (
+        <aside className="describe-strip" aria-label="Describe">
+          <IconButton id="describe-rail-open" label="Open Describe" aria-expanded={false} onClick={() => foldRail(true)}><PanelRightOpen size={14} /></IconButton>
+        </aside>
+      )}
+
+      <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
 
       <AgentSettingsModal
         open={settingsOpen}
@@ -1352,25 +1477,25 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {appSettingsOpen && <Suspense fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>}><AppSettingsDialog key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} importTarget={activeDeployment ? { project: { id: project.id, name: project.name, slug: project.slug }, visibility: activeDeployment.manifest.visibility, onImported: () => window.location.reload() } : undefined} onClose={() => setAppSettingsOpen(false)} onDeploy={() => { setAppSettingsOpen(false); setDeployment(null); setDeployError(""); setDeployOpen(true); }} onSignedOut={refreshOwnerSession} onAddressMoved={(url) => setDeployments((current) => current[project.id] ? { ...current, [project.id]: { ...current[project.id]!, url } } : current)} signInHref={signInHref} /></Suspense>}
+      {appSettingsOpen && <AppSettingsDialog fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>} key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} importTarget={activeDeployment ? { project: { id: project.id, name: project.name, slug: project.slug }, visibility: activeDeployment.manifest.visibility, onImported: () => window.location.reload() } : undefined} onClose={() => setAppSettingsOpen(false)} onSignedOut={refreshOwnerSession} onAddressMoved={(url) => setDeployments((current) => current[project.id] ? { ...current, [project.id]: { ...current[project.id]!, url } } : current)} signInHref={signInHref} onExport={() => { setAppSettingsOpen(false); void exportProject(); }} />}
 
       {platformConfirmation && <Dialog title="Allow the agent to do this?" description={project.name} onClose={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }} footer={<>
         <Button onClick={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Cancel</Button>
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
       {/* After the Deploy dialog, so it paints over it. */}
       {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 
       <Dialog
         open={resetOpen}
-        title={`Delete the rows and files in ${project.name}?`}
-        description={`This deletes the rows and files of ${project.name} on this computer and puts the starter back. A published copy stays.`}
+        title={`Start ${project.name} over?`}
+        description={`Every file of ${project.name} goes back to the first example app, and the test rows and uploads in this browser are deleted. The published app keeps its files, rows and accounts.`}
         onClose={() => setResetOpen(false)}
         footer={<>
           <Button onClick={() => setResetOpen(false)}>Cancel</Button>
-          <Button variant="danger" className="reset-confirm" onClick={() => { setResetOpen(false); resetProject(); }}><RotateCcw size={14} /> Delete the rows and files</Button>
+          <Button variant="danger" className="reset-confirm" onClick={() => { setResetOpen(false); resetProject(); }}><RotateCcw size={14} /> Start over</Button>
         </>}
       >
         {null}
@@ -1402,44 +1527,67 @@ const problemLabels: Record<string, string> = {
 /** Panels the workbench lays out. The File list is drawn inside Files instead. */
 const workbenchPanels: PanelId[] = panelIds.filter((id) => id !== "explorer");
 
-/** Preview in view: beside Files when Files is showing, otherwise brought forward where it is. */
-function withPreviewShowing(current: LayoutState): LayoutState {
-  if (isVisible(current, "preview")) return current;
-  if (!isOpen(current, "preview") && isVisible(current, "code")) {
-    return movePanel(current, "preview", { target: "code", zone: "right" });
-  }
-  return openPanel(current, "preview");
-}
-
-function focusRunningApp(current: LayoutState, target: PanelId): LayoutState {
-  let next = current;
-  for (const id of panelIds) {
-    if (id !== target && isOpen(next, id)) next = closePanel(next, id);
-  }
-  return openPanel(next, target);
-}
-
+/** How many actions the file declares, counted from the JSON even when the check refuses it. */
 function listedActions(source: string): number {
   try {
-    return Object.keys(parseServerActionSource(source).actions).length;
+    const actions = (JSON.parse(source) as { actions?: unknown }).actions;
+    return actions && typeof actions === "object" ? Object.keys(actions).length : 0;
   } catch {
     return 0;
   }
 }
 
-function ActionReadout({ source, visibility }: { source: string; visibility: "public" | "private" }) {
+/** Matches a media query and follows it as the window changes. */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const follow = () => setMatches(media.matches);
+    follow();
+    media.addEventListener("change", follow);
+    return () => media.removeEventListener("change", follow);
+  }, [query]);
+  return matches;
+}
+
+/** How many rows the published app holds, read when the preview is in view. Null until known. */
+function useLiveRowCount(database: HostedDatabaseClient | undefined, active: boolean): number | null {
+  const [rows, setRows] = useState<number | null>(null);
+  useEffect(() => {
+    setRows(null);
+  }, [database]);
+  useEffect(() => {
+    if (!database || !active) return;
+    let live = true;
+    database.inspectDatabase().then((tables) => { if (live) setRows(tables.reduce((sum, table) => sum + table.totalRows, 0)); }, () => undefined);
+    return () => { live = false; };
+  }, [database, active]);
+  return rows;
+}
+
+/**
+ * Above actions.json: the check's refusal in full, never clipped, or what each
+ * action does, folded to one line until opened.
+ */
+/** The button that takes a refusal to its line: the action it names, or the file. */
+function refusedLabel(source: string, refusal: string): string {
+  const spot = refusedSpot(source, refusal);
+  return spot ? `Go to ${spot.action}` : "Go to actions.json";
+}
+
+function ActionReadout({ source, visibility, onJump }: { source: string; visibility: "public" | "private"; onJump: () => void }) {
   const { refusal, lines } = actionReadout(source, visibility);
+  if (refusal) return <Alert tone="danger" className="action-readout-block" title="Deploy refuses this file" action={refusedSpot(source, refusal) ? <Button size="sm" onClick={onJump}>{refusedLabel(source, refusal)}</Button> : undefined}>{refusal}</Alert>;
   return (
-    <div className="action-readout-block">
-      <p className={`action-check ${refusal ? "is-refused" : ""}`}>
-        {refusal ?? "A list that reads rows needs a LIMIT. Every query here names one, so they can leave."}
-      </p>
+    <details className="action-readout-block">
+      <summary>What each action does</summary>
+      <p className="action-readout-note">Every list has a row limit, so the app can move to another machine.</p>
       {lines.length > 0 && (
         <ul className="action-readout">
-          {lines.map((line) => <li key={line}><strong className="action-limit">{line}</strong></li>)}
+          {lines.map((line) => <li key={line}>{line}</li>)}
         </ul>
       )}
-    </div>
+    </details>
   );
 }
 
@@ -1450,6 +1598,25 @@ function describeDelete(project: MiniAppProject, path: string | null): string {
   return count === 0
     ? `${path} is empty. Deleting it removes only the folder.`
     : `${path} and the ${count} file${count === 1 ? "" : "s"} inside it will be removed from the project.`;
+}
+
+type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+const createdDigestKey = (projectId: string) => `created-digest:${projectId}`;
+
+/** What New project wrote, by digest, so the workbench knows while the app is still that placeholder. "pending" until the digest is known. */
+function rememberCreatedDigest(storage: KeyStorage, project: MiniAppProject) {
+  try { storage.setItem(createdDigestKey(project.id), "pending"); } catch { return; }
+  void cachedSourceDigest(project.files).then((digest) => {
+    try { if (storage.getItem(createdDigestKey(project.id)) === "pending") storage.setItem(createdDigestKey(project.id), digest); } catch { /* the button just stays as it is */ }
+  }, () => forgetCreatedDigest(storage, project.id));
+}
+
+function readCreatedDigest(storage: KeyStorage, projectId: string): string | null {
+  try { return storage.getItem(createdDigestKey(projectId)); } catch { return null; }
+}
+
+function forgetCreatedDigest(storage: KeyStorage, projectId: string) {
+  try { storage.removeItem(createdDigestKey(projectId)); } catch { /* nothing to forget */ }
 }
 
 function AccountChip({ session, href }: { session: OwnerSession; href: string }) {

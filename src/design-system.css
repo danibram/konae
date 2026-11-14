@@ -128,7 +128,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
-  box-shadow: var(--ds-shadow);
+  /* Flat by default: the hard offset shadow belongs to dialogs and to the one primary action. */
+  box-shadow: none;
   transition: background 120ms ease, color 120ms ease, translate 80ms ease, box-shadow 80ms ease;
 }
 .ui-button:not(.ui-button-primary):not(.ui-button-ghost):not(.ui-button-danger):hover:not(:disabled) {
@@ -136,11 +137,12 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   color: var(--ds-surface);
   box-shadow: none;
 }
-.ui-button:active:not(:disabled) { translate: var(--ds-press) var(--ds-press); box-shadow: none; }
+.ui-button-primary:active:not(:disabled) { translate: var(--ds-press) var(--ds-press); box-shadow: none; }
 .ui-button-primary {
   border-color: var(--ds-stroke);
   background: var(--ds-accent);
   color: var(--ds-on-accent);
+  box-shadow: var(--ds-shadow);
 }
 .ui-button-primary:hover:not(:disabled) { background: var(--ds-accent-hover); color: var(--ds-on-accent); box-shadow: var(--ds-shadow-sm); }
 .ui-button-ghost {
@@ -167,7 +169,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .ui-button-danger:hover:not(:disabled) { background: #4b2932; }
 }
 .ui-button-sm { min-height: 32px; padding: 0 10px; font-size: 11px; }
-.ui-button-icon, .ui-button.ui-button-icon { width: 32px; min-height: 32px; padding: 0; flex-shrink: 0; text-decoration: none; border: 1px solid var(--ds-stroke); background: var(--ds-field); color: var(--ds-text); box-shadow: var(--ds-shadow-sm); }
+.ui-button-icon, .ui-button.ui-button-icon { width: 32px; min-height: 32px; padding: 0; flex-shrink: 0; text-decoration: none; border: 1px solid var(--ds-stroke); background: var(--ds-field); color: var(--ds-text); box-shadow: none; }
 .ui-button:disabled {
   opacity: 0.4;
   color: var(--ds-text);
@@ -187,17 +189,19 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   color: var(--ds-text);
   background: var(--ds-field);
   font: 400 13px/1.5 var(--ds-font);
-  box-shadow: var(--ds-shadow-sm);
+  box-shadow: none;
 }
+/* A field shows focus with the same 2px outline as buttons and links; the tint alone is under 3:1 in both themes. */
 .ui-input:focus, .ui-select:focus, .ui-textarea:focus {
-  outline: 0;
+  outline: 2px solid var(--ds-blue);
+  outline-offset: 1px;
   background: var(--ds-accent-soft);
 }
 .ui-input::placeholder, .ui-textarea::placeholder { color: var(--ds-muted); }
 .ui-input:disabled { background: var(--ds-subtle); color: var(--ds-muted); }
 .ui-input[aria-invalid="true"] { border-color: var(--ds-danger); }
 .ui-field { display: grid; gap: 7px; align-content: start; font: 600 12px/1.5 var(--ds-font); }
-.ui-field small { color: var(--ds-muted); font-size: 11px; font-weight: 400; font-family: var(--ds-mono); }
+.ui-field small { color: var(--ds-muted); font: 400 12px/1.45 var(--ds-font); }
 .ui-field:has([aria-invalid="true"]) small { color: var(--ds-danger); }
 
 .ui-badge {

@@ -1272,6 +1272,8 @@ mod tests {
             slug: "app".into(),
             url: "http://copy-test.localhost".into(),
             created_at: now_ms(),
+            released_at: 0,
+            source_digest: None,
             manifest: json!({"visibility": "public"}),
             hostname: "copy-test.localhost".into(),
             actions: "{}".into(),

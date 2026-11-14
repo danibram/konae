@@ -47,7 +47,16 @@ export type DeploymentRecord = {
   projectId: string;
   projectName: string;
   url: string;
+  /** The first publish. */
   createdAt: number;
+  /** The publish, import or folder start that installed the release it runs. Older Kernels omit it; read it with releasedAt(). */
+  releasedAt?: number;
+  /** The actions.json of the release it runs. */
+  actions?: string;
+  /** Names the release. A new publish names a new one. */
+  artifactVersion?: string;
+  /** The digest of the sources the release was built from (source-digest.ts). Older Kernels and older records omit it. */
+  sourceDigest?: string;
   manifest: CapsuleManifest;
 };
 

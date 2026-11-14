@@ -130,6 +130,15 @@ pub struct Deployment {
     pub slug: String,
     pub url: String,
     pub created_at: u64,
+    /// When the release `dist/` holds was installed: the last publish,
+    /// import or folder start that brought new files.
+    #[serde(default)]
+    pub released_at: u64,
+    /// The digest of the sources that release was built from
+    /// (`sources::digest`). Absent on a record written before the Kernel
+    /// kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
     pub manifest: Value,
     pub hostname: String,
     pub actions: String,
@@ -171,6 +180,13 @@ pub struct Settings {
 pub struct Installed {
     pub hostname: String,
     pub created_at: u64,
+    /// When the release `dist/` holds was installed. A record written before
+    /// the Kernel kept it reads as `created_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at: Option<u64>,
+    /// The digest of the sources the release `dist/` holds was built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
     /// The `actions.json` of the release `dist/` holds.
     pub actions: String,
     pub artifact_version: String,
@@ -230,6 +246,8 @@ impl Settings {
             slug: self.slug,
             url: deployment_url(public_origin, &installed.hostname),
             created_at: installed.created_at,
+            released_at: installed.released_at.unwrap_or(installed.created_at),
+            source_digest: installed.source_digest,
             manifest,
             hostname: installed.hostname,
             actions: installed.actions,
@@ -844,6 +862,8 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             .as_ref()
             .map(|item| item.created_at)
             .unwrap_or_else(now_ms),
+        released_at: now_ms(),
+        source_digest: Some(sources::digest(input.project.files.iter().map(|(path, text)| (path.as_str(), text.as_bytes())))),
         manifest,
         hostname: hostname.clone(),
         actions,
@@ -3289,6 +3309,8 @@ pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Re
     let installed = Installed {
         hostname: deployment.hostname.clone(),
         created_at: deployment.created_at,
+        released_at: Some(deployment.released_at),
+        source_digest: deployment.source_digest.clone(),
         actions: deployment.actions.clone(),
         artifact_version: deployment.artifact_version.clone(),
     };
@@ -3303,6 +3325,8 @@ pub fn write_record_for_test(root: &Path, deployment: &Deployment) {
     let installed = Installed {
         hostname: deployment.hostname.clone(),
         created_at: deployment.created_at,
+        released_at: Some(deployment.released_at),
+        source_digest: deployment.source_digest.clone(),
         actions: deployment.actions.clone(),
         artifact_version: deployment.artifact_version.clone(),
     };
@@ -3969,6 +3993,8 @@ pub mod tests {
             slug: "app".into(),
             url: "http://login-test.localhost".into(),
             created_at: now_ms(),
+            released_at: 0,
+            source_digest: None,
             manifest: json!({"visibility": visibility}),
             hostname: "login-test.localhost".into(),
             actions: "{}".into(),
@@ -4825,8 +4851,65 @@ pub mod tests {
     #[test]
     fn a_private_apps_files_stay_out_of_shared_caches() {
         let deployment = Settings::new("app", "App", "app", &json!({"visibility": "private"}))
-            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, actions: "{}".into(), artifact_version: "v1".into() }, "http://localhost");
+            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, released_at: None, source_digest: None, actions: "{}".into(), artifact_version: "v1".into() }, "http://localhost");
         assert_eq!(ArtifactCache::of(&deployment).control(), "private, no-cache");
+    }
+
+    #[test]
+    fn a_record_without_a_release_time_reads_its_first_publish() {
+        let installed: Installed =
+            serde_json::from_value(json!({"hostname": "app.localhost", "createdAt": 7, "actions": "{}", "artifactVersion": "v1"})).unwrap();
+        let deployment = Settings::new("app", "App", "app", &json!({"visibility": "public"})).deployment(installed, "http://localhost");
+        assert_eq!(deployment.released_at, 7);
+        assert_eq!(serde_json::to_value(&deployment).unwrap()["releasedAt"], json!(7));
+    }
+
+    #[tokio::test]
+    async fn a_republish_moves_the_release_time_and_keeps_the_first_publish() {
+        let root = std::env::temp_dir().join(format!("konae-released-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
+        assert!(first["releasedAt"].as_u64().unwrap() >= first["createdAt"].as_u64().unwrap());
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = deploy_files(&state, json!({"index.html": "<p>two</p>"})).await;
+        assert_eq!(second["createdAt"], first["createdAt"]);
+        assert!(second["releasedAt"].as_u64().unwrap() > first["releasedAt"].as_u64().unwrap());
+        let id = second["id"].as_str().unwrap();
+        let record: Value = serde_json::from_slice(&std::fs::read(crate::layout::record(&root, id)).unwrap()).unwrap();
+        assert_eq!(record["releasedAt"], second["releasedAt"]);
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert_eq!(json!(loaded.values().next().unwrap().released_at), second["releasedAt"]);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_release_names_the_digest_of_the_sources_it_carried() {
+        let root = std::env::temp_dir().join(format!("konae-source-digest-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
+        let sources = [("actions.json", "{\"version\":1,\"actions\":{}}"), ("schema.sql", "")];
+        let expected = sources::digest(sources.iter().map(|(path, text)| (*path, text.as_bytes())));
+        assert_eq!(first["sourceDigest"], json!(expected));
+        let id = first["id"].as_str().unwrap();
+        let record: Value = serde_json::from_slice(&std::fs::read(crate::layout::record(&root, id)).unwrap()).unwrap();
+        assert_eq!(record["sourceDigest"], json!(expected));
+        // A write that is not a release keeps the digest.
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        persist_deployment(&state, &deployment).await.unwrap();
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert_eq!(loaded.values().next().unwrap().source_digest.as_deref(), Some(expected.as_str()));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn a_record_without_a_source_digest_names_none() {
+        let installed: Installed =
+            serde_json::from_value(json!({"hostname": "app.localhost", "createdAt": 7, "actions": "{}", "artifactVersion": "v1"})).unwrap();
+        let deployment = Settings::new("app", "App", "app", &json!({"visibility": "public"})).deployment(installed, "http://localhost");
+        assert_eq!(deployment.source_digest, None);
+        assert!(serde_json::to_value(&deployment).unwrap().get("sourceDigest").is_none());
     }
 
     #[tokio::test]

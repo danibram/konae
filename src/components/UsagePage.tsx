@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUpRight, BarChart3, RefreshCw } from "lucide-react";
 import { WorkspaceNav } from "./WorkspaceNav";
-import { Alert, Badge, BarList, Breadcrumb, Button, EmptyState, LineChart, LoadingBlock, Segmented, Select } from "./ui";
+import { Alert, Badge, BarList, Breadcrumb, Button, Disclosure, EmptyState, LineChart, LoadingBlock, Segmented, Select } from "./ui";
 import { UsageLoadingShapes } from "./BootShell";
 import { useLoadingHold } from "./loading-hold";
 import type { OwnerSession } from "./owner-session";
 import { readOwnerProjectCount } from "../lib/project-sources";
-import { dailyActiveAccounts, dailyExecutions, dailyUsage, executionTotals, featureRows, formatBytes, kindTotal, noticeOutcomes, outcomeLabel, pageViews, readUsageOverview, readUsageSummary, storageParts, storageRows, usageActivity, usageRange, type UsageApp, type UsageSummary } from "../lib/usage";
+import { dailyActiveAccounts, dailyExecutions, dailyUsage, executionTotals, featureRows, formatBytes, kindTotal, noticeOutcomes, outcomeLabel, pageViews, readUsageOverview, readUsageSummary, storageParts, storageRows, usageRange, type UsageApp, type UsageSummary } from "../lib/usage";
 import { DailyChart } from "./UsageChart";
 import "./usage.css";
 
@@ -14,8 +14,17 @@ const number = new Intl.NumberFormat("en");
 const dateTime = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
 const formatTime = (at: number) => dateTime.format(at);
 const dayLabel = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
+const yearDayLabel = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+const clock = new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+/** The period in one format: "Oct 16 to Nov 14", with the year only when the period crosses one. */
+export function rangeLabel(from: string, to: string): string {
+  const format = from.slice(0, 4) === to.slice(0, 4) ? dayLabel : yearDayLabel;
+  return `${format.format(Date.parse(`${from}T00:00:00Z`))} to ${format.format(Date.parse(`${to}T00:00:00Z`))}`;
+}
 const deploymentId = () => new URLSearchParams(window.location.search).get("deployment");
 const projectHref = (projectId: string) => `/app/${encodeURIComponent(projectId)}`;
+/** An app's address as the project cards write it: host and port, no scheme. */
+const addressOf = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 const outcomeColor = (outcome: string) => outcome === "ok" ? "var(--ds-s1)" : outcome === "failed" ? "var(--ds-danger)" : outcome === "refused" ? "var(--ds-warning-fill)" : undefined;
 const outcomeTone = (outcome: string) => outcome === "ok" ? "success" : outcome === "failed" ? "danger" : outcome === "refused" ? "warning" : "neutral";
 
@@ -75,54 +84,58 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
   // The first read keeps its skeleton long enough that it never flashes.
   const reading = useLoadingHold(!updatedAt && !error, { sinceNavigation: true });
   const range = usageRange(period);
+  const title = selected ? summary?.projectName : undefined;
+  useEffect(() => { document.title = title ? `${title} usage · Konae` : "Usage · Konae"; }, [title]);
   return <div className="account-home">
     <WorkspaceNav active="usage" projectCount={projectCount} ownerSession={ownerSession} />
     <main className="account-main"><section className="account-content usage-main">
       {selected && <Breadcrumb items={[{ label: "Usage", href: "/usage" }, { label: summary?.projectName ?? "App" }]} />}
-      <header className="account-hero usage-heading">
-        <div><h1>{selected ? summary?.projectName ?? "App usage" : "Usage"}</h1>
-          <p>{selected ? "What this published app did in the period, and what it could not do." : "What your published apps did in the period. Drafts are listed without figures until you publish them."}</p></div>
-        <div className="usage-controls"><label>Period<Select value={period} onChange={(event) => setPeriod(Number(event.target.value))}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></Select></label>
-          <Button disabled={pending} onClick={() => void load()}><RefreshCw size={14} /> Refresh</Button></div>
+      <header className="usage-heading">
+        <h1>{selected ? summary?.projectName ?? "App usage" : "Usage"}</h1>
+        <div className="usage-controls">
+          <label className="usage-period">Period<Select value={period} onChange={(event) => setPeriod(Number(event.target.value))}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></Select></label>
+          <Button disabled={pending} onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Refresh</Button>
+        </div>
       </header>
-      <div className="usage-range"><span>{range.from} to {range.to} · UTC</span><span>{updatedAt ? `Updated ${formatTime(updatedAt)}` : "Waiting for Kernel data"}</span></div>
+      <p className="usage-range">{selected ? "What this published app did" : "What your published apps did"} from {rangeLabel(range.from, range.to)}, counted in UTC days. {updatedAt ? `Updated at ${clock.format(updatedAt)}, your time.` : "Reading usage…"}</p>
       {error && <Alert tone="danger" className="usage-error" title="Usage could not be refreshed" action={<Button onClick={() => void load()}>Try again</Button>}>{updatedAt ? "The figures below are from the last successful read. " : ""}{error}</Alert>}
       {reading && <LoadingBlock label="Loading Konae" sinceNavigation><UsageLoadingShapes /></LoadingBlock>}
       {!selected && updatedAt && !reading && <AccountUsage apps={apps} />}
       {!selected && nextCursor && <Button disabled={pending} onClick={() => void load(nextCursor)}>Load more apps</Button>}
       {selected && summary && !reading && <AppUsage summary={summary} />}
-      <p className="usage-footnote">Counts are approximate and belong to each app's Kernel. Editor previews are excluded. Page views are browser loads of the app's pages, not people. People are counted only when they are signed in to an app account; a visitor without an account is never counted as a person. The page refreshes every minute while it is open.</p>
+      <p className="usage-footnote">Counts are approximate. People are counted only when they are signed in to the app.</p>
+      <Disclosure summary="How these are counted">{selected && summary && <AppCounting summary={summary} />}<p>Editor previews are excluded. Page views are browser loads of the app's pages, not people. A visitor without an account is never counted as a person. Each app keeps its own counts, and the page refreshes every minute while it is open.</p>{!selected && <p>Active accounts count signed-in app accounts, each app on its own, so one person with accounts in two apps counts in both. Storage is what each app takes now, whatever the period. Actions, results, sign-ins and file activity appear on each app's own page.</p>}</Disclosure>
     </section></main>
   </div>;
 }
 
 function AccountUsage({ apps }: { apps: UsageApp[] }) {
-  if (!apps.length) return <EmptyState className="usage-empty" icon={<BarChart3 size={22} />} title="No apps yet" description="Create a project and publish it. Its usage appears here." action={<a className="ui-button ui-button-primary" href="/">Go to projects</a>} />;
+  if (!apps.length) return <EmptyState className="usage-empty" icon={<BarChart3 size={22} />} title="No apps yet" description="Create a project and deploy it. Its usage appears here." action={<a className="ui-button ui-button-primary" href="/">Go to projects</a>} />;
+  // Published apps fill the table; drafts have nothing recorded, so they fold into one line under it.
+  const drafts = apps.filter((app) => !app.summary && !app.error);
+  const listed = [...apps.filter((app) => app.summary), ...apps.filter((app) => !app.summary && app.error)];
   return <><OverviewCharts apps={apps} /><section aria-labelledby="usage-apps-heading"><h2 id="usage-apps-heading">Apps</h2>
-    <div className="ui-table-scroll"><table className="ui-table"><caption>Activity in the selected period. Open an app for feature details.</caption><thead><tr><th scope="col">App</th><th scope="col">Page views</th><th scope="col">Active accounts</th><th scope="col">Recorded operations</th><th scope="col">Execution results</th><th scope="col">Features with activity</th><th scope="col">Latest recorded day</th><th scope="col">Storage</th><th scope="col">Usage</th></tr></thead>
-      <tbody>{apps.map((app) => {
+    <div className="ui-table-scroll"><table className="ui-table usage-apps"><caption>Each published app in the period. Its own page has actions, results and features.</caption><thead><tr><th scope="col">App</th><th scope="col">Page views</th><th scope="col">Active accounts</th><th scope="col">Storage</th><th scope="col"><span className="sr-only">Detail</span></th></tr></thead>
+      <tbody>{listed.map((app) => {
         const value = app.summary;
-        if (!value) return <tr key={app.projectId}><th scope="row">{app.name}<small>{app.error ? "Read failed" : "Draft"}</small></th>
-          <td colSpan={7} data-label="Usage">{app.error ?? "Not published, so nothing is recorded. Publish it to collect usage."}</td>
+        if (!value) return <tr key={app.projectId}><th scope="row">{app.name}<small>Read failed</small></th>
+          <td colSpan={3} data-label="Usage">{app.error}</td>
           <td data-label="Project"><a href={projectHref(app.projectId)}>Open project</a></td></tr>;
-        const features = featureRows(value).filter((f) => f.count > 0 || f.failures > 0 || f.refused > 0)
-          .map((f) => f.id === "notify" && f.notSent ? <span key={f.id} className="usage-failure">{f.notSent === f.count ? `${f.name} (none sent)` : `${f.name} (${number.format(f.notSent)} not sent)`}</span> : <span key={f.id}>{f.name}</span>);
-        const latest = [...value.usage.days.map((d) => d.day), ...value.metrics.map((m) => m.day)].sort().at(-1);
-        const outcomes = executionTotals(value.metrics);
-        const hasOutcomes = value.metrics.some((m) => m.feature === "execution");
-        return <tr key={app.projectId}><th scope="row">{app.name}<small><a href={value.url} target="_blank" rel="noopener">{new URL(value.url).hostname}</a></small></th>
+        // Only trouble earns a line in the overview; the counts of what went well wait on the app's page.
+        const failed = executionTotals(value.metrics).failed ?? 0;
+        const notSent = noticeOutcomes(value).notSent;
+        const trouble = [failed > 0 ? `${number.format(failed)} failed` : "", notSent > 0 ? `${number.format(notSent)} ${notSent === 1 ? "email" : "emails"} not sent` : ""].filter(Boolean).join(", ");
+        return <tr key={app.projectId}><th scope="row">{app.name}<small><a className="usage-address" href={value.url} target="_blank" rel="noopener">{addressOf(value.url)}</a></small>{trouble && <small className="usage-failure">{trouble}</small>}</th>
           <td data-label="Page views">{number.format(kindTotal(value, "page_view"))}</td>
           <td data-label="Active accounts">{number.format(value.accounts.active)}</td>
-          <td data-label="Operations">{value.usage.days.length || hasOutcomes ? number.format(usageActivity(value)) : "No data yet"}</td>
-          <td data-label="Results">{hasOutcomes ? <span className="usage-overview-results"><span>{number.format(outcomes.ok ?? 0)} correct</span><span>{number.format(outcomes.refused ?? 0)} refused</span><span className={(outcomes.failed ?? 0) > 0 ? "usage-failure" : undefined}>{number.format(outcomes.failed ?? 0)} failed</span>{(outcomes.unchanged ?? 0) > 0 && <span>{number.format(outcomes.unchanged)} no changes</span>}</span> : "No outcomes yet"}</td>
-          <td data-label="Active features"><span>{features.length ? features.flatMap((f, i) => i ? [", ", f] : [f]) : "No recorded activity"}</span></td>
-          <td data-label="Latest day">{latest ?? "No data"}</td><td data-label="Storage">{formatBytes(value.storage.total)}</td><td data-label="Detail"><a href={`/usage?deployment=${encodeURIComponent(value.deploymentId)}`} aria-label={`View usage for ${app.name}`}>View usage <ArrowUpRight size={13} /></a></td></tr>;
+          <td data-label="Storage">{formatBytes(value.storage.total)}</td>
+          <td><a href={`/usage?deployment=${encodeURIComponent(value.deploymentId)}`} aria-label={`View usage for ${app.name}`}>View usage</a></td></tr>;
       })}</tbody></table></div>
-    <p className="usage-note">Recorded operations count successful action calls, HTTP requests, scheduled attempts and queued service calls. Results cover instrumented executions only and may cover less history than operations. Authentication and file activity appear in the feature detail. Active accounts count signed-in app accounts, each app on its own, so one person with accounts in two apps counts in both. Storage is what each app takes now, whatever the period.</p>
+    {drafts.length > 0 && <p className="usage-drafts">{drafts.length === 1 ? `${drafts[0].name} is a draft and has` : `${drafts.length} drafts have`} no usage until deployed: {drafts.map((app, index) => <span key={app.projectId}>{index > 0 && ", "}<a href={projectHref(app.projectId)}>{app.name}</a></span>)}.</p>}
   </section></>;
 }
 
-/** The apps side by side: who is used, and who takes the room. */
+/** The published apps added up; the table under it splits them by app. */
 function OverviewCharts({ apps }: { apps: UsageApp[] }) {
   const published = apps.flatMap((app) => app.summary ? [{ app, summary: app.summary }] : []);
   if (!published.length) return null;
@@ -134,20 +147,14 @@ function OverviewCharts({ apps }: { apps: UsageApp[] }) {
   ] as const;
   return <section aria-labelledby="usage-overview-heading"><h2 id="usage-overview-heading">All apps</h2>
     <dl className="ui-stats">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-    <div className="usage-charts">
-      <div className="usage-chart-card"><BarList title="Recorded operations by app" unit="operations" labelHeading="App"
-        rows={published.map(({ app, summary }) => ({ key: app.projectId, label: <a href={`/usage?deployment=${encodeURIComponent(summary.deploymentId)}`}>{app.name}</a>, value: usageActivity(summary), detail: `${number.format(kindTotal(summary, "page_view"))} page views` }))}
-        empty="No app recorded an operation in this period." /></div>
-      <div className="usage-chart-card"><BarList title="Storage by app" unit="bytes" labelHeading="App" format={formatBytes}
-        rows={published.map(({ app, summary }) => ({ key: app.projectId, label: <a href={`/usage?deployment=${encodeURIComponent(summary.deploymentId)}`}>{app.name}</a>, value: summary.storage.total, detail: `${number.format(summary.storage.files)} uploaded ${summary.storage.files === 1 ? "file" : "files"}` }))}
-        empty="No app stores anything yet." /></div>
-    </div>
   </section>;
 }
 
 function AppUsage({ summary }: { summary: UsageSummary }) {
   const rows = featureRows(summary);
   const coverage = summary.coverage;
+  const pruned = coverage.prunedThrough !== null && coverage.prunedThrough !== undefined && coverage.prunedThrough >= Date.parse(`${summary.usage.from}T00:00:00Z`);
+  const incomplete = pruned || coverage.queueFlushed === false || coverage.installationDroppedSinceRestart > 0 || coverage.installationWriteErrorsSinceRestart > 0;
   const outcomes = executionTotals(summary.metrics);
   const notices = noticeOutcomes(summary);
   const scheduled = summary.actions.some((a) => a.schedule) || (outcomes.unchanged ?? 0) > 0;
@@ -155,14 +162,14 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   const signalNames = [...new Set([...summary.actions.flatMap((a) => a.signal ? [a.signal.name] : []), ...summary.metrics.filter((m) => m.feature === "signal").map((m) => m.name)])].sort();
   const actionNames = [...new Set([...summary.actions.filter((a) => a.kind !== "call").map((a) => a.name), ...summary.metrics.filter((m) => m.feature === "execution").map((m) => m.name)])].sort();
   return <>
-    <div className="usage-app-link"><a href={summary.url} target="_blank" rel="noopener">{new URL(summary.url).hostname} <ArrowUpRight size={14} /></a><a href={projectHref(summary.projectId)}>Open project</a></div>
+    <div className="usage-app-link"><a className="usage-address" href={summary.url} target="_blank" rel="noopener">{addressOf(summary.url)} <ArrowUpRight size={14} aria-hidden="true" /></a><a href={projectHref(summary.projectId)}>Open project</a></div>
     {notices.notSent > 0 && <Alert tone="warning" className="usage-error" title={`${number.format(notices.notSent)} email ${notices.notSent === 1 ? "notice was" : "notices were"} not sent`}>{[...new Set(notices.reasons.map((r) => r.label))].map((label) => label[0].toUpperCase() + label.slice(1)).join(". ")}. The actions themselves completed; only the email is missing.{notices.reasons.some((r) => r.reason === "no-transport") && " Whoever runs this installation can connect an email service."}</Alert>}
-    <section className="usage-coverage" aria-label="Data coverage"><p>{coverage.startedAt ? `Execution outcomes and business event totals have been collected since ${formatTime(coverage.startedAt)}.` : "No execution outcome history yet. It starts when this Kernel records the next operation."} Earlier operation counts may still appear below.</p>
-      <p>Up to {coverage.retentionDays} days are retained, subject to storage limits. Blank history does not prove a feature was never used.</p>
-      {coverage.prunedThrough !== null && coverage.prunedThrough !== undefined && coverage.prunedThrough >= Date.parse(`${summary.usage.from}T00:00:00Z`) && <p>Retention has removed some records through {new Date(coverage.prunedThrough).toISOString().slice(0, 10)}. This period is incomplete.</p>}
+    {/* Only what makes this period's numbers incomplete stays in view; how they are counted waits in the disclosure. */}
+    {incomplete && <section className="usage-coverage" aria-label="Data coverage">
+      {pruned && <p>Retention has removed some records through {new Date(coverage.prunedThrough ?? 0).toISOString().slice(0, 10)}. This period is incomplete.</p>}
       {coverage.queueFlushed === false && <p role="status">The capture queue did not finish writing before this read. Recent activity may be missing. Refresh to try again.</p>}
-      {(coverage.installationDroppedSinceRestart > 0 || coverage.installationWriteErrorsSinceRestart > 0) && <p role="status">This Kernel has dropped {number.format(coverage.installationDroppedSinceRestart)} entries and encountered {number.format(coverage.installationWriteErrorsSinceRestart)} write errors since restart. These totals cover the whole installation and cannot be attributed to this app.</p>}
-    </section>
+      {(coverage.installationDroppedSinceRestart > 0 || coverage.installationWriteErrorsSinceRestart > 0) && <p role="status">This installation has dropped {number.format(coverage.installationDroppedSinceRestart)} entries and encountered {number.format(coverage.installationWriteErrorsSinceRestart)} write errors since restart. These totals cover the whole installation and cannot be attributed to this app.</p>}
+    </section>}
     <Traffic summary={summary} />
     <People summary={summary} />
     <Storage summary={summary} />
@@ -182,7 +189,7 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
         return [...groups.values()].map((g) => <tr key={`${name}/${g.origin}/${g.outcome}`}><th scope="row">{name}</th><td data-label="Origin">{g.origin}</td><td data-label="Result"><Badge tone={outcomeTone(g.outcome)}>{outcomeLabel(g.outcome)}</Badge></td><td data-label="Count">{number.format(g.count)}</td><td data-label="Last activity">{formatTime(g.lastAt)}</td></tr>);
       })}{!actionNames.length && <tr><td colSpan={5}>No actions declared or recorded.</td></tr>}</tbody></table></div>
     </section>
-    <section aria-labelledby="usage-events-heading"><h2 id="usage-events-heading">Business events</h2><p className="usage-note">Events declared by the app, recorded by the Kernel. Completed mutations emit an event only when they change a row. Daily totals outlive the retained event detail.</p>
+    <section aria-labelledby="usage-events-heading"><h2 id="usage-events-heading">Business events</h2><p className="usage-note">Events the app declares, as it recorded them. Completed mutations emit an event only when they change a row. Daily totals outlive the retained event detail.</p>
       {signalNames.length ? <ul className="usage-signals">{signalNames.map((name) => <li key={name}><span>{name}</span><strong>{number.format(summary.metrics.filter((m) => m.feature === "signal" && m.name === name).reduce((n, m) => n + m.count, 0))}</strong><span>recorded in instrumented history</span></li>)}</ul> : <p>No business events declared or recorded.</p>}
     </section>
     <section aria-labelledby="usage-delivery-heading"><h2 id="usage-delivery-heading">Delivery status</h2><p className="usage-note">Current state of retained jobs created in the selected period. Older job records may have been removed. Queued calls and accepted email are not confirmed deliveries.</p>
@@ -191,13 +198,23 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   </>;
 }
 
+/** The rules behind one app's numbers, read on demand under "How these are counted". */
+function AppCounting({ summary }: { summary: UsageSummary }) {
+  const coverage = summary.coverage;
+  return <>
+    <p>{coverage.startedAt ? `Execution outcomes and business event totals have been collected since ${formatTime(coverage.startedAt)}.` : "No execution outcome history yet. It starts with the next operation."} Earlier operation counts may still appear. Up to {coverage.retentionDays} days are kept, subject to storage limits, so a blank history does not prove a feature was never used.</p>
+    <p>A page view counts when a browser opens one of the app's pages, by the file it served. Scripts, crawlers and prefetches are not counted. A single-page app counts its first load, not the screens it shows after that.</p>
+    <p>App opens count session checks made while signed in. Actions count successful calls, including service calls accepted into the queue. An owner who entered as an account counts nothing.{summary.accounts.startedAt ? ` Accounts are counted since ${formatTime(summary.accounts.startedAt)}.` : ""}</p>
+    <p>Storage is what the app takes on this installation now, whatever the period. An export carries all of it except backups. Uploaded files count what their index records, wherever the bytes are kept.</p>
+  </>;
+}
+
 function Traffic({ summary }: { summary: UsageSummary }) {
   const pages = pageViews(summary);
   const tiles = [["Page views", kindTotal(summary, "page_view")], ["Sessions opened", kindTotal(summary, "session")], ["Signups", kindTotal(summary, "signup")], ["Sign-ins", kindTotal(summary, "login")]] as const;
   return <section aria-labelledby="usage-traffic-heading"><h2 id="usage-traffic-heading">Traffic</h2>
-    <p className="usage-note">The Kernel counts a page view when a browser opens one of the app's pages, by the file it served. Scripts, crawlers and prefetches are not counted. A single-page app counts its first load, not the screens it shows after that.</p>
     <dl className="ui-stats">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{number.format(value)}</dd></div>)}</dl>
-    <DailyChart title="Page views per day" unit="page views" points={dailyUsage(summary, "page_view")} empty="No page views recorded in this period. Views count from the first browser visit after this Kernel was updated." />
+    <DailyChart title="Page views per day" unit="page views" points={dailyUsage(summary, "page_view")} empty="No page views recorded in this period. Views count from the first browser visit after this installation was updated." />
     {pages.length > 1 && <div className="ui-table-scroll"><table className="ui-table"><caption>Page views by page in this period.</caption><thead><tr><th scope="col">Page</th><th scope="col">Views</th></tr></thead>
       <tbody>{pages.map((row) => <tr key={row.page}><th scope="row">{row.page}</th><td data-label="Views">{number.format(row.count)}</td></tr>)}</tbody></table></div>}
   </section>;
@@ -211,7 +228,6 @@ function People({ summary }: { summary: UsageSummary }) {
   const name = (row: { email: string | null; account: string }) => row.email ?? `Account removed (${row.account.slice(0, 8)})`;
   const tiles = [["Active accounts", accounts.active], ["App opens", accounts.opens], ["Actions", accounts.actions]] as const;
   return <section aria-labelledby="usage-people-heading">{heading}
-    <p className="usage-note">App opens count session checks made while signed in. Actions count successful calls, including service calls accepted into the queue. A visitor without an account is never counted as a person, and an owner who entered as an account counts nothing.{accounts.startedAt ? ` Counted since ${formatTime(accounts.startedAt)}.` : ""}</p>
     <dl className="ui-stats">{tiles.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{number.format(value)}</dd></div>)}</dl>
     <div className="usage-charts">
       <div className="usage-chart-card"><LineChart title="Active accounts per day" unit="accounts" labels={days.map((d) => dayLabel.format(Date.parse(`${d.day}T00:00:00Z`)))}
@@ -238,7 +254,6 @@ function Storage({ summary }: { summary: UsageSummary }) {
   const rows = storageRows(storage);
   const backups = storage.parts.find((part) => part.part === "backups");
   return <section aria-labelledby="usage-storage-heading">{heading}
-    <p className="usage-note">What the app takes on this installation now, whatever the period. An export carries all of it except backups. Uploaded files count what their index records, wherever the bytes are kept.</p>
     <div className="usage-chart-card"><BarList title="Storage by part" unit="bytes" labelHeading="Part" format={formatBytes} total={storage.total}
       rows={rows.map((row) => ({ key: row.part, label: row.name, value: row.bytes, tone: row.tone,
         detail: [row.part === "files" ? `${number.format(storage.files)} ${storage.files === 1 ? "file" : "files"}` : storageParts[row.part]?.description, row.limit ? `${row.bytes > 0 && (row.share ?? 0) < 0.01 ? "Under 1%" : `${Math.round((row.share ?? 0) * 100)}%`} of the ${formatBytes(row.limit)} limit` : null].filter(Boolean).join(" · ") }))}

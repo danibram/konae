@@ -1,9 +1,10 @@
-import { Box, Plus } from "lucide-react";
+import { Box } from "lucide-react";
 import { type ReactNode } from "react";
 import { WorkspaceNav } from "./WorkspaceNav";
 import type { OwnerSession } from "./owner-session";
-import { Button, Card, LoadingBlock, Select, Skeleton } from "./ui";
+import { Button, LoadingBlock, Select, Skeleton } from "./ui";
 import "./usage.css";
+import "./project-list.css";
 
 /**
  * What the owner sees from the first paint until the real screen is ready.
@@ -26,47 +27,39 @@ export function BootShell({ kind = bootKindFor(window.location.pathname), ownerS
   return <div className="account-home">
     <WorkspaceNav active={kind} ownerSession={ownerSession} />
     <main className="account-main" aria-busy="true">
-      {kind === "usage" ? <UsageBoot label={label} /> : kind === "design-system" ? <DesignSystemBoot label={label} /> : <ProjectsBoot label={label} />}
+      {kind === "usage" ? <UsageBoot label={label} /> : kind === "design-system" ? <DesignSystemBoot label={label} /> : <ProjectsBoot label={label} signedIn={ownerSession.state === "signed-in"} />}
     </main>
   </div>;
 }
 
-function ProjectsBoot({ label }: { label: string }) {
-  return <section className="account-content">
-    <div className="account-hero">
-      <Button variant="primary" className="new-project-button" disabled><Plus size={15} /> New project</Button>
-      <h1>Your apps</h1>
-      <p className="hero-note">Drafts open in the editor. Publish an app to give it a live address.</p>
-    </div>
-    <div className="project-list-heading">
-      <div><p>All projects</p><Skeleton width={72} height={21} /></div>
-      <button type="button" className="project-sort" disabled>Last updated ↓</button>
-    </div>
-    <LoadingBlock label={label} sinceNavigation className="dashboard-app-group">
-      <Skeleton width={110} height={30} />
-      <Skeleton width="60%" height={22} />
-      <div className="project-grid">
-        <Card className="project-card">
-          <div className="project-card-preview boot-preview"><Skeleton height="100%" radius={0} /></div>
-          <div className="project-card-body boot-card-body">
-            <Skeleton width="55%" height={38} />
-            <Skeleton width="85%" height={14} className="boot-gap" />
-            <footer><Skeleton width={96} height={36} /><Skeleton width={96} height={36} /><Skeleton width={96} height={36} /></footer>
-          </div>
-        </Card>
-      </div>
-    </LoadingBlock>
+function ProjectsBoot({ label, signedIn }: { label: string; signedIn: boolean }) {
+  // Until the session is known nothing is drawn but the frame: a signed-out visit leaves for sign-in without a flash of the list.
+  return <section className="account-content project-list">
+    {signedIn && <>
+      <header className="project-list-head"><h1>Projects</h1><Skeleton width={128} height={36} /></header>
+      <LoadingBlock label={label} sinceNavigation className="project-list-boot">
+        <div className="project-list-tools"><Skeleton width={320} height={40} /><Skeleton width={180} height={40} /></div>
+        <Skeleton width={90} height={18} className="boot-gap" />
+        <ul className="project-cards">
+          {[0, 1, 2].map((index) => <li key={index} className="project-card-item">
+            <Skeleton width="60%" height={20} />
+            <Skeleton width="90%" height={14} className="boot-gap" />
+            <Skeleton width="45%" height={14} className="boot-gap" />
+          </li>)}
+        </ul>
+      </LoadingBlock>
+    </>}
   </section>;
 }
 
 function UsageBoot({ label }: { label: string }) {
   return <section className="account-content usage-main">
-    <header className="account-hero usage-heading">
-      <div><h1>Usage</h1><p>What your published apps did in the period. Drafts are listed without figures until you publish them.</p></div>
-      <div className="usage-controls"><label>Period<Select value={30} disabled onChange={() => undefined}><option value={30}>Last 30 days</option></Select></label>
+    <header className="usage-heading">
+      <h1>Usage</h1>
+      <div className="usage-controls"><label className="usage-period">Period<Select value={30} disabled onChange={() => undefined}><option value={30}>Last 30 days</option></Select></label>
         <Button disabled>Refresh</Button></div>
     </header>
-    <div className="usage-range"><Skeleton width={180} height={14} /><Skeleton width={150} height={14} /></div>
+    <p className="usage-range"><Skeleton width={360} height={14} /></p>
     <LoadingBlock label={label} sinceNavigation><UsageLoadingShapes /></LoadingBlock>
   </section>;
 }

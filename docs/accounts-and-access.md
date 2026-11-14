@@ -33,7 +33,7 @@ Server Actions decide what a Runtime Actor may do, and no Runtime Actor is ever 
 The app decides, in the statement and its bindings. A Server Action binds the caller with `{ "source": "actor", "field": "id" }`.
 
 - `id` is the app user's ID or the API key's ID. It is null for a visitor and for a schedule's run.
-- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner names the first one with SQL in Data, such as `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';` with the ID from Auth > Users or `app_users_list`. From the CLI, `bun run konae -- sql --dir <folder> --prod "<statement>"` runs it.
+- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner names the first one with SQL in Data, such as `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';` with the ID from Access > Users or `app_users_list`. From the CLI, `bun run konae -- sql --dir <folder> --prod "<statement>"` runs it.
 
 ```json
 "items.list": {
@@ -66,7 +66,7 @@ The Signup Policy decides who may create an app account on one Deployment.
 
 Public Deployments start Open. A private Deployment starts Closed when its first release names no mode. The editor's deploy dialog preselects Invitation only for a private app, and `konae init` writes `invitation` into `konae.json`, so a first release from either door names it. After that, a republish never changes it, except that republishing a public app as private turns Open into Closed.
 
-The owner changes it in the editor's Auth > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. An app folder published with the CLI takes its first release's policy from `signupPolicy` in `konae.json`.
+The owner changes it in the editor's Access > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. An app folder published with the CLI takes its first release's policy from `signupPolicy` in `konae.json`.
 
 In local verification mode, Konae does not verify email addresses. Whoever signs up first with a listed address gets that account. Use Closed for apps that hold private data, or require verification.
 
@@ -75,7 +75,7 @@ In local verification mode, Konae does not verify email addresses. Whoever signs
 Every app account can sign in with email and password. The owner can add Google for one app, with that app's own Google OAuth client. The installation holds no Google client.
 
 1. Make a Web application client in your Google Cloud console.
-2. Set its two halves as the signing secrets `google_client_id` and `google_client_secret`, with `secret_set` and `use: "google"`, or in the editor's Auth > Users view.
+2. Set its two halves as the signing secrets `google_client_id` and `google_client_secret`, with `secret_set` and `use: "google"`, or in the editor's Access > Users view.
 3. Register the redirect URIs that `sign_in_methods_read` lists in that client.
 4. Turn Google on with `sign_in_methods_set` and `["password", "google"]`, which needs `manage_users`.
 
@@ -97,7 +97,7 @@ An account is pending until it proves control of its email, active, or suspended
 
 ## Entering as a user
 
-An owner can see the app as one of its people. **Open as**, beside an active account in the editor's Auth > Users view, calls `app_user_enter` and opens a link on the app's own address that works once, for two minutes, and signs that tab in as the account. The owner's audit log records who entered as whom. The session is marked, so Usage and Signals do not count what it does as that person, but its writes are real rows of that account. Only the owner's own browser session can ask for a link; an agent's credential cannot. Outside Konae the same function is `kernel enter <email>` on the machine, and the Kernel's log records it.
+An owner can see the app as one of its people. **Open as**, beside an active account in the editor's Access > Users view, calls `app_user_enter` and opens a link on the app's own address that works once, for two minutes, and signs that tab in as the account. The owner's audit log records who entered as whom. The session is marked, so Usage and Signals do not count what it does as that person, but its writes are real rows of that account. Only the owner's own browser session can ask for a link; an agent's credential cannot. Outside Konae the same function is `kernel enter <email>` on the machine, and the Kernel's log records it.
 
 ## Credentials for agents
 

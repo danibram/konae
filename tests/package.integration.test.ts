@@ -144,6 +144,41 @@ async function sourcePackage(id: string, directory: string) {
 }
 
 describe("chunked package", () => {
+  test("an export compares every saved file with the release and clears the warning after a revert", async () => {
+    const id = "pkg_source_digest";
+    const request = payload(id);
+    const original = { ...request.project.files, "index.html": "<main>Package proof</main>", "app.js": "console.log('published');\n", "metadata.txt": "published metadata" };
+    const manifest = { ...request.project.manifest, runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "optional" }, files: { access: "deployment" } } };
+    const source = { ...request.project, manifest, files: original, directories: [], updatedAt: 1 };
+    await owner.call("project_create", { projectId: id, name: source.name });
+    let revision = 0;
+    const save = async (files: Record<string, string>) => {
+      const upload = await owner.upload(new TextEncoder().encode(JSON.stringify({ ...source, files, updatedAt: revision + 1 })), id);
+      try {
+        const saved = await owner.call<{ revision: number }>("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: revision });
+        revision = saved.revision;
+      } finally { await owner.cancel(upload.transferId); }
+    };
+    await save(original);
+    const { receipt } = await release(owner, { ...request, project: source }, id);
+    const ahead = async () => {
+      const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+      try { return exported.sourcesAhead; }
+      finally {
+        for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId);
+      }
+    };
+    expect(await ahead()).toBe(false);
+    await save({ ...original, "app.js": "console.log('edited');\n" });
+    expect(await ahead()).toBe(true);
+    await save(original);
+    expect(await ahead()).toBe(false);
+    await save({ ...original, "metadata.txt": "edited metadata" });
+    expect(await ahead()).toBe(true);
+    await save(original);
+    expect(await ahead()).toBe(false);
+  });
+
   test("moves rows, accounts and files into a new app, drops sessions, and a repeated apply returns its receipt", async () => {
     const directory = await mkdtemp(path.join(root, "export-"));
     const { source, cookie, fileId, key, exported, files } = await sourcePackage("pkg_source", directory);

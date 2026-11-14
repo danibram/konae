@@ -182,7 +182,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
                 "Upload JSON {project:{id,name,slug,files,manifest},visibility,artifact:{version:1,entrypoint:'index.html',files:{...}}} using transfer_begin with projectId, byte size and sha256, then transfer_write and transfer_complete.",
                 "Call release_plan with transferId, inspect its planId, expectedRevision and schema, then call release_apply with planId.",
                 "schema is the change the Kernel derived from schema.sql to the live database, with statements, losses and confirmation. A new table, column or index applies. When losses is not empty (a dropped table, a dropped column, a changed column type), show the owner each loss's sentence and pass confirmation as confirmSchema only after the owner agrees. Without it release_apply refuses with schema.confirmation-required and changes nothing.",
-                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect. Its sourcesDiffer is true when that release came with actions other than the editor's saved app/actions.json, as after konae publish from an app folder, and the editor's next Deploy replaces them."
+                "Save the receipt and cancel the temporary transfer. Read the live Deployment with project_inspect."
             ],
             "cli": "bun run konae -- publish --dir <folder> runs these steps with the credential from login and sends signupPolicy from konae.json as initialSignupPolicy on the first release.",
             "concurrency": "An obsolete plan is rejected. Repeating an applied plan returns the same receipt.",
@@ -209,7 +209,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         }),
         "portability" => json!({
             "export": [
-                "project_export { deploymentId } needs export_data. It hands over the app folder: folder, a download of konae.json, app/ and dist/, and a manifest with one download per part of data/: database, identity, files and, when the app recorded any, usage. sourcesAhead is true when app/actions.json differs from the actions the release runs. Secrets, owners and the installation's records never leave.",
+                "project_export { deploymentId } needs export_data. It hands over the app folder: folder, a download of konae.json, app/ and dist/, and a manifest with one download per part of data/: database, identity, files and, when the app recorded any, usage. sourcesAhead compares app/ with the release's sourceDigest. Older releases without a digest compare app/actions.json with the actions the release runs. Secrets, owners and the installation's records never leave.",
                 "Read each download with transfer_read { transferId, offset } until nextOffset equals size, check its SHA-256, then transfer_cancel it.",
                 "bun run konae -- export --dir <folder> --out <new folder> --with-data writes the same app folder on disk."
             ],

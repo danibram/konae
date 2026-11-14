@@ -1,0 +1,18 @@
+/* "Projects / <app name ▾>": the way home from inside an app, in the editor and on an app edited in a folder. */
+.project-crumb { display: flex; align-items: center; gap: 6px; min-width: 0; font: 500 14px/1.3 var(--ds-font); }
+.project-crumb-home { flex: none; color: var(--project-crumb-muted, var(--ds-muted)); text-decoration: none; }
+.project-crumb-home:hover { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.project-crumb-sep { flex: none; color: var(--project-crumb-muted, var(--ds-muted)); }
+.project-crumb .ui-menu { min-width: 0; }
+.project-crumb .ui-button.project-crumb-current,
+.project-crumb .ui-button.project-crumb-current:hover:not(:disabled) { min-width: 0; min-height: 32px; gap: 4px; padding: 0 6px; border-color: transparent; background: transparent; color: inherit; box-shadow: none; font: 700 17px/1.3 var(--ds-font); letter-spacing: -.02em; }
+.project-crumb .ui-button.project-crumb-current:hover:not(:disabled),
+.project-crumb .ui-button.project-crumb-current[aria-expanded="true"] { background: color-mix(in srgb, currentColor 8%, transparent); }
+.project-crumb .ui-button.project-crumb-current:active:not(:disabled) { translate: none; }
+.project-crumb .project-crumb-current > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-crumb .ui-menu-list { max-height: min(60vh, 420px); overflow-y: auto; min-width: 240px; }
+/* The logo in the editor's top bar is a link to the list, so it opens in a new tab like any link. */
+.topbar a.brand { color: inherit; text-decoration: none; }
+.topbar a.brand:focus-visible { outline: 2px solid var(--ds-blue); outline-offset: -2px; }
+/* The switcher shows each app's state after its name; names keep one line. */
+.project-crumb .ui-menu-list { max-width: min(360px, calc(100vw - 24px)); }

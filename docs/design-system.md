@@ -1,6 +1,6 @@
 # Konae design system
 
-The editor and the apps it makes share one set of tokens and components. The default variant has square corners, 2px ink strokes, offset shadows without blur, uppercase labels, Bricolage Grotesque and one lime accent. The clean variant swaps in system type with Inter, hairline borders, rounded corners and a black primary on the same tokens. The theme follows the system, light or dark.
+The editor and the apps it makes share one set of tokens and components. The default variant has square corners, 2px ink strokes, Bricolage Grotesque and one lime accent. Primary buttons and dialogs keep hard offset shadows. Fields, secondary buttons and panel content stay flat. The clean variant swaps in system type with Inter, hairline borders, rounded corners and a black primary on the same tokens. The theme follows the system, light or dark.
 
 ## Foundations
 
@@ -40,7 +40,7 @@ Import shared controls from `src/components/ui`. The ones a form or a dialog nee
 | `Card` | Shared border, background and corners. Takes normal div props. |
 | `EmptyState` | Icon, title, description and optional action. |
 | `Skeleton` | A quiet placeholder shape. Give it the width and height of the content that replaces it. Hidden from assistive technology. |
-| `LoadingBlock` | One loading surface: `role="status"` with one label for screen readers, and skeleton shapes (`rows`, or your own children) that hold the layout. Fades in after 200 ms. `sinceNavigation` counts that from the page load, for boot stages. |
+| `LoadingBlock` | One loading surface with `role="status"`, one label for screen readers and skeleton shapes that hold the layout. Use `rows` or your own children. Fades in after 250 ms. `sinceNavigation` counts that from the page load, for boot stages. |
 | `Dialog` | Title, optional description and footer, `open`, `onClose`, optional `initialFocus`. Traps focus, handles Escape and restores focus when closed. |
 
 The same module exports `Tabs`, `Switch`, `Checkbox`, `Radio`, `Segmented`, `Alert`, `ToastRegion`, `Progress`, `Avatar`, `Kbd`, `Breadcrumb`, `Disclosure`, `StatStrip`, `Table`, `Tooltip` and `Menu`, the charts in `charts.tsx` (`BarChart`, `BarList`, `LineChart`, `DonutChart`, `Sparkline`, `ChartLegend`), and the page patterns an app uses: `Page`, `PageHeader`, `Lede`, `Actions`, `Steps`, `Identity`, `SectionHead`, `List`, `ListItem`, `Composer`, `Tiles`, `Tile` and `Tick`. The gallery shows them.
@@ -72,13 +72,13 @@ A published app gets the design system as one stylesheet, with the components as
 
 ## Where the editor uses it
 
-The project list, the deploy dialog, the build agent's message box and the Data panel use the shared buttons, inputs, selects, badges, cards, dialogs, empty states and loading blocks. Auth > Users and Auth > Integrations use cards, fields, selects, badges, buttons and confirmation dialogs from the same set. Their layout rules live in `src/components/app-access.css` and use only `--ds-*` tokens, so the system theme carries light and dark.
+The project list, the deploy dialog, the build agent's message box and the Data panel use the shared buttons, inputs, selects, badges, cards, dialogs, empty states and loading blocks. Access > Users and Access > Integrations use cards, fields, selects, badges, buttons and confirmation dialogs from the same set. Their layout rules live in `src/components/app-access.css` and use only `--ds-*` tokens, so the system theme carries light and dark.
 
 The other panels keep their own layout selectors with token-based rules in `src/design-system.css`. New controls use the shared components.
 
 ## Loading
 
-A screen renders its chrome (navigation, header, title) on the first paint and keeps it. Whatever is still loading sits inside that frame as skeleton shapes the size of the content that replaces them, so nothing moves. Use `LoadingBlock` for a surface and `Skeleton` for a single shape. Never swap one sentence for another, and never show a loader for work that ends in under 200 ms. `useLoadingHold` in `src/components/loading-hold.ts` keeps a skeleton that did show on screen for at least 300 ms. `BootShell` draws the page and editor chrome while the session check, the code chunk and the project load run.
+A screen renders its navigation, header and title on the first paint and keeps them. Whatever is still loading sits inside that frame as skeleton shapes the size of the content that replaces them. Use `LoadingBlock` for a surface and `Skeleton` for a single shape. Never swap one sentence for another, and never show a loader for work that ends in under 250 ms. `useLoadingHold` in `src/components/loading-hold.ts` keeps a skeleton that did show on screen for at least 400 ms. `heldLazy` in `src/components/held-lazy.tsx` applies the same delay and hold when a panel's module loads. It counts the hold from the fallback's CSS animation so a late first paint cannot shorten it. `BootShell` draws the page and editor chrome while the session check, the code chunk and the project load run.
 
 ## Gallery
 

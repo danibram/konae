@@ -26,6 +26,8 @@ export type ProviderConfig = {
   needsKey: boolean;
   defaultModels: ProviderModelOption[];
   supportsCustomModelId: boolean;
+  /** The provider's own page where a person creates an API key. */
+  keyPage?: string;
 };
 
 /**
@@ -86,7 +88,7 @@ export type ValidationWarning = {
   stage: ValidationStage;
   message: string;
   detail?: string;
-  /** The owner clears it outside the files, in Auth > Integrations; Deploy refuses until then. */
+  /** The owner clears it outside the files, in Access > Integrations; Deploy refuses until then. */
   owner?: true;
   code?: RefusalCode;
   hint?: RefusalHint;

@@ -1,4 +1,4 @@
-import { Check, Copy, ExternalLink, Globe2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Globe2 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { clearDomain, domainTrafficTarget, readDomain, setDomain, type DomainView } from "../deployments/domains";
 import { hostnameLabel, setHostname } from "../deployments/hostnames";
@@ -8,8 +8,9 @@ import { checkPathName } from "../lib/path-name";
 import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
+import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
-import { Badge, Button, Dialog, Field, Input, LoadingBlock, Switch } from "./ui";
+import { Badge, Button, Dialog, Field, Input, LoadingBlock, Switch, TabBar } from "./ui";
 import "./app-settings.css";
 
 type Props = {
@@ -18,17 +19,29 @@ type Props = {
   importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
   onClose: () => void;
-  onDeploy: () => void;
   onSignedOut: () => void;
   /** The generated address moved; the editor shows the new url everywhere. */
   onAddressMoved?: (url: string) => void;
   signInHref: string;
+  /** Downloads the app folder, as More > Export does. */
+  onExport?: () => void;
 };
 
-export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onDeploy, onSignedOut, onAddressMoved, signInHref }: Props) {
+type Section = "addresses" | "email" | "move";
+const sections: { id: Section; label: string }[] = [
+  { id: "addresses", label: "Addresses" },
+  { id: "email", label: "Contact email" },
+  { id: "move", label: "Move this app" },
+];
+
+export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
+  // Everyday settings apart from moving the app; every part stays mounted, so a switch loses nothing typed.
+  const [section, setSection] = useState<Section>("addresses");
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
-  const [loading, setLoading] = useState(Boolean(deploymentId));
+  const [reading, setLoading] = useState(Boolean(deploymentId));
+  // The loader follows the hold. A quick read shows none, and once shown it stays 400 ms.
+  const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [inputError, setInputError] = useState("");
@@ -112,12 +125,14 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   };
 
   return <Dialog title="App settings" description={projectName} onClose={() => { if (!busy) onClose(); }} className="app-settings-dialog">
+    {deploymentId && <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={setSection}
+      items={sections.map((item) => ({ ...item, tabId: `app-settings-tab-${item.id}`, controls: `app-settings-${item.id}` }))} />}
     <div className="app-settings-body" aria-busy={busy || loading}>
-      <header className="domain-heading"><Globe2 size={20} /><h3>Addresses</h3></header>
       {!deploymentId ? <>
-        <p>Publish this app first. Then its addresses appear here.</p>
-        <Button variant="primary" onClick={onDeploy}>Deploy app</Button>
+        <header className="domain-heading"><Globe2 size={20} /><h3>Addresses</h3></header>
+        <p>Deploy this app first. Then its addresses appear here.</p>
       </> : <>
+      <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
         {loading && <LoadingBlock label="Reading domain settings" rows={2} />}
         {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
         {error && view && reloadOffered && !signedOut && <Button disabled={busy} onClick={() => { setConfirmation(null); setReload((value) => value + 1); }}>Reload domain settings</Button>}
@@ -143,7 +158,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
             {view.hostname && view.record && <>
               <section className="domain-step" aria-label="DNS ownership record">
                 <h4>1. Prove you own {view.hostname}</h4>
-                <p>Add this TXT record at your DNS provider. DNS updates can take time to reach the Kernel.</p>
+                <p>Add this TXT record at your DNS provider. DNS updates can take a while to arrive.</p>
                 <dl className="domain-record">
                   <div><dt>Type</dt><dd>TXT</dd></div>
                   <CopyRecord key={view.record.name} label="Name" value={view.record.name} />
@@ -151,7 +166,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
                 </dl>
                 <p>Some providers append your domain to the name. Enter the part before your zone, so the final name matches the full name above.</p>
                 {view.dns && <p className="domain-dns-result" role="status">{view.dns}</p>}
-                {view.status === "active" && <p>The Kernel accepts this hostname. Ownership stays verified until you remove it; refreshing does not recheck the TXT.</p>}
+                {view.status === "active" && <p>This hostname is verified. It stays verified until you remove it; refreshing does not check the TXT again.</p>}
               </section>
               <TrafficInstructions view={view} />
               <p className="domain-portability">Moving this app to another machine issues a new TXT token. Verify it at the destination before switching traffic.</p>
@@ -166,13 +181,23 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
                 <Button variant="danger" loading={busy} onClick={() => void perform(confirmation.kind === "remove" ? "remove" : "set", confirmation.hostname)}>{confirmation.kind === "remove" ? "Confirm removal" : "Replace domain"}</Button>
               </div>
             </section>}
-            <p className="domain-agent-note">You can also ask the agent to manage this app's domain. It uses these same Kernel checks and asks before changing it.</p>
           </section>
         </>}
         <PathAddress key={deploymentId} deploymentId={deploymentId} signInHref={signInHref} onSignedOut={onSignedOut} />
+      </div>
+      <div className="app-settings-section" role="tabpanel" id="app-settings-email" aria-labelledby="app-settings-tab-email" hidden={section !== "email"}>
         <AppContactEmail key={`contact-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
+      </div>
+      <div className="app-settings-section" role="tabpanel" id="app-settings-move" aria-labelledby="app-settings-tab-move" hidden={section !== "move"}>
+        <p>To take this app to another machine with its accounts, rows and rules, export its folder here and import it there. Pause it first so nothing changes in between.</p>
+        {onExport && <section className="domain-step" aria-label="Export">
+          <header className="domain-heading"><Download size={20} /><h3>Export</h3></header>
+          <p>Downloads the app folder as a .tar with its files, accounts, rows, uploads and rules.</p>
+          <Button onClick={onExport}><Download size={14} aria-hidden="true" /> Export app folder</Button>
+        </section>}
         <AppMaintenance key={`maintenance-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
         {importTarget && <AppImport deploymentId={deploymentId} {...importTarget} onSignedOut={onSignedOut} />}
+      </div>
       </>}
     </div>
   </Dialog>;
@@ -241,7 +266,8 @@ type PathConfirmation = { kind: "accept"; change: PathChange; message: string } 
 /** The path address of the app: its switch, its addresses and its name. Each change reads the path back before it reports success. */
 function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: string; signInHref: string; onSignedOut: () => void }) {
   const [view, setView] = useState<PathView | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [reading, setLoading] = useState(true);
+  const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -320,7 +346,7 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
     {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
     {signedOut && <a href={signInHref}>Sign in again to manage this app</a>}
     {!loading && !view && !signedOut && <Button onClick={() => setReload((value) => value + 1)}>Retry loading</Button>}
-    {!loading && view && pathNeedsDomain(view) && <p className="domain-notice" role="status">{view.next}</p>}
+    {!loading && view && pathNeedsDomain(view) && <p className="domain-notice" role="status">This installation has no short links. Its operator turns them on.</p>}
     {!loading && view && !pathNeedsDomain(view) && <>
       <p>Answers on the installation's domain, under /p/. Other apps on that domain share its origin.</p>
       <Switch checked={view.enabled} label="Answer on the path" disabled={busy || signedOut || Boolean(confirmation)} onChange={(next) => {
@@ -385,7 +411,7 @@ function TrafficInstructions({ view }: { view: DomainView }) {
     <Badge tone="neutral">Not checked</Badge>
     {target.local ? <p>This installation runs locally. Public DNS cannot point to localhost. Your hosting provider must supply a public DNS target and an HTTPS certificate.</p> : <>
       <p>For a subdomain, point a CNAME record at <code>{target.hostname}</code>. For a root domain, ask your hosting provider for the required ALIAS or IP records.</p>
-      <p>Your hosting provider must configure HTTPS for <code>{view.hostname}</code> and forward its hostname to the Kernel.</p>
+      <p>Your hosting provider must configure HTTPS for <code>{view.hostname}</code> and forward requests to this installation.</p>
     </>}
     <p>A verified TXT proves ownership. It does not check traffic routing or the HTTPS certificate.</p>
   </section>;

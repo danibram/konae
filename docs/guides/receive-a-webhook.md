@@ -38,7 +38,7 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
     }
     ```
 
-3. Set the secret before you publish. A release that signs with an unset secret is refused, and the refusal names each one. The value is 16 to 512 printable characters with no spaces. Set it in the editor's Auth > Integrations view, or call `secret_set` with `projectId`, `name` and `value`. From the CLI, pipe the value in so it stays off the command line:
+3. Set the secret before you publish. A release that signs with an unset secret is refused, and the refusal names each one. The value is 16 to 512 printable characters with no spaces. Set it in the editor's Access > Integrations view, or call `secret_set` with `projectId`, `name` and `value`. From the CLI, pipe the value in so it stays off the command line:
 
     ```sh
     printf '%s' "$SECRET" | bun run konae -- tool secret_set '{"projectId":"<id>","name":"status_webhook"}' --stdin value --dir ./my-app
@@ -52,7 +52,7 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
     "http": { "method": "POST", "path": "/api/updates", "callers": ["key"] }
     ```
 
-    Then issue a key that names the action with `api_keys_create` and `deploymentId`, `name` and `actions`. The key is shown once. The editor's Auth > Integrations view shows a curl for each route the key names.
+    Then issue a key that names the action with `api_keys_create` and `deploymentId`, `name` and `actions`. The key is shown once. The editor's Access > Integrations view shows a curl for each route the key names.
 6. Test a signed route from a shell. The sender puts `t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>` in the declared header. The MAC covers the time, the nonce, the method, the path, the query string and the raw body, joined by newlines.
 
     ```sh

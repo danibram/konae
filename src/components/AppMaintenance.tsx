@@ -1,6 +1,7 @@
 import { Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { readMaintenance, setMaintenance, type MaintenanceState } from "../deployments/client";
+import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, LoadingBlock } from "./ui";
 
@@ -43,17 +44,18 @@ export function AppMaintenance({ deploymentId, onSignedOut }: { deploymentId: st
   };
 
   const own = state && state.maintenance && !state.installation;
+  const pending = useLoadingHold(!state && !error);
   return <section className="domain-step" aria-label="Maintenance" aria-busy={busy || !state}>
     <header className="domain-heading"><Wrench size={20} /><h3>Maintenance</h3></header>
     {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
-    {!state && !error && <LoadingBlock label="Reading maintenance" rows={1} />}
+    {pending && <LoadingBlock label="Reading maintenance" rows={1} />}
     {!state && error && <Button onClick={() => setReload((value) => value + 1)}>Retry loading</Button>}
-    {state && <>
+    {state && !pending && <>
       <div className="domain-status"><Badge tone={state.maintenance ? "warning" : "success"}>{state.maintenance ? "In maintenance" : "Serving"}</Badge></div>
       {state.installation
         ? <p>{state.installation}</p>
         : state.maintenance
-          ? <p>{state.unreadable ? "The app's maintenance state cannot be read, so the Kernel keeps it paused." : `Paused since ${new Date(state.since ?? 0).toLocaleString()}.`} Visitors see a maintenance page. Writes, signups, sign-ins, email, calls and scheduled runs wait until you take it out.</p>
+          ? <p>{state.unreadable ? "The app's maintenance state cannot be read, so the app stays paused." : `Paused since ${new Date(state.since ?? 0).toLocaleString()}.`} Visitors see a maintenance page. Writes, signups, sign-ins, email, calls and scheduled runs wait until you take it out.</p>
           : <p>Pause the app while you move it or replace its data. Visitors see a maintenance page and nothing writes until you take it out.</p>}
       {!state.installation && <Button variant={own ? "primary" : "secondary"} loading={busy} onClick={() => void change(!own)}>{own ? "Take out of maintenance" : "Put in maintenance"}</Button>}
     </>}

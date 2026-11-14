@@ -53,7 +53,8 @@ const templates = { tasks: "Shared list", notes: "Private notes" } as const;
 async function createProject(page: Page, name: string, template: keyof typeof templates = "tasks") {
   await page.goto("/");
   await page.getByRole("button", { name: "New project" }).click();
-  await page.getByLabel("Project name").fill(name);
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill(name);
+  await page.getByText("Start from a template instead", { exact: true }).click();
   await page.getByRole("radio", { name: new RegExp(`^${templates[template]}`) }).check();
   const saved = page.waitForResponse((response) => {
     const body = response.request().postData() ?? "";
@@ -62,7 +63,7 @@ async function createProject(page: Page, name: string, template: keyof typeof te
   });
   await page.getByRole("button", { name: /^Create/ }).click();
   await expect(page).toHaveURL(/\/app\/[^/]+$/);
-  await expect(page.getByRole("banner").locator("summary").getByText(name, { exact: true })).toBeVisible();
+  await expect(page.getByRole("banner").locator(".project-crumb-current").getByText(name, { exact: true })).toBeVisible();
   await saved;
   await expect(page.getByRole("banner").getByText("Saving")).toHaveCount(0);
   await expect(page.getByRole("banner").getByText("Not saved")).toHaveCount(0);
@@ -77,8 +78,14 @@ async function waitForKernelSave(page: Page) {
   await expect(page.getByRole("banner").getByText("Not saved")).toHaveCount(0);
 }
 
-async function showSection(page: Page, name: "Preview" | "Auth" | "Files" | "Data") {
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name, exact: true }).click();
+async function showSection(page: Page, name: "Preview" | "Access" | "Files" | "Data" | "Uploads") {
+  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("tab", { name, exact: true }).click();
+}
+
+// Export and App settings live in the top bar's More menu.
+async function fromMore(page: Page, item: "Export" | "App settings") {
+  await page.getByRole("banner").getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
 // Files has a File list button that opens New file and New folder beside the editor.
@@ -103,31 +110,32 @@ async function openFile(page: Page, path: string) {
   return page.getByLabel(`${path} code editor`);
 }
 
+// The top bar's button reads "Deploy" on a draft and "Deploy changes" once the app is published.
 async function publish(page: Page) {
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await page.getByRole("banner").getByRole("button", { name: /^Deploy( changes)?$/ }).click();
   // A first publish of a private template starts on Private; these tests publish public apps.
   const visibility = page.getByRole("radiogroup", { name: "Deployment visibility" });
   if (await visibility.count()) await visibility.getByText("Public", { exact: true }).click();
-  await page.getByRole("button", { name: "Deploy public", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /^Deploy (public|changes)$/ }).click();
   const link = page.locator("a.published-url");
   await expect(link).toBeVisible({ timeout: 30_000 });
   const url = await link.getAttribute("href");
-  await page.getByRole("button", { name: "Back to workshop" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   return url!;
 }
 
 test("workspace count follows Kernel projects across the component gallery", async ({ page }) => {
   for (const name of ["Count one", "Count two", "Count three"]) await createProject(page, name);
   await page.goto("/");
-  const projects = page.locator(".account-sidebar a[href='/']").first();
+  const projects = page.locator(".account-sidebar nav a[href='/']").first();
   await expect(projects).toHaveText("Projects 3");
-  const drafts = page.getByRole("region", { name: "Draft apps" });
-  await expect(drafts.getByRole("button", { name: "Open editor", exact: true })).toHaveCount(3);
-  await expect(drafts.getByRole("link", { name: "Open published app" })).toHaveCount(0);
+  const drafts = page.getByRole("region", { name: "Drafts" });
+  await expect(drafts.getByRole("listitem")).toHaveCount(3);
+  await expect(drafts.locator(".app-status-address")).toHaveCount(0);
   await page.goto("/design-system");
-  await expect(page.locator(".account-sidebar a[href='/']").first()).toHaveText("Projects 3");
+  await expect(page.locator(".account-sidebar nav a[href='/']").first()).toHaveText("Projects 3");
   await page.goto("/usage");
-  await expect(page.locator(".account-sidebar a[href='/']").first()).toHaveText("Projects 3");
+  await expect(page.locator(".account-sidebar nav a[href='/']").first()).toHaveText("Projects 3");
   await expect(page.locator(".account-content").getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
 });
 
@@ -149,14 +157,12 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
   await page.setViewportSize({ width: 320, height: 740 });
   await page.emulateMedia({ colorScheme: "dark" });
   const projectPath = await createProject(page, "Mobile domain review");
-  await page.getByText("More", { exact: true }).click();
-  await page.getByRole("button", { name: "App settings", exact: true }).click();
+  await fromMore(page, "App settings");
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
-  await expect(settings.getByText("Publish this app first.", { exact: false })).toBeVisible();
-  await settings.getByRole("button", { name: "Deploy app", exact: true }).click();
-  await page.getByRole("button", { name: "Deploy public", exact: true }).click();
-  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Connect a custom domain", exact: true }).click();
+  await expect(settings.getByText("Deploy this app first. Then its addresses appear here.", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
+  await publish(page);
+  await fromMore(page, "App settings");
   settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByLabel("Domain", { exact: true }).fill("https://notes.example.test/path");
   await settings.getByRole("button", { name: "Add domain", exact: true }).click();
@@ -177,8 +183,7 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
   await settings.getByRole("button", { name: "Check TXT record", exact: true }).click();
   await expect(settings.getByText("Ownership is still pending.", { exact: false })).toBeVisible();
   await page.goto(projectPath);
-  await page.getByText("More", { exact: true }).click();
-  await page.getByRole("button", { name: "App settings", exact: true }).click();
+  await fromMore(page, "App settings");
   settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await expect(settings.getByLabel("Domain", { exact: true })).toHaveValue("notes.example.test");
   await settings.getByLabel("Domain", { exact: true }).fill("new-notes.example.test");
@@ -256,9 +261,9 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await app.reload();
   await expect(app.getByText("Survives a new release")).toBeVisible();
 
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("button", { name: /Data/i }).click();
-  await page.getByLabel("Database target").selectOption("deployed");
-  await page.getByRole("navigation", { name: "Database views" }).getByRole("button", { name: "Backups" }).click();
+  await showSection(page, "Data");
+  await expect(page.getByRole("radio", { name: "Live app", exact: true })).toBeChecked();
+  await page.getByRole("tablist", { name: "Database views" }).getByRole("tab", { name: "Backups" }).click();
   await page.getByRole("button", { name: "Create backup" }).click();
   await expect(page.getByRole("status")).toContainText("Backup created");
   await app.getByPlaceholder(/Add one small thing/).fill("Added after backup");
@@ -272,14 +277,14 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await expect(app.getByText("Added after backup")).toHaveCount(0);
 
   const downloadEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await fromMore(page, "Export");
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toMatch(/\.tar$/);
   await download.saveAs(testInfo.outputPath("app-folder.tar"));
   await app.screenshot({ path: testInfo.outputPath("published-app.png"), fullPage: true });
 });
 
-test("the Deploy dialog says when the published app runs actions from an app folder", async ({ page, baseURL }) => {
+test("the Deploy dialog says when the editor holds other files than a release published from an app folder", async ({ page, baseURL }) => {
   const projectId = (await createProject(page, `Folder publish ${Date.now()}`)).split("/").pop()!;
   await publish(page);
   // The owner's browser session delegates a token, as `konae login` does.
@@ -300,18 +305,17 @@ test("the Deploy dialog says when the published app runs actions from an app fol
   const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": "<p>Published from a folder</p>" } };
   await publishProject(folder, project, () => ({ project, visibility: "public", artifact }), async () => true);
 
-  const warning = "The published app runs actions that did not come from this editor, as after konae publish from an app folder. Deploy replaces that release with the files in this editor.";
-  const dialog = page.getByRole("dialog", { name: "Deploy application" });
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  const warning = "The editor holds other files than the published app runs, after edits here or a publish from an app folder. Deploy replaces what runs with these files. Its accounts and rows stay.";
+  const dialog = page.getByRole("dialog", { name: /^Deploy / });
+  await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
   await expect(dialog.getByText(warning)).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("deploy-dialog-sources-differ.png") });
-  await dialog.getByRole("button", { name: "Deploy public", exact: true }).click();
+  await dialog.getByRole("button", { name: /^Deploy (public|changes)$/ }).click();
   await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Back to workshop" }).click();
-  // After the editor's own release the dialog reads the Kernel again and says nothing.
-  const inspected = page.waitForResponse((response) => new URL(response.url()).pathname === "/mcp" && (response.request().postData() ?? "").includes('"project_inspect"'));
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  expect((await (await inspected).json()).result.structuredContent.result.sourcesDiffer).toBe(false);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  // After the editor's own release the published app runs these files again, so the dialog no longer says they differ.
+  await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
+  await expect(dialog).toBeVisible();
   await expect(dialog.getByText(warning)).toHaveCount(0);
 });
 
@@ -330,14 +334,14 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await preview.getByRole("button", { name: "Save", exact: true }).click();
   await expect(preview.getByText("Alice preview note")).toBeVisible();
   // One section shows at a time, so pick the preview user in Auth and look in Preview.
-  await showSection(page, "Auth");
-  // The heading agrees with the template's rule: only a signed-in person lists notes.
-  await expect(page.getByRole("heading", { name: "A signed-in person can list the rows. The list stops at 100 rows." })).toBeVisible();
+  await showSection(page, "Access");
+  // The list rule agrees with the template: only a signed-in person lists notes.
+  await expect(page.getByText("A signed-in person can run it. The list stops at 100 rows.")).toBeVisible();
   await page.getByLabel("Preview user").selectOption("bob");
   await showSection(page, "Preview");
   await expect(preview.getByText("No notes yet. Start with one thought.")).toBeVisible();
   await expect(preview.getByText("Alice preview note")).toHaveCount(0);
-  await showSection(page, "Auth");
+  await showSection(page, "Access");
   await page.getByLabel("Preview user").selectOption("alice");
   await showSection(page, "Preview");
   await expect(preview.getByText("Alice preview note")).toBeVisible();
@@ -370,7 +374,7 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await expect(app.getByText("Alice published note")).toBeVisible();
   await app.screenshot({ path: testInfo.outputPath("authenticated-notes.png"), fullPage: true });
   const downloadEvent = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await fromMore(page, "Export");
   const download = await downloadEvent;
   await download.saveAs(testInfo.outputPath("notes-app-folder.tar"));
 });
@@ -392,7 +396,6 @@ test("a private Invitation only app admits the person the owner invites from the
   const name = `Invited notes ${Date.now()}`;
   await createProject(page, name, "notes");
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  // The radio itself is visually hidden; its card is what a person clicks.
   await page.getByRole("radiogroup", { name: "Deployment visibility" }).getByText("Private", { exact: true }).click();
   await expect(page.getByRole("radio", { name: /^Private/ })).toBeChecked();
   // A private first publish proposes Invitation only and says what it means.
@@ -443,7 +446,7 @@ test("a private Invitation only app admits the person the owner invites from the
   await expect(row.getByRole("button", { name: /Resend/ })).toHaveCount(0);
   await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: invitee })).toContainText("Active");
 
-  // The Auth panel scrolls inside the window, so a tall window shows the whole view.
+  // The Access panel scrolls inside the window, so a tall window shows the whole view.
   // Buttons fade their colour on a theme change; "disabled" finishes that before the capture.
   await page.setViewportSize({ width: 1280, height: 2000 });
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -454,7 +457,7 @@ test("a private Invitation only app admits the person the owner invites from the
 
   // Integrations: a signing secret by name only, and an API key shown once with a working curl.
   await page.emulateMedia({ colorScheme: "light" });
-  await page.getByRole("navigation", { name: "Auth views" }).getByRole("button", { name: "Integrations" }).click();
+  await page.getByRole("tablist", { name: "Access views" }).getByRole("tab", { name: "Integrations" }).click();
   const integrations = page.getByRole("region", { name: "Integrations" });
   await integrations.getByLabel("Secret name").fill("orders_webhook");
   await integrations.getByLabel("Secret value").fill("a-long-enough-secret-2026");
@@ -502,16 +505,17 @@ test("a person who writes code adds a page, a public file and a signed route, an
   };
   await actions.fill(JSON.stringify(program, null, 2));
   // The readout above actions.json names the route as the action's only door and the guard's answer.
-  await expect(page.getByText("orders.receive. Only its route, POST /hooks/orders, runs it, for a signed request or an API key.")).toBeVisible();
-  await expect(page.getByText('Marks a row done. Anyone can run it. When no row changes it refuses with "That task is gone.".')).toBeVisible();
+  await page.getByText("What each action does", { exact: true }).click();
+  await expect(page.getByText("Receive. Only its route, POST /hooks/orders, runs it, for a signed request or an API key.")).toBeVisible();
+  await expect(page.getByText('Mark a row done. Anyone can run it. When no row changes it refuses with "That task is gone.".')).toBeVisible();
   await waitForKernelSave(page);
 
   // The deploy dialog reads the release plan first, so it names the unset secret and keeps Deploy off.
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Deploy application" });
+  const dialog = page.getByRole("dialog", { name: /^Deploy / });
   await expect(dialog).toContainText("Action orders.receive signs with the secret orders_webhook, which is not set for this project.");
   await expect(dialog.getByRole("button", { name: "Deploy public", exact: true })).toBeDisabled();
-  await dialog.getByRole("button", { name: "Open Auth > Integrations" }).click();
+  await dialog.getByRole("button", { name: "Open Access > Integrations" }).click();
   await expect(page.getByText("orders.receive uses it. Publishing is refused until it is set.")).toBeVisible();
   await page.getByRole("button", { name: "Set", exact: true }).click();
   await page.getByLabel("Secret value").fill("whsec-0123456789abcdef");
@@ -559,7 +563,6 @@ test("usage counts signed-in accounts as people, never a visitor, and shows what
   const row = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(name) }) });
   await expect(row.locator('td[data-label="Active accounts"]')).toHaveText("2");
   await expect(row.locator('td[data-label="Storage"]')).toHaveText(/KiB|MiB/);
-  await expect(page.getByRole("figure").filter({ hasText: "Storage by app" }).getByRole("link", { name })).toBeVisible();
   await page.getByRole("region", { name: "All apps" }).screenshot({ path: testInfo.outputPath("usage-overview-light.png") });
 
   await row.getByRole("link", { name: `View usage for ${name}` }).click();

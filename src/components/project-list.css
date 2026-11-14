@@ -1,0 +1,114 @@
+/* The project list: a heading with New project, a search and a sort, then Published and Drafts as cards.
+   Every colour is a --ds-* token, so light and dark come from the tokens alone. */
+.account-content.project-list { background: var(--ds-surface); color: var(--ds-text); }
+.project-list-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 32px 0 20px; }
+.project-list-head h1 { margin: 0; color: var(--ds-text); font: 700 28px/1.2 var(--ds-font); letter-spacing: -.03em; }
+.project-list-notice { margin: 0 0 16px; }
+
+.project-list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 4px; }
+.project-list-search { position: relative; flex: 1 1 280px; max-width: 420px; }
+.project-list-search > svg { position: absolute; left: 11px; top: 50%; translate: 0 -50%; color: var(--ds-muted); pointer-events: none; }
+.project-list-search .ui-input { padding-left: 34px; font-size: 14px; }
+.project-list-sort { display: inline-flex; align-items: center; gap: 8px; color: var(--ds-muted); font: 500 13px/1.4 var(--ds-font); }
+.project-list-sort .ui-select { width: auto; min-width: 140px; font-size: 14px; }
+
+.project-list-group > h2 { margin: 28px 0 12px; color: var(--ds-text); font: 650 15px/1.3 var(--ds-font); letter-spacing: -.01em; }
+.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.project-list-none { margin: 28px 0; color: var(--ds-muted); font: 400 14px/1.5 var(--ds-font); }
+
+/* One card is one link: the name's link stretches over the card; the address and the menu sit above it. */
+.project-card-item {
+  position: relative; min-width: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name menu" "purpose purpose" "status status" "meta meta";
+  align-content: start; gap: 4px 12px; padding: 14px 12px 14px 16px;
+  border: 1px solid var(--ds-border); border-radius: var(--ds-radius); background: var(--ds-field); color: var(--ds-text);
+  transition: border-color 120ms ease;
+}
+.project-card-item[data-opens]:hover { border-color: var(--ds-stroke); }
+.project-card-item:has(.project-card-link:focus-visible) { outline: 2px solid var(--ds-blue); outline-offset: 2px; }
+.project-card-item > h3 { grid-area: name; align-self: center; min-width: 0; margin: 0; font: 700 17px/1.3 var(--ds-font); letter-spacing: -.02em; overflow-wrap: anywhere; }
+.project-card-link { color: inherit; text-decoration: none; }
+.project-card-link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.project-card-link:focus-visible { outline: 0; }
+.project-card-item[data-opens]:hover .project-card-link { text-decoration: underline; text-underline-offset: 3px; }
+.project-card-purpose { grid-area: purpose; margin: 0; color: var(--ds-muted); font: 400 14px/1.5 var(--ds-font); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.project-card-status { grid-area: status; margin-top: 8px; }
+.project-card-status .app-status-address { position: relative; }
+.project-card-meta { grid-area: meta; display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 0; color: var(--ds-muted); font: 400 13px/1.4 var(--ds-font); }
+.project-card-meta:empty { display: none; }
+.project-card-meta > span { color: var(--ds-warning); font-weight: 600; }
+.project-card-menu { grid-area: menu; position: relative; align-self: start; }
+.project-card-item .project-card-menu .ui-button.project-card-more { width: 32px; min-height: 32px; padding: 0; border-color: transparent; background: transparent; color: var(--ds-muted); box-shadow: none; }
+.project-card-item .project-card-menu .ui-button.project-card-more:hover:not(:disabled),
+.project-card-item .project-card-menu .ui-button.project-card-more[aria-expanded="true"] { border-color: var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); }
+.project-card-item .project-card-menu .ui-button.project-card-more:active:not(:disabled) { translate: none; }
+
+/* Copies an earlier version kept in this browser. */
+.project-list-copies { margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--ds-border); background: var(--ds-field); font: 400 14px/1.5 var(--ds-font); }
+.project-list-copies summary { cursor: pointer; font-weight: 650; }
+.project-list-copies p { margin: 8px 0; color: var(--ds-muted); }
+.project-list-copies ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.project-list-copies li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.project-list-copies li > span { flex: 1 1 160px; }
+
+/* A fresh owner sees one thing: describe the first app. */
+.project-list-empty.ui-empty { min-height: 50vh; }
+.project-list-empty.ui-empty h3 { font-size: 20px; }
+.project-list-empty.ui-empty p { font-size: 14px; }
+.project-list-empty-actions { display: grid; justify-items: center; gap: 10px; margin-top: 4px; }
+.project-list-empty-actions > p { margin: 10px 0 0; color: var(--ds-muted); font: 500 13px/1.4 var(--ds-font); }
+.project-list-empty-actions > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+/* New project: what it should do first, the name second, templates last. */
+.new-project.ui-dialog { width: min(600px, 100%); }
+.new-project .new-project-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; display: grid; gap: 18px; padding: var(--ds-space-6); }
+.new-project-body .ui-field { font-size: 13px; }
+.new-project-body .ui-field small { font-family: var(--ds-font); font-size: 12px; }
+.new-project-body .ui-textarea { min-height: 96px; resize: vertical; font-size: 14px; }
+.new-project-body .ui-input { font-size: 14px; }
+.new-project-templates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+/* The templates sit behind one line; the chosen one's name shows on it while it is closed. */
+.new-project-more > summary { min-height: 36px; }
+.new-project-more[open] > summary { margin-bottom: 4px; }
+.new-project-chosen { margin-left: auto; color: var(--ds-muted); font-weight: 400; }
+.new-project-more[open] .new-project-chosen { display: none; }
+.new-project-templates > p { grid-column: 1 / -1; margin: 0 0 4px; color: var(--ds-muted); font: 400 12px/1.5 var(--ds-font); }
+.new-project-templates label { position: relative; display: grid; align-content: start; gap: 2px; padding: 10px 12px; border: 1px solid var(--ds-border); border-radius: var(--ds-radius); background: var(--ds-field); cursor: pointer; }
+.new-project-templates label:hover { border-color: var(--ds-stroke); }
+.new-project-templates label.is-selected { border-color: var(--ds-stroke); background: var(--ds-accent-soft); box-shadow: inset 4px 0 0 var(--ds-stroke); }
+.new-project-templates label:has(input:focus-visible) { outline: 2px solid var(--ds-blue); outline-offset: 2px; }
+.new-project-templates input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.new-project-templates strong { font: 650 14px/1.35 var(--ds-font); }
+.new-project-templates small { color: var(--ds-muted); font: 400 12px/1.45 var(--ds-font); }
+.new-project-templates label.is-selected small { color: var(--ds-text); }
+/* The boot frame's placeholder bars span the card, not its name and menu columns. */
+.project-list-boot .project-card-item > * { grid-column: 1 / -1; }
+.project-delete-failure { margin: 12px 0 0; color: var(--ds-danger); font: 600 13px/1.5 var(--ds-font); }
+/* Keeping the data comes first in the delete dialog's footer, apart from Cancel and Delete. */
+.project-delete-keep { margin-right: auto; }
+/* Without a model, New project says in one line where the app starts and where the words wait. */
+.new-project-model { margin: -8px 0 0; padding: 8px 10px; border-left: 3px solid var(--ds-stroke); background: var(--ds-subtle); color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
+.project-list-head h1:focus { outline: none; }
+.project-list-head h1:focus-visible { outline: 2px solid var(--ds-blue); outline-offset: 4px; }
+
+@media (max-width: 560px) {
+  .project-list-head { padding: 20px 0 14px; }
+  .project-list-head h1 { font-size: 24px; }
+  .project-list-search { max-width: none; }
+  .project-list-group > h2 { margin-top: 22px; }
+  .project-cards { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .new-project-templates { grid-template-columns: minmax(0, 1fr); }
+}
+/* On a card the address takes its own line under the state, so it is not cut to a few letters. */
+.project-card-status.app-status { flex-wrap: wrap; row-gap: 4px; }
+.project-card-status .app-status-address { order: 2; flex: 0 1 auto; max-width: 100%; }
+.project-card-status .app-status-time { order: 1; }
+.project-card-status[data-state="published"]::after { content: ""; order: 1; flex-basis: 100%; height: 0; }
+
+/* The developer's door, folded under the last line so the person who describes an app never has to read it. */
+.new-project-folder > summary { min-height: 36px; }
+.new-project-folder { min-width: 0; }
+.new-project-folder-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; justify-items: start; min-width: 0; padding: 0 0 4px; }
+.new-project-folder p { margin: 0; color: var(--ds-muted); font: 400 13px/1.5 var(--ds-font); }
+.new-project-folder pre { justify-self: stretch; max-width: 100%; margin: 0; padding: 10px 12px; overflow-x: auto; border: 1px solid var(--ds-border); background: var(--ds-field); color: var(--ds-text); font: 500 12px/1.6 var(--ds-mono); }
+.new-project-folder .ui-button { box-shadow: none; }

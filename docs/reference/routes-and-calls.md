@@ -166,7 +166,7 @@ api_keys_revoke { "deploymentId", "keyId" }
 
 `api_keys_create` returns the key once. A key belongs to one Deployment, grants no owner tool, and works only on HTTP routes and the file read path. The runtime endpoint refuses it with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` A key names actions that have an HTTP route and the file visibilities `public` and `private`; a key that names `private` reads every private file of its Deployment. A Deployment holds at most 50 live keys. The Kernel keeps the key's SHA-256 hash in `identity.sqlite`.
 
-An export carries each key's name, actions, file visibilities and hash, and an import marks every live key revoked. `api_keys_list` on the destination shows those with `revokedReason: "import"`, and Auth > Integrations lists them under "Revoked at import", so the owner knows which programs need a new key. A key the owner revoked has `revokedReason: null`. A restore keeps keys live. Auth > Integrations in the editor also sets and deletes secrets and shows a new key once with a curl for each route it names.
+An export carries each key's name, actions, file visibilities and hash, and an import marks every live key revoked. `api_keys_list` on the destination shows those with `revokedReason: "import"`, and Access > Integrations lists them under "Revoked at import", so the owner knows which programs need a new key. A key the owner revoked has `revokedReason: null`. A restore keeps keys live. Access > Integrations in the editor also sets and deletes secrets and shows a new key once with a curl for each route it names.
 
 ### The file read path
 

@@ -46,7 +46,7 @@ describe("the release plan at the editor's door", () => {
         expect(result.ok, item.case).toBe(true);
         expect(result.errors, item.case).toEqual([]);
         expect(result.warnings, item.case).toEqual([{
-          stage: "actions", message: item.error, detail: "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.", owner: true,
+          stage: "actions", message: item.error, detail: "Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.", owner: true,
           code: item.code as never, hint: expect.objectContaining({ fix: "owner", tool: "secret_set" }),
         }]);
       } else {
@@ -76,11 +76,11 @@ describe("the release plan at the editor's door", () => {
     const unset = file.cases.find((item) => item.case === "a signed route whose secret is not set")!;
     const [owner] = (await validator.validate(capsule(unset.actions), { state: "absent" }, { secrets: [] })).warnings!;
     expect(owner.owner).toBe(true);
-    expect(owner.detail).toBe("Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.");
+    expect(owner.detail).toBe("Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.");
     const svix = file.cases.find((item) => item.case === "a svix route whose secret is not a whsec_ key")!;
     const [key] = (await validator.validate(capsule(svix.actions), { state: "absent" }, { secrets: svix.secrets })).warnings!;
     expect(key.owner).toBe(true);
-    expect(key.detail).toBe("Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.");
+    expect(key.detail).toBe("Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.");
     const editor = file.cases.find((item) => item.case === "a call to the editor's public host")!;
     const [author] = (await validator.validate(capsule(editor.actions), { state: "absent" }, { rules: file.rules })).errors;
     expect(author.detail).toBe("The Kernel refuses this at publish. Change actions.json.");

@@ -4,7 +4,7 @@ Export the app folder to take one app's accounts, data and rules to another mach
 
 ## Export and import an app
 
-`project_export { deploymentId }` is the one export of an app and needs `export_data`. It hands over the app folder: `folder`, one download of a ustar archive with `konae.json`, `app/` and `dist/`, and one download per part of `data/`, captured under the app's locks so no write lands halfway. `sourcesAhead` is true when `app/actions.json` differs from the actions the release runs. Secrets, owners, credentials, sessions and `.konae/` never leave.
+`project_export { deploymentId }` is the one export of an app and needs `export_data`. It hands over the app folder: `folder`, one download of a ustar archive with `konae.json`, `app/` and `dist/`, and one download per part of `data/`, captured under the app's locks so no write lands halfway. `sourcesAhead` compares `app/` with the release's `sourceDigest`. Older releases without a digest compare `app/actions.json` with the actions the release runs. Secrets, owners, credentials, sessions and `.konae/` never leave.
 
 ```json
 {

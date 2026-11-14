@@ -68,7 +68,7 @@ function describePolicy(policy: SignupPolicy) {
 export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy): string | undefined {
   const entries = (policy: SignupPolicy) => policy.allowlist.map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join("\n");
   if (wanted.mode === current.mode && (wanted.mode !== "allowlist" || entries(wanted) === entries(current))) return undefined;
-  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.`;
+  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.`;
 }
 
 /**

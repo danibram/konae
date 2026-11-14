@@ -13,7 +13,7 @@ Each Deployment has a Signup Policy that decides who may create an app account. 
 | `closed` | Nobody signs up, and a person the owner invites can still accept. Pending invitations stay acceptable when the owner closes signup, so revoke the ones that should end. |
 | `allowlist` | Only exact emails or `@domain` entries, up to 100. A domain entry matches that domain and not its subdomains. Listing an address sends no invitation. |
 
-A public Deployment starts Open and a private one Closed. A first release may set any mode in `initialSignupPolicy` with `publish`, and the Kernel installs it before the app serves a request. When the owner's request leaves access open for an app with accounts, an agent proposes private and `invitation`. A republish keeps the policy, except that republishing a public app as private turns Open into Closed. `initialSignupPolicy` on a republish answers `Portable state can only be imported on the first deployment.` The editor's Deploy dialog sends `initialSignupPolicy` on a first publish and shows the current policy read-only after that. The owner changes it in Auth > Users.
+A public Deployment starts Open and a private one Closed. A first release may set any mode in `initialSignupPolicy` with `publish`, and the Kernel installs it before the app serves a request. When the owner's request leaves access open for an app with accounts, an agent proposes private and `invitation`. A republish keeps the policy, except that republishing a public app as private turns Open into Closed. `initialSignupPolicy` on a republish answers `Portable state can only be imported on the first deployment.` The editor's Deploy dialog sends `initialSignupPolicy` on a first publish and shows the current policy read-only after that. The owner changes it in Access > Users.
 
 ## Sign-in methods
 
@@ -25,7 +25,7 @@ Each app has its own Google client, which the owner makes as a Web application c
 - the same on a verified custom domain;
 - `<domain>/p/<id>/_konae/auth/google/callback` while the path address is on. The name address uses this callback too, so a rename leaves it working.
 
-The installation's home address has no callback, and Google sign-in there answers "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google." `sign_in_methods_set` refuses `google` while either half is unset, with "Set this app's Google client ID and client secret before turning Google on.", and `secret_delete` refuses either half while Google is on. Auth > Users in the editor shows the same redirect URIs, the two fields and the switch.
+The installation's home address has no callback, and Google sign-in there answers "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google." `sign_in_methods_set` refuses `google` while either half is unset, with "Set this app's Google client ID and client secret before turning Google on.", and `secret_delete` refuses either half while Google is on. Access > Users in the editor shows the same redirect URIs, the two fields and the switch.
 
 The flow stays on the app's host. `/_konae/auth/google/start` records state, nonce, PKCE verifier, Deployment and origin behind a cookie and sends the browser to Google. `/_konae/auth/google/callback` takes the flow once, on the same Deployment, origin and browser, exchanges the code with the app's client and checks the ID token: Google as issuer, the app's client as audience, expiry, the nonce, a key from Google's JWKS and a verified email. It then opens the app's own session.
 
@@ -35,7 +35,7 @@ An export carries `signInMethods` and the accounts, never the client. On another
 
 ## Users and invitations
 
-These tools take a `deploymentId`, need `manage_users` and the project grant, and write an audit row naming the Deployment. The editor's Auth > Users calls the same tools with the owner's session. It reuses one idempotency key when a batch is retried, and it turns invite and resend off, with the reason, while `mail_status` reports `sending: false`.
+These tools take a `deploymentId`, need `manage_users` and the project grant, and write an audit row naming the Deployment. The editor's Access > Users calls the same tools with the owner's session. It reuses one idempotency key when a batch is retried, and it turns invite and resend off, with the reason, while `mail_status` reports `sending: false`.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |

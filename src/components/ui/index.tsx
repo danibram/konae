@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, ChevronRight, Info, Loader2, OctagonAlert, X } from "lucide-react";
-import { cloneElement, useEffect, useId, useRef, useState, type ComponentProps, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
+import { cloneElement, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import { useModalDialog } from "../useModalDialog";
 import { LOADING_DELAY_MS } from "../loading-hold";
 import "./ui.css";
@@ -131,6 +131,33 @@ export function Tabs({ items, label, defaultId }: { items: TabItem[]; label: str
   </div>;
 }
 
+export type TabBarItem<T extends string> = { id: T; label: string; icon?: ReactNode; /** A short mark after the label, such as a count or "refused". */ badge?: ReactNode; /** The id of the panel this tab shows, when the caller renders it. */ controls?: string; tabId?: string };
+
+/**
+ * The tab strip of `Tabs` for a caller that owns the choice and draws the panels
+ * itself, such as a workbench whose panels stay mounted. One tab stop; the arrow
+ * keys, Home and End move and choose.
+ */
+export function TabBar<T extends string>({ items, value, onChange, label, className, end }: { items: TabBarItem<T>[]; value: T | null; onChange: (id: T) => void; label: string; className?: string; /** Controls after the tabs, at the far end of the strip. */ end?: ReactNode }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const selected = items.findIndex((item) => item.id === value);
+  const move = (event: KeyboardEvent, index: number) => {
+    const next = event.key === "ArrowRight" ? (index + 1) % items.length : event.key === "ArrowLeft" ? (index - 1 + items.length) % items.length : event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    onChange(items[next].id);
+    refs.current[next]?.focus();
+  };
+  return <div className={classes("ui-tabbar", className)}>
+    <div role="tablist" aria-label={label} className="ui-tablist">
+      {items.map((item, index) => <button key={item.id} ref={(node) => { refs.current[index] = node; }} type="button" role="tab" id={item.tabId} aria-controls={item.controls}
+        aria-selected={item.id === value} tabIndex={index === (selected < 0 ? 0 : selected) ? 0 : -1} onClick={() => onChange(item.id)} onKeyDown={(event) => move(event, index)}>
+        {item.icon}{item.label}{item.badge !== undefined && <span>{item.badge}</span>}</button>)}
+    </div>
+    {end && <div className="ui-tabbar-end">{end}</div>}
+  </div>;
+}
+
 export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean }) {
   return <label className="ui-switch"><button type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}><span /></button><span>{label}</span></label>;
 }
@@ -159,7 +186,7 @@ export function Alert({ tone = "info", title, children, action, className }: { t
   return <div role={tone === "danger" || tone === "warning" ? "alert" : "status"} className={classes("ui-alert", `ui-alert-${tone}`, className)}>
     <Icon size={18} aria-hidden="true" />
     <div>{title && <strong>{title}</strong>}{children && <p>{children}</p>}</div>
-    {action}
+    {action && <div className="ui-alert-actions">{action}</div>}
   </div>;
 }
 
@@ -219,18 +246,42 @@ export function Tooltip({ text, children }: { text: string; children: ReactEleme
   return <span className="ui-tooltip">{cloneElement(children, { "aria-describedby": id })}<span role="tooltip" id={id}>{text}</span></span>;
 }
 
-export type MenuItem = { label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; disabled?: boolean };
+export type MenuItem = {
+  label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; disabled?: boolean;
+  /** Marks the item that is the current page, as a switcher does. The menu opens with focus on it. */
+  current?: boolean;
+  /** A short quiet word after the label, such as an app's Draft or Published. */
+  detail?: string;
+  /** Draws a line above the item, apart from the ones before it. */
+  separated?: boolean;
+};
 
-/** A button that opens a short list of actions. Arrow keys move, Escape returns to the button. */
-export function Menu({ label, trigger, items, align = "end" }: { label: string; trigger: ReactNode; items: MenuItem[]; align?: "start" | "end" }) {
+/**
+ * A button that opens a short list of actions. Arrow keys move, Escape returns to the button.
+ * The label names the button for a screen reader; with `showsLabel` the trigger's own text
+ * names it instead (a switcher that shows the current project). `triggerClassName` restyles it.
+ */
+export function Menu({ label, trigger, items, align = "end", triggerClassName, showsLabel = false }: { label: string; trigger: ReactNode; items: MenuItem[]; align?: "start" | "end"; triggerClassName?: string; showsLabel?: boolean }) {
   const [open, setOpen] = useState(false);
+  // Opens upward when the space below the button is too short for the list and the space above is not.
+  const [side, setSide] = useState<"bottom" | "top">("bottom");
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (!open) { setSide("bottom"); return; }
+    const list = root.current?.querySelector<HTMLElement>("[role=menu]");
+    const trigger = button.current?.getBoundingClientRect();
+    if (!list || !trigger) return;
+    const height = list.getBoundingClientRect().height;
+    if (trigger.bottom + 6 + height > window.innerHeight - 8 && trigger.top - 6 - height >= 8) setSide("top");
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
     document.addEventListener("pointerdown", close);
-    root.current?.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)")?.focus();
+    // A switcher opens where you are, on the current item; any other menu on its first.
+    const start = root.current?.querySelector<HTMLElement>("[role=menuitem][aria-current]:not(:disabled)") ?? root.current?.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)");
+    start?.focus({ preventScroll: false });
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
   const key = (event: KeyboardEvent) => {
@@ -246,9 +297,9 @@ export function Menu({ label, trigger, items, align = "end" }: { label: string; 
     event.preventDefault();
   };
   return <div className="ui-menu" ref={root} onKeyDown={open ? key : undefined}>
-    <Button ref={button} aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen(!open)}>{trigger}</Button>
-    {open && <div role="menu" aria-label={label} className="ui-menu-list" data-align={align}>
-      {items.map((item) => <button key={item.label} type="button" role="menuitem" disabled={item.disabled} className={item.danger ? "is-danger" : undefined} onClick={() => { setOpen(false); button.current?.focus(); item.onSelect(); }}>{item.icon}{item.label}</button>)}
+    <Button ref={button} className={triggerClassName} aria-haspopup="menu" aria-expanded={open} aria-label={showsLabel ? undefined : label} onClick={() => setOpen(!open)}>{trigger}</Button>
+    {open && <div role="menu" aria-label={label} className="ui-menu-list" data-align={align} data-side={side}>
+      {items.map((item, index) => <button key={`${index}:${item.label}`} type="button" role="menuitem" disabled={item.disabled} aria-current={item.current ? "page" : undefined} className={classes(item.danger && "is-danger", item.separated && "is-separated") || undefined} onClick={() => { setOpen(false); button.current?.focus(); item.onSelect(); }}>{item.icon}<span className="ui-menu-label">{item.label}</span>{item.detail && <span className="ui-menu-detail">{item.detail}</span>}</button>)}
     </div>}
   </div>;
 }

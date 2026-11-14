@@ -11,7 +11,7 @@ export const adminCheck = "(SELECT role FROM profiles WHERE user_id = ?1) IN ('a
 
 const schema = `-- One row per person who joined. The Kernel says who is signed in; the role
 -- column is the app's own decision. Everyone joins as member. To name the
--- app's owner, run in Data > SQL, with the account ID that Auth > Users shows:
+-- app's owner, run in Data > SQL, with the account ID that Access > Users shows:
 --   UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';
 -- Staff actions check: ${adminCheck}
 CREATE TABLE IF NOT EXISTS profiles (

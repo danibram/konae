@@ -255,16 +255,24 @@ pub async fn export(
         let (source, target) = (folder.clone(), scratch.clone());
         let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
         let app_folder = crate::layout::folder(&state.data_root, &deployment.id);
+        let app_sources = crate::layout::sources(&state.data_root, &deployment.id);
+        let saved_actions = tokio::fs::read_to_string(app_sources.join("actions.json")).await.ok();
+        let mut sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
+        if let Some(released) = deployment.source_digest.as_deref() {
+            // Saved editor files can include paths that a folder publish skips.
+            let saved = match crate::sources::read(&state.data_root, &deployment.id).await? {
+                Some(source) => crate::sources::digest(source["files"].as_object().context("Saved sources have no files.")?.iter()
+                    .map(|(path, text)| (path.as_str(), text.as_str().unwrap_or_default().as_bytes()))),
+                None => crate::sources::digest_folder(&app_sources).await?,
+            };
+            sources_ahead |= saved != released;
+        }
         let components = tokio::task::spawn_blocking(move || {
             let components = capture(&source, &target, &blobs)?;
             write_folder_tar(&app_folder, &target.join("folder.tar"))?;
             Ok::<_, anyhow::Error>(components)
         })
         .await?;
-        // The editor saves sources between releases. app/actions.json that differs from the
-        // actions the release runs says app/ is ahead of what dist/ and the record serve.
-        let saved_actions = tokio::fs::read_to_string(crate::layout::sources(&state.data_root, &deployment.id).join("actions.json")).await.ok();
-        let sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
         components.map(|components| (components, deployment, published_revision, sources_revision, sources_ahead))
     };
     let (components, deployment, published_revision, sources_revision, sources_ahead) = match captured {

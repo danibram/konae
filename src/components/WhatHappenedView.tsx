@@ -9,7 +9,6 @@ import "./what-happened.css";
 type Props = {
   /** The published app. The preview sends no email, calls nothing and runs no schedule. */
   deployment?: { id: string; url: string };
-  onDeploy?: () => void;
   onOpen?: (place: Place) => void;
 };
 
@@ -24,13 +23,13 @@ const icons: Record<Kind, ReactNode> = {
 const badges = { success: "Done", warning: "Check", danger: "Needs action", neutral: "Noted" } as const;
 
 const places: Record<Place, string> = {
-  integrations: "Open Auth > Integrations",
-  users: "Open Auth > Users",
+  integrations: "Open Access > Integrations",
+  users: "Open Access > Users",
   capsule: "Open actions.json",
 };
 
 /** What left or ran on the published app, newest first, each with its outcome and who acts when it failed. */
-export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
+export function WhatHappenedView({ deployment, onOpen }: Props) {
   const [days, setDays] = useState(7);
   const [read, setRead] = useState<Read | null>(null);
   const [error, setError] = useState("");
@@ -63,8 +62,7 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
           className="happened-empty"
           icon={<Activity size={26} />}
           title="Nothing has run yet"
-          description="The preview sends no email, calls no other service and runs no schedule. Deploy the app, then come back here to see what it sent and ran."
-          action={onDeploy && <Button variant="primary" onClick={onDeploy}>Deploy</Button>}
+          description="The preview sends no email, calls no other service and runs no schedule. Once the app is deployed, what it sends and runs shows here."
         />
       </section>
     );
@@ -80,7 +78,7 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
         <header className="happened-head">
           <div>
             <h2>What happened</h2>
-            <p>Email notices, calls to other services, scheduled runs, HTTP routes and Signals of <a href={deployment.url} target="_blank" rel="noreferrer">{deployment.url.replace(/^https?:\/\//, "")}</a>, newest first.</p>
+            <p>Emails, calls to other services, scheduled runs, requests from other services and Signals of <a href={deployment.url} target="_blank" rel="noreferrer">{deployment.url.replace(/^https?:\/\//, "")}</a>, newest first.</p>
           </div>
           <div className="happened-controls">
             <Select aria-label="Period" value={days} onChange={(event) => setDays(Number(event.target.value))}>
@@ -92,7 +90,8 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
               <option value="all">Everything</option>
               <option value="attention">Needs someone to act</option>
             </Select>
-            <Button size="sm" loading={loading} onClick={refresh}><RefreshCw size={13} /> Refresh</Button>
+            {/* The first read has its own loader below, so the button spins only for a refresh. */}
+            <Button size="sm" loading={loading && read !== null} onClick={refresh}><RefreshCw size={13} /> Refresh</Button>
           </div>
         </header>
         {!owner ? <p className="happened-note">Sign in with <a href={platformAccessHref(window.location.pathname)}>owner sign-in</a> to read what this app sent and ran.</p>
@@ -104,7 +103,7 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
             className="happened-empty"
             icon={<Activity size={26} />}
             title={only === "attention" ? "Nothing needs anyone to act" : "Nothing left or ran in this period"}
-            description="An action with notify, a call action, a schedule, an HTTP route or a Signal shows here once it runs on the published app."
+            description="Emails the app sends, calls it makes, scheduled runs and Signals show here once they happen on the live app."
           />
         )}
         {groups(shown).map(([day, rows]) => (
@@ -113,7 +112,10 @@ export function WhatHappenedView({ deployment, onDeploy, onOpen }: Props) {
             <ol className="happened-list">{rows.map((entry) => <Row key={entry.id} entry={entry} onOpen={onOpen} />)}</ol>
           </section>
         ))}
-        {read && <p className="happened-note">Days and times are UTC. Shows the newest 50 notices, 50 calls, 100 Signals and 500 scheduled runs. Routes, and notices the Kernel did not queue, are counted per day at the end of that day.</p>}
+        {read && <details className="happened-note">
+          <summary>How this list is counted</summary>
+          <p>Days and times are UTC. It shows the newest 50 emails, 50 calls, 100 Signals and 500 scheduled runs. Requests from other services, and emails that were never queued, are counted per day once that day ends.</p>
+        </details>}
       </div>
     </section>
   );

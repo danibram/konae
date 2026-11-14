@@ -18,6 +18,7 @@ import {
   setSizes,
   split,
   stack,
+  stageLayout,
   stackPathOf,
   togglePanel,
   visiblePanels,
@@ -303,5 +304,33 @@ describe("closed panels remember their slot", () => {
     const messy = movePanel(togglePanel(defaultLayout(), "explorer"), "agent", { target: "preview", zone: "center" });
     expect(resetLayout()).toEqual(defaultLayout());
     expect(resetLayout().root).not.toEqual(messy.root);
+  });
+});
+
+describe("the stage", () => {
+  const right = (state: LayoutState) => (state.root as { children: StackNode[] }).children[1];
+
+  test("choosing a section only switches a tab, so no panel ever leaves its group", () => {
+    const shapes = ["preview", "code", "data", "auth", "files", "activity"].map((panel) => stageLayout(panel as never, { rail: true }));
+    for (const state of shapes) {
+      expect(panelsIn(state.root)).toEqual(panelsIn(shapes[0].root));
+      expect(accountedFor(state)).toEqual(everything);
+    }
+  });
+
+  test("Files shows the preview beside it, every other section shows itself", () => {
+    expect(right(stageLayout("code", { rail: true })).panels[right(stageLayout("code", { rail: true })).active]).toBe("preview");
+    const data = right(stageLayout("data", { rail: true }));
+    expect(data.panels[data.active]).toBe("data");
+  });
+
+  test("with a rail Describe is off the stage, without one it is a section", () => {
+    expect(isOpen(stageLayout("preview", { rail: true }), "agent")).toBe(false);
+    const describe = stageLayout("agent", { rail: false });
+    expect(isVisible(describe, "agent")).toBe(true);
+  });
+
+  test("the Files column keeps a usable share", () => {
+    expect((stageLayout("code", { rail: true, codeShare: 2 }).root as { sizes: number[] }).sizes).toEqual([20, 80]);
   });
 });

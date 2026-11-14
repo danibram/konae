@@ -115,7 +115,15 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         Some(deployment) => (deployment.hostname.clone(), deployment.created_at),
         None => (free_hostname(state, &settings.slug).await, now_ms()),
     };
-    let deployment = settings.deployment(Installed { hostname, created_at, actions, artifact_version }, &state.public_origin);
+    // A start that finds the files the record names keeps their release time
+    // and the digest of the sources they were built from, so app/ edits not
+    // yet built into dist/ still read as changes.
+    let (released_at, source_digest) = match existing.as_ref() {
+        Some(deployment) if deployment.artifact_version == artifact_version && deployment.source_digest.is_some() => (deployment.released_at, deployment.source_digest.clone()),
+        Some(deployment) if deployment.artifact_version == artifact_version => (deployment.released_at, Some(crate::sources::digest_folder(&sources).await?)),
+        _ => (now_ms(), Some(crate::sources::digest_folder(&sources).await?)),
+    };
+    let deployment = settings.deployment(Installed { hostname, created_at, released_at: Some(released_at), source_digest, actions, artifact_version }, &state.public_origin);
     open_auth(state, &deployment)?;
     persist_deployment(state, &deployment).await?;
     let mut deployments = state.deployments.write().await;
@@ -226,6 +234,8 @@ async fn reload(state: &AppState, deployment: Deployment) {
     let installed = Installed {
         hostname: current.hostname.clone(),
         created_at: current.created_at,
+        released_at: Some(current.released_at),
+        source_digest: current.source_digest.clone(),
         actions: current.actions.clone(),
         artifact_version: current.artifact_version.clone(),
     };
@@ -274,6 +284,42 @@ mod tests {
         assert_eq!((again.hostname.as_str(), again.artifact_version.as_str()), (first.hostname.as_str(), first.artifact_version.as_str()));
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_start_keeps_the_release_time_until_the_files_change() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let first = open(&state, "notes_app", None).await.unwrap();
+        assert!(first.released_at >= first.created_at);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let same = open(&state, "notes_app", None).await.unwrap();
+        assert_eq!(same.released_at, first.released_at, "the same dist/ is the same release");
+        std::fs::write(layout::dist(&root, "notes_app").join("index.html"), "<!doctype html><main>Notes 2</main>").unwrap();
+        let changed = open(&state, "notes_app", None).await.unwrap();
+        assert!(changed.released_at > first.released_at, "new files are a new release");
+        assert_eq!(changed.created_at, first.created_at);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_start_names_the_sources_its_release_was_built_from() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let app = layout::sources(&root, "notes_app");
+        let first = open(&state, "notes_app", None).await.unwrap();
+        assert_eq!(first.source_digest.as_deref(), Some(crate::sources::digest_folder(&app).await.unwrap().as_str()));
+        // An edit to app/ that was not built into dist/ is not the release.
+        std::fs::write(app.join("index.html"), "<main>edited</main>").unwrap();
+        let same = open(&state, "notes_app", None).await.unwrap();
+        assert_eq!(same.source_digest, first.source_digest);
+        std::fs::write(layout::dist(&root, "notes_app").join("index.html"), "<!doctype html><main>edited</main>").unwrap();
+        let rebuilt = open(&state, "notes_app", None).await.unwrap();
+        assert_eq!(rebuilt.source_digest.as_deref(), Some(crate::sources::digest_folder(&app).await.unwrap().as_str()));
+        assert_ne!(rebuilt.source_digest, first.source_digest);
         std::fs::remove_dir_all(root).unwrap();
     }
 

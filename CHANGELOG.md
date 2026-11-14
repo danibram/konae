@@ -35,7 +35,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 #### Editor and owner page
 
-- The Deploy dialog says when the published app runs actions that did not come from the editor, as after `konae publish` from an exported folder. `project_inspect` returns it as `sourcesDiffer`, which the Kernel decides when it applies each release.
+- The Deploy dialog says when the editor holds other files than the published app runs, after edits in the editor or a `konae publish` from an exported folder, and that Deploy replaces them.
 - The owner page issues a token of 1, 7 or 30 days.
 
 #### Kernel

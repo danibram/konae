@@ -637,6 +637,8 @@ pub mod tests {
             slug: "app".into(),
             url: format!("http://{host}"),
             created_at: now_ms(),
+            released_at: 0,
+            source_digest: None,
             manifest: json!({"visibility": "public"}),
             hostname: host.into(),
             actions: "{}".into(),

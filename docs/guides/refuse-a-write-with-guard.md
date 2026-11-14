@@ -26,7 +26,7 @@ A guard is 1 to 200 characters on one line. It goes on a mutation only. A query 
     }
     ```
 
-3. For an action only some app users may call, keep their role in the app's own table and test it in the `WHERE` against the caller's ID. The starter app keeps `member`, `admin` and `owner` in a `role` column of `profiles`, and you give yourself the first `owner` row with `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';`. The account ID shows in Auth > Users or `app_users_list`. Run the statement in the editor's Data panel, or with `bun run konae -- sql --dir <folder> --prod "<statement>"` for a folder published with the CLI.
+3. For an action only some app users may call, keep their role in the app's own table and test it in the `WHERE` against the caller's ID. The starter app keeps `member`, `admin` and `owner` in a `role` column of `profiles`, and you give yourself the first `owner` row with `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';`. The account ID shows in Access > Users or `app_users_list`. Run the statement in the editor's Data panel, or with `bun run konae -- sql --dir <folder> --prod "<statement>"` for a folder published with the CLI.
 
     ```json
     "members.promote": {

@@ -10,14 +10,14 @@ An invitation is the owner's offer of an account in one app to one email, sent a
 
 ## In the editor
 
-1. Open the project and go to Auth > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people.
-2. Check the signup policy under "Who can create an app account" and change it if the app needs another one. Existing accounts keep working.
-3. Under Invite people, enter the email addresses and send. Invite only the people the owner asked for, because this sends email.
-4. Resend or revoke an invitation from the list of invitations below it. Under App accounts you can also suspend and resume an account. Suspension ends its sessions and keeps its rows.
+1. Open the project and go to Access > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people. After a deploy of a private app with no app account, it offers Invite yourself first, which invites the owner's email.
+2. Under Invite people, at the top, enter the email addresses and send. Invite only the people the owner asked for, because this sends email.
+3. Resend or revoke an invitation from the list of invitations below it. Under App accounts you can also suspend and resume an account. Suspension ends its sessions and keeps its rows.
+4. Below them, check the signup policy under "Who can create an app account" and change it if the app needs another one. Existing accounts keep working.
 
 ## Over MCP
 
-A project published from a folder with the CLI shows on the project list under "Apps without editor files". **Open data and users** on its card opens the same Users view, without the app's files, and its owner can also invite people over MCP.
+A project published from a folder with the CLI shows on the project list with the others, marked "Edited in a folder". Its card opens its data, its Users view and what it did, without the app's files, and its owner can also invite people over MCP.
 
 1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `signup_policy_read` needs only `read`.
 
@@ -52,7 +52,7 @@ The editor preview sends no email, so try invitations on one of these or on a De
 
 ## Your own app account
 
-Your owner account does not sign you in to the app. Sign up, or accept an invitation, with your email like anyone else. When the app keeps roles in its own table, give yourself one with SQL. The `members` template's first owner is this statement, with your account ID from Auth > Users or `app_users_list`:
+Your owner account does not sign you in to the app. Sign up, or accept an invitation, with your email like anyone else. When the app keeps roles in its own table, give yourself one with SQL. The `members` template's first owner is this statement, with your account ID from Access > Users or `app_users_list`:
 
 ```sql
 UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';
