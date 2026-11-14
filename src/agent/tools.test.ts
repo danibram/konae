@@ -282,7 +282,7 @@ describe("formatValidation", () => {
 describe("release facts", () => {
   const route = JSON.stringify({ version: 1, actions: { "orders.receive": { kind: "mutation", access: "anonymous", statement: "INSERT INTO tasks (title) VALUES (?1)", bindings: [{ source: "input", key: "title", type: "string" }], http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_hook" } } } } });
 
-  test("validate_capsule passes the facts to the Gate, and an unset secret is a warning that names Auth > Integrations", async () => {
+  test("validate_capsule passes the facts to the Gate, and an unset secret is a warning that names Access > Integrations", async () => {
     const workspace = createCapsuleWorkspace({ ...starterProject.files, "actions.json": route });
     const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), { releaseFacts: async () => ({ secrets: [] }) });
     const result = await call(tools, "validate_capsule", {});
@@ -290,7 +290,7 @@ describe("release facts", () => {
     const text = textOf(result);
     expect(text).toContain("Validation passed");
     expect(text).toContain("Action orders.receive signs with the secret orders_hook, which is not set for this project. Set it with secret_set before publishing.");
-    expect(text).toContain("Auth > Integrations");
+    expect(text).toContain("Access > Integrations");
     expect(text).toContain("Tell the person");
   });
 

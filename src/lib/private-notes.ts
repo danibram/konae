@@ -48,7 +48,7 @@ const privateNotesDeclarations: RuntimeActionDeclaration[] = [
 
 const privateNotesIndex = `
 <title>Private notes</title>
-<main class="ui-page">
+<main class="ui-page" data-purpose="Private notes. Each person signs in and sees only their own.">
   <section id="landing" class="landing" aria-labelledby="landing-title">
     <p class="ui-eyebrow">A quiet place to keep things</p>
     <h1 id="landing-title" class="ui-title">Your notes,<br><em>your space.</em></h1>

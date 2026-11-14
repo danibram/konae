@@ -118,7 +118,7 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
             <Button size="sm" onClick={() => { setName(secret.name); setValue(""); }}>Replace</Button>
             <Button size="sm" variant="ghost" aria-label={`Delete secret ${secret.name}`} onClick={() => confirm.ask({
               title: `Delete ${secret.name}?`,
-              description: "The Kernel refuses while the published app signs a route with it. Senders that still sign with it get 401.",
+              description: "Deleting it is refused while the published app signs a route with it. Senders that still sign with it get 401.",
               action: "Delete secret",
               run: async () => { await deleteSecret(projectId, secret.name); setReload((count) => count + 1); },
             })}>Delete</Button>

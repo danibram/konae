@@ -65,8 +65,8 @@ describe("signup policy copy", () => {
   });
 
   test("a republish says the policy stays and where to change it", () => {
-    expect(republishAccessNote({ visibility: "private", mode: "invitation" }, "private")).toContain("Auth > Users");
-    expect(republishAccessNote({ visibility: "public", mode: "open" }, "private")).toContain("turns Open signup into Closed");
+    expect(republishAccessNote({ visibility: "private", mode: "invitation" }, "private")).toContain("Access > Users");
+    expect(republishAccessNote({ visibility: "public", mode: "open" }, "private")).toContain("Open signup becomes Closed");
     expect(republishAccessNote({ visibility: "public", mode: "invitation" }, "private")).not.toContain("Closed");
   });
 

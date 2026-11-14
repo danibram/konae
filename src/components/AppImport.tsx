@@ -33,6 +33,7 @@ export function AppImport({ deploymentId, project, visibility, onImported, onSig
   const [losses, setLosses] = useState<SchemaChange | null>(null);
   const [done, setDone] = useState<Extract<ImportResult, { imported: true }> | null>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const choose = async (file: File | undefined) => {
     setError(""); setLosses(null); setDone(null); setFolder(null);
@@ -64,10 +65,12 @@ export function AppImport({ deploymentId, project, visibility, onImported, onSig
   return <section className="domain-step" aria-label="Import" aria-busy={busy}>
     <header className="domain-heading"><Upload size={20} /><h3>Import</h3></header>
     <p>Replace this app with an exported app folder (the .tar that Export downloads). A backup of what the import replaces comes first; restore it from the Data panel's Backups. Rows are never merged, and people stay signed in.</p>
-    <label className="import-file">
+    <div className="import-file">
       <span>App folder</span>
-      <input type="file" accept=".tar,application/x-tar" disabled={busy} onChange={(event) => void choose(event.target.files?.[0])} />
-    </label>
+      <input ref={fileRef} type="file" accept=".tar,application/x-tar" hidden disabled={busy} onChange={(event) => void choose(event.target.files?.[0])} />
+      <Button disabled={busy} onClick={() => fileRef.current?.click()}>Choose a .tar</Button>
+      <span className="import-file-name">{folder?.name ?? "No file selected"}</span>
+    </div>
     {folder && <>
       <p>{folder.name}: {folder.read.settings.name}, {Object.keys(folder.read.sources).length} source files{hasData ? ", with data" : ", without data"}.</p>
       <fieldset className="import-choices" disabled={busy}>

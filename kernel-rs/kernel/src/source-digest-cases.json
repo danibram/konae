@@ -1,0 +1,20 @@
+{
+  "comment": "The digest of an app's sources. kernel-rs/kernel/src/sources.rs `digest` and src/deployments/source-digest.ts `sourceDigest` must both give `digest` for `files`.",
+  "cases": [
+    {
+      "files": {
+        "index.html": "<p>héllo</p>\n",
+        "src/main.ts": "",
+        "actions.json": "{}",
+        "a b/ñ.css": "p{}",
+        "～.txt": "wave",
+        "😀.txt": "smile"
+      },
+      "digest": "ec5d9b41ced886933a8075ae575ce64eb7806f33674731e4ac6654a08ee51b7b"
+    },
+    {
+      "files": {},
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

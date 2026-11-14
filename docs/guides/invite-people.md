@@ -10,14 +10,14 @@ An invitation is the owner's offer of an account in one app to one email, sent a
 
 ## In the editor
 
-1. Open the project and go to Auth > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people.
+1. Open the project and go to Access > Users. After a deploy with the Invitation only policy, the deploy dialog also offers Invite people.
 2. Check the signup policy under "Who can create an app account" and change it if the app needs another one. Existing accounts keep working.
 3. Under Invite people, enter the email addresses and send. Invite only the people the owner asked for, because this sends email.
 4. Resend or revoke an invitation from the list of invitations below it. Under App accounts you can also suspend and resume an account. Suspension ends its sessions and keeps its rows.
 
 ## Over MCP
 
-A project published from a folder with the CLI shows on the project list under "Apps without editor files". **Open data and users** on its card opens the same Users view, without the app's files, and its owner can also invite people over MCP.
+A project published from a folder with the CLI shows on the project list with the others, marked "Edited in a folder". Its card opens its data, its Users view and what it did, without the app's files, and its owner can also invite people over MCP.
 
 1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `signup_policy_read` needs only `read`.
 
@@ -42,7 +42,7 @@ The editor preview sends no email, so try invitations on one of these or on a De
 
 ## Your own app account
 
-Your owner account does not sign you in to the app. Sign up, or accept an invitation, with your email like anyone else. When the app keeps roles in its own table, give yourself one with SQL, using the account ID that Auth > Users or `app_users_list` shows. Run the SQL in the editor's Data panel, or with `bun run konae -- sql --dir <folder> --prod "<statement>"` for an app published with the CLI.
+Your owner account does not sign you in to the app. Sign up, or accept an invitation, with your email like anyone else. When the app keeps roles in its own table, give yourself one with SQL, using the account ID that Access > Users or `app_users_list` shows. Run the SQL in the editor's Data panel, or with `bun run konae -- sql --dir <folder> --prod "<statement>"` for an app published with the CLI.
 
 ## Check it worked
 

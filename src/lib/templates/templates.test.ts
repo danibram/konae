@@ -5,7 +5,8 @@ import initSqlJs, { type SqlJsStatic } from "sql.js";
 import type { CapsuleFiles } from "../../agent/contracts";
 import { createCapsuleValidator } from "../../agent/gate";
 import { notifyReturning, notifyReturningStatement, parseServerActionSource } from "../../kernel/actions";
-import { cloneStarter } from "../starter";
+import { cloneStarter, plainListProject, plainListPurpose } from "../starter";
+import { projectPurpose } from "../../components/project-list";
 import { adminCheck } from "./members";
 import { DEFAULT_TEMPLATE } from "../../../scripts/project-templates";
 import * as templates from "./index";
@@ -41,15 +42,16 @@ describe("a project born from a template", () => {
     }
   });
 
-  test("the new project dialog starts on the private notes template, the one konae init and project_create default to", () => {
+  test("private notes is the template konae init and project_create default to; the new project dialog chooses none for the person", () => {
     expect(templates.defaultTemplate).toBe("notes");
     expect(templates.defaultTemplate).toBe(DEFAULT_TEMPLATE);
     const created = applyTemplate({ ...cloneStarter(), id: "app_default", name: "Default", slug: "default" }, templates.defaultTemplate);
     expect(created.manifest.visibility).toBe("private");
     expect(created.manifest.runtime.auth.mode).toBe("required");
     const dashboard = readFileSync(path.join(import.meta.dir, "../../components/ProjectDashboard.tsx"), "utf8");
-    expect(dashboard).toContain("useState<TemplateId>(defaultTemplate)");
-    expect(dashboard).not.toContain('useState<TemplateId>("tasks")');
+    // New project opens with nothing chosen: a description picks "No template", or the person clicks one.
+    expect(dashboard).toContain("setCreating({ template: null })");
+    expect(dashboard).not.toContain("setCreating(defaultTemplate)");
   });
 
   test("each choice says before creation whether the app starts public, the way the project is born", () => {
@@ -137,5 +139,45 @@ describe("a project born from a template", () => {
     expect(db.exec(statement, [now])).toEqual([]);
     expect(db.exec("SELECT body FROM entries WHERE digested_at IS NULL")[0].values).toEqual([["today"]]);
     db.close();
+  });
+
+  describe("No template", () => {
+    const described = 'A chore rota for "our" flat & friends.\nWho cleans <when>.';
+    const plain = plainListProject({ ...cloneStarter(), id: "app_plain", name: "Chore <rota>", slug: "chore-rota" }, described);
+    const page = plain.files["index.html"];
+
+    test("is a private plain list whose page, card and Access agree", () => {
+      expect(plain.manifest.visibility).toBe("private");
+      expect(plain.manifest.runtime.auth.mode).toBe("required");
+      const { actions } = parseServerActionSource(plain.files["actions.json"]);
+      for (const action of Object.values(actions)) expect(action.access).toBe("authenticated");
+      expect(plain.manifest.runtime.database.actions.map((action) => [action.name, action.access]).sort())
+        .toEqual(Object.keys(actions).sort().map((name) => [name, "authenticated"]));
+      for (const file of ["index.html", "app.js"] as const) {
+        expect(plain.files[file]).not.toMatch(/anyone|pinboard|miniapp\.files|Tiny Tasks|Shared list|Guest/i);
+      }
+    });
+
+    test("is titled with the project name and declares the person's words as its purpose", () => {
+      expect(page).toContain("<title>Chore &lt;rota&gt;</title>");
+      expect(page).toContain('<h1 class="ui-title">Chore &lt;rota&gt;</h1>');
+      expect(projectPurpose(plain)).toBe('A chore rota for "our" flat & friends. Who cleans <when>.');
+      expect(page).not.toContain("<when>");
+    });
+
+    test("without words it still says what it is", () => {
+      expect(projectPurpose(plainListProject(cloneStarter()))).toBe(plainListPurpose);
+    });
+
+    test("passes the Gate and calls only what it declares", async () => {
+      const files = plain.files as CapsuleFiles;
+      expect((await validator.validate(files)).errors).toEqual([]);
+      const live = await validator.validate(files, { state: "loaded", bytes: await exportDatabase(files["schema.sql"]) });
+      expect(live.errors).toEqual([]);
+      const declared = new Set(Object.keys(parseServerActionSource(plain.files["actions.json"]).actions));
+      for (const [, name] of plain.files["app.js"].matchAll(/actions\.call\('([^']+)'/g)) expect(declared.has(name)).toBe(true);
+      const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (body: string) => unknown;
+      expect(() => new AsyncFunction(plain.files["app.js"])).not.toThrow();
+    });
   });
 });

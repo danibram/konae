@@ -19,23 +19,30 @@ import type { AgentSessionConfig } from "../agent/contracts";
 import { validationSummary, type ToolChip } from "./agent-thread-state";
 import type { AgentThread } from "./useAgentThread";
 import "./agent-panel.css";
-import { Textarea } from "./ui";
+import { Button, Textarea } from "./ui";
 
 type Props = {
   thread: AgentThread;
   sessionConfig: AgentSessionConfig;
   onOpenSettings: () => void;
+  /** Changes this app does not make yet, offered before anyone types. */
+  suggestions?: string[];
 };
 
 /**
  * The agent conversation, in the editor next to the code it edits. Provider,
  * model and key live in the settings dialog; this panel only reports which of
  * them is answering. All state belongs to `useAgentThread`, so the panel can be
- * dragged between groups without losing the conversation.
+ * moved between the rail and the stage without losing the conversation.
+ *
+ * Top to bottom: the thread, the Gate's verdict with Apply, and the composer,
+ * which is always there. With no model connected a picked suggestion still
+ * fills the composer, and the send button says what it needs.
  */
-export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [] }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     const element = threadRef.current;
@@ -43,70 +50,42 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
   }, [state.messages, state.tools, footer.kind]);
 
   const model = sessionConfig.modelId || "no model";
-  const needsConnect = !live && state.messages.length === 0;
-
-  if (needsConnect) {
-    return (
-      <div className="messages agent-thread agent-connect-panel" ref={threadRef} aria-live="polite">
-        <div className="agent-thread-empty agent-connect-step">
-          <span className="agent-empty-mark"><Settings2 size={22} /></span>
-          <h2>Connect a model to change this app.</h2>
-          <p>Describe what should change in plain words. The model edits the files; you apply the change after you see it.</p>
-          <button type="button" className="agent-connect" onClick={onOpenSettings}>
-            Connect a model
-          </button>
-          <p className="agent-empty-note">Your key stays in this browser. Pick a change. It waits here until the model is connected.</p>
-          <ExamplePrompts onPick={thread.setDraft} />
-        </div>
-      </div>
-    );
-  }
+  const descriptionReady = state.messages.length === 0 && !live && Boolean(thread.draft.trim());
+  const pick = (sentence: string) => {
+    thread.setDraft(sentence);
+    requestAnimationFrame(() => {
+      const element = composerRef.current;
+      if (!element) return;
+      element.focus();
+      element.setSelectionRange(sentence.length, sentence.length);
+    });
+  };
+  const send = () => {
+    if (!thread.draft.trim()) return;
+    if (!live) { onOpenSettings(); return; }
+    void thread.submit();
+  };
 
   return (
-    <>
-      <div className="prompt-box">
-        <Textarea aria-label="Message to agent"
-          value={thread.draft}
-          rows={2}
-          placeholder={blocker || "Describe the app."}
-          onChange={(event) => thread.setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.shiftKey) return;
-            event.preventDefault();
-            if (!thread.draft.trim()) return;
-            if (!live) { onOpenSettings(); return; }
-            void thread.submit();
-          }}
-        />
-        <div>
-          <button className={`agent-model-chip ${live ? "" : "is-connect"}`} onClick={onOpenSettings} title="Agent settings">
-            <Settings2 size={11} />
-            <span>{blocker || (live ? `${provider.label} · ${model}` : "Connect a model")}</span>
-          </button>
-          {running
-            ? <button className="agent-stop" onClick={thread.interrupt}><Square size={11} /> Stop</button>
-            : live && (
-              <button
-                className="agent-send"
-                aria-label="Send"
-                title={blocker}
-                disabled={running || !thread.draft.trim() || blocker.length > 0}
-                onClick={() => { void thread.submit(); }}
-              >
-                <ArrowUp size={15} />
-              </button>
-            )}
-        </div>
-      </div>
+    <div className="agent-panel">
       <div className="messages agent-thread" ref={threadRef} aria-live="polite" aria-busy={running}>
         {state.messages.length === 0 && (
           <div className="agent-thread-empty">
-            <span className="agent-empty-mark"><Sparkles size={22} /></span>
+            {descriptionReady ? <>
+              <h2>Your description is ready</h2>
+              <p>Connect a model and Konae builds it from these words.</p>
+              <Button variant="primary" className="agent-ready-connect" onClick={onOpenSettings}><Settings2 size={13} aria-hidden="true" /> Connect a model</Button>
+            </> : <>
             <h2>What should change?</h2>
-            <p>Describe it in one sentence. You apply the change after you see it.</p>
-            <p className="agent-examples-label">Try asking</p>
-            <ExamplePrompts onPick={thread.setDraft} />
-            <p className="agent-empty-note">{provider.label} uses your key, saved in this browser.</p>
+            <p>{live
+              ? "Describe it in one sentence. You see the change in the preview and apply it when it looks right."
+              : "Describe it in one sentence. A model you connect makes the change, and you apply it after you see it."}</p>
+            {suggestions.length > 0 && <>
+              <p className="agent-examples-label">Try one</p>
+              <ExamplePrompts sentences={suggestions} onPick={pick} />
+            </>}
+            </>}
+            <p className="agent-empty-note">{live ? `${provider.label} uses your key, saved in this browser.` : "Your key stays in this browser."}</p>
           </div>
         )}
         {state.messages.map((message) => (
@@ -166,20 +145,50 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings }: Props) {
         </div>
       )}
 
-    </>
+      <div className="prompt-box">
+        <Textarea id="agent-composer" ref={composerRef} aria-label="Message to agent"
+          value={thread.draft}
+          rows={2}
+          placeholder={blocker || "Describe the change."}
+          onChange={(event) => thread.setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            send();
+          }}
+        />
+        <div>
+          {live && (
+            <button className="agent-model-chip" onClick={onOpenSettings} title="Model settings">
+              <Settings2 size={11} />
+              <span>{blocker || `${provider.label} · ${model}`}</span>
+            </button>
+          )}
+          {running
+            ? <button className="agent-stop" onClick={thread.interrupt}><Square size={11} /> Stop</button>
+            : live
+              ? (
+                <button
+                  className="agent-send"
+                  aria-label="Send"
+                  title={blocker}
+                  disabled={!thread.draft.trim() || blocker.length > 0}
+                  onClick={send}
+                >
+                  <ArrowUp size={15} />
+                </button>
+              )
+              : !descriptionReady && <Button variant="primary" size="sm" className="agent-connect" onClick={onOpenSettings}><Settings2 size={13} aria-hidden="true" /> Connect a model to send</Button>}
+        </div>
+      </div>
+    </div>
   );
 }
 
-const examplePrompts = [
-  "Let anyone with the link add a row.",
-  "Stop the list at 100 rows.",
-  "Ask for a name before the app opens.",
-];
-
-function ExamplePrompts({ onPick }: { onPick: (sentence: string) => void }) {
+function ExamplePrompts({ sentences, onPick }: { sentences: string[]; onPick: (sentence: string) => void }) {
   return (
     <div className="agent-examples">
-      {examplePrompts.map((sentence) => (
+      {sentences.map((sentence) => (
         <button key={sentence} type="button" onClick={() => onPick(sentence)}>{sentence}</button>
       ))}
     </div>

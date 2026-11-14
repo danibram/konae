@@ -80,6 +80,51 @@ async fn swap(root: &Path, id: &str, staged: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The digest of a release's sources, which the Deployment returns as
+/// `sourceDigest` so the editor can tell whether its files are the ones the
+/// app runs. SHA-256 in lowercase hex over the files sorted by the bytes of
+/// their path. Each file adds its path, a NUL, its length in bytes as decimal
+/// digits, a NUL and its bytes. src/deployments/source-digest.ts computes the
+/// same, and source-digest-cases.json holds the cases both run.
+pub fn digest<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> String {
+    use sha2::Digest;
+    let sorted: std::collections::BTreeMap<&str, &[u8]> = files.into_iter().collect();
+    let mut hasher = sha2::Sha256::new();
+    for (path, bytes) in sorted {
+        hasher.update(path.as_bytes());
+        hasher.update([0]);
+        hasher.update(bytes.len().to_string().as_bytes());
+        hasher.update([0]);
+        hasher.update(bytes);
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// The digest of the files in `app/`. Like `konae publish`, it skips dot
+/// entries and `node_modules` at any depth.
+pub async fn digest_folder(app: &Path) -> Result<String> {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut pending: Vec<PathBuf> = vec![app.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut entries = tokio::fs::read_dir(&directory).await.with_context(|| format!("{} is not readable.", directory.display()))?;
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            let kind = entry.file_type().await?;
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                let relative = entry.path().strip_prefix(app)?.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                files.push((relative, tokio::fs::read(entry.path()).await?));
+            }
+        }
+    }
+    Ok(digest(files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice()))))
+}
+
 /// The saved sources as the editor sent them, or `None` when the app has none.
 pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
     let metadata = match tokio::fs::read(layout::private(root, id).join(layout::SOURCES_METADATA)).await {
@@ -111,6 +156,29 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_digest_matches_every_case_the_editor_runs() {
+        let cases: Value = serde_json::from_str(include_str!("source-digest-cases.json")).unwrap();
+        for case in cases["cases"].as_array().unwrap() {
+            let files = case["files"].as_object().unwrap();
+            let expected = case["digest"].as_str().unwrap();
+            assert_eq!(digest(files.iter().map(|(path, text)| (path.as_str(), text.as_str().unwrap().as_bytes()))), expected);
+
+            // The same files written to app/ give the same digest, and dot entries and node_modules do not count.
+            let app = std::env::temp_dir().join(format!("konae-digest-{}", Uuid::new_v4()));
+            for (path, text) in files {
+                let target = app.join(path);
+                tokio::fs::create_dir_all(target.parent().unwrap()).await.unwrap();
+                tokio::fs::write(&target, text.as_str().unwrap()).await.unwrap();
+            }
+            tokio::fs::create_dir_all(app.join("node_modules/x")).await.unwrap();
+            tokio::fs::write(app.join("node_modules/x/index.js"), "1").await.unwrap();
+            tokio::fs::write(app.join(".DS_Store"), "1").await.unwrap();
+            assert_eq!(digest_folder(&app).await.unwrap(), expected);
+            let _ = tokio::fs::remove_dir_all(app).await;
+        }
+    }
 
     #[tokio::test]
     async fn saved_sources_are_the_files_of_app_and_read_back_the_same() {

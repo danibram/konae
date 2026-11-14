@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE UNIQUE INDEX IF NOT EXISTS events_external_id_unique ON events(external_id);
 
 -- The accounts that read the feed. The owner adds one from Data > SQL with
--- the account ID that Auth > Users shows:
+-- the account ID that Access > Users shows:
 --   INSERT INTO admins (user_id) VALUES ('<account id>');
 CREATE TABLE IF NOT EXISTS admins (
   user_id TEXT PRIMARY KEY

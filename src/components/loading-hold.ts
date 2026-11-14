@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 
 /** A loader that would show for less than this stays hidden. */
-export const LOADING_DELAY_MS = 200;
+export const LOADING_DELAY_MS = 250;
 /** Once a loader has shown, it stays at least this long. */
-export const LOADING_MINIMUM_MS = 300;
+export const LOADING_MINIMUM_MS = 400;
 
 /**
  * How much longer a loader must stay up after its work finished.

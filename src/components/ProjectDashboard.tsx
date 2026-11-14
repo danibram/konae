@@ -1,20 +1,18 @@
-import {
-  ArrowRight,
-  Clock3,
-  ExternalLink,
-  Globe2,
-  LockKeyhole,
-  Plus,
-} from "lucide-react";
-import { useMemo, useState } from "react";
-import { Badge, Button, Card, Dialog, Field, Input } from "./ui";
-import type { DeploymentReceipt } from "../deployments/client";
+import { ArrowRight, BarChart3, Code2, Copy, Download, MoreHorizontal, Plus, RotateCcw, Search, Sparkles, Terminal, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Alert, Button, Dialog, EmptyState, Field, Input, Menu, Select, Textarea, ToastRegion, type MenuItem, type ToastItem } from "./ui";
 import type { DeploymentIndex } from "../lib/workspace";
 import type { MiniAppProject } from "../lib/types";
 import type { OwnerSession } from "./owner-session";
 import type { ProjectMetadata } from "../lib/project-sources";
 import { WorkspaceNav } from "./WorkspaceNav";
+import { AppStatus, UndeployedMarker, useRelativeTime } from "./AppStatus";
+import { changesNotDeployed, releasedAt } from "../deployments/deployed-changes";
+import { useSourceDigests } from "../deployments/source-digest";
+import { groupProjects, listOrder, nameFromDescription, projectEntries, pullCommand, uniqueName, type ProjectEntry, type ProjectSort } from "./project-list";
+import { exactTime } from "../lib/relative-time";
 import { defaultTemplate, templateChoices, type TemplateId } from "../lib/templates";
+import "./project-list.css";
 
 type Props = {
   projects: MiniAppProject[];
@@ -26,250 +24,377 @@ type Props = {
   onImportDraft: (index: number) => void;
   onDismissDraft: (index: number) => void;
   onDeleteMissing: (project: ProjectMetadata, name: string) => Promise<void>;
+  /**
+   * Deletes a project the editor holds files for. Until the editor passes it,
+   * those cards offer no Delete, because the list could not drop the card.
+   */
+  onDeleteProject?: (project: ProjectMetadata, name: string) => Promise<void>;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
-  /** Opens the data, accounts and activity of a published app that has no editor files. */
+  /** Opens the data, accounts and activity of a published app whose files live in a folder. */
   onOpenPublished: (projectId: string) => void;
-  onCreateProject: (name: string, template: TemplateId | "scratch") => void;
+  /** `description` is what the owner wrote under "What should it do?", for the conversation to start from. */
+  onCreateProject: (name: string, template: TemplateId | "scratch", description?: string) => void;
+  /** A model is connected, so Describe can act on a description. New project says so when it cannot. */
+  modelConnected?: boolean;
 };
 
-export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onOpenProject, onOpenPublished, onCreateProject }: Props) {
-  const interrupted = missing.filter((item) => !projects.some((project) => project.id === item.id));
-  const projectCount = projects.length + interrupted.length;
-  const [deleting, setDeleting] = useState<ProjectMetadata | null>(null);
-  const [newestFirst, setNewestFirst] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState("");
-  const [nameTouched, setNameTouched] = useState(false);
-  const [template, setTemplate] = useState<TemplateId>(defaultTemplate);
-  const filtered = useMemo(
-    () => [...projects].sort((a, b) => newestFirst ? b.updatedAt - a.updatedAt : a.updatedAt - b.updatedAt),
-    [projects, newestFirst],
-  );
-  const nameMissing = !name.trim();
-  const nameError = nameTouched && nameMissing ? "A project name is required." : undefined;
-  const create = () => {
-    setNameTouched(true);
-    if (nameMissing) return;
-    onCreateProject(name.trim(), template);
-    setName("");
-    setNameTouched(false);
-    setCreating(false);
+
+const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+
+export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onDeleteProject, onOpenProject, onOpenPublished, onCreateProject, modelConnected = false }: Props) {
+  const entries = useMemo(() => projectEntries(projects, missing, deployments), [projects, missing, deployments]);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<ProjectSort>("edited");
+  const groups = useMemo(() => groupProjects(entries, query, sort), [entries, query, sort]);
+  const [deleting, setDeleting] = useState<ProjectEntry | null>(null);
+  // Which template the opener picked; New project itself opens with none picked.
+  const [creating, setCreating] = useState<{ template: TemplateId | null } | null>(null);
+  const [exporting, setExporting] = useState("");
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toast = (message: string, tone: ToastItem["tone"] = "success") => {
+    const id = Date.now();
+    setToasts((current) => [...current, { id, message, tone }]);
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4000);
+  };
+  useEffect(() => { document.title = "Projects · Konae"; }, []);
+  // A cached copy of a project the account already holds is not a copy outside the account: an agent or the CLI may simply have changed it since.
+  const localCopies = drafts.map((draft, index) => ({ draft, index })).filter(({ draft }) => !missing.some((item) => item.id === draft.id) && !projects.some((item) => item.id === draft.id));
+
+  // The same comparison as the workbench's top bar, so the card and the project never disagree.
+  const digests = useSourceDigests(projects);
+  const undeployed = (entry: ProjectEntry) => {
+    const project = entry.deployment && projects.find((item) => item.id === entry.id);
+    return Boolean(project && changesNotDeployed(project, entry.deployment, digests.get(project.id) ?? null));
+  };
+  const open = (entry: ProjectEntry, door: "preview" | "agent" | "code" = "preview") => {
+    if (entry.inFolder) { if (entry.deployment) onOpenPublished(entry.id); return; }
+    onOpenProject(entry.id, door);
+  };
+  const copyAddress = (url: string) => {
+    void navigator.clipboard?.writeText(url)
+      .then(() => toast("Address copied"))
+      .catch(() => toast("Could not copy. Select the address on the card instead.", "danger"));
+  };
+  const copyPull = () => {
+    void navigator.clipboard?.writeText(pullCommand)
+      .then(() => toast("Pull command copied. Run it in the app's folder."))
+      .catch(() => toast(`Could not copy. In the app's folder, run ${pullCommand}`, "danger"));
+  };
+  /** The same export the editor's More menu makes: the app folder, with accounts and rows once it is published. */
+  const exportApp = async (entry: ProjectEntry) => {
+    const project = projects.find((item) => item.id === entry.id);
+    if (!project || exporting) return;
+    setExporting(entry.id);
+    toast(`Exporting ${entry.name}…`, "info");
+    try {
+      const [{ createProjectExport }, { buildProjectInBrowser }] = await Promise.all([import("../lib/export-project"), import("../runtime/browser-build")]);
+      const result = await createProjectExport(project, await buildProjectInBrowser(project), entry.deployment?.id);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast(entry.deployment
+        ? `${result.filename} saved. It holds the app's files, accounts, rows and rules.${result.sourcesAhead ? " The published app runs older files than the editor holds; deploy, then export again, to make them match." : ""}`
+        : `${result.filename} saved. It holds the app's files. A draft has no accounts or rows yet.`);
+    } catch (error) {
+      toast(`Export failed: ${error instanceof Error ? error.message : String(error)}`, "danger");
+    } finally {
+      setExporting("");
+    }
+  };
+  const deleteHandler = deleting ? (deleting.inFolder ? onDeleteMissing : onDeleteProject) : undefined;
+  /** After a delete, focus goes to the card that took its place, so clearing several drafts keeps your place. */
+  const focusAfterDelete = (removed: ProjectEntry) => {
+    const order = listOrder(entries).filter((entry) => groups.published.includes(entry) || groups.drafts.includes(entry));
+    const at = order.findIndex((entry) => entry.id === removed.id);
+    const next = order[at + 1] ?? order[at - 1];
+    window.setTimeout(() => {
+      const target = next && document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(next.id)}"] .project-card-link`);
+      (target ?? document.querySelector<HTMLElement>(".project-list-head h1"))?.focus();
+    }, 0);
   };
 
   return (
     <div className="account-home">
-      <WorkspaceNav active="projects" projectCount={projectCount} ownerSession={ownerSession} />
+      <WorkspaceNav active="projects" projectCount={entries.length} ownerSession={ownerSession} />
 
       <main className="account-main">
-        <section className="account-content">
-          <div className="account-hero">
-            <Button variant="primary" className="new-project-button" onClick={() => setCreating(true)}><Plus size={15} /> New project</Button>
-            <h1>Your apps</h1>
-            <p className="hero-note">Drafts open in the editor. Publish an app to give it a live address.</p>
-            {notice && <p className="hero-note" role="status">{notice}</p>}
-          </div>
-          {drafts.some((draft) => !missing.some((item) => item.id === draft.id)) && <details className="local-copies"><summary>Copies saved in this browser</summary><p>Earlier versions of Konae kept apps in the browser. These copies are not in your account. Import one to edit it here, or remove it from this browser.</p><ul>{drafts.map((draft, index) => !missing.some((item) => item.id === draft.id) && <li key={`${draft.id}-${index}`}><span>{draft.name}</span> <Button size="sm" onClick={() => onImportDraft(index)}>Import as new</Button> <Button size="sm" variant="ghost" onClick={() => onDismissDraft(index)}>Remove from this browser</Button></li>)}</ul></details>}
+        <section className="account-content project-list">
+          <header className="project-list-head">
+            <h1 tabIndex={-1}>Projects</h1>
+            <Button variant="primary" onClick={() => setCreating({ template: null })}><Plus size={15} aria-hidden="true" /> New project</Button>
+          </header>
+          {notice && <Alert className="project-list-notice" tone="info">{notice}</Alert>}
+          {localCopies.length > 0 && <details className="project-list-copies">
+            <summary>Copies saved in this browser ({localCopies.length})</summary>
+            <p>Earlier versions of Konae kept apps in the browser. These copies are not in your account. Import one to edit it here, or remove it from this browser.</p>
+            <ul>{localCopies.map(({ draft, index }) => <li key={`${draft.id}-${index}`}><span>{draft.name}</span><Button size="sm" onClick={() => onImportDraft(index)}>Import as new</Button><Button size="sm" onClick={() => onDismissDraft(index)}>Remove from this browser</Button></li>)}</ul>
+          </details>}
 
-          <div className="project-list-heading">
-            <div><p>All projects</p><strong>{projectCount} project{projectCount === 1 ? "" : "s"}</strong>{interrupted.length > 0 && <p>{projects.length} editable · {interrupted.length} without editor files</p>}</div>
-            <button
-              className="project-sort"
-              aria-label={`Sort by last updated, ${newestFirst ? "newest" : "oldest"} first`}
-              onClick={() => setNewestFirst((current) => !current)}
-            >
-              Last updated {newestFirst ? "↓" : "↑"}
-            </button>
-          </div>
-
-          {([true, false] as const).map((published) => {
-            const group = filtered.filter((project) => Boolean(deployments[project.id]) === published);
-            if (!group.length) return null;
-            return <section className="dashboard-app-group" aria-label={published ? "Published apps" : "Draft apps"} key={String(published)}>
-              <h2>{published ? "Published" : "Drafts"} <small>{group.length}</small></h2>
-              {!published && <p>These apps have no published address yet. Open the editor, then Deploy when ready.</p>}
-              <div className="project-grid">
-            {group.map((project, index) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                deployment={deployments[project.id]}
-                index={index}
-                onOpen={(entry) => onOpenProject(project.id, entry)}
-              />
-            ))}
+          {entries.length === 0
+            ? <EmptyState
+              className="project-list-empty"
+              icon={<Sparkles size={22} />}
+              title="No projects yet"
+              description="Say what you need in plain words, and Konae makes an app that runs."
+              action={<div className="project-list-empty-actions">
+                <Button variant="primary" onClick={() => setCreating({ template: null })}><Plus size={15} aria-hidden="true" /> Describe your first app</Button>
+                <p>Or start from a template</p>
+                <div>{templateChoices.filter((choice) => choice.id !== defaultTemplate).slice(0, 3).map((choice) => <Button key={choice.id} size="sm" onClick={() => setCreating({ template: choice.id })}>{choice.name}</Button>)}</div>
+              </div>}
+            />
+            : <>
+              <div className="project-list-tools">
+                <label className="project-list-search">
+                  <Search size={15} aria-hidden="true" />
+                  <span className="sr-only">Search projects</span>
+                  <Input type="search" placeholder="Search projects" value={query} onChange={(event) => setQuery(event.target.value)} />
+                </label>
+                <label className="project-list-sort">
+                  <span>Sort</span>
+                  <Select value={sort} onChange={(event) => setSort(event.target.value as ProjectSort)}>
+                    <option value="edited">Last edited</option>
+                    <option value="name">Name</option>
+                  </Select>
+                </label>
               </div>
-            </section>;
-          })}
-          {interrupted.length > 0 && <section className="dashboard-app-group dashboard-recovery" aria-label="Apps without editor files">
-            <h2>Apps without editor files <small>{interrupted.length}</small></h2>
-            <p>Your account has these apps, but no files were saved for the editor, so their files cannot open here. An app made and published from a folder with the Konae command line or over MCP looks like this. A published one opens on its data, its accounts and what it did.</p>
-            <div className="project-grid">
-            {interrupted.map((item) => {
-              const draftIndex = drafts.findIndex((draft) => draft.id === item.id);
-              const deployment = deployments[item.id];
-              return <Card key={item.id} className="project-card">
-                <div className="project-card-body">
-                  <div className="project-card-title"><h2>{item.name}</h2><Badge tone="neutral">No editor files</Badge></div>
-                  {draftIndex >= 0
-                    ? <p>This browser holds a copy of its files. Restore it to edit the app here.</p>
-                    : <p>Its files live in the folder it was published from. Publish changes from there with the Konae command line.</p>}
-                  <footer>
-                    {draftIndex >= 0 && <Button size="sm" onClick={() => onImportDraft(draftIndex)}>Restore editor files</Button>}
-                    {deployment && <Button size="sm" variant="secondary" onClick={() => onOpenPublished(item.id)}>Open data and users</Button>}
-                    {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
-                    <Button size="sm" variant="ghost" onClick={() => setDeleting(item)}>Delete app…</Button>
-                  </footer>
-                </div>
-              </Card>;
-            })}
-            </div>
-          </section>}
-          {projectCount === 0 && <div className="projects-empty"><strong>No projects yet</strong><p>Create one and describe what it should do.</p></div>}
-          <section className="take-it-group" aria-labelledby="take-it-heading">
-            <h2 id="take-it-heading">Take it with you</h2>
-            <p>Open a project, then Export or Deploy.</p>
-          </section>
+              {([["Published", groups.published], ["Drafts", groups.drafts]] as const).map(([title, group]) => group.length > 0 && <section className="project-list-group" aria-labelledby={`projects-${title}`} key={title}>
+                <h2 id={`projects-${title}`}>{title}</h2>
+                <ul className="project-cards">
+                  {group.map((entry) => <ProjectCard
+                    key={entry.id}
+                    entry={entry}
+                    restoreIndex={drafts.findIndex((draft) => draft.id === entry.id)}
+                    onOpen={(door) => open(entry, door)}
+                    onRestore={onImportDraft}
+                    onCopy={copyAddress}
+                    onDelete={entry.inFolder || onDeleteProject ? () => setDeleting(entry) : undefined}
+                    onExport={entry.inFolder ? undefined : () => void exportApp(entry)}
+                    exporting={exporting === entry.id}
+                    onCopyPull={entry.inFolder && entry.deployment ? copyPull : undefined}
+                    undeployed={undeployed(entry)}
+                  />)}
+                </ul>
+              </section>)}
+              {!groups.published.length && !groups.drafts.length && <p className="project-list-none" role="status">No project matches "{query.trim()}".</p>}
+            </>}
         </section>
       </main>
-      <DeleteProjectDialog project={deleting} published={Boolean(deleting && deployments[deleting.id])} onClose={() => setDeleting(null)} onDelete={onDeleteMissing} />
-      <Dialog
-        open={creating}
-        className="new-project"
-        title="Name this app"
-        description="Pick a name, then how it starts."
-        onClose={() => { setCreating(false); setNameTouched(false); }}
-        footer={<>
-          <Button onClick={() => { setCreating(false); setNameTouched(false); }}>Cancel</Button>
-          <Button variant="primary" type="submit" form="new-project">Create <ArrowRight size={14} /></Button>
-        </>}
-      >
-        <form id="new-project" className="new-project-dialog" onSubmit={(event) => { event.preventDefault(); create(); }}>
-          <Field
-            label="Project name"
-            help={nameError ?? "Choose a name you can recognize later."}
-          >
-            <Input
-              autoFocus
-              value={name}
-              aria-invalid={nameError ? true : undefined}
-              onChange={(event) => { setName(event.target.value); if (nameTouched) setNameTouched(true); }}
-              placeholder=""
-              maxLength={80}
-            />
-          </Field>
-          <fieldset className="start-cards">
-            <legend>Start with</legend>
-            <p className="start-note">Each one runs as it is. Describe what to change next.</p>
-            {templateChoices.map((choice) => (
-              <label key={choice.id} className={template === choice.id ? "selected" : ""}>
-                <input type="radio" name="project-template" value={choice.id} checked={template === choice.id} onChange={() => setTemplate(choice.id)} />
-                <span className="start-title"><strong>{choice.name}</strong><Badge tone={choice.visibility === "public" ? "success" : "accent"}>{choice.visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{choice.visibility === "public" ? "Public" : "Private"}</Badge></span>
-                <small>{choice.sentence}</small>
-              </label>
-            ))}
-          </fieldset>
-        </form>
-      </Dialog>
+      {deleting && deleteHandler && <DeleteProjectDialog
+        project={deleting}
+        published={Boolean(deleting.deployment)}
+        onClose={() => setDeleting(null)}
+        onDelete={deleteHandler}
+        onDeleted={(name) => { toast(`${name} deleted`); focusAfterDelete(deleting); }}
+        onExport={deleting.inFolder ? undefined : () => void exportApp(deleting)}
+        exporting={exporting === deleting.id}
+        onCopyPull={deleting.inFolder && deleting.deployment ? copyPull : undefined}
+      />}
+      {creating && <NewProjectDialog
+        initialTemplate={creating.template}
+        modelConnected={modelConnected}
+        takenNames={entries.map((entry) => entry.name)}
+        onClose={() => setCreating(null)}
+        onCreate={(name, template, description) => { setCreating(null); onCreateProject(name, template, description); }}
+      />}
+      <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
     </div>
   );
 }
 
-function DeleteProjectDialog({ project, published, onClose, onDelete }: {
-  project: ProjectMetadata | null;
+function ProjectCard({ entry, restoreIndex, onOpen, onRestore, onCopy, onDelete, onExport, exporting = false, onCopyPull, undeployed = false }: {
+  entry: ProjectEntry;
+  /** The editor holds changes the published app does not run yet. */
+  undeployed?: boolean;
+  restoreIndex: number;
+  onOpen: (door: "preview" | "agent" | "code") => void;
+  onRestore: (index: number) => void;
+  onCopy: (url: string) => void;
+  onDelete?: () => void;
+  /** Downloads the app folder, as the editor's Export does. */
+  onExport?: () => void;
+  exporting?: boolean;
+  /** For an app edited in a folder: copies the command that brings its data to that folder. */
+  onCopyPull?: () => void;
+}) {
+  const { deployment } = entry;
+  const editedTime = useRelativeTime(entry.editedAt);
+  const opens = !entry.inFolder || Boolean(deployment);
+  const href = `/app/${encodeURIComponent(entry.id)}`;
+  const items: MenuItem[] = [
+    ...(!entry.inFolder ? [
+      { label: "Describe a change", icon: <Sparkles size={14} />, onSelect: () => onOpen("agent") },
+      { label: "Edit files", icon: <Code2 size={14} />, onSelect: () => onOpen("code") },
+    ] : []),
+    ...(restoreIndex >= 0 && entry.inFolder ? [{ label: "Restore editor files", icon: <RotateCcw size={14} />, onSelect: () => onRestore(restoreIndex) }] : []),
+    ...(deployment ? [
+      { label: "Copy address", icon: <Copy size={14} />, onSelect: () => onCopy(deployment.url) },
+      { label: "Usage", icon: <BarChart3 size={14} />, onSelect: () => window.location.assign(`/usage?deployment=${encodeURIComponent(deployment.id)}`) },
+    ] : []),
+    ...(onExport ? [{ label: exporting ? "Exporting…" : "Export app folder", icon: <Download size={14} />, disabled: exporting, onSelect: onExport }] : []),
+    ...(onCopyPull ? [{ label: "Copy pull command", icon: <Terminal size={14} />, onSelect: onCopyPull }] : []),
+    ...(onDelete ? [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: onDelete }] : []),
+  ];
+  return <li className="project-card-item" data-opens={opens || undefined} data-project-id={entry.id}>
+    <h3>
+      {opens
+        ? <a className="project-card-link" href={href} onClick={(event) => { if (!plainClick(event)) return; event.preventDefault(); onOpen("preview"); }}>{entry.name}</a>
+        : <span>{entry.name}</span>}
+    </h3>
+    {entry.purpose
+      ? <p className="project-card-purpose">{entry.purpose}</p>
+      : !entry.inFolder && <p className="project-card-purpose is-quiet">No description yet.</p>}
+    {entry.inFolder && <p className="project-card-purpose is-quiet">{restoreIndex >= 0 ? "Edited in a folder. This browser holds a copy of its files." : "Edited in a folder."}</p>}
+    <AppStatus className="project-card-status" url={deployment?.url} publishedAt={deployment ? releasedAt(deployment) : undefined} />
+    <p className="project-card-meta">
+      {entry.editedAt !== undefined && <time dateTime={new Date(entry.editedAt).toISOString()} title={exactTime(entry.editedAt)}>Edited {editedTime}</time>}
+      {undeployed && <UndeployedMarker />}
+    </p>
+    {items.length > 0 && <div className="project-card-menu">
+      <Menu label={`More for ${entry.name}`} trigger={<MoreHorizontal size={16} />} triggerClassName="project-card-more" items={items} />
+    </div>}
+  </li>;
+}
+
+function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose, onCreate }: {
+  /** A template the person already clicked, or null: nothing is chosen for them. */
+  initialTemplate: TemplateId | null;
+  modelConnected: boolean;
+  /** Names already on the list; a new project never repeats one. */
+  takenNames: readonly string[];
+  onClose: () => void;
+  onCreate: (name: string, template: TemplateId | "scratch", description?: string) => void;
+}) {
+  const describe = useRef<HTMLTextAreaElement>(null);
+  const [description, setDescription] = useState("");
+  const [name, setName] = useState("");
+  const [picked, setPicked] = useState<TemplateId | "scratch" | null>(initialTemplate);
+  const [tried, setTried] = useState(false);
+  // The templates wait behind one line unless the person came here by clicking one.
+  const [showTemplates, setShowTemplates] = useState(initialTemplate !== null);
+  const described = description.trim();
+  // Once words are typed and no template was clicked, the app starts from them: "No template" shows as chosen.
+  const template = picked ?? (described ? "scratch" : null);
+  const chosen = templateChoices.find((choice) => choice.id === template);
+  const missingStart = template === null;
+  const baseName = name.trim() || nameFromDescription(description) || chosen?.name || (template === "scratch" ? "Untitled app" : "");
+  const finalName = baseName ? uniqueName(baseName, takenNames) : "";
+  const create = () => {
+    setTried(true);
+    if (template === null) { setShowTemplates(true); describe.current?.focus(); return; }
+    onCreate(finalName || "Untitled app", template, described || undefined);
+  };
+  const modelNote = template === null ? ""
+    : chosen ? `No model is connected, so the app starts from the ${chosen.name} template. What you ${described ? "wrote" : "write"} waits in Describe until you connect one.`
+      : `No model is connected, so the app starts as a private list${described ? " with what you wrote at the top" : ""}. ${described ? "Your words also wait" : "What you write waits"} in Describe until you connect one.`;
+  return <Dialog
+    open
+    className="new-project"
+    title="New project"
+    initialFocus={describe}
+    onClose={onClose}
+    footer={<>
+      <Button onClick={onClose}>Cancel</Button>
+      <Button variant="primary" type="submit" form="new-project">Create <ArrowRight size={14} aria-hidden="true" /></Button>
+    </>}
+  >
+    <form id="new-project" className="new-project-body" onSubmit={(event) => { event.preventDefault(); create(); }}>
+      <Field label="What should it do?" help={tried && missingStart ? "Describe what it should do, or pick a template below." : "In plain words, the way you would tell a person."}>
+        <Textarea
+          ref={describe}
+          rows={4}
+          value={description}
+          aria-invalid={tried && missingStart ? true : undefined}
+          onChange={(event) => setDescription(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); create(); } }}
+          placeholder="A sign-up sheet for Saturday football. People add their name, and I see who is coming."
+          maxLength={2000}
+        />
+      </Field>
+      {!modelConnected && modelNote && <p className="new-project-model" role="note">{modelNote}</p>}
+      <Field label="Project name" help={finalName && finalName !== baseName ? `${baseName} is taken, so this one is ${finalName}.` : "Optional. Left empty, the name comes from the first words above."}>
+        <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={finalName} maxLength={80} />
+      </Field>
+      <details className="ui-disclosure new-project-more" open={showTemplates} onToggle={(event) => setShowTemplates(event.currentTarget.open)}>
+        <summary>Start from a template instead{chosen && <span className="new-project-chosen">{chosen.name}</span>}</summary>
+        <fieldset className="new-project-templates">
+          <legend className="sr-only">Start from</legend>
+          <p>A template runs as it is, and you change it from there.</p>
+          <label className={template === "scratch" ? "is-selected" : undefined}>
+            <input type="radio" name="project-template" value="scratch" checked={template === "scratch"} onChange={() => setPicked("scratch")} />
+            <strong>No template</strong>
+            <small>A plain list titled with the project name, with what you wrote at the top. Private.</small>
+          </label>
+          {templateChoices.map((choice) => (
+            <label key={choice.id} className={template === choice.id ? "is-selected" : undefined}>
+              <input type="radio" name="project-template" value={choice.id} checked={template === choice.id} onChange={() => setPicked(choice.id)} />
+              <strong>{choice.name}</strong>
+              <small>{choice.sentence} {choice.visibility === "public" ? "Public." : "Private."}</small>
+            </label>
+          ))}
+        </fieldset>
+      </details>
+    </form>
+  </Dialog>;
+}
+
+function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted, onExport, exporting = false, onCopyPull }: {
+  project: ProjectEntry;
   published: boolean;
   onClose: () => void;
   onDelete: (project: ProjectMetadata, name: string) => Promise<void>;
+  onDeleted: (name: string) => void;
+  /** Downloads the app folder first, so the data can leave with the person. */
+  onExport?: () => void;
+  exporting?: boolean;
+  /** For an app edited in a folder: copies the command that brings its data there. */
+  onCopyPull?: () => void;
 }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
-  if (!project) return null;
-  const close = () => { if (busy) return; setTyped(""); setFailure(""); onClose(); };
+  const field = useRef<HTMLInputElement>(null);
+  const close = () => { if (busy) return; onClose(); };
   const matches = typed === project.name;
   const submit = async () => {
     if (!matches) return;
     setBusy(true);
     setFailure("");
     try {
-      await onDelete(project, typed);
-      setTyped("");
+      await onDelete({ id: project.id, name: project.name, slug: "" }, typed);
+      onDeleted(project.name);
       onClose();
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error));
-    } finally {
       setBusy(false);
     }
   };
+  const keep = published && onCopyPull
+    ? <Button onClick={onCopyPull} disabled={busy}><Terminal size={14} aria-hidden="true" /> Copy pull command</Button>
+    : published && onExport
+      ? <Button onClick={onExport} disabled={busy || exporting} loading={exporting}><Download size={14} aria-hidden="true" /> Export first</Button>
+      : null;
   return <Dialog
     open
     title={`Delete ${project.name}`}
     description={published
-      ? "This app is published. Deleting it stops its address, and deletes its database, app accounts, uploaded files and backups on this Kernel. This cannot be undone. Export the app first to keep its data."
-      : "This removes the app from your account. This cannot be undone."}
+      ? `This app is published. Deleting it stops its address and deletes its database, app accounts, uploaded files and backups. This cannot be undone. ${onCopyPull ? "To keep its data, copy the pull command and run it in the app's folder first." : "To keep its data, export the app folder first."}`
+      : "This removes the app and its files from your account. This cannot be undone."}
+    initialFocus={field}
     onClose={close}
     footer={<>
+      {keep && <span className="project-delete-keep">{keep}</span>}
       <Button onClick={close} disabled={busy}>Cancel</Button>
       <Button variant="danger" type="submit" form="delete-project" disabled={!matches} loading={busy}>Delete app</Button>
     </>}
   >
     <form id="delete-project" className="ui-dialog-body" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       <Field label={`Type ${project.name} to confirm`}>
-        <Input autoFocus value={typed} onChange={(event) => setTyped(event.target.value)} aria-invalid={failure ? true : undefined} maxLength={80} />
+        <Input ref={field} value={typed} onChange={(event) => setTyped(event.target.value)} aria-invalid={failure ? true : undefined} maxLength={80} autoComplete="off" />
       </Field>
-      {failure && <p role="alert">{failure}</p>}
+      {failure && <p className="project-delete-failure" role="alert">{failure}</p>}
     </form>
   </Dialog>;
-}
-
-function ProjectCard({ project, deployment, index, onOpen }: {
-  project: MiniAppProject;
-  deployment?: DeploymentReceipt;
-  index: number;
-  onOpen: (entry: "preview" | "agent" | "code") => void;
-}) {
-  const visibility = deployment?.manifest.visibility;
-  return (
-    <Card className={`project-card project-tone-${index % 4}`}>
-      <button className="project-card-preview" onClick={() => onOpen("preview")} aria-label={`Open ${project.name}`}>
-        <div className="project-poster">{posterLines(project).map((line) => <span className="poster-line" key={line}>{line}</span>)}</div>
-      </button>
-      <div className="project-card-body">
-        <div className="project-card-title">
-          <div>
-            <h2>{project.name}{project.id === "app_tiny_tasks" && <Badge className="starter-badge">Starter</Badge>}</h2>
-            {pageSummary(project) && <p>{pageSummary(project)}</p>}
-          </div>
-          {visibility && <Badge tone={visibility === "public" ? "success" : "accent"} className={`deployment-badge ${visibility}`}>{visibility === "public" ? <Globe2 size={11} /> : <LockKeyhole size={11} />}{visibility}</Badge>}
-          {!deployment && <Badge tone="neutral">Draft · Not published</Badge>}
-        </div>
-        <div className="project-meta"><span><Clock3 size={11} /> {relativeTime(project.updatedAt)}</span></div>
-        <footer>
-          <Button variant="secondary" size="sm" onClick={() => onOpen("preview")}>Open editor</Button>
-          <button type="button" className="project-door-link" onClick={() => onOpen("agent")}>Describe</button>
-          <button type="button" className="project-door-link edit-files" onClick={() => onOpen("code")}>Edit files</button>
-          {deployment && <a href={`/usage?deployment=${encodeURIComponent(deployment.id)}`}>Usage</a>}
-          {deployment && <a href={deployment.url} target="_blank" rel="noopener"><ExternalLink size={13} /> Open published app</a>}
-        </footer>
-      </div>
-    </Card>
-  );
-}
-
-function posterLines(project: MiniAppProject): string[] {
-  const html = project.files["index.html"] ?? "";
-  if (project.id === "app_konae_architecture" || html.includes("data-map=\"leaves\"")) {
-    return ["Export and Deploy", "Accounts, rows, and rules leave together."];
-  }
-  if (html.includes("Add one small thing")) return ["Add one small thing…", "The list stops at 100 rows."];
-  const summary = pageSummary(project);
-  return summary ? [summary] : ["A small app."];
-}
-
-function pageSummary(project: MiniAppProject): string {
-  const purpose = project.files["index.html"]?.match(/data-purpose="([^"]+)"/);
-  return purpose?.[1] ?? "";
-}
-
-function relativeTime(timestamp: number) {
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
 }

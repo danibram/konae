@@ -1,4 +1,4 @@
-/* Auth > Users, Auth > Integrations and the access part of the publish dialog.
+/* Access > Users, Access > Integrations and the access part of the publish dialog.
    Tokens only, so the system theme carries light and dark. */
 
 .auth-tabs { display: flex; gap: var(--ds-space-1); padding: var(--ds-space-3) 20px 0; border-bottom: 1px solid var(--ds-border); }
@@ -80,3 +80,17 @@
   .publish-signup { padding-left: 22px; padding-right: 22px; }
   .publish-access { margin-left: 22px; margin-right: 22px; }
 }
+
+/* Access > Rules: one row per action, the Deploy dialog's sentence under its name. */
+.rules-view > .ui-alert { margin: 0; }
+.rule-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--ds-border); }
+.rule-list > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--ds-space-2) var(--ds-space-4); padding: var(--ds-space-3) 0; border-bottom: 1px solid var(--ds-border); }
+.rule-text { display: grid; gap: 2px; min-width: 0; }
+.rule-text strong { font: 650 14px/1.35 var(--ds-font); }
+.rule-text span { color: var(--ds-muted); font: 400 13px/1.45 var(--ds-font); }
+.rule-list .ui-select { width: auto; min-width: 230px; }
+@media (max-width: 700px) {
+  .rule-list > li { grid-template-columns: minmax(0, 1fr); }
+  .rule-list .ui-select { width: 100%; min-width: 0; }
+}
+.rules-view .access-card .ui-field .ui-select { max-width: 420px; }

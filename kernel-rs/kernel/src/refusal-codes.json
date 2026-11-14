@@ -31,7 +31,7 @@
   "call.method-invalid": { "fix": "capsule", "remedy": "Set \"method\" to \"GET\" or \"POST\"." },
   "call.path-reserved": { "fix": "capsule", "remedy": "Call a path outside /_konae, /oauth, /.well-known and /mcp." },
   "call.secret-invalid": { "fix": "capsule", "remedy": "Name the auth secret with lowercase letters, digits and \"_\", starting with a letter." },
-  "call.secret-unset": { "fix": "owner", "remedy": "The owner sets the secret with secret_set, or in Auth > Integrations, before publishing.", "tool": "secret_set" },
+  "call.secret-unset": { "fix": "owner", "remedy": "The owner sets the secret with secret_set, or in Access > Integrations, before publishing.", "tool": "secret_set" },
   "call.signature-header-invalid": { "fix": "capsule", "remedy": "Name a signature header of letters, digits and \"-\" that the Kernel does not set itself." },
   "call.then-binds-actor": { "fix": "capsule", "remedy": "Name a then mutation that binds no actor. It runs with no caller." },
   "call.then-fills-unknown": { "fix": "capsule", "remedy": "Fill only the then mutation's input keys." },
@@ -106,9 +106,9 @@
   "route.method-mismatch": { "fix": "capsule", "remedy": "Bind GET on a query and POST on a mutation." },
   "route.path-invalid": { "fix": "capsule", "remedy": "Use a path with a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\"." },
   "route.path-reserved": { "fix": "capsule", "remedy": "Bind a path outside /_konae, /oauth, /.well-known and /mcp." },
-  "route.signature-secret-call-only": { "fix": "owner", "remedy": "The owner sets a route secret with a value of its own, with secret_set or in Auth > Integrations.", "tool": "secret_set" },
-  "route.signature-secret-unset": { "fix": "owner", "remedy": "The owner sets the secret with secret_set, or in Auth > Integrations, before publishing.", "tool": "secret_set" },
-  "route.signature-svix-secret-invalid": { "fix": "owner", "remedy": "The owner sets the secret to the whsec_ value the provider shows, with secret_set or in Auth > Integrations.", "tool": "secret_set" },
+  "route.signature-secret-call-only": { "fix": "owner", "remedy": "The owner sets a route secret with a value of its own, with secret_set or in Access > Integrations.", "tool": "secret_set" },
+  "route.signature-secret-unset": { "fix": "owner", "remedy": "The owner sets the secret with secret_set, or in Access > Integrations, before publishing.", "tool": "secret_set" },
+  "route.signature-svix-secret-invalid": { "fix": "owner", "remedy": "The owner sets the secret to the whsec_ value the provider shows, with secret_set or in Access > Integrations.", "tool": "secret_set" },
 
   "schedule.daily-invalid": { "fix": "capsule", "remedy": "Write daily as HH:MM in UTC, from 00:00 to 23:59." },
   "schedule.input": { "fix": "capsule", "remedy": "Bind only actor, kernel and literal values on a scheduled mutation." },
@@ -123,7 +123,7 @@
   "secret.google-id-looks-like-secret": { "fix": "owner", "remedy": "Paste the client ID, which ends with .apps.googleusercontent.com, and put the GOCSPX- value in google_client_secret.", "tool": "secret_set" },
   "secret.google-names-only": { "fix": "owner", "remedy": "Name a secret with use google google_client_id or google_client_secret.", "tool": "secret_set" },
   "secret.google-names-reserved": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with use google, or leave use out.", "tool": "secret_set" },
-  "secret.google-still-on": { "fix": "owner", "remedy": "Turn Google off with sign_in_methods_set methods [\"password\"], or in Auth > Users, then delete the secret.", "tool": "sign_in_methods_set" },
+  "secret.google-still-on": { "fix": "owner", "remedy": "Turn Google off with sign_in_methods_set methods [\"password\"], or in Access > Users, then delete the secret.", "tool": "sign_in_methods_set" },
   "secret.value-invalid": { "fix": "owner", "remedy": "Paste a value of 16 to 512 printable ASCII characters without spaces.", "tool": "secret_set" },
 
   "signal.invalid": { "fix": "capsule", "remedy": "Give signal a \"name\" and optionally a \"properties\" list of input keys." },
@@ -137,7 +137,7 @@
   "signal.route": { "fix": "capsule", "remedy": "Remove http, or declare the signal on a mutation with a POST route." },
   "signal.statement": { "fix": "capsule", "remedy": "Remove the statement from the signal action." },
 
-  "signin.google-client-unset": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with secret_set use google, or in Auth > Users, then turn Google on.", "tool": "secret_set" },
+  "signin.google-client-unset": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with secret_set use google, or in Access > Users, then turn Google on.", "tool": "secret_set" },
   "signin.methods-invalid": { "fix": "owner", "remedy": "Send methods as [\"password\"] or [\"password\", \"google\"].", "tool": "sign_in_methods_set" },
   "signin.password-required": { "fix": "owner", "remedy": "Keep \"password\" in methods.", "tool": "sign_in_methods_set" },
 

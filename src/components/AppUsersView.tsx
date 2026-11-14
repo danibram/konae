@@ -26,9 +26,33 @@ type Props = {
   onSetVisibility?: (visibility: DeploymentVisibility) => void;
   fileAccess?: "app-users";
   onSetFileAccess?: (shared: boolean) => void;
+  /** False when the caller shows who can open the app elsewhere, as the editor's Rules do. */
+  openAccess?: boolean;
 };
 
 const PAGE = 25;
+
+/** What a change that waits for Deploy says, wherever it is made. */
+export const appliesOnDeploy = "It applies to the live app when you deploy.";
+
+/** Who can open the app and who can read its uploads: both reach the live app with a deploy. */
+export function OpenAccessFields({ visibility, onSetVisibility, fileAccess, onSetFileAccess }: Pick<Props, "visibility" | "onSetVisibility" | "fileAccess" | "onSetFileAccess">) {
+  const folder = "It changes in the app's folder, with a publish.";
+  return <>
+    <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} ${onSetVisibility ? appliesOnDeploy : folder}`}>
+      <Select value={visibility} disabled={!onSetVisibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
+        <option value="public">Anyone with the link</option>
+        <option value="private">People with an app account</option>
+      </Select>
+    </Field>
+    <Field label="Who can read uploaded files" help={`${onSetFileAccess ? `${appliesOnDeploy} It covers existing and new files. Choosing each file's visibility brings back what each file had before.` : folder} Only the uploader can delete a file.`}>
+      <Select value={fileAccess ?? "per-file"} disabled={!onSetFileAccess} onChange={(event) => onSetFileAccess?.(event.target.value === "app-users")}>
+        <option value="per-file">Each file's visibility</option>
+        <option value="app-users">All signed-in app users</option>
+      </Select>
+    </Field>
+  </>;
+}
 
 
 function SignedOut() {
@@ -36,7 +60,7 @@ function SignedOut() {
 }
 
 /** App accounts, invitations and who may join, for the published app. Owners only. */
-export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, fileAccess, onSetFileAccess }: Props) {
+export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, fileAccess, onSetFileAccess, openAccess = true }: Props) {
   const [mail, setMail] = useState<MailStatus | null>(null);
   const [mailError, setMailError] = useState("");
   const [changed, setChanged] = useState(0);
@@ -59,20 +83,9 @@ export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibil
 
   return (
     <section className="access-view" aria-label="App users">
-      <Card className="access-card" role="group" aria-label="Who can open and join">
-        <h3>Who can open and join</h3>
-        <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} ${onSetVisibility ? "It applies when you deploy." : "It changes in the app's folder, with a publish."}`}>
-          <Select value={visibility} disabled={!onSetVisibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
-            <option value="public">Anyone with the link</option>
-            <option value="private">People with an app account</option>
-          </Select>
-        </Field>
-        <Field label="Who can read uploaded files" help={onSetFileAccess ? "Deploy to apply this to existing and new files. Choosing per-file access restores earlier visibility settings. Only the uploader can delete a file." : "It changes in the app's folder, with a publish. Only the uploader can delete a file."}>
-          <Select value={fileAccess ?? "per-file"} disabled={!onSetFileAccess} onChange={(event) => onSetFileAccess?.(event.target.value === "app-users")}>
-            <option value="per-file">Each file's visibility</option>
-            <option value="app-users">All signed-in app users</option>
-          </Select>
-        </Field>
+      <Card className="access-card" role="group" aria-label={openAccess ? "Who can open and join" : "Who can join"}>
+        <h3>{openAccess ? "Who can open and join" : "Who can join"}</h3>
+        {openAccess && <OpenAccessFields visibility={visibility} onSetVisibility={onSetVisibility} fileAccess={fileAccess} onSetFileAccess={onSetFileAccess} />}
         {deploymentId
           ? ownerSignedOut ? <SignedOut /> : <SignupPolicyControl deploymentId={deploymentId} onSignedOut={onSignedOut} onSaved={onChanged} />
           : <p className="access-note">You choose who can create an app account when you deploy. Invitation only is the choice for a private app.</p>}

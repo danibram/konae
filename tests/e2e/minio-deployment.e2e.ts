@@ -14,13 +14,15 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   await page.goto("/");
 
   await page.getByRole("button", { name: "New project" }).click();
-  await page.getByLabel("Project name").fill("MinIO tasks");
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill("MinIO tasks");
+  await page.getByText("Start from a template instead", { exact: true }).click();
+  await page.getByRole("radio", { name: /^Shared list/ }).check();
   await page.getByRole("button", { name: /^Create/ }).click();
 
   await expect(page).toHaveURL(/\/app\/[^/]+$/);
   // Files has a File list button that opens New file and New folder beside the editor.
   const sections = page.getByRole("navigation", { name: "Workspace sections" });
-  await sections.getByRole("button", { name: "Files", exact: true }).click();
+  await sections.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("button", { name: "File list", exact: true }).click();
   const explorer = page.getByRole("navigation", { name: "Project files" });
   await expect(explorer).toBeVisible();
@@ -41,8 +43,8 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   const appSource = await appEditor.inputValue();
   await appEditor.fill(
     `import { emptyLabel } from './src/features/empty-label.js';\n${appSource.replace(
-      "'<div class=\"empty\">Nothing here yet. Anyone with this link sees the same list.</div>'",
-      "'<div class=\"empty\">' + emptyLabel + '</div>'",
+      "Nothing here yet. Anyone with this link sees the same list.",
+      "' + emptyLabel + '",
     )}`,
   );
 
@@ -56,7 +58,7 @@ test("builds a multi-file app in the browser, deploys it to MinIO, and persists 
   const publishedUrl = page.locator("a.published-url");
   await expect(publishedUrl).toBeVisible({ timeout: 30_000 });
   const deploymentUrl = await publishedUrl.getAttribute("href");
-  expect(deploymentUrl).toMatch(new RegExp(`^http://minio-tasks-[a-f0-9]{6}\\.localhost:${new URL(baseURL!).port}$`));
+  expect(deploymentUrl).toMatch(new RegExp(`^http://minio-tasks(?:-[a-f0-9]{6})?\\.localhost:${new URL(baseURL!).port}$`));
 
   // The tasks starter declares anonymous actions, so a public app works without signing in.
   await page.goto(deploymentUrl!);

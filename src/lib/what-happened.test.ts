@@ -72,7 +72,7 @@ describe("what happened", () => {
 
   test("a call that needs an unset secret names the owner and Integrations, in the refusal table's words", () => {
     const outcome = callOutcome(call({ state: "failed", status: null, error: "secret-unset" }));
-    expect(outcome.fix).toEqual({ who: "owner", what: "The owner sets the secret with secret_set, or in Auth > Integrations, before publishing.", where: "integrations" });
+    expect(outcome.fix).toEqual({ who: "owner", what: "The owner sets the secret with secret_set, or in Access > Integrations, before publishing.", where: "integrations" });
   });
 
   test("a call answered with an error status and its then mutation say what happened", () => {

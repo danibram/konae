@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 -- The accounts that read what the app keeps for its staff. The owner adds one
--- from Data > SQL with the account ID that Auth > Users shows:
+-- from Data > SQL with the account ID that Access > Users shows:
 --   INSERT INTO admins (user_id) VALUES ('<account id>');
 CREATE TABLE IF NOT EXISTS admins (
   user_id TEXT PRIMARY KEY

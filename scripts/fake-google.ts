@@ -5,7 +5,7 @@
  *   bun run scripts/fake-google.ts            # listens on 127.0.0.1:8799
  *   KONAE_GOOGLE_TEST_ISSUER=http://127.0.0.1:8799 bun run dev:local
  *
- * Then set any client ID and secret for the app in Auth > Users and turn
+ * Then set any client ID and secret for the app in Access > Users and turn
  * Google on. /authorize shows a form where you pick the Google subject, the
  * email, its Workspace domain (hd) and whether Google verified it. /token
  * checks that the client sends the secret it used, the redirect URI and

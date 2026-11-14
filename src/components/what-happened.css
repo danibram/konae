@@ -36,3 +36,6 @@
   .cap-workspace.happened > .happened-scroll { padding: var(--ds-space-3); }
   .happened-title time { margin-left: 0; width: 100%; }
 }
+details.happened-note summary { width: fit-content; cursor: pointer; color: var(--ds-muted); }
+details.happened-note summary:hover { color: var(--ds-text); }
+details.happened-note p { margin: var(--ds-space-2) 0 0; }

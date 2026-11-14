@@ -74,12 +74,12 @@ export function actionSentence(action: DescribedAction, visibility: Visibility):
     : `${actionWho(action.access, visibility)} can run it.${action.http ? ` It also answers on ${route}.` : ""}`;
   const guard = action.guard ? ` When no row changes it refuses with "${action.guard}"` : "";
   if (action.kind === "signal") return `${who} It records a Signal and writes no row.`;
-  if (action.kind === "call") return `${who} The Kernel sends the request it describes and writes no row itself.`;
+  if (action.kind === "call") return `${who} The app sends the request it describes and writes no row itself.`;
   if (action.kind !== "query") return `${who}${guard ? `${guard}.` : ""}`;
   const limit = action.statement === undefined ? null : topLevelLimit(action.statement);
   if (limit !== null) return `${who} The list stops at ${limit} row${limit === 1 ? "" : "s"}.`;
   // A query that parsed and names no number is a total, reads no table, or takes its LIMIT from a binding.
-  return `${who} The Kernel stops it at 1000 rows.`;
+  return `${who} It returns at most 1000 rows.`;
 }
 
 /** Who may call an action that the runtime endpoint answers. */
@@ -111,6 +111,37 @@ export function actionReadout(source: string, visibility: Visibility): { refusal
 }
 
 function actionDoes(name: string): string {
-  const verb = name.split(".").pop();
-  return verb === "list" ? "Lists the rows" : verb === "create" ? "Adds a row" : verb === "toggle" ? "Marks a row done" : name;
+  return actionTitle(name);
+}
+
+/** A person's words for an action, from the verb at the end of its name. */
+export function actionTitle(name: string): string {
+  const verb = name.split(".").pop() ?? name;
+  if (verb === "list") return "List the rows";
+  if (verb === "create") return "Add a row";
+  if (verb === "toggle") return "Mark a row done";
+  if (verb === "delete" || verb === "remove") return "Delete a row";
+  if (verb === "update" || verb === "edit") return "Change a row";
+  if (verb === "me") return "Read their own account";
+  if (verb === "send") return "Send a message";
+  const words = verb.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Where in actions.json a refusal points: the action it names, and inside it
+ * the statement when the action has one. Null when the refusal names no action
+ * the file holds, such as a file that is not JSON.
+ */
+export function refusedSpot(source: string, refusal: string | null): { action: string; index: number } | null {
+  const action = refusal?.match(/(?:Action|server action:?) ([A-Za-z0-9_.-]*[A-Za-z0-9_-])/)?.[1];
+  if (!action) return null;
+  const key = source.search(new RegExp(`"${action.replace(/\./g, "\\.")}"\\s*:`));
+  if (key < 0) return null;
+  // The statement counts only while it belongs to this action, before the next one opens.
+  const after = key + action.length + 2;
+  const next = source.slice(after).search(/"[A-Za-z0-9_.-]+"\s*:\s*\{/);
+  const end = next < 0 ? source.length : after + next;
+  const statement = source.indexOf('"statement"', key);
+  return { action, index: statement >= 0 && statement < end ? statement : key };
 }

@@ -209,7 +209,7 @@ pub(super) fn topic(name: &str) -> Result<Value> {
         }),
         "portability" => json!({
             "export": [
-                "project_export { deploymentId } needs export_data. It hands over the app folder: folder, a download of konae.json, app/ and dist/, and a manifest with one download per part of data/: database, identity, files and, when the app recorded any, usage. sourcesAhead is true when app/actions.json differs from the actions the release runs. Secrets, owners and the installation's records never leave.",
+                "project_export { deploymentId } needs export_data. It hands over the app folder: folder, a download of konae.json, app/ and dist/, and a manifest with one download per part of data/: database, identity, files and, when the app recorded any, usage. sourcesAhead compares app/ with the release's sourceDigest. Older releases without a digest compare app/actions.json with the actions the release runs. Secrets, owners and the installation's records never leave.",
                 "Read each download with transfer_read { transferId, offset } until nextOffset equals size, check its SHA-256, then transfer_cancel it.",
                 "bun run konae -- export --dir <folder> --out <new folder> --with-data writes the same app folder on disk."
             ],

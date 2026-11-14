@@ -150,7 +150,7 @@ export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "c
 
 /**
  * The project's signing secrets. The app's Google client (`use` "google")
- * is left out: no route or call reads it, and Auth > Users shows it.
+ * is left out: no route or call reads it, and Access > Users shows it.
  */
 export async function listSecrets(projectId: string) {
   const answer = await platformMcp.call<{ projectId: string; secrets: Array<Omit<ProjectSecret, "use"> & { use: ProjectSecret["use"] | "google" }> }>("secrets_list", { projectId });

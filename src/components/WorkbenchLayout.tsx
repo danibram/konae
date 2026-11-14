@@ -47,9 +47,14 @@ function panelElementId(panel: PanelId): string {
   return `panel-${panel}`;
 }
 
-/** Moves keyboard focus onto a panel's tab, so revealing a panel never drops focus on the body. */
+/**
+ * Moves keyboard focus onto the tab that shows a panel, so revealing a panel
+ * never drops focus on the body. The section nav's tab wins over the group's,
+ * which the workbench keeps out of sight.
+ */
 export function focusPanelTab(panel: PanelId): void {
-  document.getElementById(tabElementId(panel))?.focus();
+  const tab = document.getElementById(`section-${panel}`) ?? document.getElementById(tabElementId(panel));
+  tab?.focus();
 }
 
 /**

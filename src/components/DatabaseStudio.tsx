@@ -27,7 +27,7 @@ import type {
   DatabaseTable,
   DatabaseAdminHost,
 } from "../runtime/host";
-import { Badge, Button, Dialog, EmptyState, LoadingBlock } from "./ui";
+import { Badge, Button, Dialog, EmptyState, LoadingBlock, Segmented, TabBar } from "./ui";
 import { SqlEditor } from "./SqlEditor";
 import { classifySql } from "./sql-statements";
 
@@ -79,24 +79,35 @@ export function DatabaseStudio({ host, onEditSchema, onExportDatabase, target = 
           which view of the database, and which database. */}
       {tableError && <div className="backup-error" role="alert">Could not refresh database tables: {tableError}</div>}
       <header className="database-studio-header">
-        <nav className="database-tabs" aria-label="Database views">
-          <button className={tab === "data" ? "active" : ""} onClick={() => setTab("data")}><Table2 size={13} /> Data</button>
-          <button className={tab === "sql" ? "active" : ""} onClick={() => setTab("sql")}><Code2 size={13} /> SQL</button>
-          <button className={tab === "schema" ? "active" : ""} onClick={() => setTab("schema")}><FileCode2 size={13} /> Schema</button>
-          <button className={tab === "backups" ? "active" : ""} onClick={() => setTab("backups")}><History size={13} /> Backups</button>
-        </nav>
+        {/* Which rows this is comes first: an empty table of test rows must never read as a live app with none. */}
         {onTargetChange && (
-          <select className="database-target" aria-label="Database target" title={target === "deployed" && deployedLabel ? `Deployed app at ${deployedLabel}` : "Local preview database"} value={target} onChange={(event) => onTargetChange(event.target.value as "local" | "deployed")}>
-            <option value="local">Local preview</option>
-            <option value="deployed">Deployed app (live)</option>
-          </select>
+          <Segmented
+            label="Which rows"
+            value={target}
+            onChange={onTargetChange}
+            options={[{ value: "deployed", label: "Live app" }, { value: "local", label: "Test rows in this browser" }]}
+          />
         )}
+        <TabBar
+          label="Database views"
+          className="data-views"
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: "data", label: "Rows", icon: <Table2 size={13} aria-hidden="true" /> },
+            { id: "sql", label: "SQL", icon: <Code2 size={13} aria-hidden="true" /> },
+            { id: "schema", label: "Schema", icon: <FileCode2 size={13} aria-hidden="true" /> },
+            { id: "backups", label: "Backups", icon: <History size={13} aria-hidden="true" /> },
+          ]}
+        />
       </header>
-      {target === "deployed" && (
+      {target === "deployed" ? (
         <div className="live-database-banner">
-          <Badge tone="warning">Live database</Badge>
-          <span>Changes here reach the people using {deployedLabel ? <strong>{deployedLabel}</strong> : "the deployed app"} right away.</span>
+          <Badge tone="warning">Live</Badge>
+          <span>These are the rows of {deployedLabel ? <strong>{deployedLabel}</strong> : "the published app"}. A change here reaches the people using it right away.</span>
         </div>
+      ) : (
+        <p className="test-rows-note">{onTargetChange ? "Test rows the preview uses, kept in this browser. The live app has its own." : "Test rows the preview uses, kept in this browser. The app gets rows of its own when you deploy it."}</p>
       )}
 
       {tab === "data" && (
@@ -116,7 +127,7 @@ export function DatabaseStudio({ host, onEditSchema, onExportDatabase, target = 
       {tab === "backups" && <BackupsView host={host} tables={tables} deployed={target === "deployed"} onExport={onExportDatabase} onRestored={mutated} />}
 
       <footer className="database-statusbar">
-        <span><i /> {target === "deployed" ? "Deployed database" : "Local database"}</span>
+        <span><i /> {target === "deployed" ? "Live app" : "Test rows in this browser"}</span>
         <span>{tables.length} table{tables.length === 1 ? "" : "s"}</span>
       </footer>
     </section>
@@ -509,7 +520,7 @@ function BackupsView({ host, tables, deployed, onExport, onRestored }: {
   return (
     <div className="studio-document-view backups-view">
       <header>
-        <div><h3>{deployed ? "Rows of the published app" : "Rows on this browser"}</h3><span>Export, beside Deploy, takes the accounts, the rows and the rules.</span></div>
+        <div><h3>{deployed ? "Rows of the published app" : "Test rows in this browser"}</h3><span>Export, under More, takes the accounts, the rows and the rules.</span></div>
         {supportsRestore
           ? <button onClick={() => void createBackup()} disabled={busy}><History size={12} /> Create backup</button>
           : <button onClick={onExport}><Download size={12} /> Download rows</button>}
@@ -533,7 +544,7 @@ function BackupsView({ host, tables, deployed, onExport, onRestored }: {
               </li>
             ))}
           </ul>
-        ) : <div className="future-backups"><History size={20} /><div><strong>No restore points yet</strong><p>{deployed ? "Create a backup before changing the tables. The Kernel keeps each one in the app's folder on the machine that serves it." : "Create a backup before changing the tables. This preview keeps five. A published copy keeps its backups on the machine that hosts it."}</p></div></div>
+        ) : <div className="future-backups"><History size={20} /><div><strong>No restore points yet</strong><p>{deployed ? "Create a backup before changing the tables. The published app keeps each one in its folder on the machine that serves it." : "Create a backup before changing the tables. This preview keeps five. A published copy keeps its backups on the machine that hosts it."}</p></div></div>
       ) : <div className="future-backups"><History size={20} /><div><strong>Managed restore is not available for this target yet</strong><p>Download a consistent SQLite snapshot before changing the deployed database.</p></div></div>}
     </div>
   );

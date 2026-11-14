@@ -42,12 +42,12 @@ export const visibilityCopy: Record<DeploymentVisibility, { label: string; sente
  */
 export function republishAccessNote(current: { visibility: DeploymentVisibility; mode?: SignupMode }, next: DeploymentVisibility): string {
   if (current.visibility === "public" && next === "private" && current.mode === "open") {
-    return "This publish makes the app private, so the Kernel turns Open signup into Closed. Invite people or change the policy in Auth > Users afterwards.";
+    return "This publish makes the app private, so Open signup becomes Closed. Invite people or change the policy in Access > Users afterwards.";
   }
   if (current.visibility !== next) {
-    return `This publish makes the app ${next}. Who can create an app account stays as it is; change it in Auth > Users.`;
+    return `This publish makes the app ${next}. Who can create an app account stays as it is; change it in Access > Users.`;
   }
-  return "Publishing again keeps who can open the app and who can create an app account. Change them in Auth > Users.";
+  return "Publishing again keeps who can create an app account; change it in Access > Users. Who can open the app is set in Access > Rules.";
 }
 
 export const MAX_INVITATION_BATCH = 50;

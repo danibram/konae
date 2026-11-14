@@ -240,7 +240,7 @@ describe("konae CLI", () => {
     expect(JSON.parse(uploaded)).not.toHaveProperty("initialSignupPolicy");
     expect(calls.find((call) => call.name === "signup_policy_read")!.arguments).toEqual({ deploymentId: "dep_1" });
     expect(warnings).toEqual([
-      "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.",
+      "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",
     ]);
 
     // The same policy, or a Kernel that cannot read it, publishes without a word.

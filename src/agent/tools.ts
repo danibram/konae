@@ -260,7 +260,7 @@ function defineTool<T extends TSchema, D>(definition: AgentTool<T, D>): AgentToo
 export function formatValidation(validation: ValidationResult): string {
   const warnings = (validation.warnings ?? []).map((warning) => {
     const detail = (warning.detail ? `\n  ${warning.detail}` : "") + refusalLine(warning);
-    const owner = warning.owner ? " Tell the person which secret to set and that they set it in Auth > Integrations; Apply does not wait for it." : "";
+    const owner = warning.owner ? " Tell the person which secret to set and that they set it in Access > Integrations; Apply does not wait for it." : "";
     return `\n- [${warning.stage}] Warning: ${warning.message}${detail}${owner}`;
   }).join("");
   if (validation.ok) {

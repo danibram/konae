@@ -34,7 +34,32 @@ export type AgentThreadInput = {
   /** Writes the demo proposal the owner just accepted. */
   onDemoApply: () => void;
   providers?: readonly ProviderConfig[];
+  /**
+   * The project the conversation belongs to. With `draftStorage`, an unsent
+   * draft is kept per project in this browser until it is sent, so words typed
+   * in New project or in Describe survive leaving the app and a reload.
+   */
+  draftKey?: string;
+  draftStorage?: DraftStorage;
 };
+
+export type DraftStorage = { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void; removeItem: (key: string) => void };
+
+/** Where a project's unsent Describe draft waits in this browser. */
+export const describeDraftKey = (projectId: string) => `describe-draft:${projectId}`;
+
+function readDraft(storage: DraftStorage | undefined, projectId: string | undefined): string {
+  if (!storage || !projectId) return "";
+  try { return storage.getItem(describeDraftKey(projectId)) ?? ""; } catch { return ""; }
+}
+
+function writeDraft(storage: DraftStorage | undefined, projectId: string | undefined, value: string) {
+  if (!storage || !projectId) return;
+  try {
+    if (value.trim()) storage.setItem(describeDraftKey(projectId), value);
+    else storage.removeItem(describeDraftKey(projectId));
+  } catch { /* A full or blocked storage keeps the draft in memory only. */ }
+}
 
 export type AgentThread = {
   state: AgentThreadState;
@@ -77,9 +102,18 @@ export function useAgentThread({
   onDemoSend,
   onDemoApply,
   providers = PROVIDERS,
+  draftKey,
+  draftStorage,
 }: AgentThreadInput): AgentThread {
   const [state, dispatch] = useReducer(agentThreadReducer, initialAgentThreadState);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState(() => readDraft(draftStorage, draftKey));
+  // Written on each change rather than from an effect, so a project switch never stores one project's draft under another.
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  const setDraft = (value: string) => {
+    setDraftState(value);
+    writeDraft(draftStorage, draftKeyRef.current, value);
+  };
   const [demoPending, setDemoPending] = useState(false);
   // Subscription is keyed by instance so a send can attach before it runs.
   const subscription = useRef<{ agent: KonaeAgent; off: () => void } | null>(null);
@@ -109,11 +143,12 @@ export function useAgentThread({
 
   useEffect(() => () => subscription.current?.off(), []);
 
+  // A new thread, or another project, opens on that project's unsent draft.
   useEffect(() => {
     dispatch({ type: "reset" });
-    setDraft("");
+    setDraftState(readDraft(draftStorage, draftKey));
     setDemoPending(false);
-  }, [threadResetToken]);
+  }, [threadResetToken, draftKey]);
 
   async function submit() {
     const text = draft.trim();

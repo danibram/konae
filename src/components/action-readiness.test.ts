@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { cloneStarter } from "../lib/starter";
-import { actionReadout, actionSentence, deployReadiness, namedSecrets, ownerFixes } from "./action-readiness";
+import { actionReadout, actionSentence, deployReadiness, namedSecrets, ownerFixes, refusedSpot } from "./action-readiness";
 
 function withActions(actions: Record<string, unknown>) {
   const project = cloneStarter();
@@ -13,7 +13,7 @@ describe("the Deploy dialog's readiness", () => {
     const project = withActions({ "orders.count": { kind: "query", access: "anonymous", statement: "SELECT count(*) AS n FROM orders", bindings: [] } });
     const { refusal, actions } = deployReadiness(project);
     expect(refusal).toBeNull();
-    expect(actionSentence(actions[0], "public")).toBe("Anyone can run it. The Kernel stops it at 1000 rows.");
+    expect(actionSentence(actions[0], "public")).toBe("Anyone can run it. It returns at most 1000 rows.");
   });
 
   test("refuses a LIMIT that sits in a string with the Kernel's sentence", () => {
@@ -55,7 +55,7 @@ describe("the readout above actions.json", () => {
 
   test("does not call a total refused", () => {
     const total = JSON.stringify({ version: 1, actions: { "orders.count": { kind: "query", access: "anonymous", statement: "SELECT count(*) AS n FROM orders", bindings: [] } } });
-    expect(actionReadout(total, "public")).toEqual({ refusal: null, lines: ["orders.count. Anyone can run it. The Kernel stops it at 1000 rows."] });
+    expect(actionReadout(total, "public")).toEqual({ refusal: null, lines: ["Count. Anyone can run it. It returns at most 1000 rows."] });
   });
 });
 
@@ -136,5 +136,25 @@ describe("the Deploy dialog before release_plan", () => {
       ["orders_webhook", { actions: ["orders.receive"], route: true }],
     ]);
     expect(namedSecrets("not json").size).toBe(0);
+  });
+});
+
+describe("refusedSpot", () => {
+  const source = JSON.stringify({ version: 1, actions: {
+    "notes.create": { kind: "mutation", access: "authenticated", statement: "INSERT INTO notes (title) VALUES (?1)", bindings: [] },
+    "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id FROM notes", bindings: [] },
+  } }, null, 2);
+
+  test("points at the statement of the action the refusal names", () => {
+    const spot = refusedSpot(source, "Action notes.list reads rows without a LIMIT. Add a LIMIT.");
+    expect(spot?.action).toBe("notes.list");
+    expect(source.slice(spot!.index, spot!.index + 11)).toBe('"statement"');
+    expect(spot!.index).toBeGreaterThan(source.indexOf('"notes.list"'));
+  });
+
+  test("says nothing when the refusal names no action in the file", () => {
+    expect(refusedSpot(source, "Unexpected token } in JSON at position 3")).toBeNull();
+    expect(refusedSpot(source, "Action tasks.list has an invalid kind.")).toBeNull();
+    expect(refusedSpot(source, null)).toBeNull();
   });
 });

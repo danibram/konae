@@ -75,7 +75,7 @@ The predicate holds on both Kernels. Nobody without the role changed a row.
 
 | Area | Request | Answer |
 | --- | --- | --- |
-| Signup Policy | A republish whose `konae.json` names Open on an app that is Invitation only | `konae publish` prints a warning that names Auth > Users and `signup_policy_set`, and changes nothing. A publish sets the policy only on the first release. |
+| Signup Policy | A republish whose `konae.json` names Open on an app that is Invitation only | `konae publish` prints a warning that names Access > Users and `signup_policy_set`, and changes nothing. A publish sets the policy only on the first release. |
 | Signup Policy | `signup_policy_set` with the publish token | `Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.` Changing an existing app's policy needs `manage_users`, which the CLI's publish token lacks. |
 | Invitation only | `POST /_konae/auth/signup` from an uninvited address | 403 `{"error":"This app is not accepting new accounts for this email address."}` |
 | Private file | Ben's `files_read` of Ana's note | `File not found.` |

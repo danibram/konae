@@ -120,7 +120,8 @@
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
-  box-shadow: var(--ds-shadow);
+  /* Flat by default: the hard offset shadow belongs to dialogs and to the one primary action. */
+  box-shadow: none;
   transition: background 120ms ease, color 120ms ease, translate 80ms ease, box-shadow 80ms ease;
 }
 .ui-button:not(.ui-button-primary):not(.ui-button-ghost):not(.ui-button-danger):hover:not(:disabled) {
@@ -128,11 +129,12 @@
   color: var(--ds-surface);
   box-shadow: none;
 }
-.ui-button:active:not(:disabled) { translate: var(--ds-press) var(--ds-press); box-shadow: none; }
+.ui-button-primary:active:not(:disabled) { translate: var(--ds-press) var(--ds-press); box-shadow: none; }
 .ui-button-primary {
   border-color: var(--ds-stroke);
   background: var(--ds-accent);
   color: var(--ds-on-accent);
+  box-shadow: var(--ds-shadow);
 }
 .ui-button-primary:hover:not(:disabled) { background: var(--ds-accent-hover); color: var(--ds-on-accent); box-shadow: var(--ds-shadow-sm); }
 .ui-button-ghost {
@@ -159,7 +161,7 @@
   .ui-button-danger:hover:not(:disabled) { background: #4b2932; }
 }
 .ui-button-sm { min-height: 32px; padding: 0 10px; font-size: 11px; }
-.ui-button-icon, .ui-button.ui-button-icon { width: 32px; min-height: 32px; padding: 0; flex-shrink: 0; text-decoration: none; border: 1px solid var(--ds-stroke); background: var(--ds-field); color: var(--ds-text); box-shadow: var(--ds-shadow-sm); }
+.ui-button-icon, .ui-button.ui-button-icon { width: 32px; min-height: 32px; padding: 0; flex-shrink: 0; text-decoration: none; border: 1px solid var(--ds-stroke); background: var(--ds-field); color: var(--ds-text); box-shadow: none; }
 .ui-button:disabled {
   opacity: 0.4;
   color: var(--ds-text);
@@ -178,17 +180,18 @@
   color: var(--ds-text);
   background: var(--ds-field);
   font: 400 13px/1.5 var(--ds-font);
-  box-shadow: var(--ds-shadow-sm);
+  box-shadow: none;
 }
 .ui-input:focus, .ui-select:focus, .ui-textarea:focus {
-  outline: 0;
+  outline: 2px solid var(--ds-blue);
+  outline-offset: 1px;
   background: var(--ds-accent-soft);
 }
 .ui-input::placeholder, .ui-textarea::placeholder { color: var(--ds-muted); }
 .ui-input:disabled { background: var(--ds-subtle); color: var(--ds-muted); }
 .ui-input[aria-invalid="true"] { border-color: var(--ds-danger); }
 .ui-field { display: grid; gap: 7px; align-content: start; font: 600 12px/1.5 var(--ds-font); }
-.ui-field small { color: var(--ds-muted); font-size: 11px; font-weight: 400; font-family: var(--ds-mono); }
+.ui-field small { color: var(--ds-muted); font: 400 12px/1.45 var(--ds-font); }
 .ui-field:has([aria-invalid="true"]) small { color: var(--ds-danger); }
 .ui-badge {
   display: inline-flex;
@@ -269,6 +272,7 @@
   border: var(--ds-bw) solid var(--tone); border-left-width: var(--ds-bar); background: var(--tone-soft); color: var(--ds-text);
 }
 .ui-alert > svg { margin-top: 1px; color: var(--tone); }
+.ui-alert-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .ui-alert strong { display: block; font: 700 13px/1.4 var(--ds-font); }
 .ui-alert p { margin: 2px 0 0; font: 400 13px/1.55 var(--ds-font); }
 .ui-alert-success { --tone: var(--ds-success); --tone-soft: var(--ds-success-soft); }
@@ -286,7 +290,7 @@
 .ui-disclosure > summary::before { content: ""; width: 7px; height: 7px; border-right: var(--ds-bw) solid var(--ds-text); border-bottom: var(--ds-bw) solid var(--ds-text); rotate: -45deg; transition: rotate 120ms ease; }
 .ui-disclosure[open] > summary::before { rotate: 45deg; }
 .ui-disclosure > div { padding: 0 0 14px; font: 400 13px/1.6 var(--ds-font); color: var(--ds-muted); }
-.ui-stats { display: flex; flex-wrap: wrap; gap: 22px 0; margin: 16px 0 28px; padding: 0; border: var(--ds-bw) solid var(--ds-line); background: var(--ds-surface); box-shadow: var(--ds-shadow); }
+.ui-stats { display: flex; flex-wrap: wrap; gap: 22px 0; margin: 16px 0 28px; padding: 0; border: var(--ds-bw) solid var(--ds-line); background: var(--ds-surface); box-shadow: none; }
 .ui-stats > div { flex: 1 1 160px; min-width: 0; display: grid; align-content: start; gap: 4px; padding: 16px 18px; border-right: 1px solid var(--ds-border); }
 .ui-stats > div:last-child { border-right: 0; }
 .ui-stats dt { color: var(--ds-muted); font: 500 11px/1.4 var(--ds-mono); letter-spacing: .06em; text-transform: var(--ds-label-case); }

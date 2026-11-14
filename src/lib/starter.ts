@@ -1,5 +1,5 @@
 import type { MiniAppProject } from "./types";
-import { createDefaultManifest } from "../deployments/manifest";
+import { createDefaultManifest, withVisibility } from "../deployments/manifest";
 import { appStyles, escapeHtmlSource } from "./templates/shared";
 
 /** The design system, then nothing: the starter needs no rules of its own. */
@@ -176,7 +176,174 @@ export function cloneStarter(): MiniAppProject {
   };
 }
 
-const droppedPreviewUpload = `if ((await miniapp.auth.session()).role === 'anonymous') {
+/** What a card says about a plain list nobody described. */
+export const plainListPurpose = "A private list. People with an app account add rows and tick them off.";
+
+/** One line for the page's declared purpose: no line breaks, at most 200 characters. */
+export function purposeLine(description: string): string {
+  const line = description.replace(/\s+/g, " ").trim();
+  return line.length > 200 ? `${line.slice(0, 199).trimEnd()}…` : line;
+}
+
+const escapeText = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] as string);
+
+const plainListActions = {
+  version: 1,
+  actions: {
+    "tasks.list": {
+      kind: "query",
+      access: "authenticated",
+      statement: "SELECT id, title, done, created_at FROM tasks ORDER BY created_at DESC LIMIT 100",
+      bindings: [],
+    },
+    "tasks.create": {
+      kind: "mutation",
+      access: "authenticated",
+      statement: "INSERT INTO tasks (title, done, created_at) VALUES (?, 0, ?)",
+      bindings: [
+        { source: "input", key: "title", type: "string", maxLength: 200 },
+        { source: "kernel", field: "now" },
+      ],
+    },
+    "tasks.toggle": {
+      kind: "mutation",
+      access: "authenticated",
+      statement: "UPDATE tasks SET done = CASE done WHEN 0 THEN 1 ELSE 0 END WHERE id = ?",
+      bindings: [{ source: "input", key: "id", type: "number" }],
+    },
+  },
+};
+
+const plainListScript = `
+const form = document.querySelector('#task-form');
+const input = document.querySelector('#task-input');
+const addButton = document.querySelector('#add-task');
+const list = document.querySelector('#tasks');
+const count = document.querySelector('#count');
+const identity = document.querySelector('#identity');
+const signIn = document.querySelector('#sign-in');
+const listSection = document.querySelector('#list');
+const status = document.querySelector('#status');
+
+${escapeHtmlSource}
+
+function showError(error) {
+  status.textContent = error && error.message ? error.message : 'Could not complete that request.';
+  status.dataset.tone = 'danger';
+}
+
+async function loadTasks() {
+  const tasks = await miniapp.actions.call('tasks.list');
+  count.textContent = tasks.length + (tasks.length === 1 ? ' item' : ' items');
+  list.innerHTML = tasks.length ? tasks.map(task =>
+    '<article class="ui-list-item task ' + (task.done ? 'done' : '') + '"' + (task.done ? ' data-done' : '') + '>' +
+      '<span class="ui-list-lead"><button class="ui-tick" data-id="' + escapeHtml(task.id) + '" aria-label="Toggle task" aria-pressed="' + (task.done ? 'true' : 'false') + '"></button></span>' +
+      '<div class="ui-list-main"><p>' + escapeHtml(task.title) + '</p></div>' +
+    '</article>'
+  ).join('') : '<p class="ui-list-empty">Nothing here yet.</p>';
+}
+
+// A private app signs every visitor in before the page loads; the editor's preview asks here instead.
+async function start() {
+  const session = await miniapp.auth.session();
+  const signedIn = session.role !== 'anonymous';
+  identity.textContent = signedIn ? session.name : '';
+  signIn.hidden = signedIn;
+  listSection.hidden = !signedIn;
+  form.hidden = !signedIn;
+  status.textContent = signedIn ? '' : 'Sign in to see the list and add to it.';
+  delete status.dataset.tone;
+  if (signedIn) await loadTasks();
+}
+
+async function addTask() {
+  const title = input.value.trim();
+  if (!title) return;
+  try {
+    status.textContent = '';
+    await miniapp.actions.call('tasks.create', { title });
+    input.value = '';
+    await loadTasks();
+  } catch (error) { showError(error); }
+}
+
+signIn.addEventListener('click', async () => {
+  try { await miniapp.auth.signIn(); await start(); } catch (error) { showError(error); }
+});
+form.addEventListener('submit', (event) => event.preventDefault());
+addButton.addEventListener('click', addTask);
+input.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void addTask();
+  }
+});
+
+list.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-id]');
+  if (!button) return;
+  try {
+    await miniapp.actions.call('tasks.toggle', { id: Number(button.dataset.id) });
+    await loadTasks();
+  } catch (error) { showError(error); }
+});
+
+try { await start(); } catch (error) { showError(error); }
+`;
+
+/**
+ * The app "No template" creates: a private, plain list titled with the
+ * project's name, whose page declares what the person wrote as its purpose.
+ * People with an app account share the rows; nobody without one opens it.
+ */
+export function plainListProject(base: MiniAppProject, description = ""): MiniAppProject {
+  const purpose = purposeLine(description) || plainListPurpose;
+  const name = escapeText(base.name);
+  const html = `
+<title>${name}</title>
+<main class="ui-page" data-purpose="${escapeText(purpose)}">
+  <header class="ui-page-header">
+    <div>
+      <h1 class="ui-title">${name}</h1>
+    </div>
+    <div class="ui-identity"><span id="identity"></span><button id="sign-in" class="ui-button ui-button-sm" type="button" hidden>Sign in</button></div>
+  </header>
+
+  <p class="ui-lede">${escapeText(purpose)}</p>
+  <p id="status" class="ui-status" role="status" aria-live="polite"></p>
+
+  <form id="task-form" class="ui-composer" hidden>
+    <input id="task-input" placeholder="Add one small thing…" autocomplete="off" required>
+    <button id="add-task" type="button" class="ui-button ui-button-primary" aria-label="Add task">Add</button>
+  </form>
+
+  <section id="list" hidden>
+    <div class="ui-section-head"><span>List</span><span id="count"></span></div>
+    <div id="tasks" class="ui-list"></div>
+    <p class="ui-list-note">The list stops at 100 rows.</p>
+  </section>
+</main>`;
+  const declarations = Object.entries(plainListActions.actions).map(([actionName, action]) => ({ name: actionName, kind: action.kind as "query" | "mutation", access: "authenticated" as const }));
+  return {
+    ...base,
+    directories: [],
+    files: {
+      ...base.files,
+      "index.html": html,
+      "styles.css": starterStyles,
+      "app.js": plainListScript,
+      "schema.sql": starterProject.files["schema.sql"],
+      "actions.json": `${JSON.stringify(plainListActions, null, 2)}\n`,
+    },
+    manifest: withVisibility({
+      ...base.manifest,
+      runtime: { ...base.manifest.runtime, database: { ...base.manifest.runtime.database, actions: declarations } },
+    }, "private"),
+    updatedAt: Date.now(),
+  };
+}
+
+const droppedPreviewUpload =`if ((await miniapp.auth.session()).role === 'anonymous') {
     fileInput.value = '';
     miniapp.auth.signIn();
     return;

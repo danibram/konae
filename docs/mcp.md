@@ -57,7 +57,7 @@ Each Deployment has a Signup Policy that decides who may create an app account. 
 | `closed` | Nobody signs up, and a person the owner invites can still accept. Pending invitations stay acceptable when the owner closes signup, so revoke the ones that should end. |
 | `allowlist` | Only exact emails or `@domain` entries, up to 100. A domain entry matches that domain and not its subdomains. Listing an address sends no invitation. |
 
-A public Deployment starts Open and a private one Closed. A first release may set any mode in `initialSignupPolicy` with `publish`, and the Kernel installs it before the app serves a request. When the owner's request leaves access open for an app with accounts, an agent proposes private and `invitation`. A republish keeps the policy, except that republishing a public app as private turns Open into Closed. `initialSignupPolicy` on a republish answers `Portable state can only be imported on the first deployment.` The editor's Deploy dialog sends `initialSignupPolicy` on a first publish and shows the current policy read-only after that. The owner changes it in Auth > Users.
+A public Deployment starts Open and a private one Closed. A first release may set any mode in `initialSignupPolicy` with `publish`, and the Kernel installs it before the app serves a request. When the owner's request leaves access open for an app with accounts, an agent proposes private and `invitation`. A republish keeps the policy, except that republishing a public app as private turns Open into Closed. `initialSignupPolicy` on a republish answers `Portable state can only be imported on the first deployment.` The editor's Deploy dialog sends `initialSignupPolicy` on a first publish and shows the current policy read-only after that. The owner changes it in Access > Users.
 
 ## Sign-in methods
 
@@ -69,7 +69,7 @@ Each app has its own Google client, which the owner makes as a Web application c
 - the same on a verified custom domain;
 - `<domain>/p/<id>/_konae/auth/google/callback` while the path address is on. The name address uses this callback too, so a rename leaves it working.
 
-The installation's home address has no callback, and Google sign-in there answers "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google." `sign_in_methods_set` refuses `google` while either half is unset, with "Set this app's Google client ID and client secret before turning Google on.", and `secret_delete` refuses either half while Google is on. Auth > Users in the editor shows the same redirect URIs, the two fields and the switch.
+The installation's home address has no callback, and Google sign-in there answers "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google." `sign_in_methods_set` refuses `google` while either half is unset, with "Set this app's Google client ID and client secret before turning Google on.", and `secret_delete` refuses either half while Google is on. Access > Users in the editor shows the same redirect URIs, the two fields and the switch.
 
 The flow stays on the app's host. `/_konae/auth/google/start` records state, nonce, PKCE verifier, Deployment and origin behind a cookie and sends the browser to Google. `/_konae/auth/google/callback` takes the flow once, on the same Deployment, origin and browser, exchanges the code with the app's client and checks the ID token: Google as issuer, the app's client as audience, expiry, the nonce, a key from Google's JWKS and a verified email. It then opens the app's own session.
 
@@ -79,7 +79,7 @@ An export carries `signInMethods` and the accounts, never the client. On another
 
 ## Users and invitations
 
-These tools take a `deploymentId`, need `manage_users` and the project grant, and write an audit row naming the Deployment. The editor's Auth > Users calls the same tools with the owner's session. It reuses one idempotency key when a batch is retried, and it turns invite and resend off, with the reason, while `mail_status` reports `sending: false`.
+These tools take a `deploymentId`, need `manage_users` and the project grant, and write an audit row naming the Deployment. The editor's Access > Users calls the same tools with the owner's session. It reuses one idempotency key when a batch is retried, and it turns invite and resend off, with the reason, while `mail_status` reports `sending: false`.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
@@ -383,7 +383,7 @@ api_keys_revoke { "deploymentId", "keyId" }
 
 `api_keys_create` returns the key once. A key belongs to one Deployment, grants no owner tool, and works only on HTTP routes and the file read path. The runtime endpoint refuses it with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` A key names actions that have an HTTP route and the file visibilities `public` and `private`; a key that names `private` reads every private file of its Deployment. A Deployment holds at most 50 live keys. The Kernel keeps the key's SHA-256 hash in `identity.sqlite`.
 
-An export carries each key's name, actions, file visibilities and hash, and an import marks every live key revoked. `api_keys_list` on the destination shows those with `revokedReason: "import"`, and Auth > Integrations lists them under "Revoked at import", so the owner knows which programs need a new key. A key the owner revoked has `revokedReason: null`. A restore keeps keys live. Auth > Integrations in the editor also sets and deletes secrets and shows a new key once with a curl for each route it names.
+An export carries each key's name, actions, file visibilities and hash, and an import marks every live key revoked. `api_keys_list` on the destination shows those with `revokedReason: "import"`, and Access > Integrations lists them under "Revoked at import", so the owner knows which programs need a new key. A key the owner revoked has `revokedReason: null`. A restore keeps keys live. Access > Integrations in the editor also sets and deletes secrets and shows a new key once with a curl for each route it names.
 
 ### The file read path
 
@@ -721,7 +721,7 @@ sequenceDiagram
 
 A published app runs under the Kernel's Content Security Policy ([the architecture](./architecture.md#isolation-of-hosted-code)). The inline scripts of each HTML page run because the Kernel allows each by its hash. Inline event handler attributes, scripts from other origins and requests to other origins do not.
 
-`signupPolicy` in `konae.json` names who may create an app account when the first release goes out, and `publish` sends it as `initialSignupPolicy`. `init` writes the template's visibility, which is private except for `tasks`, `form` and `gallery`, and `{ "mode": "invitation" }`. On a later release `publish` sends no policy; when the app's policy differs from the file, it prints one warning and still publishes, such as `konae.json asks for signup Open, but this app has Invitation only. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Auth > Users view, or call signup_policy_set with a credential that holds manage_users.`
+`signupPolicy` in `konae.json` names who may create an app account when the first release goes out, and `publish` sends it as `initialSignupPolicy`. `init` writes the template's visibility, which is private except for `tasks`, `form` and `gallery`, and `{ "mode": "invitation" }`. On a later release `publish` sends no policy; when the app's policy differs from the file, it prints one warning and still publishes, such as `konae.json asks for signup Open, but this app has Invitation only. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.`
 
 ### The schema change
 
@@ -869,7 +869,7 @@ An expression column without `AS`, such as `count(*)`, is listed under `unnamed`
 
 ## Export and import an app
 
-`project_export { deploymentId }` is the one export of an app and needs `export_data`. It hands over the app folder: `folder`, one download of a ustar archive with `konae.json`, `app/` and `dist/`, and one download per part of `data/`, captured under the app's locks so no write lands halfway. `sourcesAhead` is true when `app/actions.json` differs from the actions the release runs. Secrets, owners, credentials, sessions and `.konae/` never leave.
+`project_export { deploymentId }` is the one export of an app and needs `export_data`. It hands over the app folder: `folder`, one download of a ustar archive with `konae.json`, `app/` and `dist/`, and one download per part of `data/`, captured under the app's locks so no write lands halfway. `sourcesAhead` compares `app/` with the release's `sourceDigest`. Older releases without a digest compare `app/actions.json` with the actions the release runs. Secrets, owners, credentials, sessions and `.konae/` never leave.
 
 ```json
 {

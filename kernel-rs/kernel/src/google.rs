@@ -172,7 +172,7 @@ impl Google {
     pub fn from_env(public_origin: &str) -> Result<Self> {
         for retired in ["KONAE_GOOGLE_CLIENT_ID", "KONAE_GOOGLE_CLIENT_SECRET"] {
             if std::env::var(retired).is_ok_and(|value| !value.is_empty()) {
-                eprintln!("{retired} is no longer read. Each app's owner sets the app's own Google client in Auth > Users.");
+                eprintln!("{retired} is no longer read. Each app's owner sets the app's own Google client in Access > Users.");
             }
         }
         let Some(base) = std::env::var("KONAE_GOOGLE_TEST_ISSUER").ok().filter(|v| !v.is_empty()) else {
@@ -958,6 +958,8 @@ mod tests {
                 slug: "app".into(),
                 url: format!("http://{host}"),
                 created_at: now_ms(),
+                released_at: 0,
+                source_digest: None,
                 manifest: json!({"visibility": "private"}),
                 hostname: hostname.into(),
                 actions: "{}".into(),

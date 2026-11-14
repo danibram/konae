@@ -242,7 +242,7 @@ describe("agent thread apply gate", () => {
   test("a pass with a secret only the owner can set says so, and Apply stays open", () => {
     const warned: ValidationResult = { ok: true, errors: [], checked: ["schema", "actions"], warnings: [
       { stage: "actions", message: "A result column has no name." },
-      { stage: "actions", message: "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.", detail: "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.", owner: true },
+      { stage: "actions", message: "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.", detail: "Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.", owner: true },
     ] };
     const state = run([
       { type: "prompt", text: "x" },
@@ -255,7 +255,7 @@ describe("agent thread apply gate", () => {
       checked: ["schema", "actions"],
       owner: {
         message: "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.",
-        detail: "Deploy refuses this until the owner sets the secret in Auth > Integrations. No edit to the files clears it.",
+        detail: "Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.",
       },
     });
   });

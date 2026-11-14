@@ -186,7 +186,7 @@ export type ProposalFooter =
    */
   | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal };
 
-/** The Kernel's sentence for a refusal the owner clears in Auth > Integrations, and who acts. */
+/** The Kernel's sentence for a refusal the owner clears in Access > Integrations, and who acts. */
 export type OwnerRefusal = { message: string; detail?: string };
 
 const stageOrder: ValidationStage[] = ["schema", "preview-rows", "actions"];

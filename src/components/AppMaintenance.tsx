@@ -53,7 +53,7 @@ export function AppMaintenance({ deploymentId, onSignedOut }: { deploymentId: st
       {state.installation
         ? <p>{state.installation}</p>
         : state.maintenance
-          ? <p>{state.unreadable ? "The app's maintenance state cannot be read, so the Kernel keeps it paused." : `Paused since ${new Date(state.since ?? 0).toLocaleString()}.`} Visitors see a maintenance page. Writes, signups, sign-ins, email, calls and scheduled runs wait until you take it out.</p>
+          ? <p>{state.unreadable ? "The app's maintenance state cannot be read, so the app stays paused." : `Paused since ${new Date(state.since ?? 0).toLocaleString()}.`} Visitors see a maintenance page. Writes, signups, sign-ins, email, calls and scheduled runs wait until you take it out.</p>
           : <p>Pause the app while you move it or replace its data. Visitors see a maintenance page and nothing writes until you take it out.</p>}
       {!state.installation && <Button variant={own ? "primary" : "secondary"} loading={busy} onClick={() => void change(!own)}>{own ? "Take out of maintenance" : "Put in maintenance"}</Button>}
     </>}
