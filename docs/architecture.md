@@ -125,7 +125,7 @@ apps/<id>/
 ├── data/
 │   ├── database.sqlite # the app's rows, in WAL mode
 │   ├── identity.sqlite # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
-│   ├── usage.sqlite    # Usage and Signals
+│   ├── usage.sqlite    # Usage, Signals, and the schedule's slots and runs
 │   ├── files/          # index.json, and the uploads unless a bucket holds them
 │   └── secrets.sqlite  # signing secrets and the Google client
 ├── actions.d.ts, action-contract.md, AGENTS.md, compose.yaml, .env.example, package.json

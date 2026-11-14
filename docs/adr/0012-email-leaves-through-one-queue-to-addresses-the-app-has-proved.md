@@ -11,6 +11,7 @@ Verification, recovery and invitations depend on email, and apps want to email o
 Every email leaves through one queue in `mail.sqlite`, at the root of the data directory. It belongs to the installation, not to any app, and an export does not carry it.
 
 - The transaction that issues a challenge attaches `mail.sqlite` and writes the job before it commits, so a refusal rolls both back. The worker sends a job only while its challenge is still open, which also covers a link replaced by a newer one, a challenge ended by a suspension and one that expired.
+- A crash can fall between the two commits. The account file (`identity.sqlite` or `owners.sqlite`) and `mail.sqlite` are both in WAL mode. In WAL mode SQLite commits each attached file on its own, so a Kernel that dies between the two commits can keep one write and lose the other. Both outcomes are harmless. The worker never sends a job whose challenge does not exist, and a challenge with no job means the person gets no email and asks for the link again.
 - A job holds its purpose, recipient, scope, the app name, the link sealed with AES-256-GCM and the job's state. The states are pending, accepted by the provider, delivered and failed, and a failed job carries a reason. The job ID is the idempotency key and the associated data of the seal. The sealed text is deleted when the provider accepts the email or the job fails.
 - HKDF-SHA256 derives the sealing key from `KONAE_MAIL_SECRET`, or from `KONAE_ADMIN_KEY` when that is unset. The Kernel refuses to send through a real provider with the public development key. The `kernel` binary writes a random key on its first start, readable by its owner alone.
 - One worker task drains the queue, so no request waits for a provider. A pass leases due jobs for two minutes. Retries wait 30 seconds, doubling up to an hour, for at most nine attempts.
@@ -61,3 +62,4 @@ A mutation may declare `"notify": { "to": ..., "subject": "<template>", "body": 
 - A restore ends pending jobs, and an imported app sends none of its origin's email.
 - There is no per-recipient unsubscribe yet. Verification proves an address belongs to an account of the app, not consent to every notice, and the per-recipient budget bounds the harm.
 - The editor preview sends no email. `konae dev` writes it to the development mailbox file, and `konae events` lists it.
+- A Kernel that crashes between the two commits can lose one email, and the person asks again.
