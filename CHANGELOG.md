@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-14
+
+This release carries the Kamynando rollout fixes and the security fixes for import, restore and access revocation that were not in 0.7.0, and the three fixes from the review of 0.7.0.
+
 ### Added
 
 - `konae login --browser` signs the owner in through the browser with OAuth and PKCE on a loopback port and saves a 24-hour credential without a password. OAuth clients that redirect to `127.0.0.1` or `localhost` get 24-hour tokens and may ask for `export_data`, and the consent page says how long the token lasts.
