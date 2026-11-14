@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-14
+
+An installation that sets `KONAE_ADMIN_KEY` or a `KONAE_MAIL_LIMIT_*CREATOR*` name refuses to start on this version until it uses the new name with the same value.
+
 ### Changed
 
 - The operator commands of `konae` that name an owner say `owner`. `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend` and `owner-account-resume` were `creator-code-create`, `creator-code-list`, `creator-code-revoke`, `creator-account-suspend` and `creator-account-resume`, and `owner-suspend` was `creator-suspend`. An old name answers `creator-code-create is now owner-code-create.` and exits with an error.
@@ -41,6 +45,13 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 #### Kernel
 
 - A port already in use is refused with its number and how to pick another.
+
+### Fixed
+
+- After the first deploy of a private app with no accounts, the receipt says the owner has no account there and invites the owner's email in one click.
+- An action's sentence in the editor and in Deploy states only what its SQL shows: a total returns one number, and a filter bound to the actor reads their own rows.
+- Go to a refused statement leaves the caret at its end, so typing a LIMIT adds to the query.
+- Back to Projects focuses the card of the app you left, and Projects exports a published app with its accounts and rows.
 
 ## [0.6.0] - 2026-11-13
 
