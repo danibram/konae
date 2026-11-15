@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { cloneStarter } from "../lib/starter";
 import { createHostedArtifact } from "./artifact";
 import { createPreviewDocument } from "./preview";
+import { encodeBase64 } from "../mcp/client";
 
 const project = cloneStarter();
 
@@ -72,6 +73,37 @@ describe("preview document", () => {
       files: { ...project.files, "app.js": "const html = '</script><img onerror=alert(1)>';" },
     };
     expect(createPreviewDocument(hostile)).not.toContain("</script><img");
+  });
+
+  test("inlines public asset bytes at shared served paths and leaves unrelated text alone", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    const data = `data:image/png;base64,${encodeBase64(png)}`;
+    const source = {
+      ...project,
+      files: {
+        ...project.files,
+        "index.html": '<img src="/images/a%20mark.png?v=1#logo"><img srcset="images/a%20mark.png 1x, https://cdn.example/a.png 2x"><link rel="icon" href="/images/a%20mark.png"><p>/images/a%20mark.png</p><script>const text="/images/a%20mark.png"</script>',
+        "styles.css": '.hero{background-image:url("images/a%20mark.png?theme=dark#x")}.external{background:url(https://cdn.example/bg.png)}',
+        "public/images/a mark.png": encodeBase64(png),
+      },
+      encodings: { "public/images/a mark.png": "base64" },
+    };
+    const document = createPreviewDocument(source);
+    expect(document.split(data).length - 1).toBe(4);
+    expect(document).toContain('<p>/images/a%20mark.png</p>');
+    expect(document).toContain('const text="/images/a%20mark.png"');
+    expect(document).toContain("https://cdn.example/bg.png");
+  });
+
+  test("uses the public prefix rule for normalized relative asset URLs", () => {
+    const png = new Uint8Array([1, 2, 3]);
+    const data = `data:image/png;base64,${encodeBase64(png)}`;
+    const source = {
+      ...project,
+      files: { ...project.files, "index.html": '<img src="./public/../images/a.png?x#y">', "public/images/a.png": encodeBase64(png) },
+      encodings: { "public/images/a.png": "base64" },
+    };
+    expect(createPreviewDocument(source)).toContain(`src="${data}"`);
   });
 
   /**

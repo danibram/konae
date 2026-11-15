@@ -28,12 +28,23 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
 
 export async function compileProjectInBrowser(project: MiniAppProject, options: { release?: boolean } = {}): Promise<{ body: string; styles: string; script: string }> {
   const entrypoint = appEntry(Object.keys(project.files)) ?? "app.js";
-  const { script, styles: importedCss } = await bundleInBrowser(textFiles(project), entrypoint, options.release ?? false);
-  return {
+  const bundled = await bundleInBrowser(textFiles(project), entrypoint, options.release ?? false);
+  const compiled = {
     body: project.files["index.html"] ?? "<main id=app></main>",
-    styles: [project.files["styles.css"] ?? "", importedCss].filter(Boolean).join("\n"),
-    script,
+    styles: [project.files["styles.css"] ?? "", bundled.styles].filter(Boolean).join("\n"),
+    script: bundled.script,
   };
+  // Preview and release share the same path checks, including files referenced
+  // by styles imported from the app entry.
+  await assembleStaticArtifact({
+    paths: Object.keys(project.files),
+    read: async (path) => sourceContents(project, path),
+    compile: async () => ({ styles: compiled.styles, script: compiled.script }),
+    bundle: async (path) => bundleInBrowser(textFiles(project), path, true),
+    runtime: hostedRuntime,
+    routing: project.manifest.routing,
+  });
+  return compiled;
 }
 
 async function bundleInBrowser(files: Record<string, string>, entrypoint: string, release = false): Promise<{ script: string; styles: string }> {

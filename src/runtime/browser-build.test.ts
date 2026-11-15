@@ -92,4 +92,9 @@ describe("a file that is not text in the editor's build", () => {
     expect(built.encodings).toEqual({ "logo.png": "base64" });
     expect(decodeBase64(built.files["logo.png"]!)).toEqual(png);
   });
+
+  test("preview compilation reports a missing public asset with its source reference", async () => {
+    await expect(compileProjectInBrowser(project({ "index.html": '<img src="./public/missing.png?size=large">', "app.js": "document.title = 'preview';" })))
+      .rejects.toThrow('index.html references ./public/missing.png?size=large, but the Capsule holds no public/missing.png.');
+  });
 });
