@@ -14,7 +14,7 @@
 //!   the indexes and checks the foreign keys.
 //! - A dropped table, a dropped column and a column whose type changed lose
 //!   something, so the change applies only with the confirmation that the
-//!   plan of those same statements carries.
+//!   plan of those statements and reported losses carries.
 //!
 //! An index loses no row, so a dropped or changed index applies without one.
 
@@ -44,9 +44,16 @@ pub struct Change {
 
 impl Change {
     /// The confirmation a change that loses something needs. It is a digest
-    /// of the statements, so a confirmation fits only the plan it was given for.
+    /// of the statements and reported losses, including their row and value counts.
     pub fn confirmation(&self) -> Option<String> {
-        (!self.losses.is_empty()).then(|| hex::encode(Sha256::digest(self.statements.join(";\n").as_bytes())))
+        (!self.losses.is_empty()).then(|| {
+            let scope = json!({
+                "version": 1,
+                "statements": self.statements,
+                "losses": self.losses.iter().map(|loss| (&loss.table, &loss.column, &loss.sentence)).collect::<Vec<_>>(),
+            });
+            hex::encode(Sha256::digest(scope.to_string().as_bytes()))
+        })
     }
 
     /// `{ statements, losses, confirmation }` as `release_plan` answers it.
@@ -657,6 +664,32 @@ mod tests {
         assert_eq!(rows(&path, "SELECT id, title FROM tasks ORDER BY id"), before);
         assert_eq!(rows(&path, "SELECT name FROM pragma_table_info('tasks')"), vec![vec!["Text(\"id\")".to_owned()], vec!["Text(\"title\")".to_owned()]]);
         assert_eq!(apply(&path, wanted, &program(&[]), Mode::Apply(None)).unwrap(), Change::default());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_confirmation_refuses_new_values_that_were_not_in_the_reported_loss() {
+        let (root, path) = seeded();
+        let wanted = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
+        let copy = root.join("before.sqlite");
+        Connection::open(&path).unwrap().execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()]).unwrap();
+        let plan = apply(&copy, wanted, &program(&[]), Mode::Plan).unwrap();
+        let confirmation = plan.confirmation().unwrap();
+
+        Connection::open(&path).unwrap().execute("INSERT INTO tasks(title, done) VALUES ('Arrived after planning', 1)", []).unwrap();
+        let refused = apply(&path, wanted, &program(&[]), Mode::Apply(Some(&confirmation))).unwrap_err();
+        let refusal = crate::refusal::of(&refused).unwrap();
+        assert_eq!(refusal.code, NEEDS_CONFIRMATION);
+        assert!(refusal.message.contains("4 values"), "{refusal:?}");
+        assert_eq!(rows(&path, "SELECT count(done) FROM tasks"), vec![vec!["Integer(4)".to_owned()]]);
+
+        let updated_copy = root.join("after.sqlite");
+        Connection::open(&path).unwrap().execute("VACUUM INTO ?1", [updated_copy.to_string_lossy().as_ref()]).unwrap();
+        let updated = apply(&updated_copy, wanted, &program(&[]), Mode::Plan).unwrap();
+        assert_eq!(plan.statements, updated.statements);
+        assert_ne!(plan.confirmation(), updated.confirmation());
+        apply(&path, wanted, &program(&[]), Mode::Apply(updated.confirmation().as_deref())).unwrap();
+        assert_eq!(rows(&path, "SELECT count(*) FROM tasks"), vec![vec!["Integer(4)".to_owned()]]);
         let _ = std::fs::remove_dir_all(root);
     }
 

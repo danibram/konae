@@ -33,6 +33,7 @@ import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
+import { requireTestKernel } from "./test-kernel";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
@@ -952,6 +953,7 @@ export async function localKernel(root: string, settings: AppSettings, options: 
   }
   if (!process.env.KONAE_KERNEL_BIN && !existsSync(binary)) binary = await downloadKernel(KERNEL_VERSION);
   if (!existsSync(binary)) throw Error(`No kernel binary at ${binary}. Run dev once, or set KONAE_KERNEL_BIN.`);
+  await requireTestKernel(binary);
   const data = path.join(root, ".konae/kernel");
   const link = path.join(data, "apps", settings.id);
   await mkdir(path.dirname(link), { recursive: true });
@@ -962,6 +964,7 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KONAE_") && !name.startsWith("VITE_"))),
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
+    KONAE_EXECUTION_MODE: "test",
     // Account links and notices land in a file on this machine, never a provider.
     KONAE_MAIL_TRANSPORT: "development",
     // The per-file limit is the Kernel's own, so a file refused here is refused on a Deployment. KONAE_FILE_MAX_BYTES raises it.
