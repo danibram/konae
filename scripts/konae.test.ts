@@ -8,6 +8,7 @@ import { templateChoices } from "../src/lib/templates";
 import { packageComponentFiles } from "../src/lib/portable-package";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
+import { runScenario, testReply } from "./local-test";
 import { usageRange } from "../src/lib/usage";
 import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
@@ -1043,15 +1044,77 @@ setInterval(() => {}, 1000);
       const page = await fetch(feed.url);
       expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
       // The page writes values as text, so a mail's markup stays text.
-      expect(await page.text()).not.toContain("innerHTML");
-      const events = await (await fetch(`${feed.url}/events.json`)).json() as { kind: string; title: string; mail?: { text: string } }[];
+      const pageText = await page.clone().text();
+      expect(pageText).not.toContain("innerHTML");
+      const feedAddress = new URL(feed.url); const control = new URLSearchParams(feedAddress.hash.slice(1)).get("control")!; feedAddress.hash = ""; feedAddress.pathname = "/events.json";
+      const eventsResponse = await fetch(feedAddress, { headers: { "X-Konae-Control": control } });
+      const events = await eventsResponse.json() as { kind: string; title: string; mail?: { text: string } }[];
       expect(events.map((event) => event.kind)).toEqual(["signal", "mail"]);
       expect(events[1]).toMatchObject({ title: "Email from messages.send to owner@app.test", mail: { text: "<b>Hola</b>" } });
+      expect(await eventsResponse.headers.get("cache-control")).toBe("no-store");
+      expect((await fetch(feedAddress)).status).toBe(403);
+      expect((await fetch(feedAddress, { headers: { "X-Konae-Control": control, Origin: "http://evil.test" } })).status).toBe(403);
+      expect((await fetch(feedAddress, { headers: { "X-Konae-Control": control, Host: "evil.test" } })).status).toBe(403);
+      expect(pageText).toContain("X-Konae-Control");
+      expect(pageText).not.toContain(control);
       failing = true;
-      const failed = await fetch(`${feed.url}/events.json`);
+      const failed = await fetch(feedAddress, { headers: { "X-Konae-Control": control } });
       expect(failed.status).toBe(502);
       expect(await failed.json()).toEqual({ error: "The Kernel stopped." });
-      expect((await fetch(`${feed.url}/other`)).status).toBe(404);
+      expect((await fetch(new URL("other", feedAddress))).status).toBe(403);
+    } finally { feed.stop(); }
+  });
+
+  test("test replies enforce response numbers and scenarios refuse ambiguous matches", async () => {
+    const received: string[] = [];
+    const runner = { run: async (_args: string[], input?: string) => { received.push(input || ""); return JSON.stringify({ accepted: true }); } };
+    await expect(testReply(runner, "call-a", JSON.stringify({ responseNumber: 0, status: 200, body: {} }))).rejects.toThrow("positive responseNumber");
+    const directory = await mkdtemp(path.join(tmpdir(), "konae-scenario-"));
+    try {
+      const filename = path.join(directory, "scenario.json");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: {}, response: { responseNumber: 2, status: 200, body: {} } }] }));
+      const ambiguous = { run: async () => JSON.stringify({ calls: [
+        { callId: "c1", action: "mail.send", responseNumber: 2, awaitingAt: 4 },
+        { callId: "c2", action: "mail.send", responseNumber: 2, awaitingAt: 5 },
+      ] }) };
+      await expect(runScenario(ambiguous, filename)).rejects.toThrow("matched 2 awaiting calls");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: { input: { recipient: "ana" } }, response: { responseNumber: 2, status: 202, body: { ok: true } } }] }));
+      const commands: string[][] = [];
+      const exact = { run: async (args: string[], input?: string) => {
+        commands.push(args);
+        if (args[1] === "calls") return JSON.stringify({ calls: [{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 2, awaitingAt: 8 }] });
+        expect(JSON.parse(input!)).toEqual({ responseNumber: 2, status: 202, body: { ok: true } });
+        return JSON.stringify({ accepted: true });
+      } };
+      const applied = await runScenario(exact, filename);
+      expect(applied.applied).toHaveLength(1);
+      expect(commands).toEqual([["test", "calls"], ["test", "reply", "c3"]]);
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: { input: { recipient: "ana" } }, response: { responseNumber: 1, status: 202, body: { ok: true } } }] }));
+      await expect(runScenario(exact, filename)).rejects.toThrow("expected response 2, got 1");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  test("events controls authorize local reads and mutations with the owner token", async () => {
+    const mailbox = path.join(directory, "control-mailbox.jsonl"); await writeFile(mailbox, "");
+    const mutations: string[] = [];
+    const controls = {
+      status: async () => ({ mode: "test", pausedSchedules: [{ action: "digest.run", paused: true }] }),
+      calls: async () => ({ calls: [] }),
+      reply: async (id: string, body: string) => { mutations.push(`reply:${id}:${body}`); return { accepted: false }; },
+      schedule: async (action: string) => { mutations.push(`schedule:${action}`); return { ok: true }; },
+    };
+    const feed = serveEvents(async () => ({ summary: { usage: { days: [] }, metrics: [], actions: [] }, calls: [], notices: [], signals: [] }) as unknown as Sources, "dep_1", mailbox, 0, controls);
+    try {
+      const base = new URL(feed.url); const token = new URLSearchParams(base.hash.slice(1)).get("control")!; base.hash = "";
+      const get = (route: string, headers: Record<string, string> = {}) => fetch(new URL(route, base), { headers: { "X-Konae-Control": token, ...headers } });
+      expect((await get("test/status")).status).toBe(200);
+      expect((await get("test/calls", { Origin: "http://localhost:4173" })).status).toBe(403);
+      expect((await fetch(new URL("test/status", base))).status).toBe(403);
+      const reply = await fetch(new URL("test/reply/c-1", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: '{"responseNumber":1}' });
+      expect(await reply.json()).toEqual({ accepted: false });
+      const schedule = await fetch(new URL("test/schedule/digest.run", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: "{}" });
+      expect(await schedule.json()).toEqual({ ok: true });
+      expect(mutations).toEqual(["reply:c-1:{\"responseNumber\":1}", "schedule:digest.run"]);
     } finally { feed.stop(); }
   });
 

@@ -16,6 +16,7 @@ import {
 import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src/deployments/release";
 import { type ProjectTemplates } from "./project-templates";
 import type { AppEvent, ReadRecord } from "./events";
+import { runScenario, testCalls, testControls, testReply, testSchedule, testStatus } from "./local-test";
 import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
 import { pushData } from "./push";
 import {
@@ -163,6 +164,9 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           runs, routes and Signals, oldest first. Locally an email shows its recipient and text,
           because nothing is sent. --json prints one object per line and --follow keeps printing.
           Only --prod reads the published Deployment.
+test      --dir <folder> status|calls|reply <call-id>|schedule <action>|scenario <file>
+          Reads local test state, supplies a JSON reply from --stdin or --file, runs a paused schedule,
+          or consumes ordered response steps from a version 1 file under tests/. It never targets production.
 pull      --dir <folder> [--url <installation URL>]
           Downloads app/, dist/, konae.json settings and data into <folder>/.konae/pull. Needs login
           --export-data. Use --data-only to refresh data without changing sources or their base markers.
@@ -1290,7 +1294,7 @@ export async function main() {
     return;
   }
   if (SERVER_COMMANDS.includes(command)) throw Error(serverCommandMessage(command));
-  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "rehearse", "sql", "events", "domain", "hostname", "push", "secret", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "rehearse", "sql", "events", "test", "domain", "hostname", "push", "secret", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -1447,6 +1451,33 @@ export async function main() {
     console.log(JSON.stringify(answer, null, 2));
     return;
   }
+  if (command === "test") {
+    if (args.includes("--prod")) throw Error("konae test only runs against the local test Kernel.");
+    const positional = args.filter((arg, index) => !arg.startsWith("--") && !["--dir", "--file", "--url"].includes(args[index - 1]));
+    const [action, ...rest] = positional;
+    const settings = await readSettings(root);
+    const kernel = await localKernel(root, settings, { build: false });
+    const capabilities = JSON.parse(await kernel.run(["capabilities"])) as { executionTest?: number };
+    if (capabilities.executionTest !== 1) throw Error("This Kernel does not support local test controls. Build or install a Kernel with executionTest capability.");
+    let result: unknown;
+    if (action === "status" && rest.length === 0) result = await testStatus(kernel);
+    else if (action === "calls" && rest.length === 0) result = await testCalls(kernel);
+    else if (action === "schedule" && rest.length === 1) result = await testSchedule(kernel, rest[0]);
+    else if (action === "reply" && rest.length === 1) {
+      const file = option("file");
+      const stdinFlag = args.includes("--stdin");
+      if (file && stdinFlag) throw Error("Choose --stdin or --file <json>, not both.");
+      if (!file && !stdinFlag) throw Error("Reply JSON must come from --stdin or --file <json>.");
+      const body = file ? await readFile(path.resolve(file), "utf8") : await Bun.stdin.text();
+      result = await testReply(kernel, rest[0], body);
+    } else if (action === "scenario" && rest.length === 1) {
+      const scenario = path.resolve(root, rest[0]);
+      if (!scenario.startsWith(path.join(path.resolve(root), "tests") + path.sep)) throw Error("Scenario files must live under project tests/.");
+      result = await runScenario(kernel, scenario);
+    } else throw Error("Use konae test status, calls, reply <call-id> --stdin|--file <json>, schedule <action>, or scenario <file>.");
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
   if (command === "events") {
     const { deploymentRecord, formatEvent, readEvents } = await import("./events");
     const found = await target();
@@ -1460,7 +1491,14 @@ export async function main() {
     const read = async () => {
       // Only the local Kernel has a mailbox this machine can read.
       // dev's events page stamps each mail when it is written, so its answer is preferred to a read from here.
-      const served = feed ? await fetch(`${feed}/events.json?days=${days}`).then((response) => response.ok ? response.json() as Promise<AppEvent[]> : undefined).catch(() => undefined) : undefined;
+      const served = feed ? await (async () => {
+        const feedUrl = new URL(feed);
+        const token = new URLSearchParams(feedUrl.hash.slice(1)).get("control") ?? "";
+        feedUrl.hash = "";
+        feedUrl.pathname = "/events.json";
+        feedUrl.search = new URLSearchParams({ days: String(days) }).toString();
+        return fetch(feedUrl, { headers: { "X-Konae-Control": token } }).then((response) => response.ok ? response.json() as Promise<AppEvent[]> : undefined).catch(() => undefined);
+      })() : undefined;
       const events = served ?? await readEvents(record, deploymentId, { days, seen, mailbox: local?.mailbox });
       for (const event of events) {
         // A notice or a call changes state, so the same event prints again when its outcome does.
@@ -1562,7 +1600,7 @@ export async function main() {
       // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
       const { serveEvents } = await import("./events");
       const eventsPort = Number(option("events-port", String(Number(port) + 1)));
-      try { feed = serveEvents(kernelRecord(kernel), settings.id, kernel.mailbox, eventsPort); }
+      try { feed = serveEvents(kernelRecord(kernel), settings.id, kernel.mailbox, eventsPort, testControls(kernel)); }
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
       const policy = settings.signupPolicy.mode;

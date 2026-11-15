@@ -50,6 +50,28 @@ export function mailEvents(mailbox: string, deploymentId: string, seen = new Map
 
 /** The Kernel's own record of a range of days: Usage, calls, notices and Signals. */
 export type ReadRecord = (range: { from: string; to: string }) => Promise<Sources>;
+export type LocalTestControls = {
+  status(): Promise<unknown>;
+  calls(): Promise<unknown>;
+  reply(callId: string, body: string): Promise<unknown>;
+  schedule(action: string): Promise<unknown>;
+};
+
+async function boundedBody(request: Request, maxBytes: number) {
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = []; let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > maxBytes) { await reader.cancel(); throw Error(`Request body exceeds ${maxBytes} bytes.`); }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(length); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
 
 /** The published Deployment's record, read with the four owner tools at once. */
 export function deploymentRecord(client: Pick<McpClient, "call">, deploymentId: string): ReadRecord {
@@ -122,11 +144,20 @@ export const EVENTS_PAGE = `<!doctype html>
   pre { margin: .5rem 0 0; padding: .6rem .75rem; background: var(--paper); border: 1px solid var(--line); border-radius: .4rem; white-space: pre-wrap; overflow-wrap: anywhere; font: .85rem/1.5 ui-monospace, monospace; }
   .empty, .error { color: var(--soft); padding: 2rem 0; }
   .error { color: var(--warn); }
+  textarea { width: 100%; min-height: 7rem; font: .85rem/1.5 ui-monospace, monospace; }
+  input, textarea { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: .3rem; padding: .45rem; }
+  .controls { margin: 1.5rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: .6rem; }
 </style>
 <main>
   <h1>What this app did</h1>
   <p class="lede">Email, calls to other services, scheduled runs, routes and Signals of the app on this machine, newest first. Email is written to a file here and never sent.</p>
   <div class="filters" id="filters" role="group" aria-label="Show"></div>
+  <section class="controls" id="test-controls" hidden aria-labelledby="test-heading">
+    <h2 id="test-heading">Local test controls</h2><p id="test-policy" class="detail"></p>
+    <h3>Paused schedules</h3><pre id="schedules"></pre>
+    <form id="schedule-form"><label>Run a schedule now <input name="action" required></label> <button>Run</button></form>
+    <h3>Awaiting calls</h3><div id="calls"></div>
+  </section>
   <p class="error" id="error" role="alert" hidden></p>
   <ol id="list" aria-live="polite"></ol>
   <p class="empty" id="empty" hidden>Nothing yet. Call an action that notifies, calls another service or records a Signal, and it shows here.</p>
@@ -153,21 +184,58 @@ export const EVENTS_PAGE = `<!doctype html>
       if (event.detail && !(event.mail && event.mail.link)) item.append(el("p", "detail", event.detail));
       item.append(el("p", "outcome", event.outcome));
       if (event.fix) item.append(el("p", "outcome fix", event.fix));
-      if (event.mail && event.mail.link) { const p = el("p", "detail"); const a = el("a", "", event.mail.link); a.href = event.mail.link; p.append(a); item.append(p); }
+      if (event.mail && event.mail.link) {
+        const p = el("p", "detail");
+        try { const link = new URL(event.mail.link); if (link.protocol === "http:" || link.protocol === "https:") { const a = el("a", "", event.mail.link); a.href = link.href; a.rel = "noreferrer noopener"; p.append(a); } }
+        catch {}
+        if (p.childNodes.length) item.append(p);
+      }
       if (event.mail && event.mail.text) item.append(el("pre", "", event.mail.text.trim()));
       return item;
     }));
     document.getElementById("empty").hidden = rows.length > 0;
   }
+  const token = new URLSearchParams(location.hash.slice(1)).get("control");
+  async function authorized(url, options = {}) {
+    return fetch(url, { ...options, headers: { ...(options.headers || {}), "X-Konae-Control": token || "" } });
+  }
   async function load() {
     const error = document.getElementById("error");
     try {
-      const response = await fetch("events.json");
+      const response = await authorized("events.json");
       if (!response.ok) throw Error((await response.json()).error || "The local Kernel did not answer.");
       events = (await response.json()).reverse(); error.hidden = true; draw();
     } catch (problem) { error.textContent = "Could not read the events: " + problem.message; error.hidden = false; }
   }
-  load(); setInterval(load, 2000);
+  const controls = document.getElementById("test-controls");
+  async function loadTestControls() {
+    if (!token) return;
+    try {
+      const [statusResponse, callsResponse] = await Promise.all([authorized("test/status"), authorized("test/calls")]);
+      if (!statusResponse.ok || !callsResponse.ok) throw Error("The local test controls refused this request.");
+      const status = await statusResponse.json(); const calls = await callsResponse.json();
+      controls.hidden = false;
+      document.getElementById("test-policy").textContent = "Execution mode: " + status.mode;
+      document.getElementById("schedules").textContent = JSON.stringify(status.pausedSchedules || [], null, 2);
+      const host = document.getElementById("calls"); host.replaceChildren();
+      for (const call of calls.calls || []) {
+        const box = el("article"); box.append(el("h4", "", call.action + " · " + call.callId));
+        box.append(el("pre", "", JSON.stringify(call, null, 2)));
+        const form = el("form"); const label = el("label", "", "Synthetic response JSON");
+        const field = el("textarea"); field.required = true; field.value = JSON.stringify({ responseNumber: call.responseNumber, status: 200, body: {} }, null, 2);
+        label.append(field); const button = el("button", "", "Reply"); form.append(label, button);
+        form.onsubmit = async (event) => { event.preventDefault(); try { await mutate("test/reply/" + encodeURIComponent(call.callId), field.value); await loadTestControls(); } catch (problem) { const error = document.getElementById("error"); error.textContent = problem.message; error.hidden = false; } };
+        box.append(form); host.append(box);
+      }
+    } catch (problem) { const error = document.getElementById("error"); error.textContent = problem.message; error.hidden = false; }
+  }
+  async function mutate(url, body) {
+    const response = await authorized(url, { method: "POST", headers: { "content-type": "application/json" }, body });
+    const result = await response.json(); if (!response.ok) throw Error(result.error || "The local test control refused this request.");
+    return result;
+  }
+  document.getElementById("schedule-form").onsubmit = async (event) => { event.preventDefault(); const action = new FormData(event.currentTarget).get("action"); try { await mutate("test/schedule/" + encodeURIComponent(action), "{}"); await loadTestControls(); } catch (problem) { const error = document.getElementById("error"); error.textContent = problem.message; error.hidden = false; } };
+  load(); loadTestControls(); setInterval(() => { load(); loadTestControls(); }, 2000);
 </script>
 </html>
 `;
@@ -177,23 +245,48 @@ export const EVENTS_PAGE = `<!doctype html>
  * mailbox line once a second, so a mail's time is when it was written to
  * within a second, also for a later `konae events`, which reads from here.
  */
-export function serveEvents(read: ReadRecord, deploymentId: string, mailbox: string, port: number) {
+export function serveEvents(read: ReadRecord, deploymentId: string, mailbox: string, port: number, controls?: LocalTestControls) {
   const seen = new Map<number, number>();
   const stamp = async () => { mailEvents(await readFile(mailbox, "utf8").catch(() => ""), deploymentId, seen); };
   const timer = setInterval(() => void stamp(), 1000);
+  const token = crypto.randomUUID();
+  let origin = "";
   const server = Bun.serve({
     port, hostname: "127.0.0.1",
     async fetch(request) {
       const url = new URL(request.url);
-      if (url.pathname === "/") return new Response(EVENTS_PAGE, { headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" } });
-      if (url.pathname !== "/events.json") return new Response("Not found", { status: 404 });
-      const days = Number(url.searchParams.get("days") ?? 7);
-      try {
-        return Response.json(await readEvents(read, deploymentId, { mailbox, seen, days: Number.isInteger(days) && days >= 1 && days <= 400 ? days : 7 }));
-      } catch (error) {
-        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+      const headers = { "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'" };
+      const host = request.headers.get("host");
+      const expectedHost = `localhost:${server.port}`;
+      if (host !== expectedHost) return Response.json({ error: "Host refused." }, { status: 403, headers });
+      const requestOrigin = request.headers.get("origin");
+      if ((requestOrigin && requestOrigin !== origin) || (request.method !== "GET" && requestOrigin !== origin)) return Response.json({ error: "Origin refused." }, { status: 403, headers });
+      if (url.pathname === "/") return new Response(EVENTS_PAGE, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+      if (request.headers.get("x-konae-control") !== token) return Response.json({ error: "Local owner token required." }, { status: 403, headers });
+      if (url.pathname === "/events.json" && request.method === "GET") {
+        const days = Number(url.searchParams.get("days") ?? 7);
+        try {
+          return Response.json(await readEvents(read, deploymentId, { mailbox, seen, days: Number.isInteger(days) && days >= 1 && days <= 400 ? days : 7 }), { headers });
+        } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502, headers }); }
       }
+      if (controls && request.method === "GET" && ["/test/status", "/test/calls"].includes(url.pathname)) {
+        try { return Response.json(url.pathname.endsWith("status") ? await controls.status() : await controls.calls(), { headers }); }
+        catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502, headers }); }
+      }
+      const match = /^\/test\/(reply|schedule)\/([^/]+)$/.exec(url.pathname);
+      if (controls && match && request.method === "POST") {
+        let body: string;
+        try { body = await boundedBody(request, 65536); }
+        catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413, headers }); }
+        try {
+          const result = match[1] === "reply" ? await controls.reply(decodeURIComponent(match[2]), body) : await controls.schedule(decodeURIComponent(match[2]));
+          return Response.json(result, { headers });
+        } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400, headers }); }
+      }
+      if (url.pathname.startsWith("/test/")) return Response.json({ error: controls ? "Method refused." : "Local test controls are unavailable." }, { status: controls ? 405 : 404, headers });
+      return new Response("Not found", { status: 404, headers });
     },
   });
-  return { url: `http://localhost:${server.port}`, stop: () => { clearInterval(timer); server.stop(true); } };
+  origin = `http://localhost:${server.port}`;
+  return { url: `${origin}/#control=${token}`, origin, token, stop: () => { clearInterval(timer); server.stop(true); } };
 }
