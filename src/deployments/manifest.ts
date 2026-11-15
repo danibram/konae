@@ -125,24 +125,6 @@ export function normalizeManifest(value: unknown): CapsuleManifest {
   };
 }
 
-export function createDeployment(
-  project: { id: string; name: string; slug: string; manifest: CapsuleManifest },
-  visibility: DeploymentVisibility,
-  options: { id?: string; now?: number } = {},
-): DeploymentRecord {
-  const id = options.id ?? crypto.randomUUID();
-  const manifest = normalizeManifest({ ...project.manifest, visibility });
-  if (visibility === "private") manifest.runtime.auth.mode = "required";
-  return {
-    id,
-    projectId: project.id,
-    projectName: project.name,
-    url: `https://${project.slug}-${id.replaceAll("-", "").slice(0, 4)}.konae.app`,
-    createdAt: options.now ?? Date.now(),
-    manifest,
-  };
-}
-
 function normalizeAction(value: unknown): RuntimeActionDeclaration[] {
   if (!value || typeof value !== "object") return [];
   const action = value as Partial<RuntimeActionDeclaration>;

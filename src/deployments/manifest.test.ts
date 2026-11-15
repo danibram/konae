@@ -1,17 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   createDefaultManifest,
-  createDeployment,
   editorCapabilities,
   normalizeManifest,
-  withVisibility,
 } from "./manifest";
 
 describe("deployment manifest", () => {
   test("preserves the app-user file policy and refuses invalid values", () => {
     expect(normalizeManifest({ fileAccess: "app-users" }).fileAccess).toBe("app-users");
-    const manifest = { ...createDefaultManifest(), fileAccess: "app-users" as const };
-    expect(createDeployment({ id: "p", name: "P", slug: "p", manifest }, "public").manifest.fileAccess).toBe("app-users");
     for (const fileAccess of [null, "private", "", 1]) {
       expect(() => normalizeManifest({ fileAccess })).toThrow('manifest.fileAccess must be "app-users" when set.');
     }
@@ -26,23 +22,6 @@ describe("deployment manifest", () => {
       "tasks.create",
       "tasks.toggle",
     ]);
-  });
-
-  test("private deployments force authentication without changing the project manifest", () => {
-    const project = {
-      id: "project_1",
-      name: "Sensitive notes",
-      slug: "sensitive-notes",
-      manifest: withVisibility(createDefaultManifest(), "public"),
-    };
-    const deployment = createDeployment(project, "private", { id: "abcd-1234", now: 42 });
-
-    expect(deployment.url).toBe("https://sensitive-notes-abcd.konae.app");
-    expect(deployment.createdAt).toBe(42);
-    expect(deployment.manifest.visibility).toBe("private");
-    expect(deployment.manifest.runtime.auth.mode).toBe("required");
-    expect(project.manifest.visibility).toBe("public");
-    expect(project.manifest.runtime.auth.mode).toBe("optional");
   });
 
   test("a new project is private and only a manifest that says public is public", () => {
