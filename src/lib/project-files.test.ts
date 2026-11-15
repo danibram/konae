@@ -70,4 +70,10 @@ describe("project file tree", () => {
     expect(() => createFile(tree, "lib.js/x.js")).toThrow("lib.js is a file");
     expect(() => createDirectory(tree, "lib.js/sub")).toThrow("lib.js is a file");
   });
+  test("a new file, folder or name the sources cannot hold is refused with the save's sentence", () => {
+    const rule = "A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.";
+    expect(() => createFile({ files: {}, directories: [] }, ".env")).toThrow(`The sources cannot hold the path ".env". ${rule}`);
+    expect(() => createFile({ files: {}, directories: [] }, "node_modules/x.js")).toThrow(`The sources cannot hold the path "node_modules/x.js". ${rule}`);
+    expect(() => createDirectory({ files: {}, directories: [] }, "public/.well-known")).toThrow(`The sources cannot hold the path "public/.well-known". ${rule}`);
+  });
 });

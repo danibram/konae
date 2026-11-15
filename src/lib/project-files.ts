@@ -1,4 +1,5 @@
 import { keptEncodings } from "./source-files";
+import { checkSources } from "./source-rules";
 export type ProjectTree = {
   files: Record<string, string>;
   directories: string[];
@@ -57,6 +58,11 @@ export function requireUnreservedPath(path: string) {
   if (reserved) throw new Error(`${reserved} is a reserved project file. Choose another name.`);
 }
 
+/** Refuses a new path the sources cannot hold, such as .env or node_modules/x.js, with the sentence the save and the Kernel give. */
+export function requireHeldPath(path: string) {
+  checkSources([[path, 0]]);
+}
+
 export function normalizeProjectPath(input: string): string | null {
   if (typeof input !== "string") return null;
   const trimmed = input.trim().replaceAll("\\", "/").replace(/^\/+/, "").replace(/\/+$/, "");
@@ -84,6 +90,7 @@ export function fileAncestor(files: Record<string, string>, path: string): strin
 export function createDirectory(tree: ProjectTree, input: string): ProjectTree {
   const path = requirePath(input);
   requireUnreservedPath(path);
+  requireHeldPath(path);
   requireNoFile(tree.files, path);
   requireNoFileAncestor(tree.files, path);
   return { files: { ...tree.files }, directories: mergeDirectories(tree.directories, path), encodings: tree.encodings };
@@ -92,6 +99,7 @@ export function createDirectory(tree: ProjectTree, input: string): ProjectTree {
 export function createFile(tree: ProjectTree, input: string, content = ""): ProjectTree {
   const path = requirePath(input);
   requireUnreservedPath(path);
+  requireHeldPath(path);
   requireNoFile(tree.files, path);
   const directory = existingDirectory([...tree.directories, ...directoriesForFiles(tree.files)], path);
   if (directory) throw new Error(`A directory already exists at ${directory}.`);
