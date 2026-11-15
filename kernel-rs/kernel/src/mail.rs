@@ -1642,6 +1642,28 @@ pub fn end_pending_after_restore(path: &Path) -> Result<usize> {
     )?)
 }
 
+/// Retires this app's undelivered email while its local Kernel is stopped for a data reset.
+pub fn end_pending_for_local_reset(path: &Path, app_id: &str) -> Result<usize> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let connection = Connection::open(path)?;
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(0);
+    }
+    Ok(connection.execute(
+        "UPDATE jobs SET state = 'failed', error_kind = 'local-reset', link_nonce = NULL, link_sealed = NULL,
+           leased_until = NULL, updated_at = ?1
+         WHERE state = 'pending' AND scope = ?2",
+        params![now(), auth::deployment_scope(app_id)],
+    )?)
+}
+
 // ---------------------------------------------------------------------------
 // Provider events
 
@@ -2598,6 +2620,30 @@ mod tests {
         let second = signup(State(fixture.state.clone()), headers, request("person@example.test")).await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(fixture.jobs().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_local_reset_retires_only_its_apps_pending_mail_and_preserves_history() {
+        let fixture = fixture(Scripted::new()).await;
+        fixture.signup(&fixture.app, "reset@example.test").await.unwrap();
+        fixture.signup(&fixture.other, "keep@example.test").await.unwrap();
+        fixture.signup(&fixture.app, "delivered@example.test").await.unwrap();
+        fixture.db().execute("UPDATE jobs SET state = 'delivered' WHERE recipient = 'delivered@example.test'", []).unwrap();
+        let database = fixture.root.join(MAIL_DATABASE);
+        assert_eq!(end_pending_for_local_reset(&database, &fixture.app.id).unwrap(), 1);
+        assert_eq!(end_pending_for_local_reset(&database, &fixture.app.id).unwrap(), 0);
+        let entries: Vec<(String, String, Option<String>, bool)> = fixture.db()
+            .prepare("SELECT recipient, state, error_kind, link_sealed IS NOT NULL FROM jobs ORDER BY recipient")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].1, "delivered");
+        assert_eq!(entries[1].1, "pending");
+        assert!(entries[1].3);
+        assert_eq!(entries[2], ("reset@example.test".into(), "failed".into(), Some("local-reset".into()), false));
     }
 
     #[tokio::test]
