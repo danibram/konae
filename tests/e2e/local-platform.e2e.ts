@@ -387,6 +387,30 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await waitForKernelSave(page);
 });
 
+test("manual action edits leave the running preview unchanged until Run", async ({ page }) => {
+  await createProject(page, "Run applies action edits", "tasks");
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await showSection(page, "Preview");
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await preview.locator("#task-input").fill("Before edit");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Before edit", { exact: true })).toBeVisible();
+
+  const actions = await openFile(page, "actions.json");
+  const original = await actions.inputValue();
+  expect(original).toContain('"tasks.list"');
+  await actions.fill(original.replace('"tasks.list": {', '"tasks.pending": {'));
+  await showSection(page, "Preview");
+  await preview.locator("#task-input").fill("Still using the checked preview");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Still using the checked preview", { exact: true })).toBeVisible();
+
+  await showSection(page, "Files");
+  await page.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(page.locator(".preview-problems")).toContainText("Server action not declared.", { timeout: 30_000 });
+});
+
 test("mobile domain settings persist claims, explain TXT checks and confirm changes", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 320, height: 740 });

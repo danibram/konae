@@ -259,11 +259,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   useEffect(() => hostLifecycle.retain(), [hostLifecycle]);
   useEffect(() => {
     void hostLifecycle.updateAppliedSource({
-      schema: project.files["schema.sql"],
-      actions: project.files["actions.json"],
-      fileAccess: project.manifest.fileAccess,
+      schema: previewProject.files["schema.sql"],
+      actions: previewProject.files["actions.json"],
+      fileAccess: previewProject.manifest.fileAccess,
     });
-  }, [hostLifecycle, project.files["schema.sql"], project.files["actions.json"], project.manifest.fileAccess]);
+  }, [hostLifecycle, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess]);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
   const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
