@@ -14,7 +14,7 @@ Build the compiled CLI with `bun run scripts/build-konae-binary.ts`, then copy `
     bun run konae -- init --dir /tmp/my-app --name 'My app' --template tasks
     ```
 
-2. Run it locally. `dev` builds `dist/` with the shared local builder and runs the matching `kernel` binary on the folder, with the folder's `data/`. It downloads the version-matched binary on first use unless `KONAE_KERNEL_BIN` names a local binary. It never proxies production. It prints the app address, `http://<slug>.localhost:8796` by default, and an events page on the next port. When the app has no account and its Signup Policy is not Open, `dev` invites `test@example.com` and prints the invitation link.
+2. Run it locally. `dev` builds `dist/` with the shared local builder and runs the matching `kernel` binary on the folder, with the folder's `data/`. From a repository checkout it uses that checkout's Kernel and builds it with Cargo only if the binary is absent. The compiled CLI downloads the version-matched Kernel and verifies it against `SHA256SUMS`, unless `KONAE_KERNEL_BIN` names a local binary. It never proxies production. It prints the app address, `http://<slug>.localhost:8796` by default, and an events page on the next port. When the app has no account and its Signup Policy is not Open, `dev` invites `test@example.com` and prints the invitation link.
 
     ```sh
     bun run konae -- dev --dir /tmp/my-app
