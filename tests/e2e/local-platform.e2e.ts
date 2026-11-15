@@ -80,8 +80,14 @@ async function seedRetainedBinary(page: Page, projectId: string) {
   const saved = await client.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
   const source = JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
   const asset = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pWQAAAAASUVORK5CYII=";
+  const appliedImage = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGO4I6fxHxkzkC4AAIMIIhELyVVQAAAAAElFTkSuQmCC";
+  const candidateImage = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGMQCbjzHxkzkC4AAKv4I/ELTj/5AAAAAElFTkSuQmCC";
   source.files["public/retained.png"] = asset;
-  source.encodings = { ...source.encodings, "public/retained.png": "base64" };
+  source.files["public/applied.png"] = appliedImage;
+  source.files["public/candidate.png"] = candidateImage;
+  source.files["public/theme.css"] = '.asset-stylesheet-probe { color: rgb(16, 32, 48); background-image: url("./applied.png?from=theme#background"); }';
+  source.files["index.html"] += '<link rel="stylesheet" href="/theme.css"><p id="stylesheet-probe" class="asset-stylesheet-probe">Stylesheet proof</p><img id="asset-image" alt="Applied public asset" width="48" height="48" src="/applied.png?version=applied#preview">';
+  source.encodings = { ...source.encodings, "public/retained.png": "base64", "public/applied.png": "base64", "public/candidate.png": "base64" };
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
   await client.call("project_sources_save", { projectId, transferId: transfer.transferId, expectedRevision: inspected.sourcesRevision });
   return asset;
@@ -143,9 +149,10 @@ function providerReply(tool?: { name: string; input: Record<string, unknown> }, 
 }
 
 async function installProposalFixture(page: Page) {
-  let scenario: "discard" | "apply" | "blocked" | "drift" | "build-fail" | "preview-behind" = "discard";
+  let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "drift" | "build-fail" | "preview-behind" = "discard";
   let step = 0;
   const html = "<main><h1>PROPOSAL PREVIEW</h1><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>";
+  const assetHtml = (useApplied: boolean) => `<link rel='stylesheet' href='/theme.css'><main><h1>PROPOSAL PREVIEW</h1><p id='stylesheet-probe' class='asset-stylesheet-probe'>Stylesheet proof</p><img id='asset-image' alt='Candidate public asset' width='48' height='48' src='/${useApplied ? "applied.png?version=alternate" : "candidate.png?version=candidate"}#proposal'><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>`;
   const proposalScript = (mutate: boolean) => `
 const rows = await miniapp.actions.call('tasks.list');
 document.querySelector('#proposal-rows').textContent = rows.map(row => row.title).join(', ');
@@ -178,10 +185,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at INTEGER NOT NULL,
   due_at INTEGER
 );
-` : html;
+` : scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? assetHtml(scenario === "asset-discard-applied") : html;
       tool = { name: "write", input: { path, content } };
     } else if (step === 1) {
-      tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" || scenario === "apply" ? proposalScript(scenario === "discard") : scenario === "build-fail" ? "const = ;" : "document.documentElement.dataset.proposal = 'ready';" } };
+      tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" || scenario === "apply" || scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? proposalScript(scenario === "discard" || scenario === "asset-discard" || scenario === "asset-discard-applied") : scenario === "build-fail" ? "const = ;" : "document.documentElement.dataset.proposal = 'ready';" } };
     } else if (step === 2) {
       tool = { name: "validate_capsule", input: {} };
     }
@@ -385,6 +392,106 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await openFile(page, "styles.css");
   expect(await page.getByLabel("styles.css code editor").inputValue()).toContain("Manual owner edit");
   await waitForKernelSave(page);
+});
+
+test("public image bytes stay with each proposal through Discard and Apply", async ({ page }) => {
+  await page.addInitScript(() => {
+    const active = new Set<string>();
+    (window as typeof window & { __konaeObjectUrls?: Set<string> }).__konaeObjectUrls = active;
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = (value: Blob | MediaSource) => {
+      const url = create(value);
+      active.add(url);
+      return url;
+    };
+    URL.revokeObjectURL = (url: string) => {
+      active.delete(url);
+      revoke(url);
+    };
+  });
+  const projectPath = await createProject(page, "Proposal public assets", "tasks");
+  const projectId = projectPath.split("/").at(-1)!;
+  const retainedAsset = await seedRetainedBinary(page, projectId);
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await showSection(page, "Preview");
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  const appliedImage = preview.locator("#asset-image");
+  await expect.poll(() => appliedImage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+  await expect.poll(() => preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+  expect(await preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("data:image/png;base64,");
+  const appliedDataUrl = await appliedImage.getAttribute("src");
+  expect(appliedDataUrl).toContain("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+");
+
+  await preview.locator("#task-input").fill("Saved row");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await preview.locator('input[type="file"]').setInputFiles({ name: "proposal-proof.png", mimeType: "image/png", buffer: Buffer.from("preview-image-bytes") });
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
+
+  const fixture = await installProposalFixture(page);
+  await connectProposalFixture(page);
+  const storageBefore = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort(([a], [b]) => a.localeCompare(b))));
+  const objectUrlsIn = async () => {
+    const frame = page.frames().find((candidate) => candidate.parentFrame() !== null);
+    return frame?.evaluate(() => (window as typeof window & { __konaeObjectUrls?: Set<string> }).__konaeObjectUrls?.size ?? 0) ?? 0;
+  };
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const useAlternateImage = iteration % 2 === 1;
+    fixture.setScenario(useAlternateImage ? "asset-discard-applied" : "asset-discard");
+    await showSection(page, "Describe");
+    await askFixture(page, `Preview the candidate image ${iteration + 1}.`);
+    await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+    const candidate = page.frameLocator('iframe[title="Mini-app preview"]').locator("#asset-image");
+    await expect.poll(() => candidate.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+    await expect.poll(() => page.frameLocator('iframe[title="Mini-app preview"]').locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+    const candidateDataUrl = await candidate.getAttribute("src");
+    expect(candidateDataUrl).toContain("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+");
+    if (useAlternateImage) expect(candidateDataUrl).toBe(appliedDataUrl);
+    else expect(candidateDataUrl).not.toBe(appliedDataUrl);
+    await page.screenshot({ path: "/tmp/konae-u1b2-assets-luna/proposal-public-image.png" });
+    const candidateFrame = page.frames().find((frame) => frame.parentFrame() !== null);
+    expect(await candidateFrame?.evaluate(() => [...document.images].map((image) => image.src))).toContain(await candidate.getAttribute("src"));
+    expect(await objectUrlsIn()).toBe(0);
+    await showSection(page, "Describe");
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
+    await showSection(page, "Preview");
+    await expect.poll(() => preview.locator("#asset-image").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+    await expect(preview.locator("#asset-image")).toHaveAttribute("src", appliedDataUrl!);
+    await expect.poll(() => preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+    await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+    await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+    await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
+    expect(await objectUrlsIn()).toBe(0);
+    expect(await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort(([a], [b]) => a.localeCompare(b))))).toBe(storageBefore);
+  }
+
+  fixture.setScenario("asset-apply");
+  await showSection(page, "Describe");
+  await askFixture(page, "Show the candidate public image and apply it.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  const candidate = page.frameLocator('iframe[title="Mini-app preview"]').locator("#asset-image");
+  await expect.poll(() => candidate.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+  await expect.poll(() => page.frameLocator('iframe[title="Mini-app preview"]').locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+  expect(await candidate.getAttribute("src")).not.toBe(appliedDataUrl);
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await showSection(page, "Preview");
+  await expect.poll(() => preview.locator("#asset-image").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+  expect(await preview.locator("#asset-image").getAttribute("src")).toBe(await candidate.getAttribute("src"));
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.locator("#proposal-files")).toHaveText("proposal-proof.png");
+  expect(await objectUrlsIn()).toBe(0);
+  await waitForKernelSave(page);
+  const savedSources = await readSavedSources(page, projectId);
+  expect(savedSources.files["public/retained.png"]).toBe(retainedAsset);
+  expect(savedSources.files["public/applied.png"]).toBeDefined();
+  expect(savedSources.files["public/candidate.png"]).toBeDefined();
+  expect(savedSources.encodings?.["public/applied.png"]).toBe("base64");
+  expect(savedSources.encodings?.["public/candidate.png"]).toBe("base64");
 });
 
 test("manual action edits leave the running preview unchanged until Run", async ({ page }) => {

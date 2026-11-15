@@ -106,6 +106,38 @@ describe("preview document", () => {
     expect(createPreviewDocument(source)).toContain(`src="${data}"`);
   });
 
+  test("inlines a linked public stylesheet and resolves its relative image", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2]);
+    const data = `data:image/png;base64,${encodeBase64(png)}`;
+    const source = {
+      ...project,
+      files: {
+        ...project.files,
+        "index.html": '<link rel="stylesheet" href="/theme.css"><div class="hero"></div>',
+        "public/theme.css": '.hero { color: rgb(16, 32, 48); background: url("./logo.png?q=1#hero"); }',
+        "public/logo.png": encodeBase64(png),
+      },
+      encodings: { "public/logo.png": "base64" },
+    };
+    const document = createPreviewDocument(source);
+    expect(document).toContain("<style>.hero { color: rgb(16, 32, 48); background: url(");
+    expect(document).toContain(`url("${data}")`);
+    expect(document).not.toContain('href="/theme.css"');
+  });
+
+  test("preserves data-prefixed attributes on image elements", () => {
+    const png = new Uint8Array([1, 2, 3]);
+    const source = {
+      ...project,
+      files: { ...project.files, "index.html": '<img data-src="/logo.png" data-style="background:url(/logo.png)" src="https://example.test/logo.png">', "public/logo.png": encodeBase64(png) },
+      encodings: { "public/logo.png": "base64" },
+    };
+    const document = createPreviewDocument(source);
+    expect(document).toContain('data-src="/logo.png"');
+    expect(document).toContain('data-style="background:url(/logo.png)"');
+    expect(document).toContain('src="https://example.test/logo.png"');
+  });
+
   /**
    * The bug this pins: the preview wrapped the compiled module in try { }. esbuild
    * can emit a top-level `export { x }`, which is a SyntaxError inside a block, so

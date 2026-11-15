@@ -132,12 +132,15 @@ export const runtimeClient = String.raw`
  */
 export function createPreviewDocument(project: MiniAppProject): string {
   const assets = new Map<string, string>();
-  for (const [source, contents] of Object.entries(project.files)) {
+  const stylesheets = new Map<string, string>();
+  for (const source of Object.keys(project.files)) {
+    if (!source.startsWith("public/") && !source.endsWith(".css")) continue;
     const served = servedPath(source);
-    if (!served || !source.startsWith("public/")) continue;
     const bytes = sourceBytes(project, source);
-    const type = mediaType(served);
-    assets.set(served, `data:${type};base64,${bytesToBase64(bytes)}`);
+    if (served && source.startsWith("public/")) assets.set(served, `data:${mediaType(served)};base64,${bytesToBase64(bytes)}`);
+    if (source.endsWith(".css")) {
+      try { stylesheets.set(served ?? source, new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { /* A binary file cannot be a stylesheet. */ }
+    }
   }
   const document = renderCapsuleDocument({
     body: project.files["index.html"] ?? "",
@@ -145,38 +148,51 @@ export function createPreviewDocument(project: MiniAppProject): string {
     script: project.files["app.js"] ?? "",
     runtime: runtimeClient,
   });
-  return rewritePreviewAssets(document, assets);
+  return rewritePreviewAssets(document, assets, stylesheets);
 }
 
 /** Rewrites only static fetch attributes and CSS URLs the shared builder resolves. */
-function rewritePreviewAssets(document: string, assets: Map<string, string>): string {
-  const replaceCss = (css: string, from: string) => css.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi, (whole, double, single, bare) => {
-    const raw = (double ?? single ?? bare ?? "").trim();
-    const target = previewAsset(raw, from, assets);
-    if (!target) return whole;
-    const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
-    return `url(${quote}${target}${quote})`;
-  }).replace(/(@import\s+)(?:"([^"]*)"|'([^']*)')/gi, (whole, lead, double, single) => {
-    const raw = double ?? single ?? "";
-    const target = previewAsset(raw, from, assets);
-    return target ? `${lead}${double !== undefined ? '"' : "'"}${target}${double !== undefined ? '"' : "'"}` : whole;
-  });
+function rewritePreviewAssets(document: string, assets: Map<string, string>, stylesheets: Map<string, string>): string {
+  const rewriteCss = (css: string, from: string, visited = new Set<string>()): string => {
+    let output = css.replace(/@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?([^;]*);/gi, (whole, quote, raw, suffix) => {
+      const target = resolveReferenceOrNull(raw, from);
+      const sheet = target && stylesheets.get(target);
+      if (!sheet || visited.has(target)) return whole;
+      const imported = rewriteCss(sheet, target, new Set(visited).add(target));
+      const media = suffix.trim();
+      return media ? `@media ${media}{${imported}}` : imported;
+    });
+    output = output.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi, (whole, double, single, bare) => {
+      const raw = (double ?? single ?? bare ?? "").trim();
+      const target = previewAsset(raw, from, assets);
+      if (!target) return whole;
+      const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
+      return `url(${quote}${target}${quote})`;
+    });
+    return output;
+  };
 
-  const rewriteMarkup = (markup: string) => markup.replace(/<(?!script\b)([a-z][\w-]*)(\s[^<>]*?)?>/gi, (tag, name: string, attributes = "") => {
+  const rewriteMarkup = (markup: string) => markup.replace(/<(?!script\b)([a-z][\w-]*)(\s[^<>]*?)?>/gi, (_tag, name: string, attributes = "") => {
     const kind = name.toLowerCase();
-    const rel = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attributes);
-    const isIcon = kind === "link" && /(?:^|\s)(?:icon|apple-touch-icon|mask-icon)(?:\s|$)/i.test(rel?.[1] ?? rel?.[2] ?? rel?.[3] ?? "");
+    const rel = readAttribute(attributes, "rel") ?? "";
+    const href = readAttribute(attributes, "href");
+    if (kind === "link" && rel.toLowerCase().split(/\s+/).includes("stylesheet") && href) {
+      const target = resolveReferenceOrNull(href, "index.html");
+      const sheet = target && stylesheets.get(target);
+      if (sheet) return `<style>${rewriteCss(sheet, target)}</style>`;
+    }
+    const isIcon = kind === "link" && /(?:^|\s)(?:icon|apple-touch-icon|mask-icon)(?:\s|$)/i.test(rel);
     const permitted = kind === "img" || kind === "source" || isIcon;
     let next = attributes;
     if (permitted) {
-      next = next.replace(/\b(src|href)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, key: string, quoted: string) => {
+      next = next.replace(/(^|\s)(src|href)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
         if (key.toLowerCase() === "href" && !isIcon) return attribute;
         const quote = quoted[0] === '"' || quoted[0] === "'" ? quoted[0] : "";
         const raw = quote ? quoted.slice(1, -1) : quoted;
         const target = previewAsset(raw, "index.html", assets);
-        return target ? `${key}=${quote}${target}${quote}` : attribute;
+        return target ? `${prefix}${key}${separator}${quote}${target}${quote}` : attribute;
       });
-      next = next.replace(/\bsrcset\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, quoted: string) => {
+      next = next.replace(/(^|\s)(srcset)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
         const quote = quoted[0] === '"' || quoted[0] === "'" ? quoted[0] : "";
         const value = quote ? quoted.slice(1, -1) : quoted;
         if (/^\s*data:/i.test(value)) return attribute;
@@ -186,17 +202,25 @@ function rewritePreviewAssets(document: string, assets: Map<string, string>): st
           const target = previewAsset(match[2], "index.html", assets);
           return target ? `${match[1]}${target}${match[3]}` : candidate;
         }).join(",");
-        return `${"srcset"}=${quote}${updated}${quote}`;
+        return `${prefix}${key}${separator}${quote}${updated}${quote}`;
       });
     }
-    next = next.replace(/\bstyle\s*=\s*("[^"]*"|'[^']*')/gi, (attribute: string, quoted: string) => {
+    next = next.replace(/(^|\s)(style)(\s*=\s*)("[^"]*"|'[^']*')/gi, (_attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
       const quote = quoted[0];
-      return `style=${quote}${replaceCss(quoted.slice(1, -1), "index.html")}${quote}`;
+      return `${prefix}${key}${separator}${quote}${rewriteCss(quoted.slice(1, -1), "index.html")}${quote}`;
     });
     return `<${name}${next}>`;
-  }).replace(/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi, (_whole, attributes, css) => `<style${attributes}>${replaceCss(css, "styles.css")}</style>`)
-    .replace(/<style>([\s\S]*?)<\/style>/gi, (_whole, css) => `<style>${replaceCss(css, "styles.css")}</style>`);
+  }).replace(/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi, (_whole, attributes, css) => `<style${attributes}>${rewriteCss(css, "index.html")}</style>`);
   return document.split(/(<script\b[\s\S]*?<\/script\s*>)/gi).map((part, index) => index % 2 ? part : rewriteMarkup(part)).join("");
+}
+
+function readAttribute(attributes: string, name: string): string | undefined {
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(attributes);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function resolveReferenceOrNull(raw: string, from: string): string | null {
+  try { return resolveReference(raw, from); } catch { return null; }
 }
 
 function previewAsset(raw: string, from: string, assets: Map<string, string>): string | null {

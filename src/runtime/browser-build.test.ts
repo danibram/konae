@@ -97,4 +97,15 @@ describe("a file that is not text in the editor's build", () => {
     await expect(compileProjectInBrowser(project({ "index.html": '<img src="./public/missing.png?size=large">', "app.js": "document.title = 'preview';" })))
       .rejects.toThrow('index.html references ./public/missing.png?size=large, but the Capsule holds no public/missing.png.');
   });
+
+  test("an imported CSS file resolves a binary public asset through a URL token", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
+    const capsule = project({ "app.js": 'import "./theme.css"; document.body.dataset.ready = "yes";', "theme.css": '.hero { background: url("./public/logo.png?q=1#hero"); } .bare { background: url("public/logo.png"); }' });
+    const built = await compileProjectInBrowser({
+      ...capsule,
+      files: { ...capsule.files, "public/logo.png": encodeBase64(png) },
+      encodings: { "public/logo.png": "base64" },
+    });
+    expect(built.styles.match(/url\(data:image\/png;base64,/g)).toHaveLength(2);
+  });
 });
