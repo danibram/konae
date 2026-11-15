@@ -436,7 +436,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM holds WHERE released_at IS NOT NULL", [], |row| row.get(0)).unwrap()
         }
 
-        /// The runs `usage_read` returns for the whole of November 2026, oldest first.
+        /// The runs `usage_summary` returns for the whole of November 2026, oldest first.
         fn runs(&self) -> Vec<(String, String, i64)> {
             usage::flush();
             let path = crate::layout::usage(&self.root, &self.id);

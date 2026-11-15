@@ -59,6 +59,19 @@ pub fn transfer_path(state: &AppState, id: &str) -> Result<PathBuf> {
     Ok(state.data_root.join("transfers").join(id))
 }
 
+/// Whether a completed owner upload remains available for post-commit cleanup.
+/// Missing uploads are already consumed, so callers can safely retry cleanup.
+pub fn completed_upload(state: &AppState, principal: &str, id: &str) -> Result<bool> {
+    match transfer(state, principal, &json!({"transferId": id})) {
+        Ok(upload) => {
+            anyhow::ensure!(upload["direction"] == "upload" && upload["complete"] == true, "Completed upload required.");
+            Ok(true)
+        }
+        Err(error_value) if error_value.to_string().contains("Transfer not found or expired") => Ok(false),
+        Err(error_value) => Err(error_value),
+    }
+}
+
 
 pub fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
     let id = a["transferId"]
@@ -275,6 +288,16 @@ pub async fn transfer_call(
     let id = a["transferId"].as_str().unwrap();
     let path = transfer_path(state, id)?;
     let _guard = database_lock(state, &format!("transfer:{id}")).await;
+    if name == "transfer_cancel" && !principal.starts_with("runtime:") {
+        let removed = store(state)?.execute(
+            "DELETE FROM transfers WHERE id=?1 AND principal=?2",
+            params![id, principal],
+        )?;
+        if removed == 1 {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+        return Ok(json!({"ok":true}));
+    }
     let mut t = transfer(state, principal, a)?;
     match name {
         "transfer_cancel" => {

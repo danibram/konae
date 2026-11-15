@@ -100,7 +100,7 @@ async fn resource_metadata(State(state): State<Konae>, headers: HeaderMap) -> Re
         return StatusCode::FORBIDDEN.into_response();
     }
     let origin = origin(&state, &headers);
-    Json(json!({"resource":format!("{origin}/mcp"),"authorization_servers":[origin],"scopes_supported":["read","write","publish","manage_users"],"bearer_methods_supported":["header"]})).into_response()
+    Json(json!({"resource":format!("{origin}/mcp"),"authorization_servers":[origin],"scopes_supported":["read","write","publish","manage_users","export_data"],"bearer_methods_supported":["header"]})).into_response()
 }
 
 async fn server_metadata(State(state): State<Konae>, headers: HeaderMap) -> Response {
@@ -108,7 +108,7 @@ async fn server_metadata(State(state): State<Konae>, headers: HeaderMap) -> Resp
         return StatusCode::FORBIDDEN.into_response();
     }
     let origin = origin(&state, &headers);
-    Json(json!({"issuer":origin,"authorization_endpoint":format!("{origin}/oauth/authorize"),"token_endpoint":format!("{origin}/oauth/token"),"registration_endpoint":format!("{origin}/oauth/register"),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["read","write","publish","manage_users"],"authorization_response_iss_parameter_supported":true})).into_response()
+    Json(json!({"issuer":origin,"authorization_endpoint":format!("{origin}/oauth/authorize"),"token_endpoint":format!("{origin}/oauth/token"),"registration_endpoint":format!("{origin}/oauth/register"),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["read","write","publish","manage_users","export_data"],"authorization_response_iss_parameter_supported":true})).into_response()
 }
 
 fn valid_redirect(value: &str) -> bool {
@@ -438,7 +438,7 @@ fn scope_meaning(scope: &str) -> (&'static str, &'static str) {
     match scope {
         "read" => ("Read", "See your projects, their files and their data"),
         "write" => ("Edit", "Change project files and data"),
-        "publish" => ("Publish", "Publish and roll back your apps"),
+        "publish" => ("Publish", "Publish your apps"),
         "manage_users" => ("Manage users", "Decide who may sign in to your apps"),
         "export_data" => ("Export data", "Download each app's accounts, rows and files"),
         _ => ("", ""),
@@ -778,9 +778,14 @@ mod tests {
             .extend_pairs([
                 ("client_id", client), ("redirect_uri", redirect), ("response_type", "code"),
                 ("code_challenge_method", "S256"), ("code_challenge", &challenge),
-                ("scope", "read export_data"), ("resource", "http://localhost/mcp"), ("state", "s"),
+                ("scope", "read publish export_data"), ("resource", "http://localhost/mcp"), ("state", "s"),
             ]).finish();
         let router = routes().with_state(state.clone());
+        for path in ["/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource"] {
+            let metadata = router.clone().oneshot(Request::builder().uri(path).header(header::HOST, "localhost").body(Body::empty()).unwrap()).await.unwrap();
+            let metadata: Value = serde_json::from_slice(&axum::body::to_bytes(metadata.into_body(), usize::MAX).await.unwrap()).unwrap();
+            assert_eq!(metadata["scopes_supported"], json!(["read", "write", "publish", "manage_users", "export_data"]));
+        }
         let page = |query: String| Request::builder().uri(format!("/oauth/authorize?{query}"))
             .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
             .body(Body::empty()).unwrap();
@@ -793,6 +798,7 @@ mod tests {
             axum::body::to_bytes(consent.into_body(), usize::MAX).await.unwrap().to_vec(),
         ).unwrap();
         assert!(html.contains("<span>24 hours. After that") && html.contains("Download each app's accounts"), "{html}");
+        assert!(html.contains("Publish your apps") && !html.to_ascii_lowercase().contains("roll back"), "{html}");
         let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();
         let allowed = router.clone().oneshot(Request::builder().method("POST").uri("/oauth/authorize")
             .header(header::HOST, "localhost").header(header::COOKIE, &cookie)
@@ -813,7 +819,7 @@ mod tests {
         assert_eq!(token.status(), StatusCode::OK);
         let token: Value = serde_json::from_slice(&axum::body::to_bytes(token.into_body(), usize::MAX).await.unwrap()).unwrap();
         assert_eq!(token["expires_in"], 86_400);
-        assert_eq!(token["scope"], "read export_data");
+        assert_eq!(token["scope"], "read publish export_data");
         let expires: u64 = mcp::store(&state).unwrap()
             .query_row("SELECT expires FROM credentials WHERE client='cli'", [], |r| r.get(0)).unwrap();
         assert!(expires > now_ms() + 86_000_000);

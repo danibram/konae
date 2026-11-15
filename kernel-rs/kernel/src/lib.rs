@@ -3649,7 +3649,7 @@ pub async fn deployment_by_id(state: &AppState, id: &str) -> Option<Deployment> 
 
 /// Fails closed: a Deployment is public only when its manifest says "public",
 /// so a record with no visibility or an unknown one needs a login.
-/// The Signup Policy as `signup_policy_read` answers it.
+    /// The Signup Policy as `project_inspect.deployment.signupPolicy` returns it.
 pub fn signup_policy_value(deployment: &Deployment) -> Value {
     json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
 }
