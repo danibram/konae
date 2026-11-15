@@ -220,7 +220,8 @@ describe("authenticated MCP", () => {
     await alice.call("project_create", { ...args, sourcesTransferId: upload.transferId });
     const saved = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
     expect(saved.revision).toBe(1);
-    expect(JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)))).toEqual(project);
+    const savedProject = JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)));
+    expect(savedProject).toEqual({ ...project, manifest: { version: 1, visibility: "private" } });
     const changed = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": "changed" } })));
     await expect(alice.call("project_create", { ...args, sourcesTransferId: changed.transferId })).rejects.toThrow("already has saved sources");
     await alice.cancel(changed.transferId);
@@ -238,13 +239,14 @@ describe("authenticated MCP", () => {
     await expect(bob.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 1 })).rejects.toThrow();
     const saved = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
     expect(saved.revision).toBe(1);
-    expect(JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)))).toEqual(project);
+    const savedProject = JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)));
+    expect(savedProject).toEqual({ ...project, manifest: { version: 1, visibility: "private" } });
     const invalidUpload = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...project, files: { "index.html": 123 } })), id);
     await expect(alice.call("project_sources_save", { projectId: id, transferId: invalidUpload.transferId, expectedRevision: 1 })).rejects.toThrow("The sources' files must map each path to a string.");
     await alice.cancel(invalidUpload.transferId);
     const unchanged = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
     expect(unchanged.revision).toBe(1);
-    expect(JSON.parse(new TextDecoder().decode(await alice.download(unchanged.transfer)))).toEqual(project);
+    expect(JSON.parse(new TextDecoder().decode(await alice.download(unchanged.transfer)))).toEqual(savedProject);
     const changed = { ...project, files: { "index.html": "changed" } };
     const secondUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(changed)), id);
     const writes = await Promise.allSettled([

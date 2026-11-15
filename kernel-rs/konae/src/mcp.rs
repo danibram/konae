@@ -1313,11 +1313,11 @@ async fn admin_call(
                     && (upload["projectId"].is_null() || upload["projectId"] == id), "Completed upload for this project required.");
                 ensure_no_component(&upload)?;
                 let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-                let source: Value = serde_json::from_slice(&bytes)?;
+                let source = super::sources::normalize_document(&serde_json::from_slice::<Value>(&bytes)?)?;
                 validate_sources(&source, &id)?;
                 anyhow::ensure!(source["name"] == a["name"]
                     && a.get("slug").is_none_or(|slug| *slug == source["slug"])
-                    && a.get("manifest").is_none_or(|manifest| *manifest == source["manifest"]), "Initial files must match the project metadata.");
+                    && a.get("manifest").is_none_or(|manifest| super::sources::manifest_without_runtime(manifest) == source["manifest"]), "Initial files must match the project metadata.");
                 Some(source)
             } else { None };
             let _guard = database_lock(state, &format!("project:{id}")).await;
@@ -1359,7 +1359,7 @@ async fn admin_call(
                 "An app folder with this ID already exists on this installation. Choose another project ID."
             );
             let template = project_template(a["template"].as_str())?;
-            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
+            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").map(super::sources::manifest_without_runtime).unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
             // The app's folder exists from the start: konae.json, and app/ once sources are saved.
             // A step that fails takes the folder away again, so a retry with the same ID works.
             let created = async {
@@ -1486,23 +1486,25 @@ async fn admin_call(
             owned_project(state, owner, id, "write")?;
             let current: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
+            let previous = super::sources::read(&state.data_root, id).await?;
             let source = if update["format"] == "delta" {
-                let saved = super::sources::read(&state.data_root, id).await?.ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
+                let saved = previous.clone().ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
                 merge_source_delta(&saved, &update, id)?
             } else {
                 update
             };
+            anyhow::ensure!(current == 0 || previous.is_some(), "Saved project sources are unavailable.");
             validate_sources(&source, id)?;
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
-            let previous = super::sources::read(&state.data_root, id).await?.ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
-            super::sources::write(&state.data_root, id, &source).await?;
-            let update_result = store(state)?.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]);
+            let pending = super::sources::stage_write(&state.data_root, id, &source).await?;
+            let update_result = store(state).and_then(|db| db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]).map_err(Into::into));
             if let Err(error) = update_result {
-                if let Err(restore) = super::sources::write(&state.data_root, id, &previous).await {
+                if let Err(restore) = pending.rollback().await {
                     anyhow::bail!("Saving sources failed: {error}. Restoring the saved sources failed: {restore:#}");
                 }
                 return Err(error.into());
             }
+            pending.commit().await;
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
@@ -2811,15 +2813,34 @@ mod tests {
             params![id, json!({"id":id,"name":"Saved"}).to_string()],
         ).unwrap();
         store(&state).unwrap().execute_batch("CREATE TRIGGER fail_source_revision BEFORE UPDATE OF sources ON projects BEGIN SELECT RAISE(ABORT, 'injected source revision failure'); END;").unwrap();
-        let saved = json!({"id":id,"name":"Saved","slug":"saved","files":{"index.html":"before"},"directories":[],"manifest":{"version":1,"visibility":"private"},"updatedAt":1});
+        let applied_actions = r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}"#;
+        let draft_actions = r#"{"version":1,"actions":{"draft.list":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}"#;
+        let saved = json!({"id":id,"name":"Saved","slug":"saved","files":{"index.html":"before","actions.json":draft_actions,"schema.sql":"CREATE TABLE draft_only(id INTEGER PRIMARY KEY);"},"directories":["explicit"],"manifest":{"version":1,"visibility":"private"},"updatedAt":1});
         crate::Settings::new(id, "Saved", "saved", &saved["manifest"]).write(&state.data_root).await.unwrap();
         crate::sources::write(&state.data_root, id, &saved).await.unwrap();
+        let database = kernel::database_path(&state.kernel, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT); INSERT INTO notes(body) VALUES('applied row');").unwrap();
+        let mut deployment = crate::Settings::read(&state.data_root, id).unwrap().deployment(crate::Installed {
+            hostname:"saved.localhost".into(), created_at:1, released_at:Some(2), source_digest:Some("prior".into()),
+            actions:applied_actions.into(), artifact_version:"vprior".into(), released:None,
+        }, "http://localhost");
+        deployment.released_schema = "CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT);".into();
+        let installed = crate::Installed { hostname:deployment.hostname.clone(), created_at:deployment.created_at, released_at:Some(deployment.released_at), source_digest:deployment.source_digest.clone(), actions:deployment.actions.clone(), artifact_version:deployment.artifact_version.clone(), released:None };
+        tokio::fs::write(crate::layout::record(&state.data_root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
+        let legacy_metadata = json!({"name":"Legacy saved draft","slug":"legacy-saved","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"directories":["legacy-empty"],"updatedAt":9});
+        let legacy_path = crate::layout::private(&state.data_root, id).join("sources.json");
+        tokio::fs::write(&legacy_path, serde_json::to_vec(&legacy_metadata).unwrap()).await.unwrap();
         let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into()], projects:vec![], session:false };
         let app_path = crate::layout::sources(&state.data_root, id).join("index.html");
         let settings_path = crate::layout::settings(&state.data_root, id);
+        let record_path = crate::layout::record(&state.data_root, id);
+        let before_record = tokio::fs::read(&record_path).await.unwrap();
+        let before_legacy = tokio::fs::read(&legacy_path).await.unwrap();
         let before_app = tokio::fs::read(&app_path).await.unwrap();
         let before_settings = tokio::fs::read(&settings_path).await.unwrap();
-        let mut next = saved.clone();
+        let mut next = crate::sources::read(&state.data_root, id).await.unwrap().unwrap();
+        next["name"] = json!("Refused name");
         next["files"]["index.html"] = json!("must roll back");
         next["updatedAt"] = json!(2);
         let bytes = serde_json::to_vec(&next).unwrap();
@@ -2835,6 +2856,11 @@ mod tests {
         assert_eq!(revision, 4);
         assert_eq!(tokio::fs::read(app_path).await.unwrap(), before_app);
         assert_eq!(tokio::fs::read(settings_path).await.unwrap(), before_settings);
+        assert_eq!(tokio::fs::read(record_path).await.unwrap(), before_record);
+        assert_eq!(tokio::fs::read(legacy_path).await.unwrap(), before_legacy);
+        let source = crate::sources::read(&state.data_root, id).await.unwrap().unwrap();
+        assert_eq!(source["name"], "Legacy saved draft");
+        assert_eq!(source["manifest"]["fileAccess"], "app-users");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

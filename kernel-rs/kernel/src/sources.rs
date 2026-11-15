@@ -109,70 +109,160 @@ pub fn decode_document(source: &Value) -> Result<Files> {
     decode(&files, &encodings).map_err(anyhow::Error::msg)
 }
 
-/// Writes source files into `app/` and their editable settings into `konae.json`.
-pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
-    let files = decode_document(source)?;
+/// Canonicalizes legacy source documents without changing their file bytes.
+pub fn normalize_document(source: &Value) -> Result<Value> {
+    let mut normalized = source.clone();
+    let manifest = normalized["manifest"].as_object_mut().context("The sources' manifest must be an object.")?;
+    manifest.remove("runtime");
+    let directories = normalized["directories"].as_array().context("Invalid project directories. Send each app/ directory path once.")?;
+    let directory_names = directories.iter().map(|value| value.as_str().context("Invalid project directories. Send each app/ directory path once.")).collect::<Result<Vec<_>>>()?;
+    normalized["directories"] = json!(canonical_directories(directory_names)?);
+    if normalized["encodings"].as_object().is_some_and(Map::is_empty) { normalized.as_object_mut().unwrap().remove("encodings"); }
+    Ok(normalized)
+}
+
+pub fn manifest_without_runtime(manifest: &Value) -> Value {
+    let mut normalized = manifest.clone();
+    if let Some(object) = normalized.as_object_mut() { object.remove("runtime"); }
+    normalized
+}
+
+/// Holds a source write open until the owner store has advanced its revision.
+pub struct PendingWrite {
+    staged: StagedRelease,
+    settings_path: PathBuf,
+    settings_before: Vec<u8>,
+    record_path: PathBuf,
+    record_before: Option<Vec<u8>>,
+}
+
+impl PendingWrite {
+    /// Keeps the new app and settings and removes migration input.
+    pub async fn commit(self) {
+        let legacy = self.staged.legacy_metadata.clone();
+        self.staged.finish().await;
+        let _ = tokio::fs::remove_file(legacy).await;
+    }
+
+    /// Restores the source files, settings, Installed record and migration input.
+    pub async fn rollback(self) -> Result<()> {
+        let mut failures = Vec::new();
+        if let Err(error) = restore(&self.settings_path, Some(&self.settings_before)).await { failures.push(format!("konae.json: {error:#}")); }
+        if let Err(error) = restore(&self.record_path, self.record_before.as_deref()).await { failures.push(format!(".konae/deployment.json: {error:#}")); }
+        self.staged.put_back().await;
+        if failures.is_empty() { Ok(()) } else { anyhow::bail!("{}", failures.join("; ")) }
+    }
+}
+
+async fn restore(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
+    match bytes {
+        Some(bytes) => crate::write_atomic(path, bytes).await?,
+        None => match tokio::fs::remove_file(path).await {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        },
+    }
+    Ok(())
+}
+
+/// Stages source files and editable settings so the caller can commit them with its source revision.
+pub async fn stage_write(root: &Path, id: &str, source: &Value) -> Result<PendingWrite> {
+    let source = normalize_document(source)?;
+    let files = decode_document(&source)?;
     let name = source["name"].as_str().context("Source name is missing.")?.to_owned();
     let slug = source["slug"].as_str().context("Source slug is missing.")?.to_owned();
     let mut settings = crate::Settings::read(root, id)?;
-    let metadata = json!({
-        "name": source["name"], "slug": source["slug"], "manifest": source["manifest"],
-        "directories": source["directories"], "updatedAt": source["updatedAt"],
-    });
+    let settings_path = layout::settings(root, id);
+    let settings_before = tokio::fs::read(&settings_path).await?;
+    let record_path = layout::record(root, id);
+    let record_before = match tokio::fs::read(&record_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut installed = match record_before.as_deref() {
+        Some(bytes) => Some(crate::Installed::deserialize(&mut serde_json::Deserializer::from_slice(bytes))
+            .context("The installed Deployment record is malformed.")?),
+        None => None,
+    };
+    if let Some(record) = installed.as_mut() {
+        if record.released.is_none() {
+            let mut manifest = settings.manifest.clone();
+            if let Some(object) = manifest.as_object_mut() { object.remove("runtime"); }
+            let snapshot = settings.released.clone().unwrap_or(crate::ReleasedSettings {
+                name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
+                signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
+                contact_email: settings.contact_email.clone(), manifest,
+                actions: record.actions.clone(), schema_sql: database_schema(root, id)?,
+                source_digest: record.source_digest.clone(), artifact_digest: None, released_at: record.released_at,
+            });
+            record.released = Some(snapshot.clone());
+            settings.released = Some(snapshot);
+        } else if settings.released.is_none() {
+            settings.released = record.released.clone();
+        }
+    }
+    let directories = source["directories"].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let metadata = json!({"name":name,"slug":slug,"manifest":source["manifest"],"directories":directories,"updatedAt":source["updatedAt"]});
     let staged = stage_release(root, id, &files, &metadata).await?;
     if let Err(error_value) = staged.swap().await {
         staged.discard().await;
         return Err(error_value);
     }
-    let record_path = layout::record(root, id);
-    let previous_record = match tokio::fs::read(&record_path).await {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => { staged.put_back().await; return Err(error.into()); }
-    };
-    if let Some(bytes) = previous_record.as_ref() {
-        let mut installed: crate::Installed = match serde_json::from_slice(bytes) {
-            Ok(installed) => installed,
+    if let Some(record) = installed {
+        let bytes = match serde_json::to_vec_pretty(&record) {
+            Ok(bytes) => bytes,
             Err(error) => { staged.put_back().await; return Err(error.into()); }
         };
-        if installed.released.is_none() {
-            let mut released_manifest = settings.manifest.clone();
-            if let Some(object) = released_manifest.as_object_mut() { object.remove("runtime"); }
-            let prior_actions = tokio::fs::read_to_string(staged.retired.join("actions.json")).await.unwrap_or_else(|_| installed.actions.clone());
-            let prior_schema = tokio::fs::read_to_string(staged.retired.join("schema.sql")).await.unwrap_or_default();
-            installed.released = Some(settings.released.clone().unwrap_or(crate::ReleasedSettings {
-                name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
-                signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
-                contact_email: settings.contact_email.clone(), manifest: released_manifest,
-                actions: prior_actions, schema_sql: prior_schema, source_digest: installed.source_digest.clone(), released_at: installed.released_at,
-            }));
-            settings.released = installed.released.clone();
-            let installed_bytes = match serde_json::to_vec_pretty(&installed) {
-                Ok(bytes) => bytes,
-                Err(error) => { staged.put_back().await; return Err(error.into()); }
-            };
-            if let Err(error) = crate::write_atomic(&record_path, &installed_bytes).await {
-                staged.put_back().await;
-                return Err(error.into());
-            }
+        if let Err(error) = crate::write_atomic(&record_path, &bytes).await {
+            staged.put_back().await;
+            return Err(error.into());
         }
-        if settings.released.is_none() { settings.released = installed.released.clone(); }
     }
     settings.name = name;
     settings.slug = slug;
     settings.updated_at = source["updatedAt"].as_u64().unwrap_or(settings.updated_at);
+    settings.directories = directories;
     let mut manifest = source["manifest"].clone();
     settings.visibility = manifest["visibility"].as_str().unwrap_or(&settings.visibility).to_owned();
     if let Some(object) = manifest.as_object_mut() { object.remove("visibility"); object.remove("runtime"); }
     settings.manifest = manifest;
     if let Err(error_value) = settings.write(root).await {
-        if let Some(bytes) = previous_record { let _ = crate::write_atomic(&record_path, &bytes).await; }
+        let settings_restore = restore(&settings_path, Some(&settings_before)).await;
+        let record_restore = restore(&record_path, record_before.as_deref()).await;
         staged.put_back().await;
+        settings_restore?;
+        record_restore?;
         return Err(error_value);
     }
-    let _ = tokio::fs::remove_file(layout::private(root, id).join("sources.json")).await;
-    staged.finish().await;
+    Ok(PendingWrite { staged, settings_path, settings_before, record_path, record_before })
+}
+
+/// Writes source files into `app/` and their editable settings into `konae.json`.
+pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
+    stage_write(root, id, source).await?.commit().await;
     Ok(())
+}
+
+fn canonical_directories<'a>(directories: impl IntoIterator<Item = &'a str>) -> Result<Vec<String>> {
+    let mut values = Vec::new();
+    for directory in directories {
+        anyhow::ensure!(crate::safe_relative_path(directory), "{directory} is not a path inside app/.");
+        values.push(directory.to_owned());
+    }
+    values.sort();
+    values.dedup();
+    Ok(values)
+}
+
+pub(crate) fn database_schema(root: &Path, id: &str) -> Result<String> {
+    let path = layout::database(root, id);
+    if !path.is_file() { return Ok(String::new()); }
+    let connection = rusqlite::Connection::open(path)?;
+    let mut statement = connection.prepare("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type, name")?;
+    let statements = statement.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(if statements.is_empty() { String::new() } else { format!("{};\n", statements.join(";\n")) })
 }
 
 /// A release's files written beside `app/`, which the release puts in its
@@ -340,7 +430,9 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
     anyhow::ensure!(!files.is_empty(), "app/ has no readable source files.");
     let mut manifest = settings.manifest.clone();
     if let Some(object) = manifest.as_object_mut() { object.insert("visibility".into(), Value::String(settings.visibility.clone())); }
-    let mut directories = metadata.as_ref().and_then(|value| value["directories"].as_array()).cloned().unwrap_or_default();
+    let mut directory_names = settings.directories.iter().map(String::as_str).collect::<Vec<_>>();
+    directory_names.extend(metadata.as_ref().and_then(|value| value["directories"].as_array()).into_iter().flatten().filter_map(Value::as_str));
+    let mut directories = canonical_directories(directory_names)?.into_iter().map(Value::String).collect::<Vec<_>>();
     collect_empty_directories(&app, &app, &mut directories).await?;
     directories.sort_by_key(|value| value.as_str().unwrap_or_default().to_owned());
     directories.dedup();
@@ -353,7 +445,7 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
     if !encodings.is_empty() {
         source["encodings"] = Value::Object(encodings);
     }
-    Ok(Some(source))
+    Ok(Some(normalize_document(&source)?))
 }
 
 /// Reads the saved source metadata without walking `app/` or opening its files.
@@ -364,7 +456,52 @@ pub async fn read_metadata(root: &Path, id: &str) -> Result<Option<Value>> {
     let legacy = match tokio::fs::read(path).await { Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes).context("Saved source metadata is malformed.")?), Err(error) if error.kind() == std::io::ErrorKind::NotFound => None, Err(error) => return Err(error.into()) };
     let mut manifest = settings.manifest.clone();
     if let Some(object) = manifest.as_object_mut() { object.insert("visibility".into(), Value::String(settings.visibility.clone())); }
-    Ok(Some(json!({ "id": id, "name": legacy.as_ref().and_then(|m| m["name"].as_str()).unwrap_or(&settings.name), "slug": legacy.as_ref().and_then(|m| m["slug"].as_str()).unwrap_or(&settings.slug), "manifest": legacy.as_ref().and_then(|m| m.get("manifest")).unwrap_or(&manifest), "directories": legacy.as_ref().and_then(|m| m.get("directories")).cloned().unwrap_or(json!([])), "updatedAt": legacy.as_ref().and_then(|m| m["updatedAt"].as_u64()).unwrap_or(settings.updated_at) })))
+    let mut directory_names = settings.directories.iter().map(String::as_str).collect::<Vec<_>>();
+    directory_names.extend(legacy.as_ref().and_then(|m| m["directories"].as_array()).into_iter().flatten().filter_map(Value::as_str));
+    let directories = canonical_directories(directory_names)?;
+    Ok(Some(json!({ "id": id, "name": legacy.as_ref().and_then(|m| m["name"].as_str()).unwrap_or(&settings.name), "slug": legacy.as_ref().and_then(|m| m["slug"].as_str()).unwrap_or(&settings.slug), "manifest": legacy.as_ref().and_then(|m| m.get("manifest")).unwrap_or(&manifest), "directories": directories, "updatedAt": legacy.as_ref().and_then(|m| m["updatedAt"].as_u64()).unwrap_or(settings.updated_at) })))
+}
+
+/// Returns settings with any legacy saved-source metadata folded in for export.
+pub async fn settings_for_export(root: &Path, id: &str) -> Result<crate::Settings> {
+    let mut settings = crate::Settings::read(root, id)?;
+    if settings.released.is_none() {
+        let record_path = layout::record(root, id);
+        match tokio::fs::read(record_path).await {
+            Ok(bytes) => {
+                let installed: crate::Installed = serde_json::from_slice(&bytes).context("The installed Deployment record is malformed.")?;
+                settings.released = Some(crate::ReleasedSettings {
+                name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
+                signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
+                contact_email: settings.contact_email.clone(), manifest: manifest_without_runtime(&settings.manifest),
+                actions: installed.actions.clone(), schema_sql: database_schema(root, id)?,
+                source_digest: installed.source_digest.clone(), artifact_digest: None, released_at: installed.released_at,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let path = layout::private(root, id).join("sources.json");
+    let legacy = match tokio::fs::read(path).await {
+        Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes).context("Saved source metadata is malformed.")?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(legacy) = legacy {
+        if let Some(name) = legacy["name"].as_str() { settings.name = name.to_owned(); }
+        if let Some(slug) = legacy["slug"].as_str() { settings.slug = slug.to_owned(); }
+        if let Some(updated_at) = legacy["updatedAt"].as_u64() { settings.updated_at = updated_at; }
+        let manifest = legacy.get("manifest").cloned().unwrap_or_else(|| settings.manifest.clone());
+        if let Some(visibility) = manifest["visibility"].as_str() { settings.visibility = visibility.to_owned(); }
+        settings.manifest = manifest_without_runtime(&manifest);
+        if let Some(object) = settings.manifest.as_object_mut() { object.remove("visibility"); }
+        if let Some(directories) = legacy["directories"].as_array() {
+            settings.directories = canonical_directories(directories.iter().map(|value| value.as_str().context("Invalid project directories. Send each app/ directory path once.")).collect::<Result<Vec<_>>>()?)?;
+        }
+    }
+    settings.manifest = manifest_without_runtime(&settings.manifest);
+    Ok(settings)
 }
 
 fn collect_empty_directories<'a>(root: &'a Path, at: &'a Path, out: &'a mut Vec<Value>) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
@@ -472,6 +609,14 @@ mod tests {
         let app = layout::sources(&root, id);
         tokio::fs::create_dir_all(app.join("empty/nested")).await.unwrap();
         tokio::fs::write(app.join("index.html"), "folder edit").await.unwrap();
+        tokio::fs::write(app.join("actions.json"), "draft actions").await.unwrap();
+        tokio::fs::write(app.join("schema.sql"), "CREATE TABLE draft_only(id INTEGER PRIMARY KEY);").await.unwrap();
+        let database = layout::database(&root, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE live(id INTEGER PRIMARY KEY); INSERT INTO live VALUES(1);").unwrap();
+        let installed = crate::Installed { hostname:"legacy.localhost".into(), created_at:1, released_at:Some(2), source_digest:Some("old-source".into()), actions:"applied actions".into(), artifact_version:"vold".into(), released:None };
+        tokio::fs::create_dir_all(layout::private(&root, id)).await.unwrap();
+        tokio::fs::write(layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
         let legacy = json!({"name":"Saved draft","slug":"saved-draft","manifest":{"version":1,"visibility":"public","routing":"spa","fileAccess":"app-users"},"directories":["custom/empty"],"updatedAt":77});
         let private = layout::private(&root, id);
         tokio::fs::create_dir_all(&private).await.unwrap();
@@ -479,8 +624,14 @@ mod tests {
         let opened = read(&root, id).await.unwrap().unwrap();
         assert_eq!(opened["name"], "Saved draft");
         assert_eq!(opened["files"]["index.html"], "folder edit");
+        assert_eq!(opened["files"]["actions.json"], "draft actions");
         assert_eq!(opened["manifest"]["routing"], "spa");
         assert!(opened["directories"].as_array().unwrap().contains(&json!("custom/empty")));
+        let export_settings = settings_for_export(&root, id).await.unwrap();
+        assert_eq!(export_settings.name, "Saved draft");
+        assert_eq!(export_settings.visibility, "public");
+        assert_eq!(export_settings.manifest["fileAccess"], "app-users");
+        assert_eq!(export_settings.released.as_ref().unwrap().actions, "applied actions");
         let mut changed = opened.clone();
         changed["files"]["index.html"] = json!("edited draft");
         write(&root, id, &changed).await.unwrap();
@@ -490,6 +641,11 @@ mod tests {
         assert_eq!(settings.name, "Saved draft");
         assert_eq!(settings.visibility, "public");
         assert_eq!(settings.manifest["routing"], "spa");
+        assert_eq!(settings.released.as_ref().unwrap().actions, "applied actions");
+        assert!(settings.released.as_ref().unwrap().schema_sql.contains("CREATE TABLE live"));
+        assert!(!settings.released.as_ref().unwrap().schema_sql.contains("draft_only"));
+        let installed: crate::Installed = serde_json::from_slice(&tokio::fs::read(layout::record(&root, id)).await.unwrap()).unwrap();
+        assert_eq!(installed.released.unwrap().actions, "applied actions");
         assert!(app.join("empty/nested").is_dir());
         let _ = tokio::fs::remove_dir_all(root).await;
     }

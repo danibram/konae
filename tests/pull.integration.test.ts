@@ -201,6 +201,7 @@ describe("init, publish, pull, dev --reset", () => {
     const schema = await readFile(path.join(next, "app", "schema.sql"), "utf8");
     expect(schema).toMatch(/created_at[^,\n]*\n\s*\);/);
     await writeFile(path.join(next, "app", "schema.sql"), schema.replace(/(created_at[^,\n]*)\n(\s*\);)/, "$1,\n  pinned INTEGER NOT NULL DEFAULT 0\n$2"));
+    await writeFile(path.join(next, "app", "index.html"), `${await readFile(path.join(next, "app", "index.html"), "utf8")}\n<!-- built next version -->\n`);
 
     await importPulled(next, pulled);
     const released = await serveLocally(next);
@@ -301,7 +302,7 @@ describe("a file of app/ that is not text", () => {
     const recovered = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, settings.project.id);
     expect(recovered.sourcesInstalled).toBe(true);
     expect(await readFile(path.join(folder, "app/remote-change.txt"), "utf8")).toBe("Saved on the installation");
-    const { visibility: _visibility, signupPolicy: _signupPolicy, ...pulledManifest } = source.manifest;
+    const { visibility: _visibility, signupPolicy: _signupPolicy, runtime: _runtime, ...pulledManifest } = source.manifest;
     expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).manifest).toEqual(pulledManifest);
     const final = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
     expect(final.id).toBe(published.id);

@@ -20,7 +20,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    find_project_deployment, initialize_database, layout, now_ms, open_auth, persist_deployment, runtime,
+    find_project_deployment, initialize_database, layout, now_ms, open_auth, persist_release, runtime,
     schema_change, AppState, BuildArtifact, DeployInput, Deployment, Installed, ProjectInput, Settings,
 };
 
@@ -60,31 +60,49 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
     let sources = layout::sources(root, id);
-    let released = settings.released.as_ref();
-    let actions = if let Some(released) = released { released.actions.clone() } else {
-        tokio::fs::read_to_string(sources.join("actions.json")).await
-            .with_context(|| format!("apps/{id}/app/actions.json is missing"))?
+    let stored = match tokio::fs::read(layout::record(root, id)).await {
+        Ok(bytes) => Some(serde_json::from_slice::<Installed>(&bytes).with_context(|| format!("apps/{id}/.konae/deployment.json is malformed"))?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
     };
-    let schema = if let Some(released) = released { released.schema_sql.clone() } else {
-        tokio::fs::read_to_string(sources.join("schema.sql")).await.unwrap_or_default()
+    let released = stored.as_ref().and_then(|record| record.released.clone()).or_else(|| settings.released.clone());
+    let dist = read_dist(&layout::dist(root, id))
+        .with_context(|| format!("apps/{id}/dist/ is missing or not readable. Build it with npm run build"))?;
+    let dist_digest = version_of(&dist);
+    let rebuilt = released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
+    let source_actions = || async { tokio::fs::read_to_string(sources.join("actions.json")).await.with_context(|| format!("apps/{id}/app/actions.json is missing")) };
+    let source_schema = || async { tokio::fs::read_to_string(sources.join("schema.sql")).await.unwrap_or_default() };
+    let actions = if rebuilt || (released.is_none() && stored.is_none()) {
+        source_actions().await?
+    } else if let Some(snapshot) = released.as_ref() {
+        snapshot.actions.clone()
+    } else if let Some(record) = stored.as_ref() {
+        record.actions.clone()
+    } else { source_actions().await? };
+    let schema = if rebuilt || (released.is_none() && stored.is_none()) {
+        source_schema().await
+    } else if let Some(snapshot) = released.as_ref() {
+        snapshot.schema_sql.clone()
+    } else {
+        crate::sources::database_schema(root, id)?
     };
-    let mut manifest = released.map(|record| record.manifest.clone()).unwrap_or_else(|| settings.manifest.clone());
-    let visibility = released.map(|record| record.visibility.as_str()).unwrap_or(&settings.visibility);
+    let mut manifest = if rebuilt { settings.manifest.clone() } else { released.as_ref().map(|snapshot| snapshot.manifest.clone()).unwrap_or_else(|| settings.manifest.clone()) };
+    manifest = crate::sources::manifest_without_runtime(&manifest);
+    let visibility = if rebuilt { settings.visibility.as_str() } else { released.as_ref().map(|snapshot| snapshot.visibility.as_str()).unwrap_or(&settings.visibility) };
     if let Some(object) = manifest.as_object_mut() {
         object.insert("visibility".into(), Value::String(visibility.to_owned()));
     }
-    let dist = read_dist(&layout::dist(root, id))
-        .with_context(|| format!("apps/{id}/dist/ is missing or not readable. Build it with npm run build"))?;
-    let artifact_version = format!("v{}", &version_of(&dist)[..32]);
     let encode = |bytes: &Vec<u8>| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let applied_name = released.as_ref().map(|snapshot| snapshot.name.as_str()).or_else(|| stored.as_ref().map(|_| settings.name.as_str())).unwrap_or(&settings.name);
+    let applied_slug = released.as_ref().map(|snapshot| snapshot.slug.as_str()).or_else(|| stored.as_ref().map(|_| settings.slug.as_str())).unwrap_or(&settings.slug);
     let input = DeployInput {
         project: ProjectInput {
             id: id.to_owned(),
-            name: released.map(|record| record.name.clone()).unwrap_or_else(|| settings.name.clone()),
-            slug: released.map(|record| record.slug.clone()).unwrap_or_else(|| settings.slug.clone()),
+            name: if rebuilt { settings.name.clone() } else { applied_name.to_owned() },
+            slug: if rebuilt { settings.slug.clone() } else { applied_slug.to_owned() },
             files: HashMap::from([("actions.json".to_owned(), actions.clone()), ("schema.sql".to_owned(), schema.clone())]),
             encodings: HashMap::new(),
-            directories: Vec::new(),
+            directories: settings.directories.clone(),
             manifest,
         },
         visibility: visibility.to_owned(),
@@ -97,7 +115,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         initial_signup_policy: None,
         initial_sign_in_methods: None,
         initial_package: None,
-        contact_email: released.and_then(|record| record.contact_email.clone()).or_else(|| settings.contact_email.clone()),
+        contact_email: settings.contact_email.clone().or_else(|| released.as_ref().and_then(|snapshot| snapshot.contact_email.clone())),
         schema_confirmation: None,
     };
     // The checks of a release: paths, size, routing, connects, the actions and their secrets.
@@ -120,32 +138,30 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let existing = find_project_deployment(&*state.deployments.read().await, id);
     let (hostname, created_at, _taking) = match existing.as_ref() {
         Some(deployment) => (deployment.hostname.clone(), deployment.created_at, None),
+        None if stored.is_some() => (stored.as_ref().unwrap().hostname.clone(), stored.as_ref().unwrap().created_at, None),
         None => {
-            let (hostname, taking) = free_hostname(state, &settings.slug, id).await;
+            let (hostname, taking) = free_hostname(state, input.project.slug.as_str(), id).await;
             (hostname, now_ms(), Some(taking))
         }
     };
     // A start that finds the files the record names keeps their release time
     // and the digest of the sources they were built from, so app/ edits not
     // yet built into dist/ still read as changes.
-    let (released_at, source_digest) = if let Some(released) = settings.released.as_ref().filter(|record| record.source_digest.is_some()) {
-        (released.released_at.unwrap_or(now_ms()), released.source_digest.clone())
-    } else { match existing.as_ref() {
-        Some(deployment) if deployment.artifact_version == artifact_version && deployment.source_digest.is_some() => (deployment.released_at, deployment.source_digest.clone()),
-        Some(deployment) if deployment.artifact_version == artifact_version => (deployment.released_at, Some(crate::sources::digest_folder(&sources).await?)),
-        _ => (now_ms(), Some(crate::sources::digest_folder(&sources).await?)),
-    }};
-    let released = existing.as_ref().map(|current| crate::ReleasedSettings { name: current.project_name.clone(), slug: current.slug.clone(), visibility: current.manifest["visibility"].as_str().unwrap_or("private").into(), signup_policy: current.signup_policy.clone(), sign_in_methods: current.sign_in_methods.clone(), contact_email: current.contact_email.clone(), actions: current.actions.clone(), schema_sql: current.released_schema.clone(), source_digest: current.source_digest.clone(), released_at: Some(current.released_at), manifest: { let mut value = current.manifest.clone(); if let Some(object) = value.as_object_mut() { object.remove("visibility"); } value } })
-        .or_else(|| settings.released.clone())
-        .or_else(|| Some(crate::ReleasedSettings {
-            name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
-            signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
-            contact_email: settings.contact_email.clone(), manifest: settings.manifest.clone(), actions: actions.clone(),
-            schema_sql: schema.clone(), source_digest: source_digest.clone(), released_at: Some(released_at),
-        }));
-    let deployment = settings.deployment(Installed { hostname, created_at, released_at: Some(released_at), source_digest, actions, artifact_version, released }, &state.public_origin);
+    let unchanged = !rebuilt;
+    let released_at = if unchanged { released.as_ref().and_then(|snapshot| snapshot.released_at).or_else(|| stored.as_ref().and_then(|record| record.released_at)).or_else(|| existing.as_ref().map(|current| current.released_at)).unwrap_or_else(now_ms) } else { now_ms() };
+    let source_digest = if rebuilt || (released.is_none() && stored.is_none()) { Some(crate::sources::digest_folder(&sources).await?) } else { released.as_ref().and_then(|snapshot| snapshot.source_digest.clone()).or_else(|| stored.as_ref().and_then(|record| record.source_digest.clone())).or_else(|| existing.as_ref().and_then(|current| current.source_digest.clone())) };
+    let artifact_version = if unchanged { stored.as_ref().map(|record| record.artifact_version.clone()).or_else(|| existing.as_ref().map(|current| current.artifact_version.clone())).unwrap_or_else(|| format!("v{}", &dist_digest[..32])) } else { format!("v{}", &dist_digest[..32]) };
+    let policy = settings.signup_policy.clone();
+    let sign_in_methods = settings.sign_in_methods.clone();
+    let deployment = Deployment {
+        id: id.to_owned(), project_id: id.to_owned(), project_name: input.project.name.clone(), slug: input.project.slug.clone(),
+        url: crate::deployment_url(&state.public_origin, &hostname), created_at, released_at, source_digest,
+        manifest: input.project.manifest.clone(), hostname, actions, artifact_version, signup_policy: policy,
+        sign_in_methods, contact_email: input.contact_email.clone(), released_schema: schema,
+    };
     open_auth(state, &deployment)?;
-    persist_deployment(state, &deployment).await?;
+    if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories).await?; }
+    else { crate::persist_folder_snapshot(state, &deployment, &dist_digest).await?; }
     let mut deployments = state.deployments.write().await;
     deployments.retain(|_, served| served.id != id);
     deployments.insert(deployment.hostname.clone(), deployment.clone());
@@ -194,7 +210,7 @@ fn read_dist(dist: &Path) -> Result<HashMap<String, Vec<u8>>> {
 }
 
 /// A digest of the files, so the same `dist/` keeps its version across starts.
-fn version_of(files: &HashMap<String, Vec<u8>>) -> String {
+pub(crate) fn version_of(files: &HashMap<String, Vec<u8>>) -> String {
     let mut paths = files.keys().collect::<Vec<_>>();
     paths.sort();
     let mut all = Vec::new();
@@ -234,20 +250,12 @@ async fn reload(state: &AppState, deployment: Deployment) {
             return;
         }
     };
-    // The Deployment as it stands now, so a hostname_set since the watcher
-    // read it is not undone.
     let mut deployments = state.deployments.write().await;
-    let Some(current) = deployments.values().find(|item| item.id == deployment.id) else { return };
-    let installed = Installed {
-        hostname: current.hostname.clone(),
-        created_at: current.created_at,
-        released_at: Some(current.released_at),
-        source_digest: current.source_digest.clone(),
-        actions: current.actions.clone(),
-        artifact_version: current.artifact_version.clone(),
-        released: Some(crate::ReleasedSettings { name: current.project_name.clone(), slug: current.slug.clone(), visibility: current.manifest["visibility"].as_str().unwrap_or("private").into(), signup_policy: current.signup_policy.clone(), sign_in_methods: current.sign_in_methods.clone(), contact_email: current.contact_email.clone(), actions: current.actions.clone(), schema_sql: current.released_schema.clone(), source_digest: current.source_digest.clone(), released_at: Some(current.released_at), manifest: { let mut value = current.manifest.clone(); if let Some(object) = value.as_object_mut() { object.remove("visibility"); } value } }),
-    };
-    let updated = settings.deployment(installed, &state.public_origin);
+    let Some(current) = deployments.values().find(|item| item.id == deployment.id).cloned() else { return };
+    let mut updated = current;
+    updated.signup_policy = settings.signup_policy;
+    updated.sign_in_methods = settings.sign_in_methods;
+    updated.contact_email = settings.contact_email;
     deployments.insert(updated.hostname.clone(), updated);
 }
 
@@ -405,12 +413,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_settings_watcher_applies_operator_policy_without_applying_source_drafts() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let deployment = open(&state, "notes_app", None).await.unwrap();
+        let mut source = crate::sources::read(&root, "notes_app").await.unwrap().unwrap();
+        source["manifest"]["visibility"] = serde_json::json!("private");
+        source["manifest"]["fileAccess"] = serde_json::json!("app-users");
+        crate::sources::write(&root, "notes_app", &source).await.unwrap();
+        assert_eq!(state.deployments.read().await[&deployment.hostname].manifest["visibility"], "public");
+        follow_settings(state.clone());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let mut settings = Settings::read(&root, "notes_app").unwrap();
+        settings.signup_policy = crate::SignupPolicy::from_input(crate::SignupMode::Closed, &[]).unwrap();
+        settings.write(&root).await.unwrap();
+        for _ in 0..20 {
+            if state.deployments.read().await[&deployment.hostname].signup_policy.mode == crate::SignupMode::Closed { break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let running = state.deployments.read().await[&deployment.hostname].clone();
+        assert_eq!(running.signup_policy.mode, crate::SignupMode::Closed);
+        assert_eq!(running.manifest["visibility"], "public");
+        assert!(running.manifest.get("fileAccess").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_change_that_loses_data_waits_for_its_confirmation() {
         let root = scratch();
         let state = AppState::for_test(&root);
         write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL, extra TEXT);");
         open(&state, "notes_app", None).await.unwrap();
         std::fs::write(layout::sources(&root, "notes_app").join("schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);").unwrap();
+        open(&state, "notes_app", None).await.unwrap();
+        std::fs::write(layout::dist(&root, "notes_app").join("index.html"), "<!doctype html><main>rebuilt</main>").unwrap();
         let refused = refused(open(&state, "notes_app", None).await);
         assert!(refused.contains("loses data") && refused.contains(CONFIRM_SCHEMA), "{refused}");
         let confirmation = refused.rsplit('=').next().unwrap().trim_end_matches('.').to_owned();

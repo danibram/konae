@@ -145,6 +145,41 @@ async function sourcePackage(id: string, directory: string) {
 }
 
 describe("chunked package", () => {
+  test("a legacy export keeps saved source metadata separate from the installed release", async () => {
+    const id = "pkg_legacy_metadata";
+    const receipt = await publish(id);
+    const folder = path.join(root, "data", "apps", id);
+    const settingsPath = path.join(folder, "konae.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    delete settings.released;
+    await writeFile(settingsPath, JSON.stringify(settings));
+    const recordPath = path.join(folder, ".konae", "deployment.json");
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    delete record.released;
+    await writeFile(recordPath, JSON.stringify(record));
+    await writeFile(path.join(folder, ".konae", "sources.json"), JSON.stringify({
+      name: "Legacy saved draft", slug: "legacy-draft", updatedAt: 77, directories: ["empty/nested"],
+      manifest: { version: 1, visibility: "private", fileAccess: "app-users" },
+    }));
+
+    const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+    try {
+      const archive = new Map(readTar(await owner.download(exported.folder)).map((entry) => [entry.path, entry.contents]));
+      const portableSettings = JSON.parse(new TextDecoder().decode(archive.get("konae.json")!));
+      expect(portableSettings.name).toBe("Legacy saved draft");
+      expect(portableSettings.slug).toBe("legacy-draft");
+      expect(portableSettings.visibility).toBe("private");
+      expect(portableSettings.manifest.fileAccess).toBe("app-users");
+      expect(portableSettings.manifest.runtime).toBeUndefined();
+      expect(portableSettings.directories).toEqual(["empty/nested"]);
+      expect(portableSettings.released.actions).toBe(record.actions);
+      expect(portableSettings.released.schemaSql).toContain("CREATE TABLE");
+      expect(exported.sourcesAhead).toBe(false);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+    }
+  });
+
   test("an export compares every saved file with the release and clears the warning after a revert", async () => {
     const id = "pkg_source_digest";
     const request = payload(id);

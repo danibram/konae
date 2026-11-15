@@ -174,6 +174,8 @@ pub struct Settings {
     pub kernel: String,
     /// The Capsule manifest without its visibility: routing, connects and the declared actions.
     pub manifest: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directories: Vec<String>,
     #[serde(default)]
     pub updated_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,12 +222,14 @@ pub struct ReleasedSettings {
     #[serde(default)]
     pub source_digest: Option<String>,
     #[serde(default)]
+    pub artifact_digest: Option<String>,
+    #[serde(default)]
     pub released_at: Option<u64>,
 }
 
 fn released_settings(deployment: &Deployment) -> ReleasedSettings {
     let mut manifest = deployment.manifest.clone();
-    if let Some(object) = manifest.as_object_mut() { object.remove("visibility"); }
+    if let Some(object) = manifest.as_object_mut() { object.remove("visibility"); object.remove("runtime"); }
     ReleasedSettings {
         name: deployment.project_name.clone(), slug: deployment.slug.clone(),
         visibility: deployment.manifest["visibility"].as_str().unwrap_or("private").into(),
@@ -233,6 +237,7 @@ fn released_settings(deployment: &Deployment) -> ReleasedSettings {
         contact_email: deployment.contact_email.clone(), manifest,
         actions: deployment.actions.clone(), schema_sql: deployment.released_schema.clone(),
         source_digest: deployment.source_digest.clone(), released_at: Some(deployment.released_at),
+        artifact_digest: None,
     }
 }
 
@@ -256,6 +261,7 @@ impl Settings {
             contact_email: None,
             kernel: KERNEL_VERSION.into(),
             manifest,
+            directories: Vec::new(),
             updated_at: 0,
             released: None,
         }
@@ -932,6 +938,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     };
     // The app keeps one ID: its folder, its project and its Deployment share it.
     let id = input.project.id.clone();
+    let release_directories = input.project.directories.clone();
     // Same rule as a bare Kernel folder: the slug is the address when free.
     // The name stays held until this release serves on it.
     let (hostname, _taking) = match existing.as_ref() {
@@ -1096,7 +1103,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             }
         }
     };
-    if let Err(error_value) = persist_deployment(&state, &deployment)
+    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories)
         .await
         .and_then(|()| release_step(&id, "persist_deployment"))
     {
@@ -3438,23 +3445,85 @@ pub fn safe_relative_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-/// Writes the app's settings to `konae.json` and the installation's part to
-/// `.konae/deployment.json`.
+/// Persists changes made to the applied Deployment while keeping editable settings intact.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
+    persist_applied(state, deployment, None).await
+}
+
+/// Records the artifact currently in a folder without replacing its saved draft.
+pub async fn persist_folder_snapshot(state: &AppState, deployment: &Deployment, artifact_digest: &str) -> Result<()> {
+    persist_applied(state, deployment, Some(artifact_digest)).await
+}
+
+async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_digest: Option<&str>) -> Result<()> {
+    let mut settings = match Settings::read(&state.data_root, &deployment.id) {
+        Ok(settings) => settings,
+        Err(_) if !layout::settings(&state.data_root, &deployment.id).exists() => Settings::of(deployment),
+        Err(error) => return Err(error),
+    };
+    let artifact_digest = artifact_digest.map(str::to_owned).or_else(|| settings.released.as_ref().and_then(|released| released.artifact_digest.clone()));
+    settings.signup_policy = deployment.signup_policy.clone();
+    settings.sign_in_methods = deployment.sign_in_methods.clone();
+    settings.contact_email = deployment.contact_email.clone();
+    settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
+    let mut released = released_settings(deployment);
+    released.artifact_digest = artifact_digest;
+    settings.released = Some(released.clone());
+    persist_settings_and_record(state, deployment, settings, released).await
+}
+
+/// Persists the new source and artifact state after a successful release.
+pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String]) -> Result<()> {
     let mut settings = Settings::of(deployment);
     if let Ok(previous) = Settings::read(&state.data_root, &deployment.id) { settings.updated_at = previous.updated_at; }
-    settings.write(&state.data_root).await?;
-    let installed = Installed {
-        hostname: deployment.hostname.clone(),
-        created_at: deployment.created_at,
-        released_at: Some(deployment.released_at),
-        source_digest: deployment.source_digest.clone(),
-        actions: deployment.actions.clone(),
-        artifact_version: deployment.artifact_version.clone(),
-        released: settings.released.clone(),
+    settings.directories = directories.to_vec();
+    let mut released = settings.released.clone().expect("Settings::of records released settings");
+    released.artifact_digest = Some(artifact_digest.to_owned());
+    settings.released = Some(released.clone());
+    persist_settings_and_record(state, deployment, settings, released).await
+}
+
+async fn persist_settings_and_record(state: &AppState, deployment: &Deployment, settings: Settings, released: ReleasedSettings) -> Result<()> {
+    let settings_path = layout::settings(&state.data_root, &deployment.id);
+    let record_path = layout::record(&state.data_root, &deployment.id);
+    let settings_before = match tokio::fs::read(&settings_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
     };
+    let record_before = match tokio::fs::read(&record_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let settings_bytes = serde_json::to_vec_pretty(&settings)?;
+    let installed = Installed {
+        hostname: deployment.hostname.clone(), created_at: deployment.created_at,
+        released_at: Some(deployment.released_at), source_digest: deployment.source_digest.clone(),
+        actions: deployment.actions.clone(), artifact_version: deployment.artifact_version.clone(), released: Some(released),
+    };
+    let record_bytes = serde_json::to_vec_pretty(&installed)?;
     tokio::fs::create_dir_all(layout::private(&state.data_root, &deployment.id)).await?;
-    write_atomic(&layout::record(&state.data_root, &deployment.id), &serde_json::to_vec_pretty(&installed)?).await?;
+    write_atomic(&settings_path, &settings_bytes).await?;
+    if let Err(error) = write_atomic(&record_path, &record_bytes).await {
+        let settings_restore = restore_optional(&settings_path, settings_before.as_deref()).await;
+        let record_restore = restore_optional(&record_path, record_before.as_deref()).await;
+        if let Err(restore) = settings_restore { anyhow::bail!("Writing the Deployment record failed: {error}. Restoring konae.json failed: {restore:#}"); }
+        if let Err(restore) = record_restore { anyhow::bail!("Writing the Deployment record failed: {error}. Restoring the previous record failed: {restore:#}"); }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+async fn restore_optional(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
+    match bytes {
+        Some(bytes) => write_atomic(path, bytes).await?,
+        None => match tokio::fs::remove_file(path).await {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        },
+    }
     Ok(())
 }
 
@@ -4358,6 +4427,34 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn operator_policy_updates_keep_saved_source_settings_across_restart() {
+        let root = std::env::temp_dir().join(format!("konae-policy-preserves-draft-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let mut current = state.deployments.read().await.values().next().unwrap().clone();
+        current.actions = "{\"version\":1,\"actions\":{}}".into();
+        state.deployments.write().await.insert(current.hostname.clone(), current.clone());
+        Settings::of(&current).write(&root).await.unwrap();
+        let draft = json!({"id":current.id,"name":"Unpublished draft name","slug":"app","files":{"index.html":"<main>app</main>","actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""},"directories":[],"manifest":{"version":1,"visibility":"private","fileAccess":"app-users"},"updatedAt":now_ms()});
+        crate::sources::write(&root, &current.id, &draft).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::dist(&root, &current.id)).await.unwrap();
+        tokio::fs::write(crate::layout::dist(&root, &current.id).join("index.html"), "<main>deployed</main>").await.unwrap();
+
+        set_signup_policy(&state, &current.id, SignupMode::Closed, None).await.unwrap();
+        let saved = crate::sources::read(&root, &current.id).await.unwrap().unwrap();
+        assert_eq!(saved["name"], "Unpublished draft name");
+        assert_eq!(saved["manifest"]["visibility"], "private");
+        assert_eq!(saved["manifest"]["fileAccess"], "app-users");
+
+        let restarted = AppState::for_test(&root);
+        let serving = folder::open(&restarted, &current.id, None).await.unwrap();
+        assert_eq!(serving.project_name, current.project_name);
+        assert_eq!(serving.manifest["visibility"], "public");
+        assert!(serving.manifest.get("fileAccess").is_none());
+        assert_eq!(serving.signup_policy.mode, SignupMode::Closed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn login_page_hides_account_creation_when_signup_is_closed() {
         let root = std::env::temp_dir().join(format!("konae-login-policy-{}", Uuid::new_v4()));
         let (state, headers) = login_test_state(&root, "private").await;
@@ -5093,6 +5190,9 @@ pub mod tests {
             let id = second["id"].as_str().unwrap();
             let stored = Settings::read(&root, id).unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
+            let mut legacy = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+            legacy.manifest["runtime"] = json!({"database":{"mode":"declared-actions"}});
+            assert!(released_settings(&legacy).manifest.get("runtime").is_none());
             let _ = tokio::fs::remove_dir_all(root).await;
         }
     }
