@@ -29,7 +29,7 @@ export async function createProjectExport(
   let settings: AppSettings;
   let sourcesAhead = false;
   if (deploymentId) {
-    const exported = await door.mcp.call<Exported>("project_export", { deploymentId });
+    const exported = await door.mcp.call<Exported>("project_export", { projectId: deploymentId });
     try {
       entries = readTar(await door.mcp.download(exported.folder));
       for (const { name } of exported.manifest.contents) entries.push(...dataEntries(name, await door.mcp.download(exported.downloads[name])));

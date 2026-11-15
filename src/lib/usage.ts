@@ -11,7 +11,7 @@ export type StoragePart = { part: string; bytes: number; limit: number | null; e
 export type UsageStorage = { total: number; files: number; parts: StoragePart[] };
 export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
-  usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[] };
+  usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[]; scheduled: { action: string; at: number; outcome: string; changes: number; error?: string }[] };
   metrics: Metric[]; actions: PublishedAction[];
   accounts: UsageAccounts;
   storage: UsageStorage;
@@ -32,7 +32,7 @@ export function readUsageOverview(days: number, cursor?: string, signal?: AbortS
   return platformMcp.call<UsageOverview>("usage_overview", { ...usageRange(days), ...(cursor ? { cursor } : {}) }, signal);
 }
 export function readUsageSummary(deploymentId: string, days: number, signal?: AbortSignal) {
-  return platformMcp.call<UsageSummary>("usage_summary", { deploymentId, ...usageRange(days) }, signal);
+  return platformMcp.call<UsageSummary>("usage_summary", { projectId: deploymentId, ...usageRange(days) }, signal);
 }
 
 export const featureKinds = [

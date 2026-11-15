@@ -664,7 +664,8 @@ export async function publishLocal(root: string, config: Config, token: string, 
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
   if (!first && wanted) {
     // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
-    const current = await client.call<{ mode: SignupMode; allowlist?: string[] }>("signup_policy_read", { deploymentId: receipt.id }).catch(() => undefined);
+    const inspected = await client.call<{ deployment?: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId: project.id }).catch(() => undefined);
+    const current = inspected?.deployment?.signupPolicy;
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
   }
@@ -678,10 +679,10 @@ export const firstReleaseAddress = (url: string, id: string) =>
 /** hostname_set, or domain_read without `set`. The Kernel checks the name, and its refusal reaches the caller unchanged. Returns the lines to print. */
 export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentId: string, set?: string): Promise<string[]> {
   if (set === undefined) {
-    const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { deploymentId });
+    const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { projectId: deploymentId });
     return [`This app answers at ${generatedUrl}.`];
   }
-  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { deploymentId, name: set });
+  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set });
   if (!moved.changed) return [`This app already answers at ${moved.url}.`];
   return [
     `This app now answers at ${moved.url}. ${moved.previousHostnames.at(-1)} redirects there with a 308 and stays this app's.`,
@@ -1085,15 +1086,15 @@ type DomainView = {
 /** domain_read, domain_set or domain_clear, with the hostname checked by the Kernel's rules first. Returns the lines to print. */
 export async function domainLocal(client: Pick<McpClient, "call">, deploymentId: string, request: { set?: string; clear?: boolean }): Promise<string[]> {
   if (request.clear) {
-    const cleared = await client.call<{ cleared: string | null; generatedUrl: string }>("domain_clear", { deploymentId });
+    const cleared = await client.call<{ cleared: string | null; generatedUrl: string }>("domain_clear", { projectId: deploymentId });
     return [cleared.cleared ? `${cleared.cleared} no longer serves this app. ${cleared.generatedUrl} keeps answering.` : `This app had no custom domain. It answers at ${cleared.generatedUrl}.`];
   }
-  const current = await client.call<DomainView>("domain_read", { deploymentId });
+  const current = await client.call<DomainView>("domain_read", { projectId: deploymentId });
   let view = current;
   if (request.set !== undefined) {
     const checked = checkHostname(request.set, current.rules ?? { suffix: "", installationHosts: [] });
     if (!checked.ok) throw Error(checked.message);
-    view = await client.call<DomainView>("domain_set", { deploymentId, hostname: checked.hostname });
+    view = await client.call<DomainView>("domain_set", { projectId: deploymentId, hostname: checked.hostname });
   }
   if (view.status === "none") return [`This app has no custom domain. It answers at ${view.generatedUrl}.`];
   if (view.status === "active") return [`${view.url} serves this app, next to ${view.generatedUrl}. Your proxy must terminate TLS for ${view.hostname} and forward Host unchanged.`];
@@ -1256,7 +1257,7 @@ export async function main() {
     const sql = file ? await readFile(path.resolve(file), "utf8") : inline;
     if (!sql?.trim()) throw Error("Give the statement in quotes or with --file <file.sql>.");
     const found = await target();
-    const answer = found.local ? JSON.parse(await found.local.run(["sql", sql])) : await found.client.call("database_execute", { deploymentId: found.deploymentId, operation: "sql", input: { sql } });
+    const answer = found.local ? JSON.parse(await found.local.run(["sql", sql])) : await found.client.call("database_execute", { projectId: found.deploymentId, operation: "sql", input: { sql } });
     console.log(JSON.stringify(answer, null, 2));
     return;
   }
@@ -1303,7 +1304,7 @@ export async function main() {
     const settings = await readSettings(root);
     const pushed = await pushData(root, new McpClient(endpoint(await installation()), { token: await credentials(root) }), { id: settings.id, name: settings.name, visibility: settings.visibility },
       { yes: args.includes("--yes"), confirmSchema: option("confirm-schema") });
-    console.log(`Pushed. To undo it, restore backup ${pushed.backupId} with database_execute { deploymentId: "${pushed.deploymentId}", operation: "restore-backup", input: { backupId: "${pushed.backupId}" } }.`);
+    console.log(`Pushed. To undo it, restore backup ${pushed.backupId} with database_execute { projectId: "${pushed.deploymentId}", operation: "restore-backup", input: { backupId: "${pushed.backupId}" } }.`);
     return;
   }
   if (command === "dev") {

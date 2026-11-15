@@ -60,7 +60,6 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   database_execute: "read",
   usage_summary: "read",
   notices_read: "read",
-  signup_policy_read: "read",
   sign_in_methods_read: "read",
   app_users_list: "read",
   domain_read: "read",
@@ -118,7 +117,15 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
   }
 }
 
-const pinned = ["projectId", "deploymentId"] as const;
+const pinned = ["projectId"] as const;
+const publishedProjectTools = new Set([
+  "database_execute", "api_keys_list", "domain_read", "path_read", "maintenance_read", "contact_email_read",
+  "project_export", "calls_read", "notices_read", "usage_summary", "signals_read", "sign_in_methods_read",
+  "sign_in_methods_set", "signup_policy_set", "app_user_enter", "app_users_list", "app_user_suspend",
+  "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend",
+  "app_invitation_revoke", "api_keys_create", "api_keys_revoke", "project_import", "contact_email_set",
+  "maintenance_set", "hostname_set", "domain_set", "domain_clear", "path_set", "path_clear",
+]);
 
 /** The schema the model sees: the project and deployment are the open project's, so the model never names one. */
 function modelSchema(schema: McpToolDefinition["inputSchema"]) {
@@ -167,7 +174,6 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
 
   function platformTool(tool: McpToolDefinition): AgentTool<any> {
     const properties = tool.inputSchema?.properties ?? {};
-    const takesDeployment = "deploymentId" in properties;
     const takesProject = "projectId" in properties;
     return {
       name: tool.name,
@@ -183,17 +189,16 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
         }
         const args: Record<string, unknown> = { ...given };
         if (takesProject) args.projectId = projectId;
-        if (takesDeployment) {
-          const deploymentId = binding.deploymentForProject(projectId);
-          if (!deploymentId) throw new Error(`Publish this project first. ${tool.name} reads or changes the published app.`);
-          args.deploymentId = deploymentId;
+        const needsDeployment = publishedProjectTools.has(tool.name);
+        if (needsDeployment && !binding.deploymentForProject(projectId)) {
+          throw new Error(`Publish this project first. ${tool.name} reads or changes the published app.`);
         }
         const confirm = needsConfirmation(tool.name, given);
         if (confirm) {
           const approved = await binding.confirm({ projectId, tool: tool.name, summary: describeCall(tool.name, given), arguments: given });
           check(signal);
           if (!approved) throw new Error(`The owner declined ${tool.name}. Nothing was changed.`);
-          if (takesDeployment && binding.deploymentForProject(projectId) !== args.deploymentId) {
+          if (needsDeployment && !binding.deploymentForProject(projectId)) {
             throw new Error("This project's deployment changed while waiting for the owner. Read it again before changing it.");
           }
         }

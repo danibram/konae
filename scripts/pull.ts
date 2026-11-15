@@ -34,7 +34,7 @@ export const NEEDS_EXPORT_DATA = "Downloading live data needs a credential with 
 export async function downloadPackage(client: McpClient, deploymentId: string, directory: string, includeFolder = true) {
   let exported: { manifest: unknown; downloads: Record<string, Transfer>; folder?: Transfer };
   try {
-    exported = await client.call("project_export", { deploymentId });
+    exported = await client.call("project_export", { projectId: deploymentId });
   } catch (error) {
     if (error instanceof Error && error.message.includes("Unknown tool")) throw Error(NEEDS_EXPORT_DATA);
     throw error;

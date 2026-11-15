@@ -35,7 +35,7 @@ export async function importFolder(input: {
   const { folder, replace, project } = input;
   const transfers: Transfer[] = [];
   try {
-    const args: Record<string, unknown> = { deploymentId: input.deploymentId, replace, ...(input.confirmSchema ? { confirmSchema: input.confirmSchema } : {}) };
+    const args: Record<string, unknown> = { projectId: input.deploymentId, replace, ...(input.confirmSchema ? { confirmSchema: input.confirmSchema } : {}) };
     if (replace !== "data") {
       checkSourceFiles(folder.sources);
       const payload = sourcesPayload(folder, project, input.visibility);

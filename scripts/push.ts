@@ -195,7 +195,7 @@ export function pushManifest(deployment: { id: string; projectId: string }, visi
 
 type Inspected = { name: string; totalRows: number }[];
 async function remoteRows(client: Pick<McpClient, "call">, deploymentId: string) {
-  const answer = await client.call<Inspected | { result: Inspected }>("database_execute", { deploymentId, operation: "inspect" });
+  const answer = await client.call<Inspected | { result: Inspected }>("database_execute", { projectId: deploymentId, operation: "inspect" });
   return new Map((Array.isArray(answer) ? answer : answer.result).map((table) => [table.name, table.totalRows]));
 }
 
@@ -243,7 +243,7 @@ export async function pushData(root: string, client: McpClient, project: { id: s
     log(`It sends ${local.components.map((component) => `${component.name} ${bytes(component.size)}`).join(", ")}. The app keeps its sessions, API keys, Signup Policy, sign-in methods, secrets and address.`);
     if (!options.yes) throw Error(`${NOTHING_SENT} To replace the published data with this, run push again with --yes.`);
 
-    const paused = (await client.call<{ maintenance?: boolean }>("maintenance_read", { deploymentId: deployment.id })).maintenance === true;
+    const paused = (await client.call<{ maintenance?: boolean }>("maintenance_read", { projectId: deployment.id })).maintenance === true;
     let backupId: string | undefined;
     let failure: unknown;
     // True once push itself put the app in maintenance, so only push's own pause is lifted.
@@ -252,13 +252,13 @@ export async function pushData(root: string, client: McpClient, project: { id: s
     const interrupted = () => {
       log(pausedHere ? "Interrupted. Taking the app out of maintenance." : "Interrupted.");
       void Promise.all(transfers.map((transfer) => client.cancel(transfer.transferId).catch(() => {})))
-        .then(() => pausedHere ? client.call("maintenance_set", { deploymentId: deployment.id, on: false }) : undefined)
+        .then(() => pausedHere ? client.call("maintenance_set", { projectId: deployment.id, on: false }) : undefined)
         .catch(() => {}).finally(() => process.exit(130));
     };
     process.once("SIGINT", interrupted);
     try {
       if (!paused) {
-        await client.call("maintenance_set", { deploymentId: deployment.id, on: true });
+        await client.call("maintenance_set", { projectId: deployment.id, on: true });
         pausedHere = true;
         log("Put the app in maintenance. It serves a maintenance page and refuses writes until the import ends.");
       }
@@ -272,7 +272,7 @@ export async function pushData(root: string, client: McpClient, project: { id: s
       const visibility = deployment.manifest?.visibility === "public" || deployment.manifest?.visibility === "private" ? deployment.manifest.visibility : project.visibility;
       const manifest = pushManifest({ id: deployment.id, projectId: project.id }, visibility, local.components);
       const answer = await client.call<{ imported: boolean; backup?: { id: string }; schema?: SchemaChange }>("project_import", {
-        deploymentId: deployment.id, replace: "data", package: { manifest, components },
+        projectId: deployment.id, replace: "data", package: { manifest, components },
         ...(options.confirmSchema ? { confirmSchema: options.confirmSchema } : {}),
       });
       if (!answer.imported) {
@@ -284,7 +284,7 @@ export async function pushData(root: string, client: McpClient, project: { id: s
       backupId = answer.backup!.id;
       log(`Imported. Backup ${backupId} holds the published data as it was before.`);
       // Read back through the same door. The backup is listed, and the published rows are the ones sent.
-      const backups = await client.call<{ id: string }[] | { result: { id: string }[] }>("database_execute", { deploymentId: deployment.id, operation: "list-backups" });
+      const backups = await client.call<{ id: string }[] | { result: { id: string }[] }>("database_execute", { projectId: deployment.id, operation: "list-backups" });
       if (!(Array.isArray(backups) ? backups : backups.result).some((backup) => backup.id === backupId)) throw Error(`The import answered backup ${backupId}, but list-backups does not show it.`);
       const after = await remoteRows(client, deployment.id);
       for (const line of rowsTable(local.tables, after, ["sent", "published"])) log(line);
@@ -296,11 +296,11 @@ export async function pushData(root: string, client: McpClient, project: { id: s
       process.off("SIGINT", interrupted);
       for (const transfer of transfers) await client.cancel(transfer.transferId).catch(() => {});
       if (pausedHere) {
-        const lifted = await client.call("maintenance_set", { deploymentId: deployment.id, on: false })
-          .then(() => client.call<{ maintenance?: boolean }>("maintenance_read", { deploymentId: deployment.id }))
+        const lifted = await client.call("maintenance_set", { projectId: deployment.id, on: false })
+          .then(() => client.call<{ maintenance?: boolean }>("maintenance_read", { projectId: deployment.id }))
           .then((read) => read.maintenance === false, () => false);
         if (lifted) log("Took the app out of maintenance.");
-        else log(`Warning: the app is still in maintenance. Take it out with maintenance_set { deploymentId: "${deployment.id}", on: false } and check with maintenance_read.`);
+        else log(`Warning: the app is still in maintenance. Take it out with maintenance_set { projectId: "${deployment.id}", on: false } and check with maintenance_read.`);
       }
     }
     if (failure) {

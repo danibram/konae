@@ -32,15 +32,18 @@ export async function deployProject(project: MiniAppProject, visibility: Deploym
  */
 export const signupModes = ["open", "invitation", "closed", "allowlist"] as const;
 export type SignupMode = (typeof signupModes)[number];
-export type SignupPolicy = { deploymentId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
+export type SignupPolicy = { projectId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
 
-export function readSignupPolicy(deploymentId: string) {
-  return platformMcp.call<SignupPolicy>("signup_policy_read", { deploymentId });
+export async function readSignupPolicy(projectId: string) {
+  const inspected = await platformMcp.call<{ deployment: { id: string; visibility: DeploymentVisibility; signupPolicy: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId });
+  if (!inspected.deployment) throw new Error("Publish this project before reading its Signup Policy.");
+  return { projectId, visibility: inspected.deployment.visibility, mode: inspected.deployment.signupPolicy.mode, allowlist: inspected.deployment.signupPolicy.allowlist ?? [] };
 }
 
-/** Saves the policy. The Kernel trims, lowercases and deduplicates the entries. */
-export function saveSignupPolicy(deploymentId: string, mode: SignupMode, allowlist: string[]) {
-  return platformMcp.call<SignupPolicy>("signup_policy_set", { deploymentId, mode, allowlist });
+/** Saves the policy, then reads the deployed value through project_inspect. */
+export async function saveSignupPolicy(projectId: string, mode: SignupMode, allowlist: string[]) {
+  await platformMcp.call("signup_policy_set", { projectId, mode, allowlist });
+  return readSignupPolicy(projectId);
 }
 
 /**
@@ -62,12 +65,12 @@ export type SignInMethods = {
 };
 
 export function readSignInMethods(deploymentId: string) {
-  return platformMcp.call<SignInMethods>("sign_in_methods_read", { deploymentId });
+  return platformMcp.call<SignInMethods>("sign_in_methods_read", { projectId: deploymentId });
 }
 
 export function saveSignInMethods(deploymentId: string, google: boolean) {
   const methods: SignInMethod[] = google ? ["password", "google"] : ["password"];
-  return platformMcp.call<SignInMethods>("sign_in_methods_set", { deploymentId, methods });
+  return platformMcp.call<SignInMethods>("sign_in_methods_set", { projectId: deploymentId, methods });
 }
 
 /** The project secrets that hold the app's own Google OAuth client. */
@@ -86,20 +89,20 @@ export type AppUser = { userId: string; email: string; state: AppUserState; veri
 export type AppUserPage = { users: AppUser[]; nextCursor: string | null };
 
 export function listAppUsers(deploymentId: string, options: { limit?: number; cursor?: string; state?: AppUserState } = {}) {
-  return platformMcp.call<AppUserPage>("app_users_list", { deploymentId, ...options });
+  return platformMcp.call<AppUserPage>("app_users_list", { projectId: deploymentId, ...options });
 }
 
 export function suspendAppUser(deploymentId: string, userId: string) {
-  return platformMcp.call<{ userId: string; email: string; state: AppUserState }>("app_user_suspend", { deploymentId, userId });
+  return platformMcp.call<{ userId: string; email: string; state: AppUserState }>("app_user_suspend", { projectId: deploymentId, userId });
 }
 
 export function resumeAppUser(deploymentId: string, userId: string) {
-  return platformMcp.call<{ userId: string; email: string; state: AppUserState }>("app_user_resume", { deploymentId, userId });
+  return platformMcp.call<{ userId: string; email: string; state: AppUserState }>("app_user_resume", { projectId: deploymentId, userId });
 }
 
 /** A one-time link that signs a browser in to the app as this account. It works once, for two minutes. */
 export function enterAsAppUser(deploymentId: string, userId: string) {
-  return platformMcp.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { deploymentId, userId });
+  return platformMcp.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { projectId: deploymentId, userId });
 }
 
 export type InvitationStatus = "pending" | "expired" | "needs-resend" | "already-member" | "accepted" | "revoked";
@@ -120,19 +123,19 @@ export type InvitationResult =
   | { email: string; status: "already-member" | "suspended" | "invalid-email" };
 
 export function createAppInvitations(deploymentId: string, emails: string[], idempotencyKey: string) {
-  return platformMcp.call<{ deploymentId: string; policy: SignupMode; results: InvitationResult[] }>("app_invitations_create", { deploymentId, emails, idempotencyKey });
+  return platformMcp.call<{ deploymentId: string; policy: SignupMode; results: InvitationResult[] }>("app_invitations_create", { projectId: deploymentId, emails, idempotencyKey });
 }
 
 export function listAppInvitations(deploymentId: string, options: { limit?: number; cursor?: string } = {}) {
-  return platformMcp.call<{ invitations: AppInvitation[]; nextCursor: string | null }>("app_invitations_list", { deploymentId, ...options });
+  return platformMcp.call<{ invitations: AppInvitation[]; nextCursor: string | null }>("app_invitations_list", { projectId: deploymentId, ...options });
 }
 
 export function resendAppInvitation(deploymentId: string, invitationId: string, idempotencyKey: string) {
-  return platformMcp.call<{ invitationId: string; email: string; status: "invited"; expiresAt: number; delivery: InvitationDelivery }>("app_invitation_resend", { deploymentId, invitationId, idempotencyKey });
+  return platformMcp.call<{ invitationId: string; email: string; status: "invited"; expiresAt: number; delivery: InvitationDelivery }>("app_invitation_resend", { projectId: deploymentId, invitationId, idempotencyKey });
 }
 
 export function revokeAppInvitation(deploymentId: string, invitationId: string) {
-  return platformMcp.call<{ invitationId: string; email: string; status: "revoked" }>("app_invitation_revoke", { deploymentId, invitationId });
+  return platformMcp.call<{ invitationId: string; email: string; status: "revoked" }>("app_invitation_revoke", { projectId: deploymentId, invitationId });
 }
 
 /** The installation's mail transport, as `mail_status` reports it. It names no recipient. */
@@ -181,16 +184,16 @@ export type FileVisibility = "public" | "private";
 export type ApiKey = { keyId: string; name: string; actions: string[]; files: FileVisibility[]; createdAt: number; revokedAt: number | null; revokedReason?: "import" | null };
 
 export function listApiKeys(deploymentId: string) {
-  return platformMcp.call<{ deploymentId: string; keys: ApiKey[] }>("api_keys_list", { deploymentId });
+  return platformMcp.call<{ deploymentId: string; keys: ApiKey[] }>("api_keys_list", { projectId: deploymentId });
 }
 
 /** The answer carries the key once. Nothing can read it again. */
 export function createApiKey(deploymentId: string, name: string, actions: string[], files: FileVisibility[]) {
-  return platformMcp.call<ApiKey & { key: string }>("api_keys_create", { deploymentId, name, actions, files });
+  return platformMcp.call<ApiKey & { key: string }>("api_keys_create", { projectId: deploymentId, name, actions, files });
 }
 
 export function revokeApiKey(deploymentId: string, keyId: string) {
-  return platformMcp.call<{ keyId: string; revoked: boolean }>("api_keys_revoke", { deploymentId, keyId });
+  return platformMcp.call<{ keyId: string; revoked: boolean }>("api_keys_revoke", { projectId: deploymentId, keyId });
 }
 
 export class HostedDatabaseClient implements DatabaseAdminHost {
@@ -234,7 +237,7 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
 
   /** The database as the one export carries it: project_export, then only its database download. */
   async exportDatabase() {
-    const exported = await platformMcp.call<{ downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId: this.deploymentId });
+    const exported = await platformMcp.call<{ downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: this.deploymentId });
     try {
       return await platformMcp.download(exported.downloads.database);
     } finally {
@@ -244,7 +247,7 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
 
   private async request<T = unknown>(payload: Record<string, unknown>): Promise<T> {
     const { operation, ...input } = payload;
-    return platformMcp.call<T>("database_execute", { deploymentId: this.deploymentId, operation, input });
+    return platformMcp.call<T>("database_execute", { projectId: this.deploymentId, operation, input });
   }
 }
 
@@ -256,12 +259,12 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
 export type MaintenanceState = { maintenance: boolean; since: number | null; unreadable: boolean; installation: string | null };
 
 export function readMaintenance(deploymentId: string) {
-  return platformMcp.call<MaintenanceState>("maintenance_read", { deploymentId });
+  return platformMcp.call<MaintenanceState>("maintenance_read", { projectId: deploymentId });
 }
 
 /** Puts the app in maintenance or takes it out, and answers with the state the Kernel kept. */
 export function setMaintenance(deploymentId: string, on: boolean) {
-  return platformMcp.call<MaintenanceState>("maintenance_set", { deploymentId, on });
+  return platformMcp.call<MaintenanceState>("maintenance_set", { projectId: deploymentId, on });
 }
 
 /**
@@ -272,10 +275,10 @@ export function setMaintenance(deploymentId: string, on: boolean) {
 export type ContactEmailState = { deploymentId: string; contactEmail: string | null; ownerNotices: string[] };
 
 export function readContactEmail(deploymentId: string) {
-  return platformMcp.call<ContactEmailState>("contact_email_read", { deploymentId });
+  return platformMcp.call<ContactEmailState>("contact_email_read", { projectId: deploymentId });
 }
 
 /** Sets the app's contact email in konae.json, or clears it with null, and answers with what the Kernel kept. */
 export function setContactEmail(deploymentId: string, email: string | null) {
-  return platformMcp.call<ContactEmailState>("contact_email_set", { deploymentId, email });
+  return platformMcp.call<ContactEmailState>("contact_email_set", { projectId: deploymentId, email });
 }

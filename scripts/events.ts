@@ -55,10 +55,10 @@ export type ReadRecord = (range: { from: string; to: string }) => Promise<Source
 export function deploymentRecord(client: Pick<McpClient, "call">, deploymentId: string): ReadRecord {
   return async (range) => {
     const [summary, calls, notices, signals] = await Promise.all([
-      client.call<UsageSummary>("usage_summary", { deploymentId, ...range }),
-      client.call<{ calls: Call[] }>("calls_read", { deploymentId }),
-      client.call<{ notices: Notice[] }>("notices_read", { deploymentId }),
-      client.call<{ signals: Signal[] }>("signals_read", { deploymentId }),
+      client.call<UsageSummary>("usage_summary", { projectId: deploymentId, ...range }),
+      client.call<{ calls: Call[] }>("calls_read", { projectId: deploymentId }),
+      client.call<{ notices: Notice[] }>("notices_read", { projectId: deploymentId }),
+      client.call<{ signals: Signal[] }>("signals_read", { projectId: deploymentId }),
     ]);
     return { summary, calls: calls.calls, notices: notices.notices, signals: signals.signals };
   };
