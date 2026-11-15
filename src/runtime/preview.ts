@@ -195,13 +195,7 @@ function rewritePreviewAssets(document: string, assets: Map<string, string>, sty
       next = next.replace(/(^|\s)(srcset)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
         const quote = quoted[0] === '"' || quoted[0] === "'" ? quoted[0] : "";
         const value = quote ? quoted.slice(1, -1) : quoted;
-        if (/^\s*data:/i.test(value)) return attribute;
-        const updated = value.split(",").map((candidate: string) => {
-          const match = /^(\s*)(\S+)([\s\S]*)$/.exec(candidate);
-          if (!match) return candidate;
-          const target = previewAsset(match[2], "index.html", assets);
-          return target ? `${match[1]}${target}${match[3]}` : candidate;
-        }).join(",");
+        const updated = rewriteSrcset(value, (raw) => previewAsset(raw, "index.html", assets));
         return `${prefix}${key}${separator}${quote}${updated}${quote}`;
       });
     }
@@ -221,6 +215,29 @@ function readAttribute(attributes: string, name: string): string | undefined {
 
 function resolveReferenceOrNull(raw: string, from: string): string | null {
   try { return resolveReference(raw, from); } catch { return null; }
+}
+
+function rewriteSrcset(value: string, asset: (raw: string) => string | null): string {
+  let output = "";
+  let cursor = 0;
+  while (cursor < value.length) {
+    const prefix = /^[\s,]*/.exec(value.slice(cursor))?.[0] ?? "";
+    output += prefix;
+    cursor += prefix.length;
+    if (cursor === value.length) break;
+    const start = cursor;
+    while (cursor < value.length && !/\s/.test(value[cursor])) cursor += 1;
+    const token = value.slice(start, cursor);
+    const trailing = /,+$/.exec(token)?.[0] ?? "";
+    const raw = trailing ? token.slice(0, -trailing.length) : token;
+    output += asset(raw) ?? raw;
+    output += trailing;
+    if (trailing) continue;
+    const descriptorStart = cursor;
+    while (cursor < value.length && value[cursor] !== ",") cursor += 1;
+    output += value.slice(descriptorStart, cursor);
+  }
+  return output;
 }
 
 function previewAsset(raw: string, from: string, assets: Map<string, string>): string | null {

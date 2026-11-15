@@ -82,14 +82,15 @@ describe("preview document", () => {
       ...project,
       files: {
         ...project.files,
-        "index.html": '<img src="/images/a%20mark.png?v=1#logo"><img srcset="images/a%20mark.png 1x, https://cdn.example/a.png 2x"><link rel="icon" href="/images/a%20mark.png"><p>/images/a%20mark.png</p><script>const text="/images/a%20mark.png"</script>',
+        "index.html": '<img src="/images/a%20mark.png?v=1#logo"><img srcset="images/a%20mark.png 1x, https://cdn.example/a.png 2x"><img srcset="data:image/png;base64,AAAA 1x, /images/a%20mark.png 2x"><link rel="icon" href="/images/a%20mark.png"><p>/images/a%20mark.png</p><script>const text="/images/a%20mark.png"</script>',
         "styles.css": '.hero{background-image:url("images/a%20mark.png?theme=dark#x")}.external{background:url(https://cdn.example/bg.png)}',
         "public/images/a mark.png": encodeBase64(png),
       },
       encodings: { "public/images/a mark.png": "base64" },
     };
     const document = createPreviewDocument(source);
-    expect(document.split(data).length - 1).toBe(4);
+    expect(document.split(data).length - 1).toBe(5);
+    expect(document).toContain(`srcset="data:image/png;base64,AAAA 1x, ${data} 2x"`);
     expect(document).toContain('<p>/images/a%20mark.png</p>');
     expect(document).toContain('const text="/images/a%20mark.png"');
     expect(document).toContain("https://cdn.example/bg.png");
