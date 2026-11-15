@@ -1035,6 +1035,17 @@ describe("authenticated MCP", () => {
       await expect(alice.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
     }
 
+    const unboundBytes = new TextEncoder().encode("full-owner upload without a project");
+    const unbound = await alice.upload(unboundBytes);
+    const unboundPath = path.join(root, "transfers", unbound.transferId);
+    const before = await alice.call("transfer_status", { transferId: unbound.transferId });
+    await expect(scoped.cancel(unbound.transferId)).rejects.toThrow("outside this token's grants");
+    await expect(alice.call("transfer_status", { transferId: unbound.transferId })).resolves.toEqual(before);
+    expect(new Uint8Array(await readFile(unboundPath))).toEqual(unboundBytes);
+    await expect(alice.cancel(unbound.transferId)).resolves.toMatchObject({ ok: true });
+    await expect(alice.call("transfer_status", { transferId: unbound.transferId })).rejects.toThrow("not found or expired");
+    expect(await Bun.file(unboundPath).exists()).toBe(false);
+
     const elsewhere = await alice.upload(new TextEncoder().encode("another project's upload"), otherId);
     await expect(scoped.cancel(elsewhere.transferId)).rejects.toThrow("outside this token's grants");
     await expect(alice.call("transfer_status", { transferId: elsewhere.transferId })).resolves.toMatchObject({ complete: true });

@@ -560,9 +560,9 @@ async fn cleanup_release_uploads(state: &Konae, owner: &Owner, principal: &str, 
     Ok(())
 }
 
-fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, transfer_id: &str) -> Result<Option<String>> {
+fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, transfer_id: &str) -> Result<(Option<String>, bool)> {
     if let Some(upload) = super::transfers::owned_transfer(&state.kernel, principal, &json!({"transferId":transfer_id}))? {
-        return Ok(upload["projectId"].as_str().map(str::to_owned));
+        return Ok((upload["projectId"].as_str().map(str::to_owned), true));
     }
     let db = store(state)?;
     let mut query = db.prepare("SELECT project,transfer,sources,cleanup_uploads FROM plans WHERE owner=?1")?;
@@ -571,10 +571,10 @@ fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, tra
     for (project, release_id, sources_id, cleanup_json) in plans {
         let cleanup_ids: Vec<String> = serde_json::from_str(&cleanup_json)?;
         if release_id == transfer_id || sources_id.as_deref() == Some(transfer_id) || cleanup_ids.iter().any(|id| id == transfer_id) {
-            return Ok(Some(project));
+            return Ok((Some(project), false));
         }
     }
-    Ok(None)
+    Ok((None, false))
 }
 
 /// The files of `app/` that travel in an upload of their own beside a release.
@@ -1076,14 +1076,14 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             let export_transfer = package_transfer.clone().filter(|t| t["exportData"] == true);
             let component_upload = name == "transfer_write" && package_transfer.is_some_and(|t| t["component"].is_string());
             let mut result = if name.starts_with("transfer_") {
-                let project = if name == "transfer_begin" {
-                    arguments["projectId"].as_str().map(str::to_owned)
+                let (project, live_transfer) = if name == "transfer_begin" {
+                    (arguments["projectId"].as_str().map(str::to_owned), false)
                 } else if name == "transfer_cancel" {
-                    transfer_project_for_owner(&state, &owner, &principal, arguments["transferId"].as_str().unwrap_or_default()).ok().flatten()
+                    transfer_project_for_owner(&state, &owner, &principal, arguments["transferId"].as_str().unwrap_or_default()).unwrap_or((None, false))
                 } else {
-                    transfer(&state, &principal, &arguments)
+                    (transfer(&state, &principal, &arguments)
                         .ok()
-                        .and_then(|t| t["projectId"].as_str().map(str::to_owned))
+                        .and_then(|t| t["projectId"].as_str().map(str::to_owned)), false)
                 };
                 let scope = if export_transfer.is_some() && name != "transfer_cancel" {
                     "export_data"
@@ -1110,6 +1110,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 let permission = if name == "transfer_cancel" {
                     match project.as_deref() {
                         Some(id) => owner.require(held(&["read", "publish", "write", "export_data"]), Some(id)),
+                        None if live_transfer => owner.require(held(&["read", "publish", "write", "export_data"]), None),
                         // An unknown or already-consumed ID has no resource to
                         // access. Require one cancellation-capable scope, while
                         // using a retained plan mapping above when one exists.
