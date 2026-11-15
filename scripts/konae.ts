@@ -448,6 +448,16 @@ async function capsulePaths(root: string, prefix = ""): Promise<string[]> {
   return result;
 }
 
+async function appDirectories(root: string, prefix = ""): Promise<string[]> {
+  const result: string[] = [];
+  for (const entry of await readdir(path.join(appDir(root), prefix), { withFileTypes: true })) {
+    if (skippedName(entry.name) || !entry.isDirectory()) continue;
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    result.push(relative, ...await appDirectories(root, relative));
+  }
+  return result;
+}
+
 /** Reads konae.json. */
 export async function readSettings(root: string): Promise<AppSettings> {
   try { return await json<AppSettings>(path.join(root, SETTINGS_FILE)); }
@@ -610,12 +620,14 @@ export async function publishLocal(root: string, config: Config, token: string, 
   const client = new McpClient(endpoint(config.url), { token });
   const wanted = manifestSignupPolicy(config.project.manifest);
   // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
-  const { signupPolicy: _, ...manifest } = config.project.manifest;
+  const { signupPolicy: _, runtime: _runtime, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
   const prepared = await buildLocal(root);
-  const sourcePayload = prepared.source.encodings && Object.keys(prepared.source.encodings).length
-    ? { files: prepared.source.files, encodings: prepared.source.encodings }
-    : { files: prepared.source.files };
+  const sourcePayload = {
+    files: prepared.source.files,
+    ...(prepared.source.encodings && Object.keys(prepared.source.encodings).length ? { encodings: prepared.source.encodings } : {}),
+    directories: await appDirectories(root),
+  };
   checkSourceFiles(sourcePayload);
   checkArtifact(prepared.artifact);
   const identity = { id: project.id, name: project.name, slug: project.slug, manifest: project.manifest };

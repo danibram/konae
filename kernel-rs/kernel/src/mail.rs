@@ -1818,6 +1818,7 @@ mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: Some("owner@example.test".into()),
+            released_schema: String::new(),
         }
     }
 

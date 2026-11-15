@@ -89,7 +89,3 @@ pub fn record(root: &Path, id: &str) -> PathBuf {
 pub fn backups(root: &Path, id: &str) -> PathBuf {
     private(root, id).join("backups")
 }
-
-/// In `.konae/`: the editor's name, slug, manifest and folders of the saved
-/// sources in `app/`.
-pub const SOURCES_METADATA: &str = "sources.json";

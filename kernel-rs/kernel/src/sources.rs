@@ -2,7 +2,7 @@
 //!
 //! The editor sends and receives one JSON document, `{ id, name, slug,
 //! files, encodings, directories, manifest, updatedAt }`. Its files become
-//! the files of `app/`, and the rest goes to `.konae/sources.json`. A file
+//! the files of `app/`, and its editable settings go to `konae.json`. A file
 //! whose bytes are UTF-8 is its text. Any other file, such as an image, is
 //! base64, and `encodings` names it with the value `base64`, as a Build
 //! Artifact does. A save writes the new files beside `app/` and then puts
@@ -10,7 +10,9 @@
 //! a mix. Callers hold the project lock.
 
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -107,11 +109,12 @@ pub fn decode_document(source: &Value) -> Result<Files> {
     decode(&files, &encodings).map_err(anyhow::Error::msg)
 }
 
-/// Writes `source` into the app `id`'s `app/` and its metadata into `.konae/`.
+/// Writes source files into `app/` and their editable settings into `konae.json`.
 pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
     let files = decode_document(source)?;
-    let private = layout::private(root, id);
-    tokio::fs::create_dir_all(&private).await?;
+    let name = source["name"].as_str().context("Source name is missing.")?.to_owned();
+    let slug = source["slug"].as_str().context("Source slug is missing.")?.to_owned();
+    let mut settings = crate::Settings::read(root, id)?;
     let metadata = json!({
         "name": source["name"], "slug": source["slug"], "manifest": source["manifest"],
         "directories": source["directories"], "updatedAt": source["updatedAt"],
@@ -121,6 +124,53 @@ pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
         staged.discard().await;
         return Err(error_value);
     }
+    let record_path = layout::record(root, id);
+    let previous_record = match tokio::fs::read(&record_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => { staged.put_back().await; return Err(error.into()); }
+    };
+    if let Some(bytes) = previous_record.as_ref() {
+        let mut installed: crate::Installed = match serde_json::from_slice(bytes) {
+            Ok(installed) => installed,
+            Err(error) => { staged.put_back().await; return Err(error.into()); }
+        };
+        if installed.released.is_none() {
+            let mut released_manifest = settings.manifest.clone();
+            if let Some(object) = released_manifest.as_object_mut() { object.remove("runtime"); }
+            let prior_actions = tokio::fs::read_to_string(staged.retired.join("actions.json")).await.unwrap_or_else(|_| installed.actions.clone());
+            let prior_schema = tokio::fs::read_to_string(staged.retired.join("schema.sql")).await.unwrap_or_default();
+            installed.released = Some(settings.released.clone().unwrap_or(crate::ReleasedSettings {
+                name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
+                signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
+                contact_email: settings.contact_email.clone(), manifest: released_manifest,
+                actions: prior_actions, schema_sql: prior_schema, source_digest: installed.source_digest.clone(), released_at: installed.released_at,
+            }));
+            settings.released = installed.released.clone();
+            let installed_bytes = match serde_json::to_vec_pretty(&installed) {
+                Ok(bytes) => bytes,
+                Err(error) => { staged.put_back().await; return Err(error.into()); }
+            };
+            if let Err(error) = crate::write_atomic(&record_path, &installed_bytes).await {
+                staged.put_back().await;
+                return Err(error.into());
+            }
+        }
+        if settings.released.is_none() { settings.released = installed.released.clone(); }
+    }
+    settings.name = name;
+    settings.slug = slug;
+    settings.updated_at = source["updatedAt"].as_u64().unwrap_or(settings.updated_at);
+    let mut manifest = source["manifest"].clone();
+    settings.visibility = manifest["visibility"].as_str().unwrap_or(&settings.visibility).to_owned();
+    if let Some(object) = manifest.as_object_mut() { object.remove("visibility"); object.remove("runtime"); }
+    settings.manifest = manifest;
+    if let Err(error_value) = settings.write(root).await {
+        if let Some(bytes) = previous_record { let _ = crate::write_atomic(&record_path, &bytes).await; }
+        staged.put_back().await;
+        return Err(error_value);
+    }
+    let _ = tokio::fs::remove_file(layout::private(root, id).join("sources.json")).await;
     staged.finish().await;
     Ok(())
 }
@@ -131,9 +181,7 @@ pub struct StagedRelease {
     app: PathBuf,
     staged: PathBuf,
     retired: PathBuf,
-    metadata: PathBuf,
-    staged_metadata: PathBuf,
-    retired_metadata: PathBuf,
+    legacy_metadata: PathBuf,
 }
 
 /// Stages every release's sources so app/ and dist/ describe the same build.
@@ -146,15 +194,8 @@ pub async fn stage_release(root: &Path, id: &str, files: &Files, source_metadata
         return Err(error_value.into());
     }
     let nonce = Uuid::new_v4().simple().to_string();
-    let metadata = private.join(layout::SOURCES_METADATA);
-    let staged_metadata = private.join(format!("sources-{nonce}.json"));
-    if let Err(error_value) = crate::write_atomic(&staged_metadata, &serde_json::to_vec_pretty(source_metadata)?).await {
-        let _ = tokio::fs::remove_dir_all(&staged).await;
-        return Err(error_value.into());
-    }
     let retired = private.join(format!("app-retired-{nonce}"));
-    let retired_metadata = private.join(format!("sources-retired-{nonce}.json"));
-    Ok(StagedRelease { app: layout::sources(root, id), staged, retired, metadata, staged_metadata, retired_metadata })
+    Ok(StagedRelease { app: layout::sources(root, id), staged, retired, legacy_metadata: private.join("sources.json") })
 }
 
 impl StagedRelease {
@@ -171,38 +212,11 @@ impl StagedRelease {
             }
             return Err(error_value.into());
         }
-        let had_metadata = match tokio::fs::try_exists(&self.metadata).await {
-            Ok(had) => had,
-            Err(error_value) => {
-                let _ = tokio::fs::remove_dir_all(&self.app).await;
-                if had { let _ = tokio::fs::rename(&self.retired, &self.app).await; }
-                return Err(error_value.into());
-            }
-        };
-        if had_metadata {
-            if let Err(error_value) = tokio::fs::rename(&self.metadata, &self.retired_metadata).await {
-                let _ = tokio::fs::remove_dir_all(&self.app).await;
-                if had { let _ = tokio::fs::rename(&self.retired, &self.app).await; }
-                return Err(error_value.into());
-            }
-        }
-        if let Err(error_value) = tokio::fs::rename(&self.staged_metadata, &self.metadata).await {
-            let _ = tokio::fs::remove_dir_all(&self.app).await;
-            if had { let _ = tokio::fs::rename(&self.retired, &self.app).await; }
-            if had_metadata { let _ = tokio::fs::rename(&self.retired_metadata, &self.metadata).await; }
-            return Err(error_value.into());
-        }
         Ok(())
     }
 
     /// Puts the old `app/` back after a later step of the release failed.
     pub async fn put_back(self) {
-        let _ = tokio::fs::remove_file(&self.metadata).await;
-        if tokio::fs::try_exists(&self.retired_metadata).await.unwrap_or(false) {
-            if let Err(error_value) = tokio::fs::rename(&self.retired_metadata, &self.metadata).await {
-                eprintln!("Could not put back {} after a failed release: {error_value}", self.metadata.display());
-            }
-        }
         if let Err(error_value) = tokio::fs::rename(&self.app, &self.staged).await {
             eprintln!("Could not move the sources of a failed release out of {}: {error_value}", self.app.display());
             return;
@@ -218,14 +232,12 @@ impl StagedRelease {
     /// Removes the old `app/` once the release serves.
     pub async fn finish(self) {
         let _ = tokio::fs::remove_dir_all(&self.retired).await;
-        let _ = tokio::fs::remove_file(&self.retired_metadata).await;
-        let _ = tokio::fs::remove_file(&self.staged_metadata).await;
+        let _ = tokio::fs::remove_file(&self.legacy_metadata).await;
     }
 
     /// Removes the staged files of a release that never swapped.
     pub async fn discard(self) {
         let _ = tokio::fs::remove_dir_all(&self.staged).await;
-        let _ = tokio::fs::remove_file(&self.staged_metadata).await;
     }
 }
 
@@ -303,12 +315,15 @@ pub async fn digest_folder(app: &Path) -> Result<String> {
 /// The document has `encodings` only when a file is not UTF-8, so sources
 /// that are all text read back as they were saved.
 pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
-    let metadata = match tokio::fs::read(layout::private(root, id).join(layout::SOURCES_METADATA)).await {
-        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    let app = layout::sources(root, id);
+    if !tokio::fs::try_exists(&app).await? { return Ok(None); }
+    let settings = crate::Settings::read(root, id)?;
+    let legacy_path = layout::private(root, id).join("sources.json");
+    let metadata = match tokio::fs::read(legacy_path).await {
+        Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes).context("Saved source metadata is malformed.")?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let app = layout::sources(root, id);
     let mut files = Map::new();
     let mut encodings = Map::new();
     for (relative, path) in walk(&app).await? {
@@ -322,9 +337,18 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
         };
         files.insert(relative, Value::String(contents));
     }
+    anyhow::ensure!(!files.is_empty(), "app/ has no readable source files.");
+    let mut manifest = settings.manifest.clone();
+    if let Some(object) = manifest.as_object_mut() { object.insert("visibility".into(), Value::String(settings.visibility.clone())); }
+    let mut directories = metadata.as_ref().and_then(|value| value["directories"].as_array()).cloned().unwrap_or_default();
+    collect_empty_directories(&app, &app, &mut directories).await?;
+    directories.sort_by_key(|value| value.as_str().unwrap_or_default().to_owned());
+    directories.dedup();
     let mut source = json!({
-        "id": id, "name": metadata["name"], "slug": metadata["slug"], "files": files,
-        "directories": metadata["directories"], "manifest": metadata["manifest"], "updatedAt": metadata["updatedAt"],
+        "id": id, "name": metadata.as_ref().and_then(|m| m["name"].as_str()).unwrap_or(&settings.name),
+        "slug": metadata.as_ref().and_then(|m| m["slug"].as_str()).unwrap_or(&settings.slug), "files": files,
+        "directories": directories, "manifest": metadata.as_ref().and_then(|m| m.get("manifest")).unwrap_or(&manifest),
+        "updatedAt": metadata.as_ref().and_then(|m| m["updatedAt"].as_u64()).unwrap_or(settings.updated_at),
     });
     if !encodings.is_empty() {
         source["encodings"] = Value::Object(encodings);
@@ -334,27 +358,42 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
 
 /// Reads the saved source metadata without walking `app/` or opening its files.
 pub async fn read_metadata(root: &Path, id: &str) -> Result<Option<Value>> {
-    let path = layout::private(root, id).join(layout::SOURCES_METADATA);
-    match tokio::fs::read(path).await {
-        Ok(bytes) => {
-            let metadata: Value = serde_json::from_slice(&bytes)?;
-            Ok(Some(json!({
-                "id": id,
-                "name": metadata["name"],
-                "slug": metadata["slug"],
-                "manifest": metadata["manifest"],
-                "directories": metadata["directories"],
-                "updatedAt": metadata["updatedAt"],
-            })))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+    if !tokio::fs::try_exists(layout::sources(root, id)).await? { return Ok(None); }
+    let settings = crate::Settings::read(root, id)?;
+    let path = layout::private(root, id).join("sources.json");
+    let legacy = match tokio::fs::read(path).await { Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes).context("Saved source metadata is malformed.")?), Err(error) if error.kind() == std::io::ErrorKind::NotFound => None, Err(error) => return Err(error.into()) };
+    let mut manifest = settings.manifest.clone();
+    if let Some(object) = manifest.as_object_mut() { object.insert("visibility".into(), Value::String(settings.visibility.clone())); }
+    Ok(Some(json!({ "id": id, "name": legacy.as_ref().and_then(|m| m["name"].as_str()).unwrap_or(&settings.name), "slug": legacy.as_ref().and_then(|m| m["slug"].as_str()).unwrap_or(&settings.slug), "manifest": legacy.as_ref().and_then(|m| m.get("manifest")).unwrap_or(&manifest), "directories": legacy.as_ref().and_then(|m| m.get("directories")).cloned().unwrap_or(json!([])), "updatedAt": legacy.as_ref().and_then(|m| m["updatedAt"].as_u64()).unwrap_or(settings.updated_at) })))
+}
+
+fn collect_empty_directories<'a>(root: &'a Path, at: &'a Path, out: &'a mut Vec<Value>) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+  Box::pin(async move {
+    let mut entries = tokio::fs::read_dir(at).await?;
+    let mut occupied = false;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "node_modules" { occupied = true; continue; }
+        if entry.file_type().await?.is_dir() {
+            occupied = true;
+            if !collect_empty_directories(root, &entry.path(), out).await? {
+                out.push(Value::String(entry.path().strip_prefix(root)?.to_string_lossy().into_owned()));
+            }
+        } else { occupied = true; }
     }
+    Ok(occupied)
+  })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn setup_settings(root: &Path, id: &str, source: &Value) {
+        tokio::fs::create_dir_all(layout::folder(root, id)).await.unwrap();
+        crate::Settings::new(id, source["name"].as_str().unwrap(), source["slug"].as_str().unwrap(), &source["manifest"]).write(root).await.unwrap();
+    }
 
     #[tokio::test]
     async fn the_digest_matches_every_case_the_editor_runs() {
@@ -386,8 +425,9 @@ mod tests {
         let source = json!({
             "id": "app_a", "name": "A", "slug": "a",
             "files": {"index.html": "<main></main>", "src/main.ts": "console.log(1)", "actions.json": "{}"},
-            "directories": ["public"], "manifest": {"version": 1}, "updatedAt": 5,
+            "directories": ["public"], "manifest": {"version": 1, "visibility":"private"}, "updatedAt": 5,
         });
+        setup_settings(&root, "app_a", &source).await;
         write(&root, "app_a", &source).await.unwrap();
         assert_eq!(std::fs::read_to_string(layout::sources(&root, "app_a").join("src/main.ts")).unwrap(), "console.log(1)");
         assert!(layout::sources(&root, "app_a").join("public").is_dir());
@@ -410,8 +450,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-source-metadata-{}", Uuid::new_v4()));
         let source = json!({
             "id":"app_a", "name":"A", "slug":"a", "files":{"image.png":"AA=="},
-            "encodings":{"image.png":"base64"}, "directories":[], "manifest":{"version":1}, "updatedAt":5
+            "encodings":{"image.png":"base64"}, "directories":[], "manifest":{"version":1,"visibility":"private"}, "updatedAt":5
         });
+        setup_settings(&root, "app_a", &source).await;
         write(&root, "app_a", &source).await.unwrap();
         tokio::fs::remove_file(layout::sources(&root, "app_a").join("image.png")).await.unwrap();
         let metadata = read_metadata(&root, "app_a").await.unwrap().unwrap();
@@ -419,6 +460,116 @@ mod tests {
         assert_eq!(metadata["name"], "A");
         assert_eq!(metadata["manifest"]["version"], 1);
         assert!(read_metadata(&root, "missing").await.unwrap().is_none());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_editor_metadata_migrates_into_settings_without_replacing_app_files() {
+        let root = std::env::temp_dir().join(format!("konae-legacy-sources-{}", Uuid::new_v4()));
+        let id = "app_legacy";
+        let deployed = crate::Settings::new(id, "Deployed", "deployed", &json!({"version":1,"visibility":"private","routing":"pages"}));
+        deployed.write(&root).await.unwrap();
+        let app = layout::sources(&root, id);
+        tokio::fs::create_dir_all(app.join("empty/nested")).await.unwrap();
+        tokio::fs::write(app.join("index.html"), "folder edit").await.unwrap();
+        let legacy = json!({"name":"Saved draft","slug":"saved-draft","manifest":{"version":1,"visibility":"public","routing":"spa","fileAccess":"app-users"},"directories":["custom/empty"],"updatedAt":77});
+        let private = layout::private(&root, id);
+        tokio::fs::create_dir_all(&private).await.unwrap();
+        tokio::fs::write(private.join("sources.json"), serde_json::to_vec(&legacy).unwrap()).await.unwrap();
+        let opened = read(&root, id).await.unwrap().unwrap();
+        assert_eq!(opened["name"], "Saved draft");
+        assert_eq!(opened["files"]["index.html"], "folder edit");
+        assert_eq!(opened["manifest"]["routing"], "spa");
+        assert!(opened["directories"].as_array().unwrap().contains(&json!("custom/empty")));
+        let mut changed = opened.clone();
+        changed["files"]["index.html"] = json!("edited draft");
+        write(&root, id, &changed).await.unwrap();
+        assert!(!private.join("sources.json").exists());
+        assert_eq!(read(&root, id).await.unwrap().unwrap()["files"]["index.html"], "edited draft");
+        let settings = crate::Settings::read(&root, id).unwrap();
+        assert_eq!(settings.name, "Saved draft");
+        assert_eq!(settings.visibility, "public");
+        assert_eq!(settings.manifest["routing"], "spa");
+        assert!(app.join("empty/nested").is_dir());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_v08_folder_without_editor_metadata_reads_at_revision_zero() {
+        let root = std::env::temp_dir().join(format!("konae-v08-sources-{}", Uuid::new_v4()));
+        let id = "app_v08";
+        crate::Settings::new(id, "Folder app", "folder-app", &json!({"version":1,"visibility":"public"})).write(&root).await.unwrap();
+        let app = layout::sources(&root, id);
+        tokio::fs::create_dir_all(app.join("public")).await.unwrap();
+        tokio::fs::write(app.join("index.html"), "<main>old format</main>").await.unwrap();
+        tokio::fs::write(app.join("public/logo.png"), [0x89, 0x50, 0xff]).await.unwrap();
+        let source = read(&root, id).await.unwrap().unwrap();
+        assert_eq!(source["updatedAt"], 0);
+        assert_eq!(source["files"]["index.html"], "<main>old format</main>");
+        assert_eq!(decode_document(&source).unwrap()["public/logo.png"], vec![0x89, 0x50, 0xff]);
+        assert!(read_metadata(&root, id).await.unwrap().is_some());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn saving_ahead_sources_keeps_the_released_rules_after_reload() {
+        let root = std::env::temp_dir().join(format!("konae-released-settings-{}", Uuid::new_v4()));
+        let id = "app_release";
+        let settings = crate::Settings::new(id, "Live app", "live-app", &json!({"version":1,"visibility":"private","fileAccess":"app-users"}));
+        settings.write(&root).await.unwrap();
+        let app = layout::sources(&root, id);
+        tokio::fs::create_dir_all(&app).await.unwrap();
+        tokio::fs::write(app.join("actions.json"), "old actions").await.unwrap();
+        tokio::fs::write(app.join("schema.sql"), "CREATE TABLE live(id INTEGER);").await.unwrap();
+        let mut deployment = settings.deployment(crate::Installed {
+            hostname: "live-app.localhost".into(), created_at: 10, released_at: Some(20), source_digest: Some("old-digest".into()),
+            actions: "old actions".into(), artifact_version: "v-old".into(), released: None,
+        }, "http://localhost");
+        deployment.released_schema = "CREATE TABLE live(id INTEGER);".into();
+        crate::write_record_for_test(&root, &deployment);
+        let draft = json!({
+            "id":id,"name":"Draft app","slug":"draft-app","files":{"actions.json":"new actions","schema.sql":"CREATE TABLE draft(id INTEGER);","index.html":"<main>draft</main>"},
+            "directories":[],"manifest":{"version":1,"visibility":"public","routing":"spa"},"updatedAt":30
+        });
+        write(&root, id, &draft).await.unwrap();
+        let running = crate::load_deployments(&root, "http://localhost").await.unwrap().remove("live-app.localhost").unwrap();
+        assert_eq!(running.project_name, "Live app");
+        assert_eq!(running.manifest["visibility"], "private");
+        assert_eq!(running.manifest["fileAccess"], "app-users");
+        assert_eq!(running.actions, "old actions");
+        assert_eq!(running.released_schema, "CREATE TABLE live(id INTEGER);");
+        let saved_settings = crate::Settings::read(&root, id).unwrap();
+        assert_eq!(saved_settings.name, "Draft app");
+        assert_eq!(saved_settings.visibility, "public");
+        assert_eq!(saved_settings.released.as_ref().unwrap().source_digest.as_deref(), Some("old-digest"));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_save_leaves_app_settings_and_installed_record_unchanged() {
+        let root = std::env::temp_dir().join(format!("konae-refused-source-save-{}", Uuid::new_v4()));
+        let id = "app_save_failure";
+        let settings = crate::Settings::new(id, "Live", "live", &json!({"version":1,"visibility":"public"}));
+        settings.write(&root).await.unwrap();
+        let initial = json!({"id":id,"name":"Live","slug":"live","files":{"index.html":"old"},"directories":[],"manifest":{"version":1,"visibility":"public"},"updatedAt":1});
+        write(&root, id, &initial).await.unwrap();
+        let installed = crate::Installed { hostname:"live.localhost".into(), created_at:1, released_at:Some(2), source_digest:Some("old".into()), actions:"old actions".into(), artifact_version:"v1".into(), released:None };
+        let deployment = settings.deployment(installed, "http://localhost");
+        crate::write_record_for_test(&root, &deployment);
+        let app = layout::sources(&root, id);
+        let settings_path = layout::settings(&root, id);
+        let record_path = layout::record(&root, id);
+        let before_app = std::fs::read(app.join("index.html")).unwrap();
+        let before_settings = std::fs::read(&settings_path).unwrap();
+        let before_record = std::fs::read(&record_path).unwrap();
+
+        let mut refused = initial.clone();
+        refused.as_object_mut().unwrap().remove("name");
+        refused["files"]["index.html"] = json!("must not replace the live source");
+        assert!(write(&root, id, &refused).await.is_err());
+        assert_eq!(std::fs::read(app.join("index.html")).unwrap(), before_app);
+        assert_eq!(std::fs::read(&settings_path).unwrap(), before_settings);
+        assert_eq!(std::fs::read(&record_path).unwrap(), before_record);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -431,8 +582,9 @@ mod tests {
             "id": "app_a", "name": "A", "slug": "a",
             "files": {"index.html": "<main></main>", "public/logo.png": base64::engine::general_purpose::STANDARD.encode(png), "public/site.webmanifest": with_bom},
             "encodings": {"public/logo.png": "base64"},
-            "directories": [], "manifest": {"version": 1}, "updatedAt": 5,
+            "directories": [], "manifest": {"version": 1, "visibility":"private"}, "updatedAt": 5,
         });
+        setup_settings(&root, "app_a", &source).await;
         write(&root, "app_a", &source).await.unwrap();
         assert_eq!(std::fs::read(layout::sources(&root, "app_a").join("public/logo.png")).unwrap(), png);
         assert_eq!(std::fs::read_to_string(layout::sources(&root, "app_a").join("public/site.webmanifest")).unwrap(), with_bom, "a byte order mark stays");
@@ -492,7 +644,8 @@ mod tests {
     #[tokio::test]
     async fn saved_sources_and_the_digest_skip_dot_entries_and_node_modules() {
         let root = std::env::temp_dir().join(format!("konae-sources-{}", Uuid::new_v4()));
-        let source = json!({"id": "app_a", "name": "A", "slug": "a", "files": {"index.html": "<main></main>"}, "directories": [], "manifest": {"version": 1}, "updatedAt": 5});
+        let source = json!({"id": "app_a", "name": "A", "slug": "a", "files": {"index.html": "<main></main>"}, "directories": [], "manifest": {"version": 1, "visibility":"private"}, "updatedAt": 5});
+        setup_settings(&root, "app_a", &source).await;
         write(&root, "app_a", &source).await.unwrap();
         let app = layout::sources(&root, "app_a");
         std::fs::write(app.join(".DS_Store"), [0u8, 0, 0, 1, 0xff]).unwrap();

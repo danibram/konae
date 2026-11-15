@@ -459,24 +459,7 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     anyhow::ensure!(directories.len() <= super::sources::MAX_FILES && directories.iter().all(|entry| entry.as_str().is_some_and(super::sources::holds)), "Invalid project directories.");
     let manifest = &source["manifest"];
     artifact::check_file_access(manifest).map_err(anyhow::Error::msg)?;
-    let actions = manifest["runtime"]["database"]["actions"].as_array();
-    anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or(""))
-        && manifest["runtime"]["database"]["mode"] == "declared-actions"
-        && ["optional", "required"].contains(&manifest["runtime"]["auth"]["mode"].as_str().unwrap_or(""))
-        && manifest["runtime"]["files"]["access"] == "deployment"
-        && actions.is_some_and(|list| list.len() <= kernel::action_shape::MAX_ACTIONS && list.iter().all(|action|
-            string(&action["name"], 120) && ["query", "mutation", "signal", "call"].contains(&action["kind"].as_str().unwrap_or(""))
-            && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest. Send {{ version: 1, visibility, runtime: {{ database: {{ mode: \"declared-actions\", actions: [{{ name, kind, access }}] }}, auth: {{ mode: \"optional\" or \"required\" }}, files: {{ access: \"deployment\" }} }} }} with up to {} actions.", kernel::action_shape::MAX_ACTIONS);
-    let mut names = std::collections::HashSet::new();
-    for action in actions.unwrap() {
-        let name = action["name"].as_str().unwrap();
-        let parts: Vec<_> = name.split('.').collect();
-        anyhow::ensure!(parts.len() >= 2 && parts.iter().all(|part| {
-            let mut chars = part.bytes();
-            chars.next().is_some_and(|c| c.is_ascii_lowercase())
-                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        }) && names.insert(name), "Invalid project action name.");
-    }
+    anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or("")), "Invalid project manifest. Send version 1 and visibility \"public\" or \"private\".");
     Ok(())
 }
 
@@ -543,6 +526,8 @@ struct ReleaseSources {
     files: HashMap<String, String>,
     #[serde(default)]
     encodings: HashMap<String, String>,
+    #[serde(default)]
+    directories: Vec<String>,
 }
 
 /// The release `release_plan` checks and `release_apply` installs. The
@@ -573,6 +558,7 @@ async fn release_input(state: &Konae, principal: &str, transfer_id: &str, source
         let sources: ReleaseSources = serde_json::from_slice(&bytes).map_err(|error_value| anyhow::anyhow!("The sources upload must be the JSON {{ files, encodings }}: {error_value}"))?;
         input.project.files = sources.files;
         input.project.encodings = sources.encodings;
+        input.project.directories = sources.directories;
     }
     Ok(input)
 }
@@ -1498,8 +1484,7 @@ async fn admin_call(
             let update: Value = serde_json::from_slice(&bytes)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             owned_project(state, owner, id, "write")?;
-            let db = store(state)?;
-            let current: u64 = db.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
+            let current: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
             let source = if update["format"] == "delta" {
                 let saved = super::sources::read(&state.data_root, id).await?.ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
@@ -1509,8 +1494,15 @@ async fn admin_call(
             };
             validate_sources(&source, id)?;
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
+            let previous = super::sources::read(&state.data_root, id).await?.ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
             super::sources::write(&state.data_root, id, &source).await?;
-            db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision])?;
+            let update_result = store(state)?.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]);
+            if let Err(error) = update_result {
+                if let Err(restore) = super::sources::write(&state.data_root, id, &previous).await {
+                    anyhow::bail!("Saving sources failed: {error}. Restoring the saved sources failed: {restore:#}");
+                }
+                return Err(error.into());
+            }
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
@@ -2296,6 +2288,7 @@ mod tests {
             "id":"app_legacy", "name":"Legacy", "slug":"legacy", "files":{"index.html":"<main>old source</main>"},
             "directories":[], "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}}, "updatedAt":1
         });
+        crate::Settings::new("app_legacy", "Legacy", "legacy", &source["manifest"]).write(&state.data_root).await.unwrap();
         super::super::sources::write(&state.data_root, "app_legacy", &source).await.unwrap();
         let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into()], projects:vec![], session:false };
         let answer = admin_call(&state, &owner, "owner:o", "project_sources_read", json!({"projectId":"app_legacy"})).await.unwrap();
@@ -2319,6 +2312,7 @@ mod tests {
             "id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"old source"},"directories":[],
             "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}},"updatedAt":1
         });
+        crate::Settings::new(id, "Import failure", "import-failure", &old_source["manifest"]).write(&state.data_root).await.unwrap();
         super::super::sources::write(&state.data_root, id, &old_source).await.unwrap();
         let database = kernel::database_path(&state.kernel, id);
         tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
@@ -2527,6 +2521,7 @@ mod tests {
             db.execute("UPDATE projects SET sources=1 WHERE id=?1", [draft]).unwrap();
         }
         let saved = json!({"id": draft, "name": "Draft", "slug": "draft", "files": {"index.html": "<main></main>"}, "directories": [], "manifest": {}, "updatedAt": 1});
+        crate::Settings::new(draft, "Draft", "draft", &saved["manifest"]).write(&state.data_root).await.unwrap();
         crate::sources::write(&state.data_root, draft, &saved).await.unwrap();
         let call = |name: &'static str, a: Value| { let (state, owner) = (state.clone(), owner.clone()); async move { admin_call(&state, &owner, "owner:o", name, a).await } };
 
@@ -2784,7 +2779,7 @@ mod tests {
         let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
         assert_eq!(refusal(&|s| s["manifest"]["fileAccess"] = json!("public")), artifact::FILE_ACCESS_MESSAGE);
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
-        assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
+        assert!(refusal(&|s| s["manifest"] = json!({"version":1})).starts_with("Invalid project manifest. Send version 1 and visibility"));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
         let big = |s: &mut Value| {
             s["files"]["public/big.bin"] = json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0xffu8; super::super::sources::MAX_BYTES + 1]));
@@ -2800,6 +2795,47 @@ mod tests {
         with_png(&mut binary);
         assert!(validate_sources(&binary, "app_a").is_ok());
         assert_eq!(refusal(&|s| { with_png(s); s["encodings"] = json!({"public/logo.png": 1}); }), "The sources' encodings must map each path to \"base64\".");
+    }
+
+    #[tokio::test]
+    async fn a_failed_source_revision_write_restores_sources_and_keeps_revision() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+
+        let root = std::env::temp_dir().join(format!("konae-refused-save-revision-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let id = "app_save_revision";
+        store(&state).unwrap().execute(
+            "INSERT INTO projects(id,owner,body,revision,sources) VALUES(?1,'o',?2,1,4)",
+            params![id, json!({"id":id,"name":"Saved"}).to_string()],
+        ).unwrap();
+        store(&state).unwrap().execute_batch("CREATE TRIGGER fail_source_revision BEFORE UPDATE OF sources ON projects BEGIN SELECT RAISE(ABORT, 'injected source revision failure'); END;").unwrap();
+        let saved = json!({"id":id,"name":"Saved","slug":"saved","files":{"index.html":"before"},"directories":[],"manifest":{"version":1,"visibility":"private"},"updatedAt":1});
+        crate::Settings::new(id, "Saved", "saved", &saved["manifest"]).write(&state.data_root).await.unwrap();
+        crate::sources::write(&state.data_root, id, &saved).await.unwrap();
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into()], projects:vec![], session:false };
+        let app_path = crate::layout::sources(&state.data_root, id).join("index.html");
+        let settings_path = crate::layout::settings(&state.data_root, id);
+        let before_app = tokio::fs::read(&app_path).await.unwrap();
+        let before_settings = tokio::fs::read(&settings_path).await.unwrap();
+        let mut next = saved.clone();
+        next["files"]["index.html"] = json!("must roll back");
+        next["updatedAt"] = json!(2);
+        let bytes = serde_json::to_vec(&next).unwrap();
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
+        let principal = "owner:o";
+        let transfer = transfer_call(&state.kernel, principal, "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+        let transfer_id = transfer["transferId"].as_str().unwrap();
+        transfer_call(&state.kernel, principal, "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+        transfer_call(&state.kernel, principal, "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+        let error = admin_call(&state, &owner, principal, "project_sources_save", json!({"projectId":id,"transferId":transfer_id,"expectedRevision":4})).await.unwrap_err();
+        assert!(error.to_string().contains("injected source revision failure"), "{error:#}");
+        let revision: u64 = store(&state).unwrap().query_row("SELECT sources FROM projects WHERE id=?1", [id], |row| row.get(0)).unwrap();
+        assert_eq!(revision, 4);
+        assert_eq!(tokio::fs::read(app_path).await.unwrap(), before_app);
+        assert_eq!(tokio::fs::read(settings_path).await.unwrap(), before_settings);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

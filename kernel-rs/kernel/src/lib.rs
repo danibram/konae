@@ -153,6 +153,8 @@ pub struct Deployment {
     /// it with the owner's email; the Kernel keeps no record of owners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
+    #[serde(skip, default)]
+    pub released_schema: String,
 }
 
 /// `konae.json`: the app's settings, the part of an app an export hands over
@@ -172,6 +174,10 @@ pub struct Settings {
     pub kernel: String,
     /// The Capsule manifest without its visibility: routing, connects and the declared actions.
     pub manifest: Value,
+    #[serde(default)]
+    pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<ReleasedSettings>,
 }
 
 /// `.konae/deployment.json`: what this installation adds to the settings to
@@ -191,6 +197,43 @@ pub struct Installed {
     /// The `actions.json` of the release `dist/` holds.
     pub actions: String,
     pub artifact_version: String,
+    /// Access settings of the artifact currently served. Editable konae.json
+    /// may describe a draft that has not been released yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<ReleasedSettings>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleasedSettings {
+    pub name: String,
+    pub slug: String,
+    pub visibility: String,
+    pub signup_policy: SignupPolicy,
+    pub sign_in_methods: Vec<SignInMethod>,
+    pub contact_email: Option<String>,
+    pub manifest: Value,
+    #[serde(default)]
+    pub actions: String,
+    #[serde(default)]
+    pub schema_sql: String,
+    #[serde(default)]
+    pub source_digest: Option<String>,
+    #[serde(default)]
+    pub released_at: Option<u64>,
+}
+
+fn released_settings(deployment: &Deployment) -> ReleasedSettings {
+    let mut manifest = deployment.manifest.clone();
+    if let Some(object) = manifest.as_object_mut() { object.remove("visibility"); }
+    ReleasedSettings {
+        name: deployment.project_name.clone(), slug: deployment.slug.clone(),
+        visibility: deployment.manifest["visibility"].as_str().unwrap_or("private").into(),
+        signup_policy: deployment.signup_policy.clone(), sign_in_methods: deployment.sign_in_methods.clone(),
+        contact_email: deployment.contact_email.clone(), manifest,
+        actions: deployment.actions.clone(), schema_sql: deployment.released_schema.clone(),
+        source_digest: deployment.source_digest.clone(), released_at: Some(deployment.released_at),
+    }
 }
 
 pub const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -201,6 +244,7 @@ impl Settings {
         let mut manifest = manifest.clone();
         if let Some(object) = manifest.as_object_mut() {
             object.remove("visibility");
+            object.remove("runtime");
         }
         Self {
             id: id.into(),
@@ -212,16 +256,20 @@ impl Settings {
             contact_email: None,
             kernel: KERNEL_VERSION.into(),
             manifest,
+            updated_at: 0,
+            released: None,
         }
     }
 
     pub fn of(deployment: &Deployment) -> Self {
-        Self {
+        let mut settings = Self {
             signup_policy: deployment.signup_policy.clone(),
             sign_in_methods: deployment.sign_in_methods.clone(),
             contact_email: deployment.contact_email.clone(),
             ..Self::new(&deployment.id, &deployment.project_name, &deployment.slug, &deployment.manifest)
-        }
+        };
+        settings.released = Some(released_settings(deployment));
+        settings
     }
 
     pub fn read(root: &Path, id: &str) -> Result<Self> {
@@ -236,26 +284,34 @@ impl Settings {
     }
 
     pub fn deployment(self, installed: Installed, public_origin: &str) -> Deployment {
-        let mut manifest = self.manifest;
+        let released = installed.released.clone().or_else(|| self.released.clone());
+        let mut manifest = released.as_ref().map(|r| r.manifest.clone()).unwrap_or(self.manifest);
+        let name = released.as_ref().map(|r| r.name.clone()).unwrap_or(self.name);
+        let slug = released.as_ref().map(|r| r.slug.clone()).unwrap_or(self.slug);
+        let visibility = released.as_ref().map(|r| r.visibility.clone()).unwrap_or(self.visibility);
+        let signup_policy = released.as_ref().map(|r| r.signup_policy.clone()).unwrap_or(self.signup_policy);
+        let sign_in_methods = released.as_ref().map(|r| r.sign_in_methods.clone()).unwrap_or(self.sign_in_methods);
+        let contact_email = released.as_ref().and_then(|r| r.contact_email.clone()).or(self.contact_email);
         if let Some(object) = manifest.as_object_mut() {
-            object.insert("visibility".into(), Value::String(self.visibility));
+            object.insert("visibility".into(), Value::String(visibility));
         }
         Deployment {
             project_id: self.id.clone(),
             id: self.id,
-            project_name: self.name,
-            slug: self.slug,
+            project_name: name,
+            slug,
             url: deployment_url(public_origin, &installed.hostname),
             created_at: installed.created_at,
-            released_at: installed.released_at.unwrap_or(installed.created_at),
-            source_digest: installed.source_digest,
+            released_at: installed.released_at.or_else(|| released.as_ref().and_then(|r| r.released_at)).unwrap_or(installed.created_at),
+            source_digest: installed.source_digest.or_else(|| released.as_ref().and_then(|r| r.source_digest.clone())),
             manifest,
             hostname: installed.hostname,
             actions: installed.actions,
             artifact_version: installed.artifact_version,
-            signup_policy: self.signup_policy,
-            sign_in_methods: self.sign_in_methods,
-            contact_email: self.contact_email,
+            signup_policy,
+            sign_in_methods,
+            contact_email,
+            released_schema: released.as_ref().map(|r| r.schema_sql.clone()).unwrap_or_default(),
         }
     }
 }
@@ -431,6 +487,8 @@ pub struct ProjectInput {
     pub files: HashMap<String, String>,
     #[serde(default)]
     pub encodings: HashMap<String, String>,
+    #[serde(default)]
+    pub directories: Vec<String>,
     pub manifest: Value,
 }
 
@@ -887,6 +945,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         .as_ref()
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
+    let released_schema = input.project.files.get("schema.sql").cloned().unwrap_or_default();
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
@@ -915,6 +974,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
         },
         contact_email: input.contact_email.clone(),
+        released_schema,
     };
     let data = layout::data(&state.data_root, &id);
     if let Err(error_value) = tokio::fs::create_dir_all(&data).await {
@@ -998,7 +1058,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     // These sources travel with this build, so app/ and dist/ change together.
     let source_metadata = json!({
         "name": deployment.project_name, "slug": deployment.slug, "manifest": deployment.manifest,
-        "directories": [], "updatedAt": now_ms(),
+        "directories": input.project.directories, "updatedAt": now_ms(),
     });
     let staged_sources = match sources::stage_release(&state.data_root, &id, &release_sources, &source_metadata).await {
         Ok(staged) => staged,
@@ -3381,7 +3441,9 @@ pub fn safe_relative_path(path: &str) -> bool {
 /// Writes the app's settings to `konae.json` and the installation's part to
 /// `.konae/deployment.json`.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
-    Settings::of(deployment).write(&state.data_root).await?;
+    let mut settings = Settings::of(deployment);
+    if let Ok(previous) = Settings::read(&state.data_root, &deployment.id) { settings.updated_at = previous.updated_at; }
+    settings.write(&state.data_root).await?;
     let installed = Installed {
         hostname: deployment.hostname.clone(),
         created_at: deployment.created_at,
@@ -3389,6 +3451,7 @@ pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Re
         source_digest: deployment.source_digest.clone(),
         actions: deployment.actions.clone(),
         artifact_version: deployment.artifact_version.clone(),
+        released: settings.released.clone(),
     };
     tokio::fs::create_dir_all(layout::private(&state.data_root, &deployment.id)).await?;
     write_atomic(&layout::record(&state.data_root, &deployment.id), &serde_json::to_vec_pretty(&installed)?).await?;
@@ -3405,6 +3468,7 @@ pub fn write_record_for_test(root: &Path, deployment: &Deployment) {
         source_digest: deployment.source_digest.clone(),
         actions: deployment.actions.clone(),
         artifact_version: deployment.artifact_version.clone(),
+        released: Some(released_settings(deployment)),
     };
     std::fs::create_dir_all(layout::private(root, &deployment.id)).unwrap();
     std::fs::write(layout::settings(root, &deployment.id), serde_json::to_vec(&Settings::of(deployment)).unwrap()).unwrap();
@@ -4078,6 +4142,7 @@ pub mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
+            released_schema: String::new(),
         };
         tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))
             .await
@@ -4927,7 +4992,7 @@ pub mod tests {
     #[test]
     fn a_private_apps_files_stay_out_of_shared_caches() {
         let deployment = Settings::new("app", "App", "app", &json!({"visibility": "private"}))
-            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, released_at: None, source_digest: None, actions: "{}".into(), artifact_version: "v1".into() }, "http://localhost");
+            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, released_at: None, source_digest: None, actions: "{}".into(), artifact_version: "v1".into(), released: None }, "http://localhost");
         assert_eq!(ArtifactCache::of(&deployment).control(), "private, no-cache");
     }
 
@@ -5165,7 +5230,7 @@ pub mod tests {
             let live = state.deployments.read().await.values().next().cloned().unwrap();
             let app = crate::layout::sources(&root, &id);
             let first_actions = std::fs::read(app.join("actions.json")).unwrap();
-            let first_source_metadata = std::fs::read(crate::layout::private(&root, &id).join(crate::layout::SOURCES_METADATA)).unwrap();
+            assert!(!crate::layout::private(&root, &id).join("sources.json").exists());
 
             // The next release drops tags, confirmed as release_plan would confirm it.
             let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
@@ -5198,7 +5263,7 @@ pub mod tests {
             assert_eq!(read_artifact(&state, &serving, "index.html").await.unwrap(), b"<p>one</p>", "{step}");
             assert_eq!(std::fs::read(crate::layout::dist(&root, &id).join("index.html")).unwrap(), b"<p>one</p>", "{step}: dist/ is the first release's");
             assert_eq!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the first release's");
-            assert_eq!(std::fs::read(crate::layout::private(&root, &id).join(crate::layout::SOURCES_METADATA)).unwrap(), first_source_metadata, "{step}: source metadata is the first release's");
+            assert!(!crate::layout::private(&root, &id).join("sources.json").exists(), "{step}: the release does not write editor metadata outside app/");
             assert!(staged_or_retired(&root, &id).is_empty(), "{step}: no staged files stay");
             let staged_sources: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())

@@ -809,6 +809,7 @@ mod tests {
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
                 sign_in_methods: default_sign_in_methods(),
                 contact_email: None,
+                released_schema: String::new(),
             };
             std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);

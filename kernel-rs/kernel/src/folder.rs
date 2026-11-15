@@ -5,9 +5,9 @@
 //! record it serves the app by. An exported folder carries no record, so
 //! this is how it starts to answer.
 //!
-//! While it serves, the Kernel follows each app's `konae.json`, so an
-//! operator command that changes the Signup Policy takes effect without a
-//! restart.
+//! While it serves, the Kernel follows each app's `konae.json` for changes
+//! to the applied Signup Policy. Editable source settings stay drafts until
+//! a successful release.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -60,28 +60,34 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
     let sources = layout::sources(root, id);
-    let actions = tokio::fs::read_to_string(sources.join("actions.json"))
-        .await
-        .with_context(|| format!("apps/{id}/app/actions.json is missing"))?;
-    let schema = tokio::fs::read_to_string(sources.join("schema.sql")).await.unwrap_or_default();
+    let released = settings.released.as_ref();
+    let actions = if let Some(released) = released { released.actions.clone() } else {
+        tokio::fs::read_to_string(sources.join("actions.json")).await
+            .with_context(|| format!("apps/{id}/app/actions.json is missing"))?
+    };
+    let schema = if let Some(released) = released { released.schema_sql.clone() } else {
+        tokio::fs::read_to_string(sources.join("schema.sql")).await.unwrap_or_default()
+    };
+    let mut manifest = released.map(|record| record.manifest.clone()).unwrap_or_else(|| settings.manifest.clone());
+    let visibility = released.map(|record| record.visibility.as_str()).unwrap_or(&settings.visibility);
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert("visibility".into(), Value::String(visibility.to_owned()));
+    }
     let dist = read_dist(&layout::dist(root, id))
         .with_context(|| format!("apps/{id}/dist/ is missing or not readable. Build it with npm run build"))?;
     let artifact_version = format!("v{}", &version_of(&dist)[..32]);
-    let mut manifest = settings.manifest.clone();
-    if let Some(object) = manifest.as_object_mut() {
-        object.insert("visibility".into(), Value::String(settings.visibility.clone()));
-    }
     let encode = |bytes: &Vec<u8>| base64::engine::general_purpose::STANDARD.encode(bytes);
     let input = DeployInput {
         project: ProjectInput {
             id: id.to_owned(),
-            name: settings.name.clone(),
-            slug: settings.slug.clone(),
+            name: released.map(|record| record.name.clone()).unwrap_or_else(|| settings.name.clone()),
+            slug: released.map(|record| record.slug.clone()).unwrap_or_else(|| settings.slug.clone()),
             files: HashMap::from([("actions.json".to_owned(), actions.clone()), ("schema.sql".to_owned(), schema.clone())]),
             encodings: HashMap::new(),
+            directories: Vec::new(),
             manifest,
         },
-        visibility: settings.visibility.clone(),
+        visibility: visibility.to_owned(),
         artifact: BuildArtifact {
             version: 1,
             entrypoint: "index.html".into(),
@@ -91,7 +97,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         initial_signup_policy: None,
         initial_sign_in_methods: None,
         initial_package: None,
-        contact_email: settings.contact_email.clone(),
+        contact_email: released.and_then(|record| record.contact_email.clone()).or_else(|| settings.contact_email.clone()),
         schema_confirmation: None,
     };
     // The checks of a release: paths, size, routing, connects, the actions and their secrets.
@@ -122,12 +128,22 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     // A start that finds the files the record names keeps their release time
     // and the digest of the sources they were built from, so app/ edits not
     // yet built into dist/ still read as changes.
-    let (released_at, source_digest) = match existing.as_ref() {
+    let (released_at, source_digest) = if let Some(released) = settings.released.as_ref().filter(|record| record.source_digest.is_some()) {
+        (released.released_at.unwrap_or(now_ms()), released.source_digest.clone())
+    } else { match existing.as_ref() {
         Some(deployment) if deployment.artifact_version == artifact_version && deployment.source_digest.is_some() => (deployment.released_at, deployment.source_digest.clone()),
         Some(deployment) if deployment.artifact_version == artifact_version => (deployment.released_at, Some(crate::sources::digest_folder(&sources).await?)),
         _ => (now_ms(), Some(crate::sources::digest_folder(&sources).await?)),
-    };
-    let deployment = settings.deployment(Installed { hostname, created_at, released_at: Some(released_at), source_digest, actions, artifact_version }, &state.public_origin);
+    }};
+    let released = existing.as_ref().map(|current| crate::ReleasedSettings { name: current.project_name.clone(), slug: current.slug.clone(), visibility: current.manifest["visibility"].as_str().unwrap_or("private").into(), signup_policy: current.signup_policy.clone(), sign_in_methods: current.sign_in_methods.clone(), contact_email: current.contact_email.clone(), actions: current.actions.clone(), schema_sql: current.released_schema.clone(), source_digest: current.source_digest.clone(), released_at: Some(current.released_at), manifest: { let mut value = current.manifest.clone(); if let Some(object) = value.as_object_mut() { object.remove("visibility"); } value } })
+        .or_else(|| settings.released.clone())
+        .or_else(|| Some(crate::ReleasedSettings {
+            name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
+            signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
+            contact_email: settings.contact_email.clone(), manifest: settings.manifest.clone(), actions: actions.clone(),
+            schema_sql: schema.clone(), source_digest: source_digest.clone(), released_at: Some(released_at),
+        }));
+    let deployment = settings.deployment(Installed { hostname, created_at, released_at: Some(released_at), source_digest, actions, artifact_version, released }, &state.public_origin);
     open_auth(state, &deployment)?;
     persist_deployment(state, &deployment).await?;
     let mut deployments = state.deployments.write().await;
@@ -229,6 +245,7 @@ async fn reload(state: &AppState, deployment: Deployment) {
         source_digest: current.source_digest.clone(),
         actions: current.actions.clone(),
         artifact_version: current.artifact_version.clone(),
+        released: Some(crate::ReleasedSettings { name: current.project_name.clone(), slug: current.slug.clone(), visibility: current.manifest["visibility"].as_str().unwrap_or("private").into(), signup_policy: current.signup_policy.clone(), sign_in_methods: current.sign_in_methods.clone(), contact_email: current.contact_email.clone(), actions: current.actions.clone(), schema_sql: current.released_schema.clone(), source_digest: current.source_digest.clone(), released_at: Some(current.released_at), manifest: { let mut value = current.manifest.clone(); if let Some(object) = value.as_object_mut() { object.remove("visibility"); } value } }),
     };
     let updated = settings.deployment(installed, &state.public_origin);
     deployments.insert(updated.hostname.clone(), updated);
@@ -275,6 +292,39 @@ mod tests {
         assert_eq!((again.hostname.as_str(), again.artifact_version.as_str()), (first.hostname.as_str(), first.artifact_version.as_str()));
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn restarting_a_source_ahead_folder_keeps_the_applied_access_actions_and_rows() {
+        let root = scratch();
+        let first_state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let first = open(&first_state, "notes_app", None).await.unwrap();
+        Connection::open(layout::database(&root, "notes_app")).unwrap()
+            .execute("INSERT INTO notes(body) VALUES('applied row')", []).unwrap();
+
+        let mut draft = crate::sources::read(&root, "notes_app").await.unwrap().unwrap();
+        draft["name"] = serde_json::json!("Draft name");
+        draft["slug"] = serde_json::json!("draft-name");
+        draft["files"]["actions.json"] = serde_json::json!(r#"{"version":1,"actions":{"draft.only":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}"#);
+        draft["files"]["schema.sql"] = serde_json::json!("CREATE TABLE draft_only(id INTEGER PRIMARY KEY);");
+        draft["manifest"]["visibility"] = serde_json::json!("private");
+        draft["manifest"]["fileAccess"] = serde_json::json!("app-users");
+        crate::sources::write(&root, "notes_app", &draft).await.unwrap();
+
+        let restarted_state = AppState::for_test(&root);
+        let running = open(&restarted_state, "notes_app", None).await.unwrap();
+        assert_eq!(running.project_name, "Notes");
+        assert_eq!(running.slug, "notes");
+        assert_eq!(running.manifest["visibility"], "public");
+        assert!(running.manifest.get("fileAccess").is_none());
+        assert_eq!(running.actions, ACTIONS);
+        assert!(running.released_schema.contains("CREATE TABLE IF NOT EXISTS notes"));
+        let row: String = Connection::open(layout::database(&root, "notes_app")).unwrap()
+            .query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(row, "applied row");
+        assert_eq!(running.artifact_version, first.artifact_version);
         std::fs::remove_dir_all(root).unwrap();
     }
 
