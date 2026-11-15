@@ -45,7 +45,7 @@ afterAll(async () => {
 
 /** The exported folder as the editor's Export writes it: project_export's folder and data, and the files every app folder carries. */
 async function exportFolder(kernel: Kernel, deploymentId: string): Promise<FolderEntry[]> {
-  const exported = await kernel.owner.call<{ manifest: { contents: { name: PackageComponentName }[] }; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId });
+  const exported = await kernel.owner.call<{ manifest: { contents: { name: PackageComponentName }[] }; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: deploymentId });
   try {
     const entries = readTar(await kernel.owner.download(exported.folder));
     for (const { name } of exported.manifest.contents) entries.push(...dataEntries(name, await kernel.owner.download(exported.downloads[name])));
@@ -251,7 +251,7 @@ test("a legacy export starts on a fresh Kernel without its record, and distingui
   }));
 
   // The first ordinary operation must capture the old applied schema and artifact before export.
-  await konae.owner.call("signup_policy_set", { deploymentId: id, mode: "closed" });
+  await konae.owner.call("signup_policy_set", { projectId: id, mode: "closed" });
   const migratedSettings = JSON.parse(await readFile(settingsPath, "utf8"));
   expect(migratedSettings.released.schemaSql).toContain('CREATE TABLE IF NOT EXISTS "live notes"');
   expect(migratedSettings.released.schemaSql).toContain('CREATE INDEX IF NOT EXISTS "live notes by title"');

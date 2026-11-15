@@ -32,10 +32,10 @@ test("an app moves to a free name, its old name redirects there and stays its ow
   const { receipt: other } = await release(kernel.owner, payload("other_app", "other"), "other_app");
   expect(receipt.hostname).toBe("kamynando2.localhost");
 
-  await expect(kernel.owner.call("hostname_set", { deploymentId: receipt.id, name: "other" })).rejects.toThrow("other.localhost is another app's address on this installation. Choose another name.");
-  await expect(kernel.owner.call("hostname_set", { deploymentId: receipt.id, name: "my_app" })).rejects.toThrow("my_app is not a valid name.");
+  await expect(kernel.owner.call("hostname_set", { projectId: receipt.id, name: "other" })).rejects.toThrow("other.localhost is another app's address on this installation. Choose another name.");
+  await expect(kernel.owner.call("hostname_set", { projectId: receipt.id, name: "my_app" })).rejects.toThrow("my_app is not a valid name.");
 
-  const moved = await kernel.owner.call<{ hostname: string; url: string; changed: boolean; previousHostnames: string[] }>("hostname_set", { deploymentId: receipt.id, name: "kamynando" });
+  const moved = await kernel.owner.call<{ hostname: string; url: string; changed: boolean; previousHostnames: string[] }>("hostname_set", { projectId: receipt.id, name: "kamynando" });
   expect(moved).toMatchObject({ hostname: "kamynando.localhost", changed: true, previousHostnames: ["kamynando2.localhost"] });
   const inspected = await kernel.owner.call<{ deployment: { url: string; hostname: string } }>("project_inspect", { projectId: "move_app" });
   expect(inspected.deployment).toMatchObject({ hostname: "kamynando.localhost", url: moved.url });
@@ -48,7 +48,7 @@ test("an app moves to a free name, its old name redirects there and stays its ow
     expect(old.status).toBe(308);
     expect(old.headers.get("location")).toBe(`${moved.url}/_konae/invitation?token=abc`);
   }
-  await expect(kernel.owner.call("hostname_set", { deploymentId: other.id, name: "kamynando2" })).rejects.toThrow("kamynando2.localhost is another app's address on this installation.");
+  await expect(kernel.owner.call("hostname_set", { projectId: other.id, name: "kamynando2" })).rejects.toThrow("kamynando2.localhost is another app's address on this installation.");
 
   // A republish keeps the new name, and a restart keeps the redirect.
   await release(kernel.owner, payload("move_app", "kamynando2", "Again"), "move_app");

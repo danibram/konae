@@ -40,11 +40,11 @@ test("an owner puts an app in maintenance, where it serves its page, refuses wri
   });
   expect((await invoke("notes.add", { body: "before" })).status).toBe(200);
 
-  const paused = await kernel.owner.call<{ maintenance: boolean; since: number }>("maintenance_set", { deploymentId: receipt.id, on: true });
+  const paused = await kernel.owner.call<{ maintenance: boolean; since: number }>("maintenance_set", { projectId: receipt.id, on: true });
   expect(paused.maintenance).toBe(true);
   await kernel.stop();
   await kernel.start();
-  expect(await kernel.owner.call("maintenance_read", { deploymentId: receipt.id })).toEqual({ maintenance: true, since: paused.since, unreadable: false, installation: null });
+  expect(await kernel.owner.call("maintenance_read", { projectId: receipt.id })).toEqual({ maintenance: true, since: paused.since, unreadable: false, installation: null });
 
   const page = await appFetch(kernel, receipt.hostname, "/", { headers: { accept: "text/html" } });
   expect(page.status).toBe(503);
@@ -55,14 +55,14 @@ test("an owner puts an app in maintenance, where it serves its page, refuses wri
   expect(write.status).toBe(503);
   expect(await write.json()).toEqual({ error: "This app is in maintenance. It accepts no writes, signups, recovery, administrative changes or email until it comes out of maintenance.", maintenance: true });
 
-  await expect(kernel.owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" })).rejects.toThrow("This app is in maintenance.");
+  await expect(kernel.owner.call("signup_policy_set", { projectId: receipt.id, mode: "closed" })).rejects.toThrow("This app is in maintenance.");
   const inspected = await kernel.owner.call<{ deployment: { id: string } }>("project_inspect", { projectId: id });
   expect(inspected.deployment.id).toBe(receipt.id);
-  const rows = await kernel.owner.call<{ rows: { body: string }[] }>("database_execute", { deploymentId: receipt.id, operation: "browse", input: { tableName: "notes" } }).catch((error: Error) => error);
+  const rows = await kernel.owner.call<{ rows: { body: string }[] }>("database_execute", { projectId: receipt.id, operation: "browse", input: { tableName: "notes" } }).catch((error: Error) => error);
   expect(rows).not.toBeInstanceOf(Error);
 
   // Taking the app out is the one change a paused app takes, and it writes again.
-  expect((await kernel.owner.call<{ maintenance: boolean }>("maintenance_set", { deploymentId: receipt.id, on: false })).maintenance).toBe(false);
+  expect((await kernel.owner.call<{ maintenance: boolean }>("maintenance_set", { projectId: receipt.id, on: false })).maintenance).toBe(false);
   expect((await invoke("notes.add", { body: "after" })).status).toBe(200);
   expect((await appFetch(kernel, receipt.hostname, "/", { headers: { accept: "text/html" } })).status).toBe(200);
 }, 120_000);

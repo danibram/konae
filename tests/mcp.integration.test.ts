@@ -101,7 +101,7 @@ function signup(hostname: string, email: string) {
 
 /** project_export's manifest, with every download released. */
 async function exportApp(deploymentId: string) {
-  const exported = await alice.call<any>("project_export", { deploymentId });
+  const exported = await alice.call<any>("project_export", { projectId: deploymentId });
   for (const transfer of [exported.folder, ...Object.values<any>(exported.downloads)]) await alice.cancel(transfer.transferId).catch(() => {});
   return exported;
 }
@@ -668,7 +668,7 @@ describe("authenticated MCP", () => {
     try {
       for (const attempt of [
         () => alice.call("release_plan", { transferId: upload.transferId, observedSourcesRevision: before.sourcesRevision }),
-        () => alice.call("project_import", { deploymentId: id, replace: "sources", transferId: upload.transferId }),
+        () => alice.call("project_import", { projectId: id, replace: "sources", transferId: upload.transferId }),
       ]) {
         const refused = await attempt().then(() => null, (error) => error);
         expect(refused?.message).toStartWith("The sources cannot hold the path \"../evil.txt\". A path inside app/ is at most 240 bytes");
@@ -686,7 +686,7 @@ describe("authenticated MCP", () => {
   test("the account usage monitor isolates owners and paginates accessible projects", async () => {
     const receipt = (await release("monitor_owner_app")).receipt;
     const today = new Date().toISOString().slice(0, 10);
-    await expect(bob.call("usage_summary", { deploymentId: receipt.id, from: today, to: today })).rejects.toThrow("access denied");
+    await expect(bob.call("usage_summary", { projectId: receipt.id, from: today, to: today })).rejects.toThrow("access denied");
     const other = await bob.call<{ apps: { projectId: string }[] }>("usage_overview", { from: today, to: today });
     expect(other.apps.some((app) => app.projectId === "monitor_owner_app")).toBe(false);
     for (let index = 0; index < 52; index++) await alice.call("project_create", { projectId: `monitor_page_${String(index).padStart(2, "0")}`, name: `App ${index}` });
@@ -718,7 +718,7 @@ describe("authenticated MCP", () => {
     expect(await betaUser.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Beta private row" }]);
     await expect(betaWithAlphaCookie.call("actions_invoke", { name: "notes.list" })).rejects.toThrow("authentication-required");
     await expect(alphaUser.call("actions_invoke", { name: "notes.list", deploymentId: beta.id })).rejects.toThrow();
-    await expect(bob.call("database_execute", { deploymentId: alpha.id, operation: "inspect", input: {} })).rejects.toThrow("access denied");
+    await expect(bob.call("database_execute", { projectId: alpha.id, operation: "inspect", input: {} })).rejects.toThrow("access denied");
   });
 
   test("nullable action inputs reach SQL as null without relaxing required inputs", async () => {
@@ -779,7 +779,7 @@ describe("authenticated MCP", () => {
       const member = await appUser(source.hostname, "existing@app.test");
       await member.call("actions_invoke", { name: "notes.create", input: { title: `Kept ${mode}` } });
       const policy = { mode, allowlist: mode === "allowlist" ? ["allowed@app.test"] : [] };
-      await alice.call("signup_policy_set", { deploymentId: source.id, ...policy });
+      await alice.call("signup_policy_set", { projectId: source.id, ...policy });
       const exported = await exportApp(source.id);
       expect(exported.manifest.signupPolicy).toEqual(policy);
       expect(exported.manifest.visibility).toBe("public");
@@ -899,6 +899,68 @@ describe("authenticated MCP", () => {
     await expect(scoped.call("projects_list")).rejects.toThrow("Sign in");
   });
 
+  test("owner discovery, can maps and project grants match each credential scope", async () => {
+    const projectId = "owner_scope_proof";
+    const otherProjectId = "owner_scope_other";
+    await alice.call("project_create", { projectId, name: "Scope proof" });
+    await alice.call("project_create", { projectId: otherProjectId, name: "Other scope" });
+    const inspect = async (scope: string) => {
+      const { token } = await alice.call<{ token: string }>("token_create", { scopes: [scope], projectIds: [projectId], ttlSeconds: 60 });
+      const request = async (method: string, params?: object) => {
+        const response = await fetch(`${url}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) }) });
+        return response.json();
+      };
+      const discovered = await request("tools/list");
+      const session = await request("tools/call", { name: "session_inspect", arguments: {} });
+      return { tools: discovered.result.tools as { name: string; inputSchema: { properties?: Record<string, unknown>; required?: string[] } }[], can: session.result.structuredContent.result.can, projects: session.result.structuredContent.result.projectIds, request };
+    };
+    const read = await inspect("read");
+    const write = await inspect("write");
+    const publish = await inspect("publish");
+    const users = await inspect("manage_users");
+    const exportData = await inspect("export_data");
+    for (const value of [read, write, publish, users, exportData]) {
+      expect(value.projects).toEqual([projectId]);
+      for (const tool of value.tools) expect(tool.inputSchema.properties).not.toHaveProperty("deploymentId");
+    }
+    expect(read.can).toMatchObject({ read: true, write: false, publish: false, manage_users: false, export_data: false });
+    expect(write.can).toMatchObject({ read: false, write: true });
+    expect(publish.can).toMatchObject({ publish: true });
+    expect(users.can).toMatchObject({ manage_users: true });
+    expect(exportData.can).toMatchObject({ export_data: true });
+    expect(read.tools.map((tool) => tool.name)).toContain("project_inspect");
+    expect(read.tools.map((tool) => tool.name)).not.toContain("signup_policy_read");
+    expect(read.tools.map((tool) => tool.name)).not.toContain("usage_read");
+    expect(publish.tools.map((tool) => tool.name)).toContain("release_apply");
+    expect(users.tools.map((tool) => tool.name)).toContain("signup_policy_set");
+    expect(exportData.tools.map((tool) => tool.name)).toContain("project_export");
+    await expect(read.request("tools/call", { name: "project_inspect", arguments: { projectId: otherProjectId } })).resolves.toMatchObject({ result: { isError: true, content: [expect.objectContaining({ text: expect.stringContaining("outside this token's grants") })] } });
+    await expect(write.request("tools/call", { name: "project_create", arguments: { projectId: "new_from_scoped_token", name: "No grant" } })).resolves.toMatchObject({ result: { isError: true, content: [expect.objectContaining({ text: expect.stringContaining("outside this token's grants") })] } });
+  });
+
+  test("platform_describe derives runtime discovery, and a private Server Action needs its app session", async () => {
+    const { receipt } = await release("runtime_discovery_proof");
+    const described = await alice.call<{ runtimeEndpoint: string; runtimeTools: string[]; anonymousRuntimeTools: string[]; credentialScope: string }>("platform_describe");
+    expect(described.credentialScope).toContain("cannot create projects");
+    const credentials = await alice.call<{ projectScope: string }>("platform_guide", { topic: "credentials" });
+    expect(credentials.projectScope).toContain("cannot create a project");
+    const response = await fetch(`${url}${described.runtimeEndpoint}`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+    const runtimeTools = (await response.json()).result.tools.map((tool: { name: string }) => tool.name);
+    expect(described.anonymousRuntimeTools).toEqual(runtimeTools);
+    const member = await appUser(receipt.hostname, "runtime-discovery@app.test");
+    const signedInTools = (await member.listTools()).map((tool) => tool.name);
+    expect(described.runtimeTools).toEqual(signedInTools);
+    expect(described.runtimeTools).toContain("actions_invoke");
+
+    const { receipt: privateReceipt } = await release("private_action_session_proof", "private");
+    const visitor = runtimeClient(privateReceipt.hostname);
+    await expect(visitor.call("actions_invoke", { name: "notes.list" })).rejects.toThrow("Sign in to use Konae MCP.");
+    await alice.call("signup_policy_set", { projectId: privateReceipt.id, mode: "open" });
+    const privateMember = await appUser(privateReceipt.hostname, "private-session@app.test");
+    await privateMember.call("actions_invoke", { name: "notes.create", input: { title: "Session required" } });
+    expect(await privateMember.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Session required" }]);
+  });
+
   test("checks transfer ownership, offsets, retries, checksums and immutable completion", async () => {
     const bytes = new TextEncoder().encode("An upload that survives a retry");
     const transfer = await alice.call<{ transferId: string }>("transfer_begin", { size: bytes.length, sha256: await checksum(bytes) });
@@ -908,11 +970,40 @@ describe("authenticated MCP", () => {
     await expect(alice.call("transfer_write", { ...args, data: encodeBase64(new TextEncoder().encode("x")) })).rejects.toThrow("does not match");
     await alice.call("transfer_complete", { transferId: transfer.transferId });
     await expect(alice.call("transfer_write", args)).rejects.toThrow("immutable");
+    await bob.cancel(transfer.transferId);
+    expect(await alice.call("transfer_status", { transferId: transfer.transferId })).toMatchObject({ complete: true });
     await alice.cancel(transfer.transferId);
+    await alice.cancel(transfer.transferId);
+    await expect(alice.call("transfer_status", { transferId: transfer.transferId })).rejects.toThrow("not found or expired");
     const invalid = await alice.call<{ transferId: string }>("transfer_begin", { size: bytes.length, sha256: "0".repeat(64) });
     await alice.call("transfer_write", { ...args, transferId: invalid.transferId });
     await expect(alice.call("transfer_complete", { transferId: invalid.transferId })).rejects.toThrow("mismatch");
     await alice.cancel(invalid.transferId);
+  });
+
+  test("consumes release and source uploads after commit, keeps replay safe and frees more than eight releases", async () => {
+    const otherBytes = new TextEncoder().encode("another owner's active upload");
+    const otherUpload = await bob.upload(otherBytes);
+    for (let index = 0; index < 9; index++) {
+      const id = `consumed_release_${index}`;
+      await alice.call("project_create", { projectId: id, name: "Consumed release" });
+      const request = payload(id);
+      const source = { files: request.project.files, directories: [] };
+      request.project.files = {};
+      const sourcesUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(source)), id);
+      const releaseUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
+      const inspected = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: releaseUpload.transferId, sourcesTransferId: sourcesUpload.transferId, observedSourcesRevision: inspected.sourcesRevision });
+      const receipt = await alice.call("release_apply", { planId: plan.planId });
+      expect(await alice.call("release_apply", { planId: plan.planId })).toEqual(receipt);
+      for (const transferId of [sourcesUpload.transferId, releaseUpload.transferId]) {
+        await expect(alice.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
+        await expect(alice.cancel(transferId)).resolves.toMatchObject({ ok: true });
+      }
+    }
+    await expect(alice.call("transfer_status", { transferId: otherUpload.transferId })).rejects.toThrow("not found");
+    expect(await bob.call("transfer_status", { transferId: otherUpload.transferId })).toMatchObject({ complete: true });
+    await bob.cancel(otherUpload.transferId);
   });
 
   test("publishes, rejects stale plans, and returns the same receipt on retry", async () => {
@@ -945,6 +1036,7 @@ describe("authenticated MCP", () => {
       const refused = await alice.call("release_apply", { planId: plan.planId }).then(() => null, (error) => error);
       expect(refused?.refusal?.code).toBe("sources.revision-conflict");
       expect(refused?.message).toBe("Sources changed since revision 0. Run konae pull --dir <folder>, then publish again.");
+      expect(await alice.call("transfer_status", { transferId: upload.transferId })).toMatchObject({ complete: true });
       expect((await alice.call<any>("project_inspect", { projectId: id })).deployment).toBeNull();
       expect(await Bun.file(path.join(root, "apps", id, "app/index.html")).text()).toBe("<main>saved later</main>");
     } finally {
@@ -993,8 +1085,8 @@ describe("authenticated MCP", () => {
     await user.call("actions_invoke", { name: "notes.create", input: { title: "Only Alice" } });
     expect(await user.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Only Alice" }]);
     expect(await other.call("actions_invoke", { name: "notes.list" })).toEqual([]);
-    await expect(user.call("database_execute", { deploymentId: receipt.id, operation: "inspect" })).rejects.toThrow("Unknown tool");
-    await expect(bob.call("database_execute", { deploymentId: receipt.id, operation: "inspect" })).rejects.toThrow("access denied");
+    await expect(user.call("database_execute", { projectId: receipt.id, operation: "inspect" })).rejects.toThrow("Unknown tool");
+    await expect(bob.call("database_execute", { projectId: receipt.id, operation: "inspect" })).rejects.toThrow("access denied");
     const file = new TextEncoder().encode("Private attachment");
     const upload = await user.upload(file);
     const saved = await user.call<{ id: string; visibility: string; ownerId: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
@@ -1028,13 +1120,13 @@ describe("authenticated MCP", () => {
     await expect(user.call("files_delete", { fileId: shared.id })).rejects.toThrow("File not found.");
     expect((await fetch(`${url}/_konae/files/${shared.id}`, { headers: { host: receipt.hostname } })).status).toBe(404);
     expect((await user.call<Array<{ id: string }>>("files_list")).map((listed) => listed.id)).toEqual([saved.id]);
-    const exported = await alice.call<any>("project_export", { deploymentId: receipt.id });
+    const exported = await alice.call<any>("project_export", { projectId: receipt.id });
     try {
       expect(new TextDecoder().decode((await alice.download(exported.downloads.database)).slice(0, 15))).toBe("SQLite format 3");
     } finally {
       for (const transfer of [exported.folder, ...Object.values<any>(exported.downloads)]) await alice.cancel(transfer.transferId).catch(() => {});
     }
-    await expect(alice.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "ATTACH DATABASE '/tmp/other.sqlite' AS other;" } })).rejects.toThrow();
+    await expect(alice.call("database_execute", { projectId: receipt.id, operation: "sql", input: { sql: "ATTACH DATABASE '/tmp/other.sqlite' AS other;" } })).rejects.toThrow();
     await user.call("auth_logout");
     // The revoked cookie now reads as a signed-out visitor of this public app.
     expect(await user.call("auth_session")).toMatchObject({ role: "anonymous" });
@@ -1043,32 +1135,34 @@ describe("authenticated MCP", () => {
 
   test("the owner chooses who may create an account on a public app", async () => {
     const { receipt } = await release("signup_policy_proof");
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "open", allowlist: [], visibility: "public" });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "open", allowlist: [] }, manifest: { visibility: "public" } } });
     const member = await appUser(receipt.hostname, "first@app.test");
     expect(await loginPage(receipt.hostname)).toContain("/_konae/auth/signup");
 
-    await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" });
+    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "closed" });
+    expect(await alice.call<any>("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "closed" } } });
     expect((await signup(receipt.hostname, "late@app.test")).status).toBe(403);
     const closedPage = await loginPage(receipt.hostname);
     expect(closedPage).not.toContain("/_konae/auth/signup");
     expect(closedPage).not.toContain("Account creation is open");
 
-    const policy = await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["Carol@Example.test", "@Team.test"] });
+    const policy = await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["Carol@Example.test", "@Team.test"] });
     expect(policy).toMatchObject({ mode: "allowlist", allowlist: ["carol@example.test", "@team.test"] });
+    expect(await alice.call<any>("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist", allowlist: ["carol@example.test", "@team.test"] } } });
     expect((await signup(receipt.hostname, "carol@EXAMPLE.TEST")).status).toBe(200);
     expect((await signup(receipt.hostname, "anyone@team.test")).status).toBe(200);
     expect((await signup(receipt.hostname, "dave@example.test")).status).toBe(403);
     expect((await signup(receipt.hostname, "anyone@sub.team.test")).status).toBe(403);
-    await expect(alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["not an email"] })).rejects.toThrow("not an email address");
+    await expect(alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["not an email"] })).rejects.toThrow("not an email address");
 
-    await expect(member.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
-    await expect(member.call("signup_policy_read", { deploymentId: receipt.id })).rejects.toThrow("Unknown tool");
-    await expect(runtimeClient(receipt.hostname).call("signup_policy_set", { deploymentId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
-    await expect(bob.call("signup_policy_read", { deploymentId: receipt.id })).rejects.toThrow("access denied");
+    await expect(member.call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
+    await expect(member.call("project_inspect", { projectId: receipt.id })).rejects.toThrow("Unknown tool");
+    await expect(runtimeClient(receipt.hostname).call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
+    await expect(bob.call("project_inspect", { projectId: receipt.id })).rejects.toThrow("access denied");
     const reader = await alice.call<{ token: string }>("token_create", { scopes: ["read"], ttlSeconds: 60 });
     const scoped = new McpClient(`${url}/mcp`, { token: reader.token });
-    expect(await scoped.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "allowlist" });
-    await expect(scoped.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
+    expect(await scoped.call<any>("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist" } } });
+    await expect(scoped.call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
     // An app host never serves the owner MCP endpoint, so app cookies cannot reach owner tools.
     expect((await fetch(`${url}/mcp`, { method: "POST", headers: { host: receipt.hostname }, body: "{}" })).status).toBe(403);
   });
@@ -1094,29 +1188,29 @@ describe("authenticated MCP", () => {
 
     // publish may choose the policy of a first release, and the first request finds it.
     const receipt = await publishWith(publisher, { ...payload(id, "private"), initialSignupPolicy: { mode: "invitation", allowlist: [] } });
-    expect(await publisher.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "invitation", visibility: "private" });
+    expect(await publisher.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "invitation" }, manifest: { visibility: "private" } } });
     expect((await signup(receipt.hostname, "stranger@app.test")).status).toBe(403);
     const page = await (await fetch(`${url}/_konae/login`, { headers: { host: receipt.hostname } })).text();
     expect(page).toContain("Only invited people can create an account");
     expect(page).not.toContain("/_konae/auth/signup");
 
     // Without manage_users, publish changes who may join neither directly nor through a republish.
-    await expect(publisher.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
-    await expect(publisher.call("app_invitations_create", { deploymentId: receipt.id, emails: ["x@app.test"], idempotencyKey: "publisher-key" })).rejects.toThrow("Unknown tool");
+    await expect(publisher.call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
+    await expect(publisher.call("app_invitations_create", { projectId: receipt.id, emails: ["x@app.test"], idempotencyKey: "publisher-key" })).rejects.toThrow("Unknown tool");
     await expect(publishWith(publisher, { ...payload(id, "public"), initialSignupPolicy: { mode: "open", allowlist: [] } })).rejects.toThrow("first deployment");
     await publishWith(publisher, payload(id, "private"));
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "invitation" });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "invitation" } } });
     // A token from before manage_users existed does not gain it.
     const legacy = await grant(["read", "write", "publish"]);
-    await expect(legacy.call("app_users_list", { deploymentId: receipt.id })).rejects.toThrow("Unknown tool");
+    await expect(legacy.call("app_users_list", { projectId: receipt.id })).rejects.toThrow("Unknown tool");
 
     // A project-limited token cannot touch another project's users.
     const other = (await release("invitation_other")).receipt;
-    await expect(manager.call("app_users_list", { deploymentId: other.id })).rejects.toThrow("outside this token's grants");
-    await expect(manager.call("app_invitations_create", { deploymentId: other.id, emails: ["x@app.test"], idempotencyKey: "other-project" })).rejects.toThrow("outside this token's grants");
-    await expect(bob.call("app_users_list", { deploymentId: receipt.id })).rejects.toThrow("access denied");
+    await expect(manager.call("app_users_list", { projectId: other.id })).rejects.toThrow("outside this token's grants");
+    await expect(manager.call("app_invitations_create", { projectId: other.id, emails: ["x@app.test"], idempotencyKey: "other-project" })).rejects.toThrow("outside this token's grants");
+    await expect(bob.call("app_users_list", { projectId: receipt.id })).rejects.toThrow("access denied");
 
-    const request = { deploymentId: receipt.id, emails: ["Ana@App.test"], idempotencyKey: "invite-ana-0001" };
+    const request = { projectId: receipt.id, emails: ["Ana@App.test"], idempotencyKey: "invite-ana-0001" };
     const created = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
     const acceptUrl = (created.results[0] as { acceptUrl?: string }).acceptUrl;
     expect(created.results[0]).toMatchObject({ status: "invited", delivery: "local-mailbox" });
@@ -1147,12 +1241,12 @@ describe("authenticated MCP", () => {
     await member.call("actions_invoke", { name: "notes.create", input: { title: "Invited" } });
     expect((await post("/_konae/auth/accept", { token, password })).status).toBe(410);
 
-    const users = await manager.call<{ users: Array<{ userId: string; state: string; verified: boolean }> }>("app_users_list", { deploymentId: receipt.id });
+    const users = await manager.call<{ users: Array<{ userId: string; state: string; verified: boolean }> }>("app_users_list", { projectId: receipt.id });
     expect(users.users).toEqual([expect.objectContaining({ email: "ana@app.test", state: "active", verified: true })]);
-    expect((await manager.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { deploymentId: receipt.id })).invitations[0].status).toBe("accepted");
-    await manager.call("app_user_suspend", { deploymentId: receipt.id, userId: users.users[0].userId });
+    expect((await manager.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { projectId: receipt.id })).invitations[0].status).toBe("accepted");
+    await manager.call("app_user_suspend", { projectId: receipt.id, userId: users.users[0].userId });
     await expect(member.call("auth_session")).rejects.toThrow();
-    expect(await manager.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" })).toMatchObject({ mode: "closed", previousMode: "invitation" });
+    expect(await manager.call("signup_policy_set", { projectId: receipt.id, mode: "closed" })).toMatchObject({ mode: "closed", previousMode: "invitation" });
 
     const audit = new Database(path.join(root, "mcp.sqlite"));
     const rows = audit.query("SELECT tool, target, ok FROM audit WHERE tool LIKE 'app_%' AND target = ?1").all(receipt.id) as Array<{ tool: string; ok: number }>;
@@ -1178,7 +1272,7 @@ describe("authenticated MCP", () => {
     await expect(visitor.call("transfer_begin", { size: 1, sha256: "a".repeat(64) })).rejects.toThrow("authentication-required");
     await expect(visitor.upload(new TextEncoder().encode("anonymous upload"))).rejects.toThrow("authentication-required");
     await expect(visitor.call("auth_logout")).rejects.toThrow("authentication-required");
-    await expect(visitor.call("database_execute", { deploymentId: receipt.id, operation: "inspect" })).rejects.toThrow("Unknown tool");
+    await expect(visitor.call("database_execute", { projectId: receipt.id, operation: "inspect" })).rejects.toThrow("Unknown tool");
     const user = await appUser(receipt.hostname, "member@app.test");
     await user.call("actions_invoke", { name: "notes.create", input: { title: "Counted" } });
     expect(await visitor.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 1 }]);
@@ -1190,28 +1284,28 @@ describe("authenticated MCP", () => {
 
   test("private apps start closed and refuse anonymous visitors", async () => {
     const { receipt } = await release("private_proof", "private");
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "closed", visibility: "private" });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "closed" }, manifest: { visibility: "private" } } });
     expect((await signup(receipt.hostname, "visitor@app.test")).status).toBe(403);
     expect(await loginPage(receipt.hostname)).not.toContain("/_konae/auth/signup");
     const anonymous = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     expect(anonymous.status).toBe(401);
     await expect(runtimeClient(receipt.hostname).call("actions_invoke", { name: "notes.count" })).rejects.toThrow("Sign in");
-    await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["visitor@app.test"] });
+    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["visitor@app.test"] });
     const visitor = await appUser(receipt.hostname, "visitor@app.test");
     expect(await visitor.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 0 }]);
   });
 
   test("republishing a public app as private closes an open signup", async () => {
     const { receipt } = await release("visibility_flip_proof");
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "open", visibility: "public" });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "open" }, manifest: { visibility: "public" } } });
     await release("visibility_flip_proof", "private");
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "closed", visibility: "private" });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "closed" }, manifest: { visibility: "private" } } });
     expect((await signup(receipt.hostname, "stranger@app.test")).status).toBe(403);
   });
 
   test("signup answers the same for closed and unlisted addresses", async () => {
     const { receipt } = await release("signup_oracle_proof");
-    await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["listed@app.test"] });
+    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["listed@app.test"] });
     const attempt = async (email: string, pw: string) => {
       const response = await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password: pw }) });
       return { status: response.status, body: await response.json() };
@@ -1221,7 +1315,7 @@ describe("authenticated MCP", () => {
     expect(await attempt("unlisted@app.test", "x")).toEqual(listedWeak);
     const unlisted = await attempt("unlisted@app.test", password);
     expect(unlisted.status).toBe(403);
-    await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "closed" });
+    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "closed" });
     expect(await attempt("listed@app.test", password)).toEqual(unlisted);
   });
 
@@ -1329,16 +1423,16 @@ describe("authenticated MCP", () => {
 
   test("the signup policy survives a Kernel restart", async () => {
     const { receipt } = await release("restart_proof");
-    await alice.call("signup_policy_set", { deploymentId: receipt.id, mode: "allowlist", allowlist: ["@kept.test"] });
+    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["@kept.test"] });
     kernel.kill();
     await kernel.exited;
     await startKernel();
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "allowlist", allowlist: ["@kept.test"] });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist", allowlist: ["@kept.test"] } } });
     expect((await signup(receipt.hostname, "someone@other.test")).status).toBe(403);
     expect((await signup(receipt.hostname, "someone@kept.test")).status).toBe(200);
     // A redeploy keeps the owner's choice.
     await release("restart_proof");
-    expect(await alice.call("signup_policy_read", { deploymentId: receipt.id })).toMatchObject({ mode: "allowlist", allowlist: ["@kept.test"] });
+    expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist", allowlist: ["@kept.test"] } } });
   }, 30_000);
 
   test("OAuth binds consent, resource, redirect, PKCE and one-time codes", async () => {
@@ -1477,7 +1571,7 @@ describe("app accounts under required verification", () => {
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     host = receipt.hostname;
-    await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" });
+    await owner.call("signup_policy_set", { projectId: receipt.id, mode: "open" });
   }, 60_000);
 
   afterAll(async () => {
@@ -1538,7 +1632,7 @@ describe("app accounts under required verification", () => {
     await owner.cancel(transfer.transferId);
     const inspected = await owner.call<{ deployment: { contactEmail?: string } }>("project_inspect", { projectId: id });
     expect(inspected.deployment.contactEmail).toBe(ownerEmail);
-    await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" });
+    await owner.call("signup_policy_set", { projectId: receipt.id, mode: "open" });
     const at = (route: string, body: unknown, cookie?: string) => post(route, body, { host: receipt.hostname, ...(cookie ? { cookie } : {}) });
     const runtimeAs = (cookie?: string) => new McpClient(`${strictUrl}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", receipt.hostname); headers.set("x-forwarded-for", freshClient()); if (cookie) headers.set("cookie", cookie);
@@ -1547,8 +1641,8 @@ describe("app accounts under required verification", () => {
     await at("/_konae/auth/signup", { email: "member@strict.test" });
     const member = setCookie(await at("/_konae/auth/verify", { token: await token("member@strict.test", "verification"), password }))!;
     expect(await runtimeAs(member).call<{ role: string }>("auth_session")).toMatchObject({ role: "member", name: "member@strict.test" });
-    const users = await owner.call<{ users: Record<string, unknown>[] }>("app_users_list", { deploymentId: receipt.id });
+    const users = await owner.call<{ users: Record<string, unknown>[] }>("app_users_list", { projectId: receipt.id });
     expect(users.users.map((user) => [user.email, "role" in user])).toEqual([["member@strict.test", false]]);
-    await expect(owner.call("app_owner_enter", { deploymentId: receipt.id })).rejects.toThrow("Unknown tool");
+    await expect(owner.call("app_owner_enter", { projectId: receipt.id })).rejects.toThrow("Unknown tool");
   }, 60_000);
 });

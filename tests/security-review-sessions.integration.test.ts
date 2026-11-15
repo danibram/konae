@@ -38,7 +38,7 @@ describe("cross-user", () => {
     const { habits } = lab.apps;
     const ana = await appUser(lab, habits);
     await invoke(runtimeClient(lab, habits.hostname, ana.cookie), "habits.create", { name: "Private habit" });
-    const key = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { deploymentId: habits.id, name: "Reader", actions: ["habits.mine"] });
+    const key = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { projectId: habits.id, name: "Reader", actions: ["habits.mine"] });
     const read = await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${key.key}` } });
     expect(read.status).toBe(200);
     // The key is its own Runtime Actor, so user_id = ?1 matches no user's row.
@@ -83,8 +83,8 @@ describe("cross-user", () => {
     await invoke(client, "habits.create", { name: "Before" });
     const transfer = await client.upload(new TextEncoder().encode("mine"));
     const file = await client.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "a.txt", type: "text/plain" });
-    const { users } = await lab.kernel.owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId: habits.id });
-    await lab.kernel.owner.call("app_user_suspend", { deploymentId: habits.id, userId: users.find((row) => row.email === user.email)!.userId });
+    const { users } = await lab.kernel.owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { projectId: habits.id });
+    await lab.kernel.owner.call("app_user_suspend", { projectId: habits.id, userId: users.find((row) => row.email === user.email)!.userId });
     await expect(invoke(client, "habits.list")).rejects.toThrow();
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { cookie: user.cookie } })).status).toBe(401);
     expect((await hostFetch(lab, habits.hostname, `/_konae/files/${file.id}`, { headers: { cookie: user.cookie } })).status).toBe(401);

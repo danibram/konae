@@ -62,7 +62,7 @@ async function listener(port: number) {
 }
 
 const sql = (client: McpClient, deploymentId: string, statement: string) =>
-  client.call<SqlAnswer>("database_execute", { deploymentId, operation: "sql", input: { sql: statement } });
+  client.call<SqlAnswer>("database_execute", { projectId: projectId, operation: "sql", input: { sql: statement } });
 
 type Counts = { blobs: number; bytes: number; notes: number };
 type SqlAnswer = { rows?: Counts[]; result?: { rows?: Counts[] } };

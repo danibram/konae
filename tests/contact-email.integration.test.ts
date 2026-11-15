@@ -34,13 +34,13 @@ test("the owner sets the app's contact email in konae.json, and a later publish 
   const id = "contact_app";
   await kernel.owner.call("project_create", { projectId: id, name: "Noticed" });
   const { receipt } = await release(kernel.owner, payload(id), id);
-  const read = () => kernel.owner.call<{ contactEmail: string | null; ownerNotices: string[] }>("contact_email_read", { deploymentId: receipt.id });
+  const read = () => kernel.owner.call<{ contactEmail: string | null; ownerNotices: string[] }>("contact_email_read", { projectId: receipt.id });
   const settings = async () => JSON.parse(await readFile(path.join(kernel.data, "apps", id, "konae.json"), "utf8")) as { contactEmail?: string };
   expect(await read()).toEqual({ deploymentId: receipt.id, contactEmail: "owner@contact.test", ownerNotices: ["notes.add"] });
 
-  expect(await kernel.owner.call("contact_email_set", { deploymentId: receipt.id, email: " Team@Contact.test " })).toMatchObject({ contactEmail: "team@contact.test" });
+  expect(await kernel.owner.call("contact_email_set", { projectId: receipt.id, email: " Team@Contact.test " })).toMatchObject({ contactEmail: "team@contact.test" });
   expect((await settings()).contactEmail).toBe("team@contact.test");
-  await expect(kernel.owner.call("contact_email_set", { deploymentId: receipt.id, email: "not an address" })).rejects.toThrow("The contact email is not a valid email address.");
+  await expect(kernel.owner.call("contact_email_set", { projectId: receipt.id, email: "not an address" })).rejects.toThrow("The contact email is not a valid email address.");
 
   await release(kernel.owner, payload(id), id);
   expect((await read()).contactEmail).toBe("team@contact.test");
@@ -50,7 +50,7 @@ test("the owner sets the app's contact email in konae.json, and a later publish 
   expect((await read()).contactEmail).toBe("folder@contact.test");
   await expect(release(kernel.owner, payload(id, { contactEmail: "nobody" }), id)).rejects.toThrow("The contact email is not a valid email address.");
 
-  expect(await kernel.owner.call("contact_email_set", { deploymentId: receipt.id, email: null })).toMatchObject({ contactEmail: null, ownerNotices: ["notes.add"] });
+  expect(await kernel.owner.call("contact_email_set", { projectId: receipt.id, email: null })).toMatchObject({ contactEmail: null, ownerNotices: ["notes.add"] });
   expect((await settings()).contactEmail).toBeUndefined();
   // An app with no address gets the owner's again from the next publish.
   await release(kernel.owner, payload(id), id);

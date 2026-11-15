@@ -173,7 +173,7 @@ describe("schema.sql and imported databases", () => {
     const app = await publish({ "notes.list": action("SELECT id FROM notes LIMIT 5") });
     if (typeof app === "string") throw Error(app);
     for (const sql of ["CREATE TRIGGER t AFTER INSERT ON notes BEGIN DELETE FROM notes; END", "CREATE VIEW v AS SELECT 1"]) {
-      await expect(lab.kernel.owner.call("database_execute", { deploymentId: app.id, operation: "sql", input: { sql } })).rejects.toThrow("not authorized");
+      await expect(lab.kernel.owner.call("database_execute", { projectId: app.id, operation: "sql", input: { sql } })).rejects.toThrow("not authorized");
     }
   });
 });

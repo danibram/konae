@@ -12,20 +12,25 @@ afterEach(() => {
 describe("signup policy", () => {
   test("reads and saves the policy through the owner MCP tools", async () => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];
+    let policy = { mode: "open", allowlist: [] as string[] };
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body));
       if (request.method.startsWith("notifications/")) return new Response(null, { status: 202 });
       if (request.method === "initialize") return Response.json({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25" } });
       const { name, arguments: args } = request.params;
       calls.push({ name, args });
-      const value = { deploymentId: args.deploymentId, visibility: "public", mode: args.mode ?? "open", allowlist: args.allowlist ?? [] };
+      if (request.params.name === "signup_policy_set") policy = { mode: args.mode, allowlist: args.allowlist };
+      const value = request.params.name === "project_inspect"
+        ? { project: { id: args.projectId }, deployment: { id: args.projectId, visibility: "public", signupPolicy: policy } }
+        : policy;
       return Response.json({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: value }, content: [], isError: false } });
     }) as typeof fetch;
     expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open" });
     expect(await saveSignupPolicy("deploy/a", "allowlist", ["@example.com"])).toMatchObject({ mode: "allowlist", allowlist: ["@example.com"] });
     expect(calls).toEqual([
-      { name: "signup_policy_read", args: { deploymentId: "deploy/a" } },
-      { name: "signup_policy_set", args: { deploymentId: "deploy/a", mode: "allowlist", allowlist: ["@example.com"] } },
+      { name: "project_inspect", args: { projectId: "deploy/a" } },
+      { name: "signup_policy_set", args: { projectId: "deploy/a", mode: "allowlist", allowlist: ["@example.com"] } },
+      { name: "project_inspect", args: { projectId: "deploy/a" } },
     ]);
   });
 });
@@ -129,9 +134,9 @@ describe("app users and invitations", () => {
     await createAppInvitations("deploy/a", ["ana@example.com"], "invite-key-1");
     await resendAppInvitation("deploy/a", "inv_1", "resend-key-1");
     expect(calls).toEqual([
-      { name: "app_users_list", args: { deploymentId: "deploy/a", limit: 25, cursor: "b@example.com", state: "suspended" } },
-      { name: "app_invitations_create", args: { deploymentId: "deploy/a", emails: ["ana@example.com"], idempotencyKey: "invite-key-1" } },
-      { name: "app_invitation_resend", args: { deploymentId: "deploy/a", invitationId: "inv_1", idempotencyKey: "resend-key-1" } },
+      { name: "app_users_list", args: { projectId: "deploy/a", limit: 25, cursor: "b@example.com", state: "suspended" } },
+      { name: "app_invitations_create", args: { projectId: "deploy/a", emails: ["ana@example.com"], idempotencyKey: "invite-key-1" } },
+      { name: "app_invitation_resend", args: { projectId: "deploy/a", invitationId: "inv_1", idempotencyKey: "resend-key-1" } },
     ]);
   });
 });

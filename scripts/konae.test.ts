@@ -475,11 +475,11 @@ describe("konae CLI", () => {
     const fromFolder = withUrl("--dir", directory);
     expect(await fromFolder.exited).toBe(0);
     expect(await new Response(fromFolder.stdout).text()).toContain("This app has no custom domain.");
-    expect(calls.map((call) => [call.name, call.arguments.deploymentId])).toEqual([["domain_read", "app_from_folder"]]);
+    expect(calls.map((call) => [call.name, call.arguments.projectId])).toEqual([["domain_read", "app_from_folder"]]);
     calls.length = 0;
     const named = withUrl("--dir", directory, "--deployment", "dep_named");
     expect(await named.exited).toBe(0);
-    expect(calls.map((call) => call.arguments.deploymentId)).toEqual(["dep_named"]);
+    expect(calls.map((call) => call.arguments.projectId)).toEqual(["dep_named"]);
     calls.length = 0;
     const neither = withUrl();
     expect(await neither.exited).toBe(1);
@@ -604,8 +604,7 @@ describe("konae CLI", () => {
 
   test("a republish sends no policy and warns, without failing, when the app has another", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
-    answers.project_inspect = { deployment: { id: "dep_1" } };
-    answers.signup_policy_read = { deploymentId: "dep_1", mode: "closed", allowlist: [] };
+    answers.project_inspect = { deployment: { id: "dep_1", signupPolicy: { mode: "closed", allowlist: [] } } };
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: { mode: "invitation" } } } };
     const warnings: string[] = [];
 
@@ -613,7 +612,7 @@ describe("konae CLI", () => {
 
     expect(receipt.url).toBe("http://test.localhost/");
     expect(releaseUpload()).not.toHaveProperty("initialSignupPolicy");
-    expect(calls.find((call) => call.name === "signup_policy_read")!.arguments).toEqual({ deploymentId: "dep_1" });
+    expect(calls.find((call) => call.name === "project_inspect")!.arguments).toEqual({ projectId: "app_test" });
     expect(warnings).toEqual([
       "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",
     ]);
@@ -621,7 +620,7 @@ describe("konae CLI", () => {
     // The same policy, or a Kernel that cannot read it, publishes without a word.
     for (const answer of [{ mode: "invitation", allowlist: ["kept@example.test"] }, undefined]) {
       warnings.length = 0;
-      if (answer) answers.signup_policy_read = answer; else failing.add("signup_policy_read");
+      answers.project_inspect = { deployment: { id: "dep_1", ...(answer ? { signupPolicy: answer } : {}) } };
       expect((await publishLocal(directory, config, "token", (message) => warnings.push(message))).url).toBe("http://test.localhost/");
       expect(warnings).toEqual([]);
     }
@@ -718,7 +717,7 @@ describe("konae CLI", () => {
     await mkdir(path.join(directory, ".konae"));
     await writeFile(path.join(directory, ".konae/credentials.json"), JSON.stringify({ url: origin(), token: "token" }));
     expect(await cli("sql", "--dir", directory, "--prod", "SELECT 1").exited).toBe(0);
-    expect(calls.find((call) => call.name === "database_execute")!.arguments).toEqual({ deploymentId: "dep_1", operation: "sql", input: { sql: "SELECT 1" } });
+    expect(calls.find((call) => call.name === "database_execute")!.arguments).toEqual({ projectId: "dep_1", operation: "sql", input: { sql: "SELECT 1" } });
     const empty = cli("sql", "--dir", directory);
     expect(await empty.exited).toBe(1);
     expect(await new Response(empty.stderr).text()).toContain("Give the statement in quotes or with --file");
@@ -732,10 +731,10 @@ describe("konae CLI", () => {
     expect(await events.exited).toBe(0);
     expect(JSON.parse(await new Response(events.stdout).text())).toMatchObject({ kind: "signal", title: "Signal order.placed" });
     expect(calls.filter((call) => call.name !== "project_inspect")).toEqual(expect.arrayContaining([
-      { name: "usage_summary", arguments: { deploymentId: "dep_1", ...usageRange(3) } },
-      { name: "calls_read", arguments: { deploymentId: "dep_1" } },
-      { name: "notices_read", arguments: { deploymentId: "dep_1" } },
-      { name: "signals_read", arguments: { deploymentId: "dep_1" } },
+      { name: "usage_summary", arguments: { projectId: "dep_1", ...usageRange(3) } },
+      { name: "calls_read", arguments: { projectId: "dep_1" } },
+      { name: "notices_read", arguments: { projectId: "dep_1" } },
+      { name: "signals_read", arguments: { projectId: "dep_1" } },
     ]));
   });
 
@@ -805,10 +804,10 @@ describe("konae CLI", () => {
     }
     expect(ranges).toEqual([usageRange(3), usageRange(3)]);
     expect(asked.slice(0, 4)).toEqual([
-      { name: "usage_summary", input: { deploymentId: "dep_1", ...usageRange(3) } },
-      { name: "calls_read", input: { deploymentId: "dep_1" } },
-      { name: "notices_read", input: { deploymentId: "dep_1" } },
-      { name: "signals_read", input: { deploymentId: "dep_1" } },
+      { name: "usage_summary", input: { projectId: "dep_1", ...usageRange(3) } },
+      { name: "calls_read", input: { projectId: "dep_1" } },
+      { name: "notices_read", input: { projectId: "dep_1" } },
+      { name: "signals_read", input: { projectId: "dep_1" } },
     ]);
     // Locally one run of the kernel binary's events command answers the range.
     const runs: string[][] = [];
@@ -861,7 +860,7 @@ describe("konae CLI", () => {
 
   test("tool takes one JSON object as its arguments", () => {
     expect(toolArguments()).toEqual({});
-    expect(toolArguments('{"deploymentId":"dep_1"}')).toEqual({ deploymentId: "dep_1" });
+    expect(toolArguments('{"projectId":"dep_1"}')).toEqual({ projectId: "dep_1" });
     expect(toolArguments('{"projectId":"app_1","name":"hook"}', { key: "value", value: "whsec_1\r\n" })).toEqual({ projectId: "app_1", name: "hook", value: "whsec_1" });
     expect(toolArguments(undefined, { key: "value", value: "v" })).toEqual({ value: "v" });
     for (const text of ["[1]", "null", "3", "{deploymentId}"]) expect(() => toolArguments(text)).toThrow(`The arguments must be one JSON object, such as '{"projectId":"app_1"}', not ${text}.`);

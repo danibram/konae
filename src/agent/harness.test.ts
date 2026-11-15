@@ -583,8 +583,8 @@ describe("konae agent", () => {
 
 describe("agent platform binding", () => {
   const domainTools = [
-    { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { deploymentId: { type: "string" } }, required: ["deploymentId"] } },
-    { name: "domain_clear", description: "Clear a domain.", inputSchema: { type: "object", properties: { deploymentId: { type: "string" } }, required: ["deploymentId"] } },
+    { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] } },
+    { name: "domain_clear", description: "Clear a domain.", inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] } },
   ];
 
   test("retarget resolves the new project's deployment on the next turn", async () => {
@@ -592,8 +592,8 @@ describe("agent platform binding", () => {
     const calls: unknown[] = [];
     const platform = {
       listTools: async () => domainTools,
-      call: async (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return { deploymentId: args.deploymentId, hostname: null }; },
-      deploymentForProject: (projectId: string) => { seen.push(projectId); return `deployment-${projectId}`; },
+      call: async (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return { projectId: args.projectId, hostname: null }; },
+      deploymentForProject: (projectId: string) => { seen.push(projectId); return projectId; },
       confirm: async () => { throw new Error("Unexpected confirmation"); },
     };
     const { agent, events } = agentFor([
@@ -605,8 +605,8 @@ describe("agent platform binding", () => {
     await agent.send("Read this domain");
     expect(seen).toEqual([starterProject.id, "other-project"]);
     expect(calls).toEqual([
-      { name: "domain_read", args: { deploymentId: `deployment-${starterProject.id}` } },
-      { name: "domain_read", args: { deploymentId: "deployment-other-project" } },
+      { name: "domain_read", args: { projectId: starterProject.id } },
+      { name: "domain_read", args: { projectId: "other-project" } },
     ]);
     expect(events.filter((event) => event.type === "tool-end" && event.name === "domain_read").every((event) => event.type === "tool-end" && event.ok)).toBe(true);
     expect(agent.proposal()).toBeNull();
@@ -623,7 +623,7 @@ describe("agent platform binding", () => {
       platform: {
         listTools: async () => domainTools,
         call: async (name) => { calls.push(name); return {}; },
-        deploymentForProject: (projectId) => `deployment-${projectId}`,
+        deploymentForProject: (projectId) => `projectId`,
         confirm: () => { entered(); return new Promise<boolean>((resolve) => { confirm = resolve; }); },
       },
     });

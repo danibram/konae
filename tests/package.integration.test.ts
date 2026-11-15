@@ -139,8 +139,8 @@ async function sourcePackage(id: string, directory: string) {
   const upload = await writer.upload(new TextEncoder().encode("attachment bytes"));
   const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
-  const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { deploymentId: source.id, name: "Mirror", files: ["public"] });
-  const exported = await owner.call<Exported>("project_export", { deploymentId: source.id });
+  const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { projectId: source.id, name: "Mirror", files: ["public"] });
+  const exported = await owner.call<Exported>("project_export", { projectId: source.id });
   return { source, cookie, fileId: file.id, key, exported, files: await download(owner, exported, directory) };
 }
 
@@ -162,7 +162,7 @@ describe("chunked package", () => {
       manifest: { version: 1, visibility: "private", fileAccess: "app-users" },
     }));
 
-    const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+    const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
     try {
       const archive = new Map(readTar(await owner.download(exported.folder)).map((entry) => [entry.path, entry.contents]));
       const portableSettings = JSON.parse(new TextDecoder().decode(archive.get("konae.json")!));
@@ -200,7 +200,7 @@ describe("chunked package", () => {
     const { receipt } = await release(owner, { ...request, project: source }, id);
     revision = 2; // A release advances the source revision with the app/ it installed.
     const ahead = async () => {
-      const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+      const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
       try { return exported.sourcesAhead; }
       finally {
         for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId);
@@ -231,7 +231,7 @@ describe("chunked package", () => {
     finally { await owner.cancel(upload.transferId); }
     const artifact = { ...request.artifact, files: { ...request.artifact.files, "logo.png": encodeBase64(png) }, encodings: { "logo.png": "base64" } };
     const { receipt } = await release(owner, { ...request, project: source, artifact }, id);
-    const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+    const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
     try {
       expect(exported.sourcesAhead).toBe(false);
       const folder = new Map(readTar(await owner.download(exported.folder)).map((entry) => [entry.path, entry.contents]));
@@ -245,7 +245,7 @@ describe("chunked package", () => {
     const next = await owner.upload(new TextEncoder().encode(JSON.stringify({ ...source, files: withoutLogo, encodings: undefined, updatedAt: 2 })), id);
     try { await owner.call("project_sources_save", { projectId: id, transferId: next.transferId, expectedRevision: 2 }); }
     finally { await owner.cancel(next.transferId); }
-    const after = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+    const after = await owner.call<Exported>("project_export", { projectId: receipt.id });
     for (const transfer of [after.folder, ...Object.values(after.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
     expect(after.sourcesAhead).toBe(true);
   });
@@ -278,16 +278,20 @@ describe("chunked package", () => {
     const first = await release(owner, { ...payload("pkg_target"), initialPackage: { manifest, components } }, "pkg_target");
     expect(first.receipt.signupPolicy).toEqual(manifest.signupPolicy);
     expect(await owner.call("release_apply", { planId: first.planId })).toEqual(first.receipt);
+    for (const transferId of Object.values(components)) {
+      await expect(owner.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
+      await expect(owner.cancel(transferId)).resolves.toMatchObject({ ok: true });
+    }
     const inspected = await owner.call<{ deployment: { id: string } }>("project_inspect", { projectId: "pkg_target" });
     expect(inspected.deployment.id).toBe(first.receipt.id);
     const today = new Date().toISOString().slice(0, 10);
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: first.receipt.id, from: yesterday, to: today });
-    expect(usage.totals).toEqual(expect.arrayContaining([
+    const usage = await owner.call<{ usage: { totals: { kind: string; name: string; count: number }[] } }>("usage_summary", { projectId: first.receipt.id, from: yesterday, to: today });
+    expect(usage.usage.totals).toEqual(expect.arrayContaining([
       { kind: "signup", name: "", count: 1 }, { kind: "action", name: "notes.create", count: 1 }, { kind: "upload", name: "", count: 1 },
     ]));
 
-    const monitor = await owner.call<UsageSummary>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    const monitor = await owner.call<UsageSummary>("usage_summary", { projectId: first.receipt.id, from: yesterday, to: today });
     expect(monitor.coverage.startedAt).toBeNumber();
     expect(monitor.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ name: "notes.create", origin: "runtime", count: 1 })]));
     expect(monitor.accounts).toMatchObject({ active: 1, opens: 0, actions: 1, top: [
@@ -297,7 +301,7 @@ describe("chunked package", () => {
 
     const moved = runtime(first.receipt.hostname, await account(first.receipt.hostname, "login", "writer@pkg_source.test"));
     expect(await moved.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Moved with the package" }]);
-    const continued = await owner.call<UsageSummary>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    const continued = await owner.call<UsageSummary>("usage_summary", { projectId: first.receipt.id, from: yesterday, to: today });
     expect(continued.accounts).toMatchObject({ active: 1, actions: 2, top: [
       { account: monitor.accounts!.top[0].account, email: "writer@pkg_source.test", actions: 2 },
     ] });
@@ -308,7 +312,7 @@ describe("chunked package", () => {
     expect(new TextDecoder().decode(await moved.download(await moved.call<Transfer>("files_read", { fileId })))).toBe("attachment bytes");
     expect(await runtime(first.receipt.hostname, cookie).call("auth_session")).toMatchObject({ role: "anonymous" });
     // The destination lists the origin's key as revoked at import, and refuses it.
-    const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: first.receipt.id });
+    const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { projectId: first.receipt.id });
     expect(keys.keys).toEqual([expect.objectContaining({ keyId: key.keyId, name: "Mirror", files: ["public"], revokedAt: expect.any(Number), revokedReason: "import" })]);
     const refused = await fetch(`${url}/_konae/files/${fileId}`, { headers: { host: first.receipt.hostname, "x-forwarded-for": freshClient(), authorization: `Bearer ${key.key}` } });
     expect(refused.status).toBe(401);
@@ -365,13 +369,13 @@ describe("chunked package", () => {
     for (const scopes of [["read"], ["publish"], ["read", "write", "publish"]]) {
       const client = await delegate(scopes, ["pkg_permission"]);
       for (const name of ["project_export"]) {
-        await expect(client.call(name, { deploymentId: source.id })).rejects.toThrow("Unknown tool or insufficient permission");
+        await expect(client.call(name, { projectId: source.id })).rejects.toThrow("Unknown tool or insufficient permission");
       }
     }
     const elsewhere = await delegate(["export_data"], ["pkg_other"]);
-    await expect(elsewhere.call("project_export", { deploymentId: source.id })).rejects.toThrow("outside this token's grants");
+    await expect(elsewhere.call("project_export", { projectId: source.id })).rejects.toThrow("outside this token's grants");
     const exporter = await delegate(["export_data"], ["pkg_permission"]);
-    const exported = await exporter.call<Exported>("project_export", { deploymentId: source.id });
+    const exported = await exporter.call<Exported>("project_export", { projectId: source.id });
     for (const transfer of [...Object.values(exported.downloads), exported.folder]) await exporter.cancel(transfer.transferId);
   }, 30_000);
 
@@ -380,8 +384,8 @@ describe("chunked package", () => {
     const writer = runtime(source.hostname, await account(source.hostname, "signup", "writer@leak.test"));
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "first" } });
     // About 300 KiB of rows, so the database download takes several blocks.
-    await owner.call("database_execute", { deploymentId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
-    const exported = await owner.call<Exported>("project_export", { deploymentId: source.id });
+    await owner.call("database_execute", { projectId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
+    const exported = await owner.call<Exported>("project_export", { projectId: source.id });
     expect(exported.downloads.database.size).toBeGreaterThan(4 * 64 * 1024);
     const reader = await delegate(["read"], ["pkg_leak"]);
     for (const transfer of Object.values(exported.downloads)) {
@@ -397,8 +401,8 @@ describe("chunked package", () => {
       // The source app recorded Usage, so its package has a fourth component.
       expect(details(0)).toEqual(["database", "files", "identity", "usage"]);
       expect(details(1)).toEqual(["database", "files", "folder", "identity", "usage"]);
-      const reads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read'").get() as { n: number };
-      expect(reads.n).toBe(0);
+      const deniedReads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read' AND ok=0").get() as { n: number };
+      expect(deniedReads.n).toBe(0);
       // Component uploads in the earlier tests wrote one row per component, not one per block.
       const writes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_write'").get() as { n: number };
       const completes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_complete' AND ok=1").get() as { n: number };

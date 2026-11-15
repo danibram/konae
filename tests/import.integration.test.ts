@@ -34,7 +34,7 @@ afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursiv
 
 /** Exports the app's data and uploads it again for an import into the same project. */
 async function exportedPackage(deploymentId: string, projectId: string) {
-  const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId });
+  const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: projectId });
   const components: Record<string, string> = {};
   try {
     for (const content of exported.manifest.contents) {
@@ -61,22 +61,22 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   await ana.call("actions_invoke", { name: "notes.add", input: { title: "second" } });
   await account(kernel, receipt.hostname, "signup", "bo@import.test");
   const titles = async () => (await ana.call<{ title: string }[]>("actions_invoke", { name: "notes.all", input: {} })).map((row) => row.title);
-  const emails = async () => (await kernel.owner.call<{ users: { email: string }[] }>("app_users_list", { deploymentId })).users.map((user) => user.email);
+  const emails = async () => (await kernel.owner.call<{ users: { email: string }[] }>("app_users_list", { projectId: id })).users.map((user) => user.email);
   expect(await titles()).toEqual(["first", "second"]);
 
   // Data only, while the app is in maintenance, as a move does it.
-  await kernel.owner.call("maintenance_set", { deploymentId, on: true });
-  const data = await kernel.owner.call<{ imported: boolean; backup: { id: string; label: string; holds: string[] } }>("project_import", { deploymentId, replace: "data", package: exported });
+  await kernel.owner.call("maintenance_set", { projectId: id, on: true });
+  const data = await kernel.owner.call<{ imported: boolean; backup: { id: string; label: string; holds: string[] } }>("project_import", { projectId: id, replace: "data", package: exported });
   for (const transferId of Object.values(exported.components)) await kernel.owner.cancel(transferId).catch(() => {});
   expect(data).toMatchObject({ imported: true, backup: { label: "Before import", holds: ["data"] } });
-  await kernel.owner.call("maintenance_set", { deploymentId, on: false });
+  await kernel.owner.call("maintenance_set", { projectId: id, on: false });
   // Ana is still signed in on the same cookie, and the rows are the export's, not merged.
   expect(await titles()).toEqual(["first"]);
   expect(await emails()).toEqual(["ana@import.test"]);
 
-  const backups = await kernel.owner.call<{ id: string; holds: string[] }[]>("database_execute", { deploymentId, operation: "list-backups" });
+  const backups = await kernel.owner.call<{ id: string; holds: string[] }[]>("database_execute", { projectId: id, operation: "list-backups" });
   expect(backups.find((backup) => backup.id === data.backup.id)?.holds).toEqual(["data"]);
-  const restored = await kernel.owner.call<{ holds: string[]; before: { label: string } }>("database_execute", { deploymentId, operation: "restore-backup", input: { backupId: data.backup.id } });
+  const restored = await kernel.owner.call<{ holds: string[]; before: { label: string } }>("database_execute", { projectId: id, operation: "restore-backup", input: { backupId: data.backup.id } });
   expect(restored).toMatchObject({ holds: ["data"], before: { label: "Before restore" } });
   expect(await titles()).toEqual(["first", "second"]);
   expect(await emails()).toEqual(["ana@import.test", "bo@import.test"]);
@@ -86,11 +86,11 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   const plain = payload(id, slimmer, "v2");
   const dropping = { ...plain, project: { ...plain.project, files: { ...plain.project.files, "public/logo.png": encodeBase64(logo) }, encodings: { "public/logo.png": "base64" } } };
   const upload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(dropping)), id);
-  const asked = await kernel.owner.call<{ imported: boolean; schema: { confirmation: string; losses: unknown[] } }>("project_import", { deploymentId, replace: "sources", transferId: upload.transferId });
+  const asked = await kernel.owner.call<{ imported: boolean; schema: { confirmation: string; losses: unknown[] } }>("project_import", { projectId: id, replace: "sources", transferId: upload.transferId });
   expect(asked.imported).toBe(false);
   expect(asked.schema.losses).toHaveLength(1);
   expect(await titles()).toEqual(["first", "second"]);
-  const sources = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { deploymentId, replace: "sources", transferId: upload.transferId, confirmSchema: asked.schema.confirmation });
+  const sources = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { projectId: id, replace: "sources", transferId: upload.transferId, confirmSchema: asked.schema.confirmation });
   await kernel.owner.cancel(upload.transferId);
   expect(sources).toMatchObject({ imported: true, backup: { holds: ["sources"] } });
   // The editor opens the imported sources.
@@ -115,7 +115,7 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   const bothUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify({ ...releasePayload, project })), id);
   const sourceUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify({ files })), id);
   const artifactUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(artifact)), id);
-  const replaced = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { deploymentId, replace: "both", transferId: bothUpload.transferId, sourcesTransferId: sourceUpload.transferId, artifactTransferId: artifactUpload.transferId, package: again });
+  const replaced = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { projectId: id, replace: "both", transferId: bothUpload.transferId, sourcesTransferId: sourceUpload.transferId, artifactTransferId: artifactUpload.transferId, package: again });
   for (const transferId of [bothUpload.transferId, sourceUpload.transferId, artifactUpload.transferId]) await kernel.owner.cancel(transferId);
   for (const transferId of Object.values(again.components)) await kernel.owner.cancel(transferId).catch(() => {});
   expect(replaced).toMatchObject({ imported: true, backup: { holds: ["data", "sources"] } });
@@ -123,7 +123,7 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   await ana.call("actions_invoke", { name: "notes.add", input: { title: "third" } });
   expect(await titles()).toEqual(["first", "second", "third"]);
 
-  await expect(kernel.owner.call("project_import", { deploymentId, replace: "data" })).rejects.toThrow("Pass package exactly when replace is data or both.");
+  await expect(kernel.owner.call("project_import", { projectId: id, replace: "data" })).rejects.toThrow("Pass package exactly when replace is data or both.");
 }, 180_000);
 
 test("invalid release settings refuse before a both import changes live rows or files", async () => {
@@ -141,12 +141,12 @@ test("invalid release settings refuse before a both import changes live rows or 
   const beforeApp = await readFile(appPath);
   const beforeDist = await readFile(distPath);
   const beforeProject = await kernel.owner.call<{ project: { name: string; slug: string; manifest: unknown }; sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: id });
-  const beforeContact = await kernel.owner.call("contact_email_read", { deploymentId });
+  const beforeContact = await kernel.owner.call("contact_email_read", { projectId: id });
   const invalid = { ...payload(id, schema, "must not publish"), contactEmail: "invalid" };
   const upload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(invalid)), id);
   try {
     await expect(kernel.owner.call("project_import", {
-      deploymentId,
+      projectId: deploymentId,
       replace: "both",
       transferId: upload.transferId,
       package: exported,
@@ -160,5 +160,5 @@ test("invalid release settings refuse before a both import changes live rows or 
   expect(await readFile(appPath)).toEqual(beforeApp);
   expect(await readFile(distPath)).toEqual(beforeDist);
   expect(await kernel.owner.call("project_inspect", { projectId: id })).toMatchObject(beforeProject);
-  expect(await kernel.owner.call("contact_email_read", { deploymentId })).toEqual(beforeContact);
+  expect(await kernel.owner.call("contact_email_read", { projectId: id })).toEqual(beforeContact);
 }, 120_000);
