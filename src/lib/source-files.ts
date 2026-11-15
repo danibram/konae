@@ -1,4 +1,4 @@
-// The files of `app/` as a source document carries them: a file whose bytes
+// The files of `app/` as a source document carries them. A file whose bytes
 // are UTF-8 is its text, and any other file, such as an image, is base64 that
 // `encodings` names, as in a Build Artifact. The CLI, the editor's import and
 // the Kernel's `sources::read` all decide by the same rule.
@@ -37,12 +37,12 @@ export function sourceBytes(source: SourceFiles, path: ProjectFile): Uint8Array 
   return isEncoded(source, path) ? decodeBase64(contents) : new TextEncoder().encode(contents);
 }
 
-/** One file as the static publishing contract reads it: text, or bytes for a file that is not text. */
+/** One file as the static publishing contract reads it, as text or as the bytes of a file that is not text. */
 export function sourceContents(source: SourceFiles, path: ProjectFile): string | Uint8Array {
   return isEncoded(source, path) ? decodeBase64(source.files[path]!) : source.files[path]!;
 }
 
-/** The text files only: what the code pane edits, the build agent reads and esbuild bundles. */
+/** The text files only, which the code pane edits, the build agent reads and esbuild bundles. */
 export function textFiles(source: SourceFiles): Record<ProjectFile, string> {
   if (!source.encodings) return source.files;
   return Object.fromEntries(Object.entries(source.files).filter(([path]) => !isEncoded(source, path)));

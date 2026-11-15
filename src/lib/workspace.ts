@@ -121,7 +121,7 @@ export function resetWorkspaceProject(project: MiniAppProject): MiniAppProject {
 }
 
 /**
- * What this browser keeps of a project: its text files. The installation
+ * What this browser keeps of a project, which is its text files. The installation
  * holds a file that is not text, and the editor cannot change one, so no
  * edit of it waits in the browser, and an image does not fill the storage.
  */
