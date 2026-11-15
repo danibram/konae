@@ -6,6 +6,8 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-15
+
 ### Changed
 
 - The editor and folder workflow use the same editable `app/` files, including binary assets. Sources and Build Artifacts travel in separate uploads and use separate limits. Existing folder apps open in the editor without source metadata sidecars.
@@ -14,7 +16,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - The project list loads metadata without source payloads. Opening a project loads its files, and source edits send deltas when possible. A full-document departure cancels known reads, with unknown transfers expiring after one hour if the browser cannot complete cancellation.
 - The editor preview shows proposals before Apply and isolates candidate rows, files and actor state. Static saved public assets work in Preview; fetches of local saved assets and runtime-created local asset URLs require `konae dev` or a Deployment. Fetches to other origins still work in the CSP-free preview.
 - The compiled `konae` CLI uses the shared local builder and downloads a matching Kernel after checking its checksum. Only macOS arm64 has been verified; its CLI binary requires macOS 13.0.
-- Owner MCP operations use `projectId`; `project_inspect` reads Signup Policy, and `usage_summary` returns daily Usage under its `usage` field. Successful `release_apply` consumes its release uploads and retries receipt cleanup after a fault. Runtime SDK and tool names remain unchanged.
+- Owner MCP requests for Deployment operations now require `projectId` instead of `deploymentId`. The `signup_policy_read` and `usage_read` tools are removed; `project_inspect` returns Signup Policy, and `usage_summary` returns daily Usage under its `usage` field. Successful `release_apply` consumes its release uploads and retries receipt cleanup after a fault. Runtime tools and the SDK remain unchanged.
 
 
 ## [0.8.0] - 2026-11-14
