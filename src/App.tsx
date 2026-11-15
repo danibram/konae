@@ -84,7 +84,7 @@ import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, refusedSpot } from "./components/action-readiness";
 import { browserCopy, createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
-import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
+import { ProjectSources, SaveSupersededError, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
@@ -181,6 +181,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [deployments, setDeployments] = useState(initialWorkspace.deployments);
   const [project, setProject] = useState(() => initialWorkspace.projects.find((item) => item.id === initialWorkspace.activeProjectId) ?? initialWorkspace.projects[0] ?? cloneStarter());
   const [previewProject, setPreviewProject] = useState(project);
+  const [loadingProjectId, setLoadingProjectId] = useState("");
+  const [projectLoadError, setProjectLoadError] = useState("");
   const [previewEpoch, setPreviewEpoch] = useState(0);
   const [route, setRoute] = useState(() => {
     const requested = parseRoute(window.location.pathname);
@@ -270,6 +272,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const conflictedRevision = useRef<number | null>(null);
   const previewBuildVersion = useRef(0);
   const workspaceGeneration = useRef(0);
+  const projectSelectionVersion = useRef(0);
   const pendingSaves = useRef(0);
   const failedSave = useRef(false);
   const failedProjects = useRef(new Set<string>());
@@ -287,6 +290,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const items = current.projects.map((item) => item.id === current.project.id ? current.project : item);
       try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...items].map(browserCopy))); }
       catch { /* The regular save reports storage failures in the editor. */ }
+      sources.cancelAll();
     };
     window.addEventListener("pagehide", flush);
     window.addEventListener("beforeunload", flush);
@@ -294,7 +298,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("beforeunload", flush);
     };
-  }, [workspaceStorage, drafts]);
+  }, [workspaceStorage, drafts, sources]);
 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -434,12 +438,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (publishing) return;
     const timeout = window.setTimeout(() => {
       for (const item of projects) {
+        if (sources.hasSources(item.id) && !sources.isLoaded(item.id)) continue;
         const snapshot = JSON.stringify(item);
         if (synchronized.current.get(item.id) === snapshot) continue;
         synchronized.current.set(item.id, snapshot);
         pendingSaves.current++;
         setSaved(false);
         void sources.save(item).then(() => { serverSnapshots.current.set(item.id, snapshot); }).catch((error) => {
+          if (error instanceof SaveSupersededError) return;
           failedSave.current = true;
           failedProjects.current.add(item.id);
           setSaveError(error instanceof Error ? error.message : String(error));
@@ -453,7 +459,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, [projects, publishing, sources, saveAttempt]);
 
   useEffect(() => {
-    if (!activeDeployment) return;
+    if (!activeDeployment || route.screen !== "editor" || !sources.isLoaded(project.id)) return;
     let active = true;
     const check = async () => {
       let reloadPending = false;
@@ -524,7 +530,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const timer = window.setInterval(() => { void check(); }, 2500);
     void check();
     return () => { active = false; window.clearInterval(timer); };
-  }, [activeDeployment?.id, project.id, sources]);
+  }, [activeDeployment?.id, project.id, route.screen, sources]);
 
   const reloadConflictingSources = async () => {
     const id = project.id;
@@ -761,6 +767,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   useEffect(() => {
+    if (sources.hasSources(project.id)) return;
     let cancelled = false;
     // A build failure belongs to the project that failed. Opening another one starts clean.
     setOperationError("");
@@ -769,7 +776,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       if (!cancelled && compiled && projectRef.current.id === snapshot.id && JSON.stringify(projectRef.current) === JSON.stringify(snapshot)) setPreviewProject(compiled);
     });
     return () => { cancelled = true; previewBuildVersion.current++; };
-  }, [project.id]);
+  }, [project.id, sources]);
 
   projectRef.current = project;
 
@@ -874,7 +881,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, []);
 
   useEffect(() => {
-    if (route.screen !== "editor" || route.projectId === project.id) return;
+    if (route.screen !== "editor") { projectSelectionVersion.current++; return; }
+    if (route.projectId === project.id && (!sources.hasSources(project.id) || sources.isLoaded(project.id))) return;
+    const selectionVersion = ++projectSelectionVersion.current;
     const target = projects.find((item) => item.id === route.projectId);
     // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
@@ -888,14 +897,38 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       }
       return;
     }
-    setProject(target);
-    setPreviewProject({ ...target, files: { ...target.files } });
-    setThreadResetToken((token) => token + 1);
-    // The open file belongs to the project being left; typing would create it in this one.
-    setActiveFile("app.js");
-    setSelectedPath("app.js");
-    setDatabaseTarget(null);
-  }, [route, projects, project.id]);
+    let active = true;
+    const select = (loadedProject: MiniAppProject) => {
+      setProjects((current) => current.map((item) => item.id === loadedProject.id ? loadedProject : item));
+      synchronized.current.set(loadedProject.id, JSON.stringify(loadedProject));
+      serverSnapshots.current.set(loadedProject.id, JSON.stringify(loadedProject));
+      setProject(loadedProject);
+      void compilePreviewSnapshot(loadedProject).then((compiled) => {
+        if (compiled && selectionVersion === projectSelectionVersion.current && projectRef.current.id === loadedProject.id && JSON.stringify(projectRef.current) === JSON.stringify(loadedProject)) {
+          setPreviewProject(compiled);
+          setPreviewEpoch((value) => value + 1);
+        }
+      });
+      setThreadResetToken((token) => token + 1);
+      setActiveFile("app.js");
+      setSelectedPath("app.js");
+      setDatabaseTarget(null);
+      setLoadingProjectId("");
+      setProjectLoadError("");
+    };
+    if (sources.hasSources(target.id) && !sources.isLoaded(target.id)) {
+      setLoadingProjectId(target.id);
+      setProjectLoadError("");
+      const controller = new AbortController();
+      void sources.loadProject(target.id, controller.signal).then((loadedProject) => {
+        if (active && loadedProject) select(loadedProject);
+        else if (active) setProjectLoadError("This project no longer has saved sources.");
+      }).catch((error) => { if (active) setProjectLoadError(error instanceof Error ? error.message : String(error)); });
+      return () => { active = false; controller.abort(); };
+    }
+    select(target);
+    return () => { active = false; };
+  }, [route, projects, project.id, sources]);
 
   const arrival = useRef<PanelId>("preview");
   const seenProject = useRef<string | null>(null);
@@ -1133,12 +1166,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const next = projects.find((item) => item.id === projectId);
     if (!next) return;
     arrival.current = entry === "code" ? "code" : entry === "agent" ? "agent" : "preview";
-    setProject(next);
-    setPreviewProject({ ...next, files: { ...next.files } });
-    setThreadResetToken((token) => token + 1);
-    setActiveFile(entry === "code" ? "app.js" : "index.html");
-    setSelectedPath(entry === "code" ? "app.js" : "index.html");
-    setDatabaseTarget(null);
+    if (!sources.hasSources(projectId) || sources.isLoaded(projectId)) {
+      setProject(next);
+      setPreviewProject({ ...next, files: { ...next.files } });
+      setThreadResetToken((token) => token + 1);
+      setActiveFile(entry === "code" ? "app.js" : "index.html");
+      setSelectedPath(entry === "code" ? "app.js" : "index.html");
+      setDatabaseTarget(null);
+    }
     openEditorRoute(next.id);
   };
 
@@ -1266,6 +1301,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const published = missing.find((item) => item.id === route.projectId);
   if (published && deployments[published.id]) {
     return <PublishedAppView app={published} deployment={deployments[published.id]} ownerSession={ownerSession} projectCount={projects.length + missing.length} projects={switcherProjects(projects, missing, deployments)} onBack={goToProjects} />;
+  }
+
+  if (screen === "editor" && loadingProjectId === route.projectId) {
+    return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>{projectLoadError ? "Could not open this project" : "Opening project"}</h1>{projectLoadError ? <><p role="alert">{projectLoadError}</p><Button onClick={() => { setProjectLoadError(""); void sources.loadProject(route.projectId).then((loadedProject) => { if (loadedProject) { setProjects((current) => current.map((item) => item.id === loadedProject.id ? loadedProject : item)); setProject(loadedProject); setPreviewProject(loadedProject); setLoadingProjectId(""); } }).catch((error) => setProjectLoadError(error instanceof Error ? error.message : String(error))); }}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></> : <p>Loading the app files…</p>}</section></div></main>;
   }
 
   const signInHref = platformAccessHref(window.location.pathname);
