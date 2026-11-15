@@ -3,7 +3,7 @@
 // names the code, so a reworded sentence keeps its code and the editor
 // branches on the code, never on the text. kernel-rs/kernel/src/refusal.rs is the
 // Kernel's twin and reads the same table.
-import codes from "../../kernel-rs/kernel/src/refusal-codes.json";
+import codes from "../../kernel-rs/kernel/src/refusal-codes.json" with { type: "json" };
 
 export type RefusalCode = keyof typeof codes;
 
