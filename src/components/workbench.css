@@ -133,7 +133,7 @@
 .deploy-dialog .deploy-contact-missing { margin: 0; color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
 
 /* ---- Data and Access on the design system ---- */
-.workshop .database-studio-header, .published-app .database-studio-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; height: auto; padding: 0 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); }
+.workshop .database-studio-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; height: auto; padding: 0 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); }
 .database-studio-header .ui-tabbar.data-views { flex: 1 1 auto; border-bottom: 0; }
 .database-studio-header .ui-segmented { order: 2; margin: 6px 0; }
 .test-rows-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--ds-border); border-bottom: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 400 13px/1.45 var(--ds-font); }

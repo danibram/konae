@@ -3,20 +3,16 @@ import type { DeploymentReceipt } from "../deployments/client";
 import type { ProjectMetadata } from "../lib/project-sources";
 import type { MiniAppProject } from "../lib/types";
 
-/** What a person runs in an app's folder to copy its published data there, in the form the owner account page uses. */
-export const pullCommand = "konae pull --dir .";
-
-/** One row of the project list, whether the editor holds its files or a folder does. */
+/** One app row. `sourceError` marks a folder the editor could not read. */
 export type ProjectEntry = {
   id: string;
   name: string;
   /** The page's own one-line purpose, when the editor holds its files. */
   purpose: string;
-  /** When its files last changed in the editor. A folder app has none here. */
+  /** When its saved sources last changed. */
   editedAt?: number;
   deployment?: DeploymentReceipt;
-  /** Its files live in the folder it was published from. */
-  inFolder: boolean;
+  sourceError?: boolean;
 };
 
 export type ProjectSort = "edited" | "name";
@@ -31,13 +27,13 @@ export function projectPurpose(project: MiniAppProject): string {
 
 export function projectEntries(projects: readonly MiniAppProject[], folders: readonly ProjectMetadata[], deployments: Readonly<Record<string, DeploymentReceipt>>): ProjectEntry[] {
   return [
-    ...projects.map((project) => ({ id: project.id, name: project.name, purpose: projectPurpose(project), editedAt: project.updatedAt, deployment: deployments[project.id], inFolder: false })),
+    ...projects.map((project) => ({ id: project.id, name: project.name, purpose: projectPurpose(project), editedAt: project.updatedAt, deployment: deployments[project.id] })),
     ...folders.filter((item) => !projects.some((project) => project.id === item.id))
-      .map((item) => ({ id: item.id, name: item.name, purpose: "", deployment: deployments[item.id], inFolder: true })),
+      .map((item) => ({ id: item.id, name: item.name, purpose: "", deployment: deployments[item.id], sourceError: true })),
   ];
 }
 
-/** The moment the list sorts by: the last edit, or for a folder app its last publish. */
+/** The moment the list sorts by the last source edit or publish. */
 const touchedAt = (entry: ProjectEntry) => entry.editedAt ?? (entry.deployment ? releasedAt(entry.deployment) : 0);
 
 /**
@@ -89,11 +85,9 @@ export function listOrder(entries: readonly ProjectEntry[]): ProjectEntry[] {
 
 /**
  * The projects the switcher lists, in the list's order, each with its state.
- * An app edited in a folder that was never published has no page to open, so
- * it is left out.
+ * Every app has a page. A damaged source folder opens its error state there.
  */
 export function switcherProjects(projects: readonly MiniAppProject[], folders: readonly ProjectMetadata[], deployments: Readonly<Record<string, DeploymentReceipt>>): { id: string; name: string; published: boolean }[] {
   return listOrder(projectEntries(projects, folders, deployments))
-    .filter((entry) => !entry.inFolder || entry.deployment)
     .map((entry) => ({ id: entry.id, name: entry.name, published: Boolean(entry.deployment) }));
 }

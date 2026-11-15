@@ -1,4 +1,4 @@
-import { ArrowRight, BarChart3, Check, Code2, Copy, Download, MoreHorizontal, Plus, RotateCcw, Search, Sparkles, Terminal, Trash2 } from "lucide-react";
+import { ArrowRight, BarChart3, Check, Code2, Copy, Download, MoreHorizontal, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Alert, Button, Dialog, EmptyState, Field, Input, Menu, Select, Textarea, ToastRegion, type MenuItem, type ToastItem } from "./ui";
 import type { DeploymentIndex } from "../lib/workspace";
@@ -9,7 +9,7 @@ import { WorkspaceNav } from "./WorkspaceNav";
 import { AppStatus, UndeployedMarker, useRelativeTime } from "./AppStatus";
 import { changesNotDeployed, releasedAt } from "../deployments/deployed-changes";
 import { useSourceDigests } from "../deployments/source-digest";
-import { groupProjects, listOrder, nameFromDescription, projectEntries, pullCommand, uniqueName, type ProjectEntry, type ProjectSort } from "./project-list";
+import { groupProjects, listOrder, nameFromDescription, projectEntries, uniqueName, type ProjectEntry, type ProjectSort } from "./project-list";
 import { exactTime } from "../lib/relative-time";
 import { defaultTemplate, templateChoices, type TemplateId } from "../lib/templates";
 import "./project-list.css";
@@ -20,9 +20,6 @@ type Props = {
   ownerSession: OwnerSession;
   missing: ProjectMetadata[];
   notice?: string;
-  drafts: MiniAppProject[];
-  onImportDraft: (index: number) => void;
-  onDismissDraft: (index: number) => void;
   onDeleteMissing: (project: ProjectMetadata, name: string) => Promise<void>;
   /**
    * Deletes a project the editor holds files for. Until the editor passes it,
@@ -30,8 +27,6 @@ type Props = {
    */
   onDeleteProject?: (project: ProjectMetadata, name: string) => Promise<void>;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
-  /** Opens the data, accounts and activity of a published app whose files live in a folder. */
-  onOpenPublished: (projectId: string) => void;
   /** `description` is what the owner wrote under "What should it do?", for the conversation to start from. */
   onCreateProject: (name: string, template: TemplateId | "scratch", description?: string) => void;
   /** A model is connected, so Describe can act on a description. New project says so when it cannot. */
@@ -43,7 +38,7 @@ type Props = {
 
 const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 
-export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, drafts, onImportDraft, onDismissDraft, onDeleteMissing, onDeleteProject, onOpenProject, onOpenPublished, onCreateProject, modelConnected = false, returnFocusTo }: Props) {
+export function ProjectDashboard({ projects, deployments, ownerSession, missing, notice, onDeleteMissing, onDeleteProject, onOpenProject, onCreateProject, modelConnected = false, returnFocusTo }: Props) {
   const entries = useMemo(() => projectEntries(projects, missing, deployments), [projects, missing, deployments]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ProjectSort>("edited");
@@ -65,8 +60,6 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
     const card = document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(returnFocusTo)}"] .project-card-link`);
     (card ?? document.querySelector<HTMLElement>(".project-list-head h1"))?.focus();
   }, []);
-  // A cached copy of a project the account already holds is not a copy outside the account: an agent or the CLI may simply have changed it since.
-  const localCopies = drafts.map((draft, index) => ({ draft, index })).filter(({ draft }) => !missing.some((item) => item.id === draft.id) && !projects.some((item) => item.id === draft.id));
 
   // The same comparison as the workbench's top bar, so the card and the project never disagree.
   const digests = useSourceDigests(projects);
@@ -75,18 +68,12 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
     return Boolean(project && changesNotDeployed(project, entry.deployment, digests.get(project.id) ?? null));
   };
   const open = (entry: ProjectEntry, door: "preview" | "agent" | "code" = "preview") => {
-    if (entry.inFolder) { if (entry.deployment) onOpenPublished(entry.id); return; }
     onOpenProject(entry.id, door);
   };
   const copyAddress = (url: string) => {
     void navigator.clipboard?.writeText(url)
       .then(() => toast("Address copied"))
       .catch(() => toast("Could not copy. Select the address on the card instead.", "danger"));
-  };
-  const copyPull = () => {
-    void navigator.clipboard?.writeText(pullCommand)
-      .then(() => toast("Pull command copied. Run it in the app's folder."))
-      .catch(() => toast(`Could not copy. In the app's folder, run ${pullCommand}`, "danger"));
   };
   /** The same export the editor's More menu makes: the app folder, with accounts and rows once it is published. */
   const exportApp = async (entry: ProjectEntry) => {
@@ -110,7 +97,7 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
       setExporting("");
     }
   };
-  const deleteHandler = deleting ? (deleting.inFolder ? onDeleteMissing : onDeleteProject) : undefined;
+  const deleteHandler = deleting ? (deleting.sourceError ? onDeleteMissing : onDeleteProject) : undefined;
   /** After a delete, focus goes to the card that took its place, so clearing several drafts keeps your place. */
   const focusAfterDelete = (removed: ProjectEntry) => {
     const order = listOrder(entries).filter((entry) => groups.published.includes(entry) || groups.drafts.includes(entry));
@@ -133,11 +120,6 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
             <Button variant="primary" onClick={() => setCreating({ template: null })}><Plus size={15} aria-hidden="true" /> New project</Button>
           </header>
           {notice && <Alert className="project-list-notice" tone="info">{notice}</Alert>}
-          {localCopies.length > 0 && <details className="project-list-copies">
-            <summary>Copies saved in this browser ({localCopies.length})</summary>
-            <p>Earlier versions of Konae kept apps in the browser. These copies are not in your account. Import one to edit it here, or remove it from this browser.</p>
-            <ul>{localCopies.map(({ draft, index }) => <li key={`${draft.id}-${index}`}><span>{draft.name}</span><Button size="sm" onClick={() => onImportDraft(index)}>Import as new</Button><Button size="sm" onClick={() => onDismissDraft(index)}>Remove from this browser</Button></li>)}</ul>
-          </details>}
 
           {entries.length === 0
             ? <EmptyState
@@ -172,14 +154,11 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
                   {group.map((entry) => <ProjectCard
                     key={entry.id}
                     entry={entry}
-                    restoreIndex={drafts.findIndex((draft) => draft.id === entry.id)}
                     onOpen={(door) => open(entry, door)}
-                    onRestore={onImportDraft}
                     onCopy={copyAddress}
-                    onDelete={entry.inFolder || onDeleteProject ? () => setDeleting(entry) : undefined}
-                    onExport={entry.inFolder ? undefined : () => void exportApp(entry)}
+                    onDelete={entry.sourceError ? () => setDeleting(entry) : onDeleteProject ? () => setDeleting(entry) : undefined}
+                    onExport={entry.sourceError ? undefined : () => void exportApp(entry)}
                     exporting={exporting === entry.id}
-                    onCopyPull={entry.inFolder && entry.deployment ? copyPull : undefined}
                     undeployed={undeployed(entry)}
                   />)}
                 </ul>
@@ -194,9 +173,8 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
         onClose={() => setDeleting(null)}
         onDelete={deleteHandler}
         onDeleted={(name) => { toast(`${name} deleted`); focusAfterDelete(deleting); }}
-        onExport={deleting.inFolder ? undefined : () => void exportApp(deleting)}
+        onExport={deleting.sourceError ? undefined : () => void exportApp(deleting)}
         exporting={exporting === deleting.id}
-        onCopyPull={deleting.inFolder && deleting.deployment ? copyPull : undefined}
       />}
       {creating && <NewProjectDialog
         initialTemplate={creating.template}
@@ -210,37 +188,31 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
   );
 }
 
-function ProjectCard({ entry, restoreIndex, onOpen, onRestore, onCopy, onDelete, onExport, exporting = false, onCopyPull, undeployed = false }: {
+function ProjectCard({ entry, onOpen, onCopy, onDelete, onExport, exporting = false, undeployed = false }: {
   entry: ProjectEntry;
   /** The editor holds changes the published app does not run yet. */
   undeployed?: boolean;
-  restoreIndex: number;
   onOpen: (door: "preview" | "agent" | "code") => void;
-  onRestore: (index: number) => void;
   onCopy: (url: string) => void;
   onDelete?: () => void;
   /** Downloads the app folder, as the editor's Export does. */
   onExport?: () => void;
   exporting?: boolean;
-  /** For an app edited in a folder: copies the command that brings its data to that folder. */
-  onCopyPull?: () => void;
 }) {
   const { deployment } = entry;
   const editedTime = useRelativeTime(entry.editedAt);
-  const opens = !entry.inFolder || Boolean(deployment);
+  const opens = true;
   const href = `/app/${encodeURIComponent(entry.id)}`;
   const items: MenuItem[] = [
-    ...(!entry.inFolder ? [
+    ...[
       { label: "Describe a change", icon: <Sparkles size={14} />, onSelect: () => onOpen("agent") },
       { label: "Edit files", icon: <Code2 size={14} />, onSelect: () => onOpen("code") },
-    ] : []),
-    ...(restoreIndex >= 0 && entry.inFolder ? [{ label: "Restore editor files", icon: <RotateCcw size={14} />, onSelect: () => onRestore(restoreIndex) }] : []),
+    ],
     ...(deployment ? [
       { label: "Copy address", icon: <Copy size={14} />, onSelect: () => onCopy(deployment.url) },
       { label: "Usage", icon: <BarChart3 size={14} />, onSelect: () => window.location.assign(`/usage?deployment=${encodeURIComponent(deployment.id)}`) },
     ] : []),
     ...(onExport ? [{ label: exporting ? "Exporting…" : "Export app folder", icon: <Download size={14} />, disabled: exporting, onSelect: onExport }] : []),
-    ...(onCopyPull ? [{ label: "Copy pull command", icon: <Terminal size={14} />, onSelect: onCopyPull }] : []),
     ...(onDelete ? [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: onDelete }] : []),
   ];
   return <li className="project-card-item" data-opens={opens || undefined} data-project-id={entry.id}>
@@ -251,8 +223,8 @@ function ProjectCard({ entry, restoreIndex, onOpen, onRestore, onCopy, onDelete,
     </h3>
     {entry.purpose
       ? <p className="project-card-purpose">{entry.purpose}</p>
-      : !entry.inFolder && <p className="project-card-purpose is-quiet">No description yet.</p>}
-    {entry.inFolder && <p className="project-card-purpose is-quiet">{restoreIndex >= 0 ? "Edited in a folder. This browser holds a copy of its files." : "Edited in a folder."}</p>}
+      : !entry.sourceError && <p className="project-card-purpose is-quiet">No description yet.</p>}
+    {entry.sourceError && <p className="project-card-purpose is-quiet">The app source folder is missing or unreadable.</p>}
     <AppStatus className="project-card-status" url={deployment?.url} publishedAt={deployment ? releasedAt(deployment) : undefined} />
     <p className="project-card-meta">
       {entry.editedAt !== undefined && <time dateTime={new Date(entry.editedAt).toISOString()} title={exactTime(entry.editedAt)}>Edited {editedTime}</time>}
@@ -366,7 +338,7 @@ function FolderStart() {
   </details>;
 }
 
-function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted, onExport, exporting = false, onCopyPull }: {
+function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted, onExport, exporting = false }: {
   project: ProjectEntry;
   published: boolean;
   onClose: () => void;
@@ -375,8 +347,6 @@ function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted,
   /** Downloads the app folder first, so the data can leave with the person. */
   onExport?: () => void;
   exporting?: boolean;
-  /** For an app edited in a folder: copies the command that brings its data there. */
-  onCopyPull?: () => void;
 }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -397,16 +367,14 @@ function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted,
       setBusy(false);
     }
   };
-  const keep = published && onCopyPull
-    ? <Button onClick={onCopyPull} disabled={busy}><Terminal size={14} aria-hidden="true" /> Copy pull command</Button>
-    : published && onExport
-      ? <Button onClick={onExport} disabled={busy || exporting} loading={exporting}><Download size={14} aria-hidden="true" /> Export first</Button>
-      : null;
+  const keep = published && onExport
+    ? <Button onClick={onExport} disabled={busy || exporting} loading={exporting}><Download size={14} aria-hidden="true" /> Export first</Button>
+    : null;
   return <Dialog
     open
     title={`Delete ${project.name}`}
     description={published
-      ? `This app is published. Deleting it stops its address and deletes its database, app accounts, uploaded files and backups. This cannot be undone. ${onCopyPull ? "To keep its data, copy the pull command and run it in the app's folder first." : "To keep its data, export the app folder first."}`
+      ? "This app is published. Deleting it stops its address and deletes its database, app accounts, uploaded files and backups. This cannot be undone. Export the app folder first to keep its data."
       : "This removes the app and its files from your account. This cannot be undone."}
     initialFocus={field}
     onClose={close}

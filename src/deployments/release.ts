@@ -70,7 +70,7 @@ type CarriedFiles = { files: Record<string, string>; encodings?: Record<string, 
  * `contactEmail` is where notices to the owner go.
  */
 export type ReleaseContents = {
-  project: ProjectIdentity & CarriedFiles;
+  project: ProjectIdentity & CarriedFiles & { directories?: string[] };
   visibility: unknown;
   artifact: CarriedFiles;
   initialSignupPolicy?: { mode: string; allowlist: string[] };
@@ -97,7 +97,11 @@ export async function publishProject<Receipt>(
 ): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
   await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
-  const sources: CarriedFiles = sent.encodings && Object.keys(sent.encodings).length ? { files: sent.files, encodings: sent.encodings } : { files: sent.files };
+  const sources: CarriedFiles & { directories: string[] } = {
+    files: sent.files,
+    ...(sent.encodings && Object.keys(sent.encodings).length ? { encodings: sent.encodings } : {}),
+    directories: sent.directories ?? [],
+  };
   checkSourceFiles(sources);
   checkArtifact(artifact);
   const identity = { id: sent.id, name: sent.name, slug: sent.slug, manifest: sent.manifest };

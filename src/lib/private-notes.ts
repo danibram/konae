@@ -1,4 +1,3 @@
-import type { RuntimeActionDeclaration } from "../deployments/manifest";
 import type { MiniAppProject } from "./types";
 import { appStyles, escapeHtmlSource } from "./templates/shared";
 
@@ -39,12 +38,6 @@ const privateNotesActions = {
     },
   },
 };
-
-const privateNotesDeclarations: RuntimeActionDeclaration[] = [
-  { name: "notes.list", kind: "query", access: "authenticated" },
-  { name: "notes.create", kind: "mutation", access: "authenticated" },
-  { name: "notes.delete", kind: "mutation", access: "authenticated" },
-];
 
 const privateNotesIndex = `
 <title>Private notes</title>
@@ -175,17 +168,7 @@ try { await showCurrentSession(); } catch (error) { showError(error); }
 `;
 
 export function withPrivateNotes(project: MiniAppProject): MiniAppProject {
-  const manifest = {
-    ...project.manifest,
-    runtime: {
-      ...project.manifest.runtime,
-      database: {
-        ...project.manifest.runtime.database,
-        actions: privateNotesDeclarations.map((action) => ({ ...action })),
-      },
-      auth: { mode: "optional" as const },
-    },
-  };
+  const manifest = { ...project.manifest, visibility: "public" as const };
 
   return {
     ...project,

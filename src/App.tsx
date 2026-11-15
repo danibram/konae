@@ -75,7 +75,6 @@ import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { parseServerActionSource } from "./kernel/actions";
 import { parseRoute, pushRoute } from "./lib/routing";
-import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
@@ -83,7 +82,7 @@ import { isEncoded, sourceBytes } from "./lib/source-files";
 import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, refusedSpot } from "./components/action-readiness";
-import { browserCopy, createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./lib/workspace";
 import { ProjectSources, SaveSupersededError, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
@@ -167,15 +166,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const cached = loadWorkspaceState(workspaceStorage);
     return { projects: loaded.projects, deployments: loaded.deployments, activeProjectId: loaded.projects.some((item) => item.id === cached.activeProjectId) ? cached.activeProjectId : loaded.projects[0]?.id ?? "" };
   });
-  const [drafts, setDrafts] = useState(() => {
-    const candidates: MiniAppProject[] = [];
-    try {
-      const recovery = JSON.parse(workspaceStorage.getItem("recovery") ?? "[]") as MiniAppProject[];
-      if (Array.isArray(recovery)) candidates.push(...recovery);
-      candidates.push(...storedLocalProjects(workspaceStorage), ...storedLocalProjects());
-    } catch { /* Invalid local drafts remain untouched. */ }
-    return recoveryDrafts(candidates, loaded.projects, readDismissedDrafts(workspaceStorage));
-  });
   const [missing, setMissing] = useState(loaded.missing);
   const [projects, setProjects] = useState(initialWorkspace.projects);
   const [deployments, setDeployments] = useState(initialWorkspace.deployments);
@@ -188,20 +178,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const requested = parseRoute(window.location.pathname);
     if (requested.screen !== "editor" || loaded.projects.some((item) => item.id === requested.projectId)) return requested;
     // A published app with no editor files opens on its data. An unpublished one is on the list below; any other id has no page.
-    if (loaded.missing.some((item) => item.id === requested.projectId)) return loaded.deployments[requested.projectId] ? requested : { screen: "projects" as const };
+    if (loaded.missing.some((item) => item.id === requested.projectId)) return requested;
     return { screen: "not-found" as const, what: "project" as const, path: window.location.pathname };
   });
   const screen = route.screen;
   // A link to an unpublished app this account holds without editor files says so, and the address bar stops naming it.
-  const [routeNotice, setRouteNotice] = useState("");
-  const explainMissingRoute = () => {
-    window.history.replaceState({}, "", "/");
-    setRouteNotice("That app is edited in a folder and is not published yet, so it has no page here.");
-  };
-  useEffect(() => {
-    const requested = parseRoute(window.location.pathname);
-    if (requested.screen === "editor" && loaded.missing.some((item) => item.id === requested.projectId) && !loaded.deployments[requested.projectId]) explainMissingRoute();
-  }, []);
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
   const [selectedPath, setSelectedPath] = useState("app.js");
   const [newEntry, setNewEntry] = useState<"file" | "folder" | null>(null);
@@ -291,7 +272,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const flush = () => {
       const current = workspaceRef.current;
       const items = current.projects.map((item) => item.id === current.project.id ? current.project : item);
-      try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...items].map(browserCopy))); }
+      try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); }
       catch { /* The regular save reports storage failures in the editor. */ }
       sources.cancelAll();
     };
@@ -301,7 +282,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("beforeunload", flush);
     };
-  }, [workspaceStorage, drafts, sources]);
+  }, [workspaceStorage, sources]);
 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -426,7 +407,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const timeout = window.setTimeout(() => {
       try {
         persistWorkspace(projects, project.id, deployments, workspaceStorage);
-        workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...projects].map(browserCopy)));
       } catch (error) {
         // A full or unavailable localStorage must say so. Reporting "Saving"
         // forever, or worse "Saved locally", would hide that the work of the
@@ -435,7 +415,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       }
     }, 350);
     return () => window.clearTimeout(timeout);
-  }, [deployments, project, projects, workspaceStorage, drafts]);
+  }, [deployments, project, projects, workspaceStorage]);
 
   useEffect(() => {
     if (publishing) return;
@@ -935,12 +915,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const target = projects.find((item) => item.id === route.projectId);
     // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
-      if (missing.some((item) => item.id === route.projectId)) {
-        // A published app with no editor files has its own page, which this route already names.
-        if (deployments[route.projectId]) return;
-        setRoute({ screen: "projects" });
-        explainMissingRoute();
-      } else {
+      if (!missing.some((item) => item.id === route.projectId)) {
         setRoute({ screen: "not-found", what: "project", path: window.location.pathname });
       }
       return;
@@ -1178,7 +1153,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const openEditorRoute = (projectId: string) => {
     invalidateProjectSelection();
-    setRouteNotice("");
     const next = { screen: "editor" as const, projectId };
     setRoute(next);
     pushRoute(next);
@@ -1217,7 +1191,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const openProject = (projectId: string, entry: "preview" | "agent" | "code" = "preview") => {
     const next = projects.find((item) => item.id === projectId);
-    if (!next) return;
+    if (!next) { if (missing.some((item) => item.id === projectId)) openEditorRoute(projectId); return; }
     arrival.current = entry === "code" ? "code" : entry === "agent" ? "agent" : "preview";
     if (!sources.hasSources(projectId) || sources.isLoaded(projectId)) {
       setProject(next);
@@ -1248,22 +1222,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     openEditorRoute(next.id);
   };
 
-  const importDraft = (index: number) => {
-    const draft = drafts[index];
-    if (!draft) return;
-    const restore = missing.some((item) => item.id === draft.id);
-    const copy = { ...draft, id: restore ? draft.id : `app_${crypto.randomUUID()}`, updatedAt: Date.now() };
-    setProjects((current) => [...current, copy]);
-    setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const dismissDraft = (index: number) => {
-    const draft = drafts[index];
-    if (!draft) return;
-    dismissDrafts(workspaceStorage, [draft]);
-    setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
   const deleteMissingProject = async (item: ProjectMetadata, name: string) => {
     await sources.deleteProject(item.id, name);
     setMissing((current) => current.filter((entry) => entry.id !== item.id));
@@ -1271,12 +1229,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const { [item.id]: _removed, ...rest } = current;
       return rest;
     });
-    // A local copy of a deleted app would otherwise come back as an import.
-    const copies = drafts.filter((draft) => draft.id === item.id);
-    if (copies.length) {
-      dismissDrafts(workspaceStorage, copies);
-      setDrafts((current) => current.filter((draft) => draft.id !== item.id));
-    }
   };
 
   /** Deletes an editable project; it leaves the lists at once, so a pending save cannot bring it back. */
@@ -1288,11 +1240,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const { [item.id]: _removed, ...rest } = current;
       return rest;
     });
-    const copies = drafts.filter((draft) => draft.id === item.id);
-    if (copies.length) {
-      dismissDrafts(workspaceStorage, copies);
-      setDrafts((current) => current.filter((draft) => draft.id !== item.id));
-    }
   };
 
   const setActionAccess = (name: string, access: RuntimeActionAccess) => {
@@ -1313,17 +1260,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setOperationError(error instanceof Error ? error.message : String(error));
       return;
     }
-    const declarations = Object.values(program.actions).map((action) => ({ name: action.name, kind: action.kind, access: action.access }));
     const next = {
       ...project,
       files: { ...project.files, "actions.json": source },
-      manifest: {
-        ...project.manifest,
-        runtime: {
-          ...project.manifest.runtime,
-          database: { ...project.manifest.runtime.database, actions: declarations },
-        },
-      },
       updatedAt: Date.now(),
     };
     setProject(next);
@@ -1346,14 +1285,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
   }
 
-  // A published app with no editor files opens on its data, accounts and activity.
-  const published = missing.find((item) => item.id === route.projectId);
-  if (published && deployments[published.id]) {
-    return <PublishedAppView app={published} deployment={deployments[published.id]} ownerSession={ownerSession} projectCount={projects.length + missing.length} projects={switcherProjects(projects, missing, deployments)} onBack={goToProjects} />;
-  }
+  if (screen === "editor" && missing.some((item) => item.id === route.projectId)) return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>Could not open this app</h1><p role="alert">This app has no readable app/ source folder. The editor did not replace its files.</p><Button onClick={() => window.location.reload()}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></section></div></main>;
 
   if (screen === "editor" && loadingProjectId === route.projectId) {
     return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>{projectLoadError ? "Could not open this project" : "Opening project"}</h1>{projectLoadError ? <><p role="alert">{projectLoadError}</p><Button onClick={retryProjectLoad}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></> : <p>Loading the app files…</p>}</section></div></main>;

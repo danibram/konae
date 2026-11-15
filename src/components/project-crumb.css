@@ -1,4 +1,4 @@
-/* "Projects / <app name ▾>": the way home from inside an app, in the editor and on an app edited in a folder. */
+/* "Projects / <app name ▾>": the way home from inside an app. */
 .project-crumb { display: flex; align-items: center; gap: 6px; min-width: 0; font: 500 14px/1.3 var(--ds-font); }
 .project-crumb-home { flex: none; color: var(--project-crumb-muted, var(--ds-muted)); text-decoration: none; }
 .project-crumb-home:hover { color: inherit; text-decoration: underline; text-underline-offset: 3px; }

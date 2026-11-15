@@ -43,14 +43,6 @@
 .project-card-item .project-card-menu .ui-button.project-card-more[aria-expanded="true"] { border-color: var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); }
 .project-card-item .project-card-menu .ui-button.project-card-more:active:not(:disabled) { translate: none; }
 
-/* Copies an earlier version kept in this browser. */
-.project-list-copies { margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--ds-border); background: var(--ds-field); font: 400 14px/1.5 var(--ds-font); }
-.project-list-copies summary { cursor: pointer; font-weight: 650; }
-.project-list-copies p { margin: 8px 0; color: var(--ds-muted); }
-.project-list-copies ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.project-list-copies li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.project-list-copies li > span { flex: 1 1 160px; }
-
 /* A fresh owner sees one thing: describe the first app. */
 .project-list-empty.ui-empty { min-height: 50vh; }
 .project-list-empty.ui-empty h3 { font-size: 20px; }

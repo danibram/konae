@@ -1,7 +1,6 @@
 import { McpClient, platformMcp } from "../mcp/client";
 import type { MiniAppProject } from "./types";
 import type { DeploymentReceipt } from "../deployments/client";
-import { repairDroppedPreviewUpload } from "./starter";
 import { checkSourceFiles } from "./source-rules";
 import { checkSourceUpload } from "./size";
 import { isEncoded } from "./source-files";
@@ -98,11 +97,10 @@ export class ProjectSources {
       const bytes = await this.client.download(saved.transfer, activeSignal);
       const source = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
       if (source.id !== projectId) throw new Error("The saved source does not match its project.");
-      const repaired = repairDroppedPreviewUpload(source);
-      this.documents.set(projectId, repaired);
+      this.documents.set(projectId, source);
       this.sourcesExist.add(projectId);
       this.snapshots.set(projectId, JSON.stringify(source));
-      return repaired;
+      return source;
     } finally {
       activeSignal.removeEventListener("abort", cancelRead);
       active.delete(controller);
@@ -140,7 +138,7 @@ export class ProjectSources {
       const bytes = await this.client.download(saved.transfer, controller.signal);
       const source = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
       if (source.id !== projectId) throw new Error("The saved source does not match its project.");
-      return { revision: saved.revision, project: repairDroppedPreviewUpload(source), serverSnapshot: JSON.stringify(source) };
+      return { revision: saved.revision, project: source, serverSnapshot: JSON.stringify(source) };
     } catch (error) {
       this.reloading.delete(projectId);
       throw error;

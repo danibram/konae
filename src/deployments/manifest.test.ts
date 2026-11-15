@@ -16,21 +16,14 @@ describe("deployment manifest", () => {
     const manifest = normalizeManifest(undefined);
     expect(manifest.version).toBe(1);
     expect(manifest.visibility).toBe("private");
-    expect(manifest.runtime.database.mode).toBe("declared-actions");
-    expect(manifest.runtime.database.actions.map((action) => action.name)).toEqual([
-      "tasks.list",
-      "tasks.create",
-      "tasks.toggle",
-    ]);
+    expect(manifest).not.toHaveProperty("runtime");
   });
 
   test("a new project is private and only a manifest that says public is public", () => {
     expect(createDefaultManifest().visibility).toBe("private");
-    expect(createDefaultManifest().runtime.auth.mode).toBe("required");
     for (const visibility of [undefined, "", "Public", "open", 1]) {
       const manifest = normalizeManifest({ ...createDefaultManifest(), visibility });
       expect(manifest.visibility).toBe("private");
-      expect(manifest.runtime.auth.mode).toBe("required");
     }
     expect(normalizeManifest({ ...createDefaultManifest(), visibility: "public" }).visibility).toBe("public");
   });
@@ -44,9 +37,9 @@ describe("deployment manifest", () => {
     expect(serialized).not.toContain("sql");
   });
 
-  test("rejects duplicate declared actions", () => {
-    const manifest = createDefaultManifest();
-    manifest.runtime.database.actions.push({ ...manifest.runtime.database.actions[0] });
-    expect(() => normalizeManifest(manifest)).toThrow("unique");
+  test("drops the obsolete runtime block when it normalizes a saved manifest", () => {
+    const manifest = normalizeManifest({ version: 1, visibility: "public", runtime: { database: { actions: ["stale"] } } });
+    expect(manifest.visibility).toBe("public");
+    expect(manifest).not.toHaveProperty("runtime");
   });
 });

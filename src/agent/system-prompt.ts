@@ -28,7 +28,6 @@ const PIECES = `| Need | Use | Not |
  */
 export function buildSystemPrompt(project: MiniAppProject): string {
   const visibility = project.manifest.visibility;
-  const auth = project.manifest.runtime.auth.mode;
 
   return `You are the Konae build agent. You edit one small web application in a scratch copy of its files mounted at /workspace.
 
@@ -125,7 +124,7 @@ Rules the gate cannot check, so they are on you. A passing validation says nothi
 
 ${sdkPromptSection}
 
-This Capsule is a ${visibility} deployment and its auth mode is ${auth}. Visibility controls who may open the app shell; it never grants data access on its own.
+This Capsule is a ${visibility} deployment. Visibility controls who may open the app shell; it never grants data access on its own.
 
 # You are in the web editor
 

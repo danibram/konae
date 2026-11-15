@@ -39,20 +39,19 @@ export const appliesOnDeploy = "It applies to the live app when you deploy.";
 
 /** Who can open the app and who can read its uploads: both reach the live app with a deploy. */
 export function OpenAccessFields({ visibility, onSetVisibility, fileAccess, onSetFileAccess }: Pick<Props, "visibility" | "onSetVisibility" | "fileAccess" | "onSetFileAccess">) {
-  const folder = "It changes in the app's folder, with a publish.";
-  // An app edited in a folder offers no choice here, so its two rules read as text, as the rules of a private app do.
+  const deploymentTiming = appliesOnDeploy;
   if (!onSetVisibility && !onSetFileAccess) return <>
-    <div className="rule-text"><strong>Who can open the app</strong><span>{visibilityCopy[visibility].sentence} {folder}</span></div>
-    <div className="rule-text"><strong>Who can read uploaded files</strong><span>{fileAccess === "app-users" ? "All signed-in app users" : "Each file's visibility"}. Only the uploader can delete a file. {folder}</span></div>
+    <div className="rule-text"><strong>Who can open the app</strong><span>{visibilityCopy[visibility].sentence} {deploymentTiming}</span></div>
+    <div className="rule-text"><strong>Who can read uploaded files</strong><span>{fileAccess === "app-users" ? "All signed-in app users" : "Each file's visibility"}. Only the uploader can delete a file. {deploymentTiming}</span></div>
   </>;
   return <>
-    <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} ${onSetVisibility ? appliesOnDeploy : folder}`}>
+    <Field label="Who can open the app" help={`${visibilityCopy[visibility].sentence} ${deploymentTiming}`}>
       <Select value={visibility} disabled={!onSetVisibility} onChange={(event) => onSetVisibility?.(event.target.value === "private" ? "private" : "public")}>
         <option value="public">Anyone with the link</option>
         <option value="private">People with an app account</option>
       </Select>
     </Field>
-    <Field label="Who can read uploaded files" help={`${onSetFileAccess ? `${appliesOnDeploy} It covers existing and new files. Choosing each file's visibility brings back what each file had before.` : folder} Only the uploader can delete a file.`}>
+    <Field label="Who can read uploaded files" help={`${deploymentTiming} It covers existing and new files. Choosing each file's visibility brings back what each file had before. Only the uploader can delete a file.`}>
       <Select value={fileAccess ?? "per-file"} disabled={!onSetFileAccess} onChange={(event) => onSetFileAccess?.(event.target.value === "app-users")}>
         <option value="per-file">Each file's visibility</option>
         <option value="app-users">All signed-in app users</option>
