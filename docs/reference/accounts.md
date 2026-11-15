@@ -4,7 +4,7 @@ Each app decides who may create an account, how its people sign in and prove an 
 
 ## Signup policy
 
-Each Deployment has a Signup Policy that decides who may create an app account. `signup_policy_set { deploymentId, mode, allowlist? }` needs `manage_users`, and `signup_policy_read` needs `read`. A `deploymentId` is the app's ID, the same value as its `projectId` and the `id` in `konae.json`, because an app keeps one ID for its folder, its project and its Deployment.
+Each Deployment has a Signup Policy that decides who may create an app account. `signup_policy_set { projectId, mode, allowlist? }` needs `manage_users`, and `project_inspect` needs `read`. A `deploymentId` is the app's ID, the same value as its `projectId` and the `id` in `konae.json`, because an app keeps one ID for its folder, its project and its Deployment.
 
 | `mode` | Who may create an account |
 | --- | --- |
@@ -17,7 +17,7 @@ A public Deployment starts Open and a private one Closed. A first release may se
 
 ## Sign-in methods
 
-`sign_in_methods_set { deploymentId, methods }` takes `["password"]` or `["password", "google"]` and needs `manage_users`. `sign_in_methods_read` reads it back with `read`. Password cannot be turned off, so every account keeps a way back in.
+`sign_in_methods_set { projectId, methods }` takes `["password"]` or `["password", "google"]` and needs `manage_users`. `sign_in_methods_read` reads it back with `read`. Password cannot be turned off, so every account keeps a way back in.
 
 Each app has its own Google client, which the owner makes as a Web application client in their own Google Cloud console and sets as two signing secrets with `secret_set { projectId, name, value, use: "google" }`, named `google_client_id` and `google_client_secret`. Those names take only `use: "google"`, the values are never returned, and no route or call reads them. `sign_in_methods_read` answers `googleClient { clientIdSet, clientSecretSet }` and `redirectUris`, the callbacks to register in that client:
 
@@ -35,7 +35,7 @@ An export carries `signInMethods` and the accounts, never the client. On another
 
 ## Users and invitations
 
-These tools take a `deploymentId`, need `manage_users` and the project grant, and write an audit row naming the Deployment. The editor's Access > Users calls the same tools with the owner's session. It reuses one idempotency key when a batch is retried, and it turns invite and resend off, with the reason, while `mail_status` reports `sending: false`.
+These tools take a `projectId`, need `manage_users` and the project grant, and write an audit row naming the Deployment. The editor's Access > Users calls the same tools with the owner's session. It reuses one idempotency key when a batch is retried, and it turns invite and resend off, with the reason, while `mail_status` reports `sending: false`.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |

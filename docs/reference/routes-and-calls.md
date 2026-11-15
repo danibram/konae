@@ -159,9 +159,9 @@ The Kernel records an accepted delivery before the action runs, in `route_delive
 ### API keys
 
 ```text
-api_keys_create { "deploymentId", "name", "actions": ["orders.receive"], "files": ["private"] }
-api_keys_list   { "deploymentId" }               metadata, revocation times and reasons, never the key
-api_keys_revoke { "deploymentId", "keyId" }
+api_keys_create { "projectId", "name", "actions": ["orders.receive"], "files": ["private"] }
+api_keys_list   { "projectId" }               metadata, revocation times and reasons, never the key
+api_keys_revoke { "projectId", "keyId" }
 ```
 
 `api_keys_create` returns the key once. A key belongs to one Deployment, grants no owner tool, and works only on HTTP routes and the file read path. The runtime endpoint refuses it with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` A key names actions that have an HTTP route and the file visibilities `public` and `private`; a key that names `private` reads every private file of its Deployment. A Deployment holds at most 50 live keys. The Kernel keeps the key's SHA-256 hash in `identity.sqlite`.
@@ -235,7 +235,7 @@ When a call ends, its `then` mutation runs once, with no actor. Each of its inpu
 
 A pointer that finds nothing leaves its input out, so it binds NULL when the input is nullable. A string input takes a number, a boolean or a structure as its JSON text. The `then` mutation must be a mutation with no HTTP route and no actor binding, and every required input must be filled. `miniapp.actions.call` refuses it with `Action <name> runs only after the call <call> answers.` It counts in Usage as an action, or under `refused` when its guard refuses. Its `notify` sends as any mutation's does; a notice to `actor` records `no-account`.
 
-`calls_read { "deploymentId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome. The outbox keeps the newest 1000 finished calls per app. An export does not carry pending calls. A scheduled copy carries `calls.sqlite`.
+`calls_read { "projectId", "cursor"? }` needs `read` and lists the app's calls newest first, 50 at a time: the action, `pending`, `delivered` or `failed`, attempts, method, URL, status, error kind, the first 1 KiB of the answer and the `then` mutation's outcome. The outbox keeps the newest 1000 finished calls per app. An export does not carry pending calls. A scheduled copy carries `calls.sqlite`.
 
 ### A page that reads another app
 

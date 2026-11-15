@@ -68,7 +68,7 @@ bun run konae -- login --dir ./my-app --url http://localhost:4173 --manage-users
 bun run konae -- publish --dir ./my-app
 ```
 
-`init` writes the app folder. The `tasks` template is public. Without `--template`, `init` writes `notes`, a private app with invitation signup, and its first `dev` serves a sign-in page. `dev` invites `test@example.com` and prints a link that opens the invitation, so you can choose a password and sign in. `dev` compiles the Kernel on its first run, which takes about a minute, runs the folder with the `kernel` binary, and starts it again when the files change. `login` saves a 24-hour credential in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
+`init` writes the app folder. The `tasks` template is public. Without `--template`, `init` writes `notes`, a private app with invitation signup, and its first `dev` serves a sign-in page. `dev` invites `test@example.com` and prints a link that opens the invitation, so you can choose a password and sign in. `dev` downloads the Kernel binary matching the CLI version and checks its SHA-256 against the release `SHA256SUMS`, unless `KONAE_KERNEL_BIN` names a local binary. It runs the folder with that Kernel and restarts it when files change. `login` saves a 24-hour credential in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
 
 ### 4. Prove it
 

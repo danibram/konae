@@ -4,7 +4,7 @@ An agent operates Konae through the owner's MCP on `/mcp`. The editor calls the 
 
 ## Connect
 
-Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256, and the token lasts one hour with no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/_konae/owner/login`, which issues a token of 1, 7 or 30 days, or from `token_create`.
+Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256. Loopback clients receive a 24-hour token and may request `export_data`; other clients receive a one-hour token. Tokens have no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/_konae/owner/login`, which issues a token of 1, 7 or 30 days, or from `token_create`.
 
 ```text
 Authorization: Bearer YOUR_TOKEN
@@ -20,7 +20,7 @@ curl -s http://localhost:4173/mcp \
 
 From a folder you logged in to, `bun run konae -- tool session_inspect --dir ./my-app` makes the same call with the saved token. See [`tool` in the CLI](./cli.md#tool).
 
-OAuth offers `read`, `write`, `publish` and `manage_users`, and `export_data` only to a client that redirects to this machine, such as `konae login --browser --export-data`. A client that redirects to this machine gets a 24-hour token, any other one hour. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
+OAuth offers `read`, `write`, `publish` and `manage_users`. A redirect to `localhost`, `127.0.0.1` or `[::1]` may also request `export_data` and receives a 24-hour token. Other clients receive a one-hour token. Clerk caps tokens at one hour. Consent describes the granted permissions and token expiry; it does not promise rollback. `konae login --browser --export-data` uses the loopback flow. After connecting, call `session_inspect` and `platform_guide` with topic `rules`.
 
 ## platform_guide topics
 
@@ -46,7 +46,7 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | Permission | Tools |
 | --- | --- |
 | None | `platform_describe`, `platform_guide`, `session_inspect` and `mail_status` |
-| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `signup_policy_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `usage_read`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
+| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` writes |
 | `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `project_import`, and `initialSignupPolicy` on a first release |
 | `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
@@ -66,7 +66,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Owner data | `database_execute` |
 | App export and import | `project_export`, `project_import` |
 | Publishing | `release_plan`, `release_apply` |
-| Signup policy | `signup_policy_read`, `signup_policy_set` |
+| Signup policy | `signup_policy_set`; read it through `project_inspect` under `deployment.signupPolicy` |
 | Sign-in methods | `sign_in_methods_read`, `sign_in_methods_set` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
@@ -75,7 +75,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Path address | `path_read`, `path_set`, `path_clear` |
 | Maintenance | `maintenance_read`, `maintenance_set` |
 | Contact email | `contact_email_read`, `contact_email_set` |
-| Usage and Signals | `usage_read`, `signals_read`, `usage_summary`, `usage_overview` |
+| Usage and Signals | `usage_summary`, `signals_read`, `usage_overview` |
 | Calls and notices | `calls_read`, `notices_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
 | Transfers | `transfer_begin`, `transfer_status`, `transfer_write`, `transfer_complete`, `transfer_read`, `transfer_cancel` |
@@ -83,7 +83,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | App runtime, with an app session | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` |
 | App accounts, before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
 
-The app runtime and app account tools run on an app's runtime endpoint, `/_konae/mcp` on the app's host, with an app session. Called on `/mcp`, they answer where they run.
+The app runtime's complete inventory has 18 tools: `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_read`, `files_upload`, `files_update`, `files_delete`, `transfer_read`, `transfer_status`, `transfer_cancel`, `transfer_begin`, `transfer_write`, `transfer_complete`, `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. A signed-in app user may call all 18. An unsigned visitor on a public Deployment may call 11: `auth_session`, `actions_invoke`, `files_list`, `files_read`, `transfer_read`, `transfer_status`, `transfer_cancel`, `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. An unsigned visitor on a private Deployment may call only the four account tools. The runtime endpoint is `/_konae/mcp` on the app's host. These tools are distinct from the owner's operations MCP on `/mcp`.
 
 [The reference](./reference/README.md) gives each tool's arguments, answers and refusals, and [the walkthrough](./mcp-walkthrough.md) runs them in order on one app.
 
@@ -104,7 +104,7 @@ Two writes answer with their own observation, so no second call follows them. `t
 | `api_keys_create` | `api_keys_list` |
 | `api_keys_revoke` | `api_keys_list` |
 | `release_apply` | `project_inspect` |
-| `signup_policy_set` | `signup_policy_read` |
+| `signup_policy_set` | `project_inspect` |
 | `sign_in_methods_set` | `sign_in_methods_read` |
 | `app_invitations_create` | `app_invitations_list` |
 | `app_invitation_resend` | `app_invitations_list` |

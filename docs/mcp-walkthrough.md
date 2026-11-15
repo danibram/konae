@@ -1,10 +1,10 @@
-# Walkthrough: from a credential to an import over MCP
+# Owner MCP walkthrough: operate an app
 
-This page takes one app through every operation an outside agent performs on Konae: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, publish it with a Signup Policy, invite an app user, check it against its Action Contract, read its Usage and Signals, export it and import it on a second installation.
+This page follows an outside agent as it operates Konae through the owner's MCP: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, invite an app user, check it against its Action Contract, read its Usage and Signals, then export and import it on another installation. Publishing uses `konae publish`, the CLI release path.
 
-`tests/mcp-walkthrough.integration.test.ts` recorded every command and every answer below from two running installations of the `konae` binary, and it fails when this page differs from what they answer. Values that change on every run appear as placeholders in angle brackets, such as `<project id>`. The first installation answers on `http://localhost:4173`, the second on `http://localhost:4174`, and `dev` on `http://localhost:8796`. An app's host is `<slug>.localhost` on its installation's port. The commands call that address the `<Kernel URL>`.
+The command and answer blocks below are the checked-in recorder output. The recorder test must pass before those blocks can be updated. The owner MCP handles operations. `konae publish` uses the same release checks as the editor.
 
-A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>" }`. Some long answers show only the fields the step needs. [The reference](reference/README.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
+A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>"}`. Some long answers show only the fields the step needs. [The reference](reference/README.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
 
 ## 1. Get an Agent Credential with an invitation code
 

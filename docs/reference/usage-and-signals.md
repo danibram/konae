@@ -7,13 +7,12 @@ The Kernel counts what an app does and records the Signals its actions declare, 
 Each Deployment keeps Usage and Signals in its own `data/usage.sqlite`. Only the owner reads them; the runtime endpoint does not list the tools, so an app cannot read its own Usage. `kernel-rs/kernel/src/usage.rs` implements it, and [ADR-0010](../adr/0010-the-kernel-keeps-usage-and-signals.md) records the decision. The editor's Usage page at `/usage` reads every project the owner holds.
 
 ```text
-usage_read     { "deploymentId", "from": "2026-11-01", "to": "2026-11-06" }
-signals_read   { "deploymentId", "name"?: "order.placed", "cursor"? }
-usage_summary  { "deploymentId", "from", "to" }
+usage_summary  { "projectId", "from": "2026-11-01", "to": "2026-11-06" }
+signals_read   { "projectId", "name"?: "order.placed", "cursor"? }
 usage_overview { "from", "to", "cursor"? }
 ```
 
-All four need `read` and the project grant. Dates are UTC `YYYY-MM-DD`, both included, at most 400 days apart. `usage_read` returns one row per day, kind and name, the totals, and the newest 500 [scheduled runs](#scheduled-work) in the range:
+All three need `read` and the project grant. Dates are UTC `YYYY-MM-DD`, both included, at most 400 days apart. `usage_summary` returns daily totals, signed-in account activity, storage and the newest 500 [scheduled runs](#scheduled-work) in the range:
 
 ```json
 { "from": "2026-11-01", "to": "2026-11-06",
@@ -71,9 +70,9 @@ The property `actor` records the caller's ID: the app user's, the API key's, or 
 | A signal action without `signal` | `Action <name> is a signal action, so it must declare a signal.` |
 | A signal action with a statement | `Action <name> is a signal action, so it runs no SQL and cannot declare a statement.` |
 | A signal action with `http` | `Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route.` |
-| `usage_read` with a date that is not `YYYY-MM-DD` | `from and to must be dates written YYYY-MM-DD.` |
-| `usage_read` with `from` after `to` | `from must not be after to.` |
-| `usage_read` over more than 400 days | `Usage covers at most 400 days at a time.` |
+| `usage_summary` with a date that is not `YYYY-MM-DD` | `from and to must be dates written YYYY-MM-DD.` |
+| `usage_summary` with `from` after `to` | `from must not be after to.` |
+| `usage_summary` over more than 400 days | `Usage covers at most 400 days at a time.` |
 | `signals_read` with a cursor it did not return | `Invalid cursor. Pass back the nextCursor of an earlier page.` |
 
 The Gate and the Kernel run the cases in `kernel-rs/kernel/src/signal-cases.json`. The store's bounds are on [the limits page](../limits.md#usage-store). An export and a scheduled copy carry it. The editor preview keeps no store.
@@ -127,7 +126,7 @@ A mutation that takes no input may declare when the Kernel's own timer runs it (
 | Failure | A failed run is logged, recorded with `outcome: "failed"` and its error, and tried at the next look |
 | Guard and Signal | A run that changes no row is recorded with `changes: 0`, and the guard does not apply. A run that changes a row records the Signal with `actor` null |
 | Notice | A run that changes a row sends its `notify`. `to: "owner"` sends to the app's contact email once per run. `to: "actor"` records `no-account` |
-| Usage | Each run counts under `scheduled`, and `usage_read` returns the newest 500 runs with `action`, `at`, `outcome`, `changes` and, for a failed run, `error` |
+| Usage | Each run counts under `scheduled`, and `usage_summary` returns the newest 500 runs with `action`, `at`, `outcome`, `changes` and, for a failed run, `error` |
 
 The editor preview runs no schedule; `konae dev` does. `KONAE_SCHEDULE_MIN_SECONDS` runs every schedule every few seconds for a test, and the Kernel refuses it unless `KONAE_BIND` is a loopback address. Nothing is pushed to a page, so a page polls a query with an `after` cursor.
 
@@ -186,7 +185,7 @@ The body keeps the template's line breaks, the HTML part escapes every value, an
 | `sender-not-ready` | The sender preflight was not ready. The job is stored as failed and never sent |
 | `storage-error` | The queue could not be written. The Kernel logs it |
 
-A queued notice is a job in the account email queue with purpose `notify`, held while its app is in maintenance, and failed as `notice-expired` when it has not left within a day. `notices_read { "deploymentId", "cursor"? }` needs `read` and lists the app's notice jobs newest first, 50 at a time, with the action, the state, attempts, the failure kind and the times; it names no recipient. The editor's What happened panel reads `usage_summary`, `calls_read`, `notices_read` and `signals_read`. Notices count apart from account email, 200 a day per app, 500 per owner and 50 per recipient from one app, and the installation's 1,000 a day counts every email.
+A queued notice is a job in the account email queue with purpose `notify`, held while its app is in maintenance, and failed as `notice-expired` when it has not left within a day. `notices_read { "projectId", "cursor"? }` needs `read` and lists the app's notice jobs newest first, 50 at a time, with the action, the state, attempts, the failure kind and the times; it names no recipient. The editor's What happened panel reads `usage_summary`, `calls_read`, `notices_read` and `signals_read`. Notices count apart from account email, 200 a day per app, 500 per owner and 50 per recipient from one app, and the installation's 1,000 a day counts every email.
 
 | Declaration | Message |
 | --- | --- |

@@ -52,7 +52,7 @@ A schedule fits work such as releasing a hold that lapsed or closing a day. The 
 
 ## Check it worked
 
-- Read the runs with `usage_read` and the Deployment's `deploymentId`, plus `from` and `to` dates. It returns the newest 500 scheduled runs in the range with `action`, `at`, `outcome`, `changes` and, for a failed run, `error`. On `konae dev`, `bun run konae -- events --dir <folder>` lists them.
+- Read the runs with `usage_summary` and the project's `projectId`, plus `from` and `to` dates. It returns the newest 500 scheduled runs in the range with `action`, `at`, `outcome`, `changes` and, for a failed run, `error`. On `konae dev`, `bun run konae -- events --dir <folder>` lists them.
 - Call the query that reads the rows the run wrote, through the page.
 - After `release_apply`, read the Deployment back with `project_inspect`.
 

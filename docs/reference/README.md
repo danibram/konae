@@ -16,7 +16,7 @@ These pages state each tool's arguments, answers and refusals, one topic to a pa
 
 ## Credentials
 
-Run `bun run dev:local`, open `http://localhost:4173/_konae/owner/login` and sign in on the owner sign-in page. The editor's `/platform-access` opens the same page, and on an installation with Clerk it holds Clerk's sign-in. The first owner of an installation follows "Create an owner account" and gives the "Installation setup key", which a local install fills in. Every later owner needs an invitation code from the operator, as [Operate an installation](../operate.md#owner-admission) describes.
+Run `bun run dev:local`, open `http://localhost:4173/_konae/owner/login` and sign in on the owner sign-in page. The editor opens `/_konae/owner/login` directly. `/platform-access` serves Clerk sign-in only. The first owner of an installation follows "Create an owner account" and gives the "Installation setup key", which a local install fills in. Every later owner needs an invitation code from the operator, as [Operate an installation](../operate.md#owner-admission) describes.
 
 | Credential | Permissions it can hold | Lifetime |
 | --- | --- | --- |

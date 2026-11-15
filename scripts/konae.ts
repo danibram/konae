@@ -130,20 +130,20 @@ login     --dir <folder> --url <installation URL> [--browser [--no-open]] [--man
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
           a development mailbox on this machine and sets KONAE_PASSWORD, for loopback Kernels only.
 init      --dir <empty folder> [--name <name>] [--template <id>]
-          Writes an app folder: konae.json, the template in app/, AGENTS.md, action-contract.md,
-          compose.yaml, .env.example and package.json, whose npm run build writes dist/. It needs no
+          Writes konae.json, app/, compose.yaml, .env.example, .gitignore, AGENTS.md, action-contract.md,
+          actions.d.ts, package.json, tsconfig.json and scripts/build.mjs, scripts/static-artifact.mjs,
+          scripts/local-builder.mjs and scripts/runtime.js. npm run build writes dist/. It needs no
           credential and no Kernel, and the first publish registers the project.
           Templates: ${INIT_TEMPLATES.join(", ")}.
 dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
-          Builds dist/ and runs the kernel binary on the folder, with data/ as its data, and starts it
-          again when a file in app/ changes. The Kernel checks the folder as a release. Its email,
+          Builds dist/ with the shared local builder and runs the matching kernel binary on the folder, with data/ as its data, and starts it again when a file in app/ changes. It downloads that Kernel version and verifies its checksum unless KONAE_KERNEL_BIN names a local binary. The Kernel checks the folder as a release. Its email,
           notices and invitations included, goes to <folder>/.konae/kernel/mailbox.jsonl.
           An app whose Signup Policy is not open and that holds no account gets one invited at
           test@example.com, and dev prints the link that opens it.
           A file over 2 MiB is refused as on a Kernel; KONAE_FILE_MAX_BYTES raises that limit.
           It sets and prints a local value for each signing secret actions.json names, and serves a
           page of what the app did (email, calls, scheduled runs, Signals) on the next port.
-          KONAE_KERNEL_BIN names a kernel binary to run instead of downloading one.
+          KONAE_KERNEL_BIN names a kernel binary to run instead of downloading the matching release binary.
           --reset imports the data pull exported into data/, after a backup, or empties data/ when there is none.
           A schema change that loses data is refused; --confirm-schema applies the plan it names.
           Writes actions.d.ts, which types miniapp.actions.call.
@@ -156,18 +156,16 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           because nothing is sent. --json prints one object per line and --follow keeps printing.
           Only --prod reads the published Deployment.
 pull      --dir <folder> [--url <installation URL>]
-          Exports app/, dist/ and data (database, accounts, files, Usage) into
-          <folder>/.konae/pull. Needs login --export-data. dev --reset imports its data/.
-          It replaces app/ and konae.json only when both match their last published values;
-          otherwise it stages the published files at .konae/pull/app and .konae/pull/konae.json.
-          Copy the staged files into place, then pull again to record their source revision.
+          Downloads app/, dist/, konae.json settings and data into <folder>/.konae/pull. Needs login --export-data.
+          It replaces local sources and settings only when their saved digests match; otherwise it
+          stages published files and preserves local edits. dev --reset imports pulled data after a backup.
+          A pending pull blocks push until that import finishes.
 push      --dir <folder> [--url <installation URL>] [--yes] [--confirm-schema <confirmation>]
-          Replaces the published app's data with <folder>/data: database, accounts, files and Usage.
+          Replaces the published app's data with <folder>/data: database, accounts, files and Usage. A pending pull must be imported with dev --reset first.
           Rows are never merged. Without --yes it prints rows here against published rows and sends
           nothing. With it, the app goes into maintenance, the import backs up the published data
           first and prints the backup's id, and maintenance ends, on failure too.
-build     --dir <folder>                 Builds app/ into dist/. It runs npm run build once node_modules is
-          installed, and the built-in bundler before that.
+build     --dir <folder>                 Builds app/ into dist/ with the shared builder. Packages declared in package.json must be installed in node_modules.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
           actions.d.ts, which types miniapp.actions.call.
 publish   --dir <folder> [--url <installation URL>] [--confirm-schema <confirmation>]
@@ -180,8 +178,8 @@ conform   --url <app URL> --contract <file> [--token <app session>] [--key <API 
           Calls every action and checks the answers against the contract. It runs each mutation once,
           so point it at a test Deployment.
 export    --dir <folder> --out <empty folder> [--with-data]
-          Writes the app folder: konae.json, app/, a fresh dist/ and the files every app folder
-          carries. --with-data adds the published app's data/ and needs a credential from
+          Writes the app folder: konae.json, app/, a fresh dist/ and its generated developer files.
+          --with-data adds the published app's data/ and needs a credential from
           login --export-data. Secrets never go with it.
 domain    [--deployment <id>] [--set <hostname> | --clear] [--dir <folder>] [--url <installation URL>]
           Shows, sets or clears the app's custom domain. --deployment defaults to the id in

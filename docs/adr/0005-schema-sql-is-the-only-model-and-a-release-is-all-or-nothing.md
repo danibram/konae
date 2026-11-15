@@ -37,6 +37,6 @@ A publish stages and uploads first. It then copies the database, applies the sch
 
 ## Consequences
 
-- The editor preview runs `schema.sql` on its own test rows and never changes a table it already has. When the preview lacks a table or column that `schema.sql` declares, the Gate warns and passes. Try such a change on `konae dev` or a published Deployment.
+- The editor preview runs `schema.sql` on its own test rows and never changes a table it already has. When its schema lacks a declared table or column, the Gate reports `PREVIEW_BEHIND`, names the difference, and marks preview row checks as skipped. Try such a change on `konae dev` or a published Deployment.
 - An export and a copy read the database with `VACUUM INTO`, which is consistent in WAL mode and writes a file in rollback mode.
 - A tool that reads a live database from disk opens it read-write, or reads a copy, because bun's SQLite refuses to open a WAL file read-only once its `-shm` is gone.

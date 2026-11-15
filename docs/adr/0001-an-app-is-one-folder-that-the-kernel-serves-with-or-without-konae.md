@@ -25,13 +25,12 @@ my-app/
   dist/           the built static files the Kernel serves
   data/           database.sqlite, identity.sqlite, usage.sqlite, secrets.sqlite, files/
   konae.json      name, visibility, Signup Policy, sign-in methods, contact email
-  actions.d.ts    types for miniapp.actions.call, generated
-  compose.yaml    runs the Kernel image on this folder
-  .env.example    the installation settings the Kernel reads
-  AGENTS.md       for a coding agent who opens the folder cold
-  action-contract.md
-  package.json    npm run build writes dist/ from app/
-  scripts/        the build the package runs
+  AGENTS.md       instructions for a coding agent
+  action-contract.md, actions.d.ts
+  compose.yaml, .env.example, .gitignore
+  package.json, tsconfig.json
+  scripts/build.mjs, scripts/static-artifact.mjs
+  scripts/local-builder.mjs, scripts/runtime.js
 ```
 
 `konae init` writes it, `konae dev` serves it on the `kernel` binary, an export downloads it, and the Kernel keeps each app in it under `apps/<id>/`. Inside the Kernel the folder also holds `.konae/`, which keeps what the installation knows about the app, such as its record, backups, maintenance state, custom domain and path address. An export never hands `.konae/` over.
@@ -62,6 +61,10 @@ A third reason keeps the secrets out of `identity.sqlite`. An export carries onl
 ## Consequences
 
 - The Kernel reads one app folder format and no other.
-- An app built outside the editor arrives with its own `dist/`. When the editor's browser build can build `app/`, the app is edited in the web. When it cannot, Konae serves the `dist/` that came with it and the editor says the app is built on its owner's machine.
+- An app built outside the editor arrives with its own `dist/`. Apps made in a folder use `app/` as their editable source and open in the editor. The editor reads project metadata without downloading asset bytes, then loads the selected project's files. A usable folder does not require `.konae/sources.json`, `manifest.runtime` or a special folder-edited branch. Server sources take precedence over older browser backups.
 - The Kernel image is built with `Dockerfile.kernel`. Releases publish it as `ghcr.io/danibram/konae-kernel:<version>` for `linux/amd64` and `linux/arm64`; see [Releasing](../releasing.md).
 - This record leaves open an MCP endpoint per app for a user's agent, a plain HTTP runtime endpoint, and merging Konae's two databases.
+
+## Superseding note, 2026-11-15
+
+The editor and folder workflow now share the `app/` source tree, including binary files. The editor and Kernel apply shared path, count and decoded-size limits. A published release stores its applied settings and artifact identity separately from the editable `konae.json` draft. Pull carries sources, `dist/`, settings and data, records a project and installation scoped source revision, and stages incoming files when local edits differ. A fresh Kernel keeps the applied release when `dist/` is unchanged and applies the current sources when the artifact changes.

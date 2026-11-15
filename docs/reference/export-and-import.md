@@ -4,7 +4,7 @@ Export the app folder to take one app's accounts, data and rules to another mach
 
 ## Export and import an app
 
-`project_export { deploymentId }` is the one export of an app and needs `export_data`. It hands over the app folder: `folder`, one download of a ustar archive with `konae.json`, `app/` and `dist/`, and one download per part of `data/`, captured under the app's locks so no write lands halfway. `sourcesAhead` compares `app/` with the release's `sourceDigest`. Older releases without a digest compare `app/actions.json` with the actions the release runs. Secrets, owners, credentials, sessions and `.konae/` never leave.
+`project_export { projectId }` exports the published app and needs `export_data`. It hands over the app folder: `folder`, one download of a ustar archive with `konae.json`, `app/` and `dist/`, and one download per part of `data/`, captured under the app's locks so no write lands halfway. `sourcesAhead` compares `app/` with the release's `sourceDigest`. Older releases without a digest compare `app/actions.json` with the actions the release runs. Secrets, owners, credentials, sessions and `.konae/` never leave.
 
 ```json
 {
@@ -34,7 +34,7 @@ Export the app folder to take one app's accounts, data and rules to another mach
 | `files` | A ustar archive of `index.json` and one `<id>.blob` per file | The destination's per-file limit and file quota |
 | `usage` | `usage.sqlite`, present when the app recorded Usage or a Signal | 128 MiB |
 
-`publishedRevision` counts the releases applied, and `sourcesRevision` the editor's saves. Read each download with `transfer_read` until `nextOffset` equals `size`, check its SHA-256, and cancel it. The downloads expire after an hour and need `export_data`. The audit log gets one `project_export` row and one `package_download` row per download.
+`publishedRevision` counts the releases applied, and `sourcesRevision` the editor's saves. `konae.json` and `app/` in an export carry saved drafts. The Kernel separately retains effective released settings, actions, schema and artifact identity. On restart, an unchanged `dist/` keeps the applied snapshot; a changed artifact applies the current sources and matching settings through the normal schema confirmation path. Legacy folders recover applied state from their Installed record and live database rather than treating a saved draft as released. Read each download with `transfer_read` until `nextOffset` equals `size`, check its SHA-256, and cancel it. The downloads expire after an hour and need `export_data`. The audit log gets one `project_export` row and one `package_download` row per download.
 
 To import into a new app on another installation, create the project there with `project_create` and the same `projectId`, and set every signing secret with `secret_set`. Upload each component with `transfer_begin { size, sha256, projectId, component }`, so the upload may reach that component's limit; `McpClient.upload(bytes, projectId, component)` in `src/mcp/client.ts` does the three calls. Then send the release payload, the one `release_plan` always takes, with `initialPackage`:
 
@@ -71,15 +71,15 @@ To import into a new app on another installation, create the project there with 
 
 ### Import into an existing app
 
-`project_import { deploymentId, replace, transferId?, package?, confirmSchema? }` replaces a published app with an exported folder and needs `publish`. `replace` is `sources`, `data` or `both`:
+`project_import { projectId, replace, transferId?, sourcesTransferId?, artifactTransferId?, package?, confirmSchema? }` replaces a published app with an exported folder and needs `publish`. `replace` is `sources`, `data` or `both`:
 
-- `sources` takes `transferId`, an upload of the release payload built from the folder's `app/` and `dist/`, publishes it and makes it the sources the editor opens.
+- `sources` takes `sourcesTransferId` for the files under `app/` and `artifactTransferId` for `dist/`. It publishes those inputs and makes the source files the editor opens.
 - `data` takes `package { manifest, components }`, uploaded as for a new app, and replaces the database, the accounts, the files and Usage. The database takes the live schema.
-- `both` takes both, and the database takes the release's schema.
+- `both` takes source and artifact uploads plus the data package, and the database takes the release's schema.
 
 It never merges rows. It first writes a backup of what it replaces, which `database_execute` operation `list-backups` lists as `Before import`, with `holds` naming `data`, `sources` or both, and `restore-backup` brings back. The app keeps its Signup Policy, sign-in methods, addresses, secrets, sessions and API keys. A schema change that loses data answers `{ imported: false, replace, schema }` and changes nothing; call again with `schema.confirmation` as `confirmSchema` once the owner agrees. Otherwise the answer is `{ imported: true, replace, backup, schema }`. `project_import` works while the app is in maintenance. In the editor, App settings has an Import section that reads the `.tar` that Export downloads.
 
-`bun run konae -- export --dir <folder> --out <empty folder> --with-data` writes the same app folder on disk. `bun run konae -- pull` exports the data into `.konae/pull/` and `dev --reset` imports it into the local folder, as [the CLI](../cli.md#pull) describes. On a `kernel` binary without Konae, `kernel import <folder>` replaces the app's data after a backup.
+`konae export --dir <folder> --out <empty folder> --with-data` writes the local app folder and rebuilds `dist/`. `konae pull` downloads sources, `dist/`, settings and data into `.konae/pull/`, recording the observed source revision and digest for that installation and project. It installs sources and settings when their saved digests still match; otherwise it stages the incoming versions and preserves local edits. Staged file replacement rolls back if a rename fails. `konae dev --reset` backs up local `data/` and imports the pulled data. While a pull is pending, `konae push` refuses until that reset import completes. On a `kernel` binary without Konae, `kernel import <folder>` replaces the app's data after a backup.
 
 ## Read next
 

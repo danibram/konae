@@ -40,11 +40,11 @@ flowchart TB
 | Path | Needs |
 | --- | --- |
 | The editor, `bun run dev:local` | [Bun](https://bun.sh) 1.3 or newer, and a Rust toolchain with Cargo 1.91 or newer. The Docker images pin Bun 1.3.11. |
-| The CLI, `konae dev` | Bun, and either the Rust toolchain above or a `kernel` binary from the [GitHub Release](https://github.com/danibram/konae/releases), which `KONAE_KERNEL_BIN` names. `konae init` needs only Bun. |
+| The CLI, `konae` | Build the compiled CLI with Bun using `bun run scripts/build-konae-binary.ts`. The resulting binary runs without Bun or Rust. It downloads the matching Kernel and checks its SHA-256 against `SHA256SUMS`; `KONAE_KERNEL_BIN` can name a local Kernel instead. |
 | Docker Compose, or an export in a container | Docker with Compose. |
 | The tests | Google Chrome for the Playwright suites, which run with `channel: "chrome"`, and Docker for the S3 store. |
 
-`bun run dev:local` and the first `konae dev` compile the Kernel with Cargo. The first compile takes about a minute with a warm Cargo cache, and later runs reuse the build. With `KONAE_KERNEL_BIN` set to a downloaded `kernel` binary, `konae dev` compiles nothing and needs no Rust. Each release publishes that binary for macOS and Linux on arm64 and x64, with a `SHA256SUMS` file ([Releasing](./docs/releasing.md) lists the names). To run Konae without Bun or Rust, see [Run it in Docker](#run-it-in-docker).
+`bun run dev:local` compiles Konae with Cargo. Build the CLI with Bun and install the resulting `out/konae-<version>-<os>-<arch>` binary on PATH. It then runs without Bun or Rust. Its `dev` command downloads the Kernel matching the CLI version and checks the binary against that release's `SHA256SUMS`; set `KONAE_KERNEL_BIN` to use a local Kernel instead. The published v0.8.0 release has the four Kernel binaries and `SHA256SUMS`, but no CLI assets. Only macOS arm64 CLI execution was verified. The inspected binary requires macOS 13.0; the other CLI platforms and release workflow remain unverified.
 
 ## Run it locally
 
@@ -68,27 +68,27 @@ The published image carries Konae, its Kernel and the editor, so a machine with 
 ```sh
 docker run -d --name konae -p 127.0.0.1:8787:8787 -v konae-data:/data \
   -e KONAE_SETUP_KEY='your-setup-key' -e KONAE_PUBLIC_ORIGIN=http://localhost:8787 \
-  ghcr.io/danibram/konae:0.7.0
+  ghcr.io/danibram/konae:0.8.0
 ```
 
 Open [http://localhost:8787](http://localhost:8787), press **Create owner account** and give that key. The data stays in the `konae-data` volume. The image is built for `linux/amd64` and `linux/arm64`. Without `KONAE_MAIL_TRANSPORT` the container sends no email, so invitations to app users are refused; `KONAE_MAIL_TRANSPORT=development` writes them to `mailbox.jsonl` in the volume instead. [Operate an installation](./docs/operate.md) covers the rest. The `0.6.0` image reads the key as `KONAE_ADMIN_KEY` and is built for `linux/amd64` only, so on Apple Silicon add `--platform linux/amd64`.
 
 ## Make a first app in the editor
 
-Press **New project**, name it and pick a starting point. Press **Connect a model** to give the build agent your Anthropic, OpenAI or OpenRouter key, which stays in the browser, then describe a change. The Validation Gate checks the change, and **Apply** saves it. **Deploy** publishes the app and shows its address. [First app from the editor](./docs/guides/first-app-from-the-editor.md) walks through it.
+Press **New project**, name it and pick a starting point. Press **Connect a model** to give the build agent your Anthropic, OpenAI or OpenRouter key, which stays in this browser. The provider account pays for the model calls; the installation does not proxy them or supply a key. Describe a change. Its proposal appears in Preview with candidate rows, files and actor before **Apply** changes the applied preview. **Deploy** publishes the app and shows its address. [First app from the editor](./docs/guides/first-app-from-the-editor.md) walks through it.
 
 ## Make a first app from a folder
 
-`init` and `dev` need no credential and no installation. Run the commands from this repository, or run `bun link` here once and write `konae` instead of `bun run konae --`.
+`konae init` and `konae dev` need no credential or installation. Build the CLI with `bun run scripts/build-konae-binary.ts`, then put `out/konae-<version>-<os>-<arch>` on PATH. The compiled macOS arm64 CLI was verified without repository reads, Bun or Rust in PATH. The published v0.8.0 release has Kernel downloads and checksums, but no compiled CLI download.
 
 ```sh
 bun run konae -- init --dir /tmp/my-list --name "My list" --template tasks
 bun run konae -- dev --dir /tmp/my-list
 ```
 
-`init` writes the app folder: `konae.json`, the sources in `app/`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/`. `dev` builds `dist/`, with no `npm install` for a template, and runs the `kernel` binary on the folder at `http://my-list.localhost:8796`, with the folder's own `data/`, and restarts it when a file in `app/` changes.
+`init` writes `konae.json`, sources in `app/`, `compose.yaml`, `.env.example`, `.gitignore`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `package.json`, `tsconfig.json` and the build scripts under `scripts/`. `npm run build` writes `dist/`. The Kernel's own app folder contains `konae.json`, `app/`, `dist/`, `data/` and `.konae/`; it does not contain the generated developer files unless they were included in the app export. `dev` builds `dist/`, with no `npm install` for a template, and runs the `kernel` binary on the folder at `http://my-list.localhost:8796`, with the folder's own `data/`, and restarts it when a file in `app/` changes.
 
-The `tasks` template is a public list that anyone with the link can use. The default template, `notes`, is private and takes accounts by invitation only, and `dev` prints the `kernel invite` command that creates a test account.
+The `tasks` template is a public list that anyone with the link can use. The default template, `notes`, is private and takes accounts by invitation only. `dev` creates a test invitation for `test@example.com` when the app has no account and prints its link.
 
 To publish, `login` saves a credential and the installation's address in the folder's `.konae/`, and the first `publish` registers the project there and prints its address. `--url` is the editor's address. On a fresh local install the line below creates the first owner with the setup key `local-development-key`. If you already pressed **Create owner account** in the editor, use that email and password. A reachable installation needs its operator's setup key, or an invitation code in `KONAE_INVITATION_CODE` for a later owner. A token cannot widen itself, so ask for `--manage-users` and `--export-data` now, because `pull`, `export --with-data` and inviting app users need them.
 
@@ -98,22 +98,22 @@ bun run konae -- login --dir /tmp/my-list --url http://localhost:4173 --manage-u
 bun run konae -- publish --dir /tmp/my-list
 ```
 
-An app published from a folder appears on the editor's project list beside the others, marked **Edited in a folder**. Its files stay in the folder, and you publish its changes from there. Its card opens its database, its app accounts and what it did.
+A folder-published app opens in the same editor as an editor-created app. Konae stores its sources in `app/`; the project card loads project metadata without downloading asset bytes, and opening the app loads its files. The server copy takes precedence over older browser backups.
 
 `login --browser` signs in through the browser and needs no password in the shell. `hostname --set <name>` moves the app to another generated name, and `secret set <name>` reads a secret's value from stdin, so it stays out of argv.
 
-To debug against what the published app holds, `pull` exports its database, accounts and files into `.konae/pull`, and `dev --reset` imports them into the local `data/`. Neither changes the published app:
+To debug against what the published app holds, `pull` downloads sources, `dist/`, settings and published data into `.konae/pull`. It replaces local sources and settings only when they still match the last recorded values. Otherwise it stages the incoming files and leaves local edits in place. The revision marker is scoped to this installation and project. `dev --reset` imports pulled data into local `data/` after a backup. A pending pull blocks `push` until that import completes. Pull does not change the published app:
 
 ```sh
 bun run konae -- pull --dir /tmp/my-list
 bun run konae -- dev --dir /tmp/my-list --reset
 ```
 
-`push --yes` sends the local `data/` back and replaces the published data with it, after a backup.
+`push --yes` sends the local `data/` and replaces published data after a backup. Rows are not merged.
 
 [Edit files with the CLI](./docs/guides/edit-files-with-the-cli.md) explains each step, and [the CLI reference](./docs/cli.md) covers `sql`, `events`, `contract` and `conform`.
 
-A page calls the SDK the build adds:
+A page imports the SDK from the static build artifact:
 
 ```js
 const session = await miniapp.auth.session();
@@ -124,7 +124,7 @@ const files = await miniapp.files.list();
 
 ## Take the app to another machine
 
-Export writes the app folder with its data. In the editor, **Export** downloads it as a tar. From a folder:
+Export carries the app folder with its accounts, data and rules. The editor downloads a tar. From a folder:
 
 ```sh
 bun run konae -- export --dir /tmp/my-list --out /tmp/my-list-export --with-data

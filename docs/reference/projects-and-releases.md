@@ -4,22 +4,20 @@ A project holds an app's sources, and a release publishes them as the Deployment
 
 ## Projects
 
-`project_create { name, projectId?, slug?, manifest?, template?, sourcesTransferId? }` needs `write`. It registers a project and returns a template's files, the ones `konae init` writes, because both read `kernel-rs/konae/src/project-templates.json`. The template is `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. Without a `manifest` the project takes the template's visibility. `project_inspect` returns the project, its Deployment and `sourcesRevision`, the number of times the editor saved its sources.
+`project_create { name, projectId?, slug?, manifest?, template?, sourcesTransferId? }` needs `write`. Owner tools use `projectId` for the app identifier. It registers a project and returns a template's files, the ones `konae init` writes, because both read `kernel-rs/konae/src/project-templates.json`. The template is `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. Without a `manifest` the project takes the template's visibility. `project_inspect` returns the project, its Deployment and `sourcesRevision`, the number of times the editor saved its sources.
 
 The editor uploads a new app's sources without a `projectId`, then calls `project_create` with `sourcesTransferId`. Konae checks the files and saves the project and its sources in one transaction, answering `sourcesRevision: 1`. A failed upload leaves no project. Repeating the same files returns the saved revision, and other files cannot replace a save through `project_create`. `project_inspect` returns the project, its Deployment and `sourcesRevision`, the number of times the editor saved its sources.
 
-`project_sources_save { projectId, transferId, expectedRevision }` saves the sources the editor opens when the revision still matches. The transfer holds this JSON, and an agent that saves sources sends the same:
+`project_sources_save { projectId, transferId, expectedRevision }` saves the sources the editor opens when the revision still matches. The transfer holds `{ files, encodings }`. UTF-8 files are strings; binary files are base64 and listed in `encodings`. The editor saves all files of `app/`, including binary assets, under the shared path, file-count and decoded-size checks. It may send a full source document or a delta against the saved revision. In one measured case, opening a project transferred a 705,659-byte document, while changing one CSS file sent a 544-byte delta. Project cards read metadata without downloading sources; opening a project loads that project's files. The editor cancels known transfers after success, errors, replacement or navigation. Full document departure sends a keepalive cancellation keyed by request ID. If the browser stops before sending it and the transfer ID was never received, the owner transfer remains until its one-hour expiry.
 
 ```json
 { "id": "app_notes", "name": "Notes", "slug": "notes", "updatedAt": 1762430000000,
   "files": { "index.html": "<main id=app></main>", "app.js": "...", "schema.sql": "...", "actions.json": "..." },
   "directories": [],
-  "manifest": { "version": 1, "visibility": "private",
-    "runtime": { "database": { "mode": "declared-actions", "actions": [{ "name": "notes.list", "kind": "query", "access": "authenticated" }] },
-      "auth": { "mode": "optional" }, "files": { "access": "deployment" } } } }
+  "manifest": { "version": 1, "visibility": "private" } }
 ```
 
-A save without one of these parts is refused with the part and its shape, such as `Invalid project manifest. Send { version: 1, visibility, runtime: … }`. A publish from a folder does not change the sources the editor saved.
+A save without one of these parts is refused with the part and its shape. New projects save their files under `app/`; the Kernel does not require `sources.json` or `manifest.runtime` to open an app folder. A publish from a folder updates the same sources the editor opens.
 
 `project_delete { projectId, name }` needs `write` and deletes a project for good. `name` must equal the project's name, or the call answers `The name does not match this project. Type the project's name exactly to delete it.` The address stops answering at once. Konae deletes the app folder (database, app accounts, uploaded files, backups, custom domain), the stored artifacts, the saved sources and the signing secrets, and answers with the deleted Deployment IDs. Read back with `projects_list`. An app in maintenance refuses it. Export the app first to keep its data. The build agent does not get this tool.
 
@@ -50,7 +48,7 @@ sequenceDiagram
   M-->>C: The Deployment and its URL
 ```
 
-`publish` sends `dist/` and the text files of `app/` over MCP. It uploads a transfer, calls `release_plan`, which checks the release against the project's revision, then `release_apply`, and saves the plan and the receipt in `.konae/`. A stale plan is refused, and repeating an applied plan returns its receipt. A republish keeps the address and the database and stops serving files the new artifact lacks. [The CLI](../cli.md#publish) has the flags, and the `publishing` topic of `platform_guide` the same steps as tool calls.
+`publish` sends the Build Artifact and the sources in separate uploads. The source upload carries every file of `app/`, with binary files encoded as base64. Source paths are checked, dot entries and `node_modules` are omitted, and the decoded sources may total 20 MiB across at most 1000 files, with paths up to 240 bytes. The serialized source upload may not exceed 32 MiB. The Build Artifact has its own 16 MiB decoded limit and 1000-file limit. The CLI and editor send the source revision they observed. `release_plan` and `release_apply` both refuse if the sources changed, including a save made after planning. A stale refusal names `sources.revision-conflict`; pull before publishing again. A successful release advances the revision and stores the files of `app/` beside `dist/`. Repeating an applied plan returns its receipt. A republish keeps the address and the database and stops serving files the new artifact lacks. [The CLI](../cli.md#publish) has the flags, and the `publishing` topic of `platform_guide` the same steps as tool calls.
 
 A published app runs under the Kernel's Content Security Policy ([the architecture](../architecture.md#isolation-of-hosted-code)). The inline scripts of each HTML page run because the Kernel allows each by its hash. Inline event handler attributes, scripts from other origins and requests to other origins do not.
 
@@ -72,7 +70,7 @@ A new table, column or index applies and keeps every row, with `losses` empty an
 
 ### What the build publishes
 
-`konae build`, the editor's Publish and an app folder's `npm run build` run one set of rules, `src/lib/static-artifact.js`, so the same Capsule gives the same artifact from every door.
+`konae build`, the editor's Publish and an app folder's `npm run build` use the shared builder, `src/lib/static-artifact.js`. Exact dependency versions and build rules match, but package resolution uses esm.sh in the editor and `node_modules` locally, so resulting bundles are not byte-identical.
 
 - An npm package is imported by name once `package.json` lists it under `dependencies` with an exact version, such as `"preact": "10.24.3"`. The editor's build fetches it from esm.sh; `konae build` and `npm run build` read it from `node_modules`, so run `npm install` first. The package goes into the bundle, and the published app loads nothing from another origin. A version range, a `node:` module or a bare import the list lacks fails the build with a sentence that names the fix.
 - A page is every `.html` file at the Capsule root and under `pages/`. `pages/guide/install.html` answers at `/guide/install.html` and `/guide/install`.
@@ -81,8 +79,8 @@ A new table, column or index applies and keeps every row, with `losses` empty an
 - A page with no doctype and no `<html>` is a fragment, which the build puts in the Capsule document with `styles.css`, the app bundled from `src/main.ts` or `app.js`, and the SDK. A page that is a whole document keeps its own head, and the build loads `/runtime.js` first in it. A `<script type="module" src>` is bundled with its imports.
 - A fragment page names its title and icon by opening with a `<title>` and any icon `<link>`, which the build moves into the head.
 - A Capsule without `index.html` gets the fragment `<main id=app></main>`.
-- The same Capsule built from two folders gives byte-identical files, because the build drops the comments that name the build folder.
-- A binary file travels as base64 and the artifact names it in `encodings`, such as `"encodings": { "logo.png": "base64" }`. The editor's saved sources hold text files only, so an icon that must work from every door is SVG, as a file or a `data:` URL.
+- Package versions are exact in `package.json`. The editor fetches those versions from esm.sh; local builds use installed packages in `node_modules`, so bundles are not byte-identical.
+- Sources and release artifacts use separate uploads and limits. Source files may be binary; base64 encodings preserve their bytes. The editor and CLI apply the same source path, file-count and decoded-size rules.
 
 | Refusal | When |
 | --- | --- |
@@ -141,7 +139,7 @@ An expression column without `AS`, such as `count(*)`, is listed under `unnamed`
 
 `"notify": { "to": "owner" }` sends to the app's contact email, `contactEmail` in `konae.json`, so an export carries it and a `kernel` binary sends there too. A first publish from Konae fills it with the owner's email when Konae knows it; an owner who signs in through Clerk has none in Konae and sets it. `konae publish` sends the one `konae.json` names.
 
-`contact_email_set { deploymentId, email }` sets it, or clears it with `email: null`, and needs `publish`. `contact_email_read { deploymentId }` answers `{ deploymentId, contactEmail, ownerNotices }`, where `ownerNotices` names the actions that send to it. With `contactEmail` null and `ownerNotices` listed, those notices are not sent and Usage counts each as `owner-has-no-email`. App settings in the editor has the same field.
+`contact_email_set { projectId, email }` sets it, or clears it with `email: null`, and needs `publish`. `contact_email_read { projectId }` answers `{ deploymentId, contactEmail, ownerNotices }`, where `ownerNotices` names the actions that send to it. With `contactEmail` null and `ownerNotices` listed, those notices are not sent and Usage counts each as `owner-has-no-email`. App settings in the editor has the same field.
 
 ## Maintenance
 
@@ -153,7 +151,7 @@ An app in maintenance takes no writes. Its host answers a page request, or any `
 
 That covers actions, uploads, file reads, signup, sign-in, recovery, invitations, HTTP routes and the runtime endpoint. Owner tools that would change the app answer with the same message. Tools ending in `_list` or `_read`, `project_export`, `release_plan`, `database_execute` with `inspect`, `browse` or `list-backups`, `project_import` and `maintenance_set` keep working. The app's email, calls and schedules wait.
 
-`maintenance_set { deploymentId, on }` needs `publish`. `maintenance_read { deploymentId }` answers `{ maintenance, since, unreadable, installation }`, where `installation` names a hold on the whole installation after a restore, which taking the app out does not lift. The state is `apps/<id>/.konae/maintenance.json`, which a restart and a copy keep. App settings in the editor has the same switch.
+`maintenance_set { projectId, on }` needs `publish`. `maintenance_read { projectId }` answers `{ maintenance, since, unreadable, installation }`, where `installation` names a hold on the whole installation after a restore, which taking the app out does not lift. The state is `apps/<id>/.konae/maintenance.json`, which a restart and a copy keep. App settings in the editor has the same switch.
 
 An owner moves an app with no lost write in three steps: put it in maintenance, export it, and import the folder on the other installation.
 
@@ -161,7 +159,7 @@ An owner moves an app with no lost write in three steps: put it in maintenance, 
 
 ## Transfers
 
-A client starts a transfer by declaring the size and SHA-256, writes blocks of at most `chunkBytes` in base64, and completes it, which checks the size and hash and freezes the bytes. `transfer_begin` answers `chunkBytes`: 4 MiB on the owner's `/mcp` and 64 KiB on an app's runtime endpoint, and `transfer_read` answers blocks of that size. Follow that number, not a constant; a smaller block is accepted. Each `transfer_write` answers `nextOffset`, so a 5 MB release is two writes and needs no `transfer_status` between them. On an app's host, a signed-in app user may instead send the whole file as the body of `PUT /_konae/transfers/<transferId>`, with the page's own origin and session cookie. The Kernel writes it from byte 0, checks the size and SHA-256 and answers `{ "result": { "transferId", "complete": true, "sha256" } }`, or 400 with the reason, and the transfer stays open for a retry. `miniapp.files.upload` uses it. The server accepts an identical retry at the same offset and refuses different content. `transfer_status` lets a client resume from the last offset. Cancel transfers you no longer need; `transfer_status` then answers `Transfer not found or expired.`, which confirms the cancel. [The limits page](../limits.md#transfers-and-publishing) lists how many a caller holds, how long they last and how large they may be.
+A client starts a transfer by declaring the size and SHA-256, writes blocks of at most `chunkBytes` in base64, and completes it, which checks the size and hash and freezes the bytes. `transfer_begin` answers `chunkBytes`: 4 MiB on the owner's `/mcp` and 64 KiB on an app's runtime endpoint, and `transfer_read` answers blocks of that size. Follow that number, not a constant; a smaller block is accepted. Each `transfer_write` answers `nextOffset`, so a 5 MB release is two writes and needs no `transfer_status` between them. On an app's host, a signed-in app user may instead send the whole file as the body of `PUT /_konae/transfers/<transferId>`, with the page's own origin and session cookie. The Kernel writes it from byte 0, checks the size and SHA-256 and answers `{ "result": { "transferId", "complete": true, "sha256" } }`, or 400 with the reason, and the transfer stays open for a retry. `miniapp.files.upload` uses it. The server accepts an identical retry at the same offset and refuses different content. `transfer_status` lets a client resume from the last offset. Cancel transfers you no longer need; `transfer_status` then answers `Transfer not found or expired.`, which confirms the cancel. [The limits page](../limits.md#sources-transfers-and-publishing) lists how many a caller holds, how long they last and how large they may be.
 
 The audit log in Konae's `mcp.sqlite` records each owner tool call with its project or Deployment, and never an email, a token or a secret's value. An export download or a component upload writes one row at its first block, not one per chunk. The log keeps the newest 10,000 rows per owner and drops rows older than 30 days. For app users the Kernel records only an upload that stores a new file and a delete that removes one.
 

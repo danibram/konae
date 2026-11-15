@@ -52,7 +52,7 @@ The route's `callers` list names who may use it, any of `"signature"` (a service
     "http": { "method": "POST", "path": "/api/updates", "callers": ["key"] }
     ```
 
-    Then issue a key that names the action with `api_keys_create` and `deploymentId`, `name` and `actions`. The key is shown once. The editor's Access > Integrations view shows a curl for each route the key names.
+    Then issue a key that names the action with `api_keys_create` and `projectId`, `name` and `actions`. The key is shown once. The editor's Access > Integrations view shows a curl for each route the key names.
 6. Test a signed route from a shell. The sender puts `t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256>` in the declared header. The MAC covers the time, the nonce, the method, the path, the query string and the raw body, joined by newlines.
 
     ```sh
@@ -75,7 +75,7 @@ A route answers `{ result }` with the rows or `{ changes, lastInsertId }`, and `
 - Send one real or test request, then read the row it wrote through a query action. `actions_invoke` is its own read-back.
 - After `secret_set`, read the names back with `secrets_list`. It shows names, uses and update times, never values.
 - After `api_keys_create` or `api_keys_revoke`, read the keys back with `api_keys_list`.
-- After `release_apply`, read the Deployment back with `project_inspect`. Usage counts the route by method and path, and `usage_read` reads it. On `konae dev`, `bun run konae -- events --dir <folder>` lists each route call.
+- After `release_apply`, read the Deployment back with `project_inspect`. Usage counts the route by method and path, and `usage_summary` reads it. On `konae dev`, `bun run konae -- events --dir <folder>` lists each route call.
 
 The editor preview has no HTTP routes. Try routes on `konae dev` or on a published Deployment.
 

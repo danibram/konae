@@ -11,7 +11,7 @@ A release is a git tag `vX.Y.Z` whose version matches `package.json` and the Car
 
 Each push also tags `X.Y` and `latest`. Both images are multi-arch: one tag holds a `linux/amd64` and a `linux/arm64` image, and Docker pulls the one that matches the machine. The editor image in `Dockerfile` stays local to Compose and is not published.
 
-The GitHub Release of the tag also carries the `kernel` binary, built with `cargo build --release --bin kernel`, for four platforms, and a checksum file.
+A published GitHub Release carries the `kernel` binaries for four configured platforms and a checksum file. Verify that the tag has been published and that each named asset exists before sharing a download link. A configured workflow is not evidence of a published release.
 
 | File | Platform |
 | --- | --- |
@@ -21,9 +21,9 @@ The GitHub Release of the tag also carries the `kernel` binary, built with `carg
 | `kernel-X.Y.Z-linux-arm64` | Linux on arm64 |
 | `SHA256SUMS` | The SHA-256 of the four binaries, one `<hash>  <file>` line each |
 
-The Linux binaries are built in `rust:1.91-bookworm`, the image the Dockerfiles build in, so they need glibc 2.36 or newer, which Debian 12 and Ubuntu 22.04 have. The macOS binaries target macOS 12 and newer. To check a download, run `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or `shasum -a 256 -c --ignore-missing SHA256SUMS` on macOS, in the folder that holds the file. The binaries are not signed or notarized, so macOS may quarantine a file saved from a browser. `xattr -d com.apple.quarantine <file>` clears that, and `curl` and `gh release download` never set it.
+The release workflow configures Linux binaries in `rust:1.91-bookworm` and macOS binaries on `macos-15` runners. Do not infer minimum operating-system support from those build settings; inspect and test each published artifact before stating its requirements. To check a download, run `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or `shasum -a 256 -c --ignore-missing SHA256SUMS` on macOS, in the folder that holds the file. The binaries are not signed or notarized, so macOS may quarantine a file saved from a browser. `xattr -d com.apple.quarantine <file>` clears that, and `curl` and `gh release download` never set it.
 
-There is no npm package and no compiled `konae` CLI. `konae dev` runs a downloaded binary when `KONAE_KERNEL_BIN` names it, so it then needs no Rust toolchain. [The CLI](./cli.md) covers `dev`.
+The repository includes a script to build the compiled `konae` CLI. The published v0.8.0 release currently has the four Kernel binaries and `SHA256SUMS`, but no CLI assets. Build the CLI with `bun run scripts/build-konae-binary.ts` and copy its output to PATH. It downloads the Kernel binary matching its version and verifies it against `SHA256SUMS`; `KONAE_KERNEL_BIN` selects a local Kernel instead. Only macOS arm64 was verified for this CLI, and its binary requires macOS 13.0. Do not infer that configured assets or the release workflow were tested. [The CLI](./cli.md) covers installation and `dev`.
 
 ### How the workflow builds it
 

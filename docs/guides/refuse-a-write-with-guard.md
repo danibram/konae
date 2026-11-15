@@ -56,10 +56,10 @@ A guard is 1 to 200 characters on one line. It goes on a mutation only. A query 
 ## Check it worked
 
 - Call the action twice through the door the page uses, once with input the rule accepts and once with input it refuses. The first answers `{ changes, lastInsertId }`. The second answers your sentence. `actions_invoke` is its own read-back.
-- Read Usage with `usage_read` and find the call under `refused`.
+- Read Usage with `usage_summary` and find the call under `refused`.
 - After `release_apply`, read the Deployment back with `project_inspect`.
 
-The editor preview refuses with the guard the same way a Deployment does, so you can try it there. It has no Usage store, so read `usage_read` on `konae dev` or a Deployment.
+The editor preview refuses with the guard the same way a Deployment does, so you can try it there. It has no Usage store, so read `usage_summary` on `konae dev` or a Deployment.
 
 ## Read next
 

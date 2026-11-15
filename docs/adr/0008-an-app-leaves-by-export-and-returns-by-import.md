@@ -13,7 +13,7 @@ Job 4 asks that either person can take the app to another machine with its accou
 - The export carries everything of the app and nothing of Konae: no owner account, no credential, no project record, no secret and none of the installation's `.konae/`.
 - The identity component leaves without sessions, email links or entry links. Each API key travels with its name, actions, file visibilities and hash, marked revoked with the reason `import`, so the export opens nothing even on a Kernel that would not revoke it. The editor lists such keys under "Revoked at import" with what each could call.
 - Downloading accounts and data needs `export_data`. OAuth offers it only to a client that redirects to this machine (ADR-0002).
-- `konae pull` is an export of the published app's data, and `konae dev --reset` imports it into the local folder. The data is what the installation held at the time of the pull.
+- `konae pull` downloads the published sources, artifact, settings and data into `.konae/pull/`. It replaces local `app/` and `konae.json` only when their digests match the last recorded state. Otherwise it stages the incoming sources and settings, preserves local edits and leaves the revision marker pending. `dev --reset` imports the pulled data after a local backup. A pending pull blocks `push` until the import completes. The revision marker is scoped to one installation and project.
 - Local work never reaches the published app on its own. `konae dev` serves the folder's own `data/` on the `kernel` binary, `pull` runs only when asked, and `konae sql` and `konae events` read the published app only with `--prod`.
 
 ### Import takes a folder
@@ -50,3 +50,8 @@ Moving an app with no lost write is maintenance on the origin, export, import on
 - Pending email and queued calls stay on the installation that queued them, so an imported app sends none of its origin's.
 - A key revoked at import shows to the new owner, who issues new keys.
 - A copy target that cannot be written makes suspensions and revocations report an error until it can.
+
+
+## Superseding note, 2026-11-15
+
+`konae pull` now downloads sources, the built artifact, settings and data. It stages the published sources and settings when local edits no longer match their recorded digests. The revision marker belongs to one installation and project. `konae push` refuses while a pull is pending, until `dev --reset` imports its data after a backup.

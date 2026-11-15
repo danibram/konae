@@ -1,11 +1,13 @@
-// The app folder of ADR-0001: what `konae init` writes, what `konae export`
-// and the editor's Export hand over, and what the Kernel keeps for each app.
+// The generated developer files for the app folder of ADR-0001. `konae init`
+// writes them and export includes them. The Kernel needs only konae.json,
+// app/, dist/ and data/; these developer files remain optional there.
 //
 //   konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
 //   app/            the sources: pages, actions.json, schema.sql
 //   dist/           the built static files the Kernel serves
 //   data/           database.sqlite, identity.sqlite, usage.sqlite, files/
-//   compose.yaml, .env.example, AGENTS.md, action-contract.md, actions.d.ts, package.json, scripts/
+//   compose.yaml, .env.example, .gitignore, AGENTS.md, action-contract.md,
+//   actions.d.ts, package.json, tsconfig.json, scripts/*.mjs
 //
 // The CLI writes these entries to disk and the editor packs them in a tar.
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
@@ -175,7 +177,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 ## Layout
 
 - \`konae.json\`: the app's name, visibility (${settings.visibility}), Signup Policy, sign-in methods, contact email and the Kernel version.
-- \`app/\`: the sources. \`index.html\`, \`app.js\`, \`src/main.ts\` or \`src/main.tsx\`, \`styles.css\`, \`actions.json\` and \`schema.sql\`.
+- \`app/\`: the editable sources. It may also hold binary assets. Konae checks the same path, count and decoded-size limits before saving and publishing them.
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
 - \`action-contract.md\`: every Server Action with its inputs and the columns it returns.
@@ -194,10 +196,10 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Run it
 
-1. To write \`dist/\`, run \`npm install\` once, then \`npm run build\`, which bundles \`app/\` with esbuild. From a Konae checkout, \`bun run konae -- build --dir <this folder>\` and \`dev\` write it without \`npm install\`. They use the checkout's bundler until \`node_modules\` exists, then run \`npm run build\`. An exported folder already carries a built \`dist/\`.
-2. On this machine, from a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes.
+1. To write \`dist/\`, install the packages listed by the app with \`npm install\`, then run \`npm run build\`. The standalone \`konae\` CLI includes the shared local builder and uses it when \`node_modules\` is absent. An app that imports an npm package needs its installed package before either build. An exported folder already carries its built \`dist/\`.
+2. Run \`konae dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes. The first run downloads the matching Kernel binary unless \`KONAE_KERNEL_BIN\` names one.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
-4. To publish on a Konae installation: \`bun run konae -- login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`bun run konae -- publish --dir <this folder>\`. \`bun run konae -- push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so, after a backup.
+4. To publish on a Konae installation: \`konae login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`konae publish --dir <this folder>\`. \`konae push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so after a backup. A pending pull blocks push until you import the pulled data with \`dev --reset\`.
 
 At startup the Kernel checks the folder as Konae checks a release. It refuses a folder whose \`dist/\` breaks the publishing rules, whose actions break a rule above, or whose \`schema.sql\` drops or retypes a column, and says which. To apply a change that loses data, start it once with the \`KONAE_CONFIRM_SCHEMA\` value it names.
 ${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`bun run konae -- secret set <name> --dir <this folder>\` on Konae, which reads the value from standard input. The Kernel does not serve the app until each is set.\n` : ""}
