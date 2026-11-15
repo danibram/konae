@@ -41,6 +41,7 @@ const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
 type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; typeScriptLibs: Record<string, string> };
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
+let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
 /** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
 /** What a publish sends. `contactEmail` is where notices to the owner go, from konae.json. */
@@ -1545,11 +1546,20 @@ export async function main() {
     let child: ReturnType<typeof Bun.spawn> | undefined;
     let feed: { url: string; stop(): void } | undefined;
     const releaseLifecycleLock = await acquireLocalLifecycleLock(root);
+    let shuttingDown = false;
+    let restartTask: Promise<void> | undefined;
+    let queueRestart = false;
+    let timer: ReturnType<typeof setTimeout>;
     // Builds dist/, sets the local secrets, imports the pulled data on the first start with --reset, and starts the Kernel, which opens the folder as a release.
-    const start = async () => {
+    const start = async (): Promise<string | undefined> => {
+      if (shuttingDown) return undefined;
+      try {
       for (const line of await setDevSecrets(root, kernel)) console.log(line);
+      if (shuttingDown) return undefined;
       await refreshActionTypes(root);
+      if (shuttingDown) return undefined;
       await buildLocal(root, { development: true });
+      if (shuttingDown) return undefined;
       if (reset) {
         reset = false;
         const resetRecord = await resetData(root, kernel, pulled, option("confirm-schema"), { lockHeld: true });
@@ -1557,6 +1567,7 @@ export async function main() {
           ? `Replaced data/ with the data ${describePulled(pulled)}. Backup ${resetRecord.backup} holds the prior data and local queues. Reset ${resetRecord.executionId} used snapshot ${resetRecord.snapshotId} and retired ${resetRecord.callsRetired} calls and ${resetRecord.mailRetired} emails.`
           : `Emptied data/. Backup ${resetRecord.backup} holds the prior data and local queues. Reset ${resetRecord.executionId} retired ${resetRecord.callsRetired} calls and ${resetRecord.mailRetired} emails.`);
       }
+      if (shuttingDown) return undefined;
       const started = Bun.spawn([kernel.binary], { env: kernel.env, stdout: "pipe", stderr: "pipe" });
       child = started;
       let output = "";
@@ -1568,14 +1579,19 @@ export async function main() {
         const decoder = new TextDecoder();
         for await (const block of started.stderr as ReadableStream<Uint8Array>) { const text = decoder.decode(block); output += text; process.stderr.write(text); }
       })();
-      for (let attempt = 0; attempt < 150 && !/listening on/.test(output); attempt++) {
+      for (let attempt = 0; attempt < 150 && !/listening on/.test(output) && !shuttingDown; attempt++) {
         if (started.exitCode !== null) break;
         await Bun.sleep(100);
       }
+      if (shuttingDown) return undefined;
       if (!/listening on/.test(output)) throw Error(`The Kernel stopped before it served the app.\n${output.trim()}`);
       const served = /Serving .+ at (\S+)/.exec(output)?.[1];
       if (!served) throw Error("The Kernel does not serve this folder. It said why above.");
       return served;
+      } catch (error) {
+        if (shuttingDown) return undefined;
+        throw error;
+      }
     };
     const stop = async () => { if (child && child.exitCode === null) { child.kill(); await child.exited; } };
     let resolveShutdown!: () => void;
@@ -1585,24 +1601,31 @@ export async function main() {
     const cleanup = async () => {
       if (cleaned) return;
       cleaned = true;
+      shuttingDown = true;
+      resolveShutdown();
       watcher?.close();
       clearTimeout(timer);
+      await restartTask;
       await stop();
       feed?.stop();
       await rm(devSession, { force: true });
       await releaseLifecycleLock();
     };
-    process.once("SIGINT", () => { process.exitCode = 130; resolveShutdown(); });
-    process.once("SIGTERM", () => { process.exitCode = 143; resolveShutdown(); });
-    let timer: ReturnType<typeof setTimeout>;
+    process.once("SIGINT", () => { shuttingDown = true; shutdownSignalCode = 130; process.exitCode = 130; resolveShutdown(); });
+    process.once("SIGTERM", () => { shuttingDown = true; shutdownSignalCode = 143; process.exitCode = 143; resolveShutdown(); });
     try {
-      console.log(await start());
+      const servedUrl = await start();
+      if (!servedUrl || shuttingDown) return;
+      console.log(servedUrl);
       // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
       const { serveEvents } = await import("./events");
+      if (shuttingDown) return;
       const eventsPort = Number(option("events-port", String(Number(port) + 1)));
       try { feed = serveEvents(kernelRecord(kernel), settings.id, kernel.mailbox, eventsPort, testControls(kernel)); }
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
+      if (shuttingDown) return;
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
+      if (shuttingDown) return;
       const policy = settings.signupPolicy.mode;
       if (policy !== "open") {
         // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
@@ -1618,15 +1641,27 @@ export async function main() {
       console.log(feed
         ? `Email, calls, scheduled runs and Signals of this app: ${feed.url} in a browser, or konae events --dir ${root} --json`
         : `See the email, calls, scheduled runs and Signals of this app with: konae events --dir ${root} --follow`);
-      let working = false; let queued = false;
-      const restart = async () => {
-        if (working) { queued = true; return; } working = true;
-        do { queued = false; try { await stop(); console.log(`Updated ${await start()}. Reload the app to see changes.`); } catch (e) { console.error(e instanceof Error ? e.message : e); } } while (queued);
-        working = false;
+      const restart = () => {
+        if (shuttingDown) return;
+        if (restartTask) { queueRestart = true; return; }
+        restartTask = (async () => {
+          do {
+            queueRestart = false;
+            if (shuttingDown) break;
+            try {
+              await stop();
+              if (shuttingDown) break;
+              const updated = await start();
+              if (!shuttingDown && updated) console.log(`Updated ${updated}. Reload the app to see changes.`);
+            } catch (error) {
+              if (!shuttingDown) console.error(error instanceof Error ? error.message : error);
+            }
+          } while (queueRestart && !shuttingDown);
+        })().finally(() => { restartTask = undefined; });
+        return restartTask;
       };
-      let timer: ReturnType<typeof setTimeout>;
       watcher = watch(appDir(root), { recursive: true }, (_, filename) => {
-        if (!filename || filename.startsWith(".") || filename.includes("node_modules") || !/\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(filename)) return;
+        if (shuttingDown || !filename || filename.startsWith(".") || filename.includes("node_modules") || !/\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(filename)) return;
         clearTimeout(timer); timer = setTimeout(() => void restart(), 200);
       });
       await shutdown;
@@ -1635,4 +1670,7 @@ export async function main() {
   }
 }
 
-if (import.meta.main) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (import.meta.main) main().catch(error => {
+  if (shutdownSignalCode !== undefined) process.exitCode = shutdownSignalCode;
+  else { console.error(error.message); process.exitCode = 1; }
+});

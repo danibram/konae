@@ -751,33 +751,141 @@ setInterval(() => {}, 1000);
     const launch = () => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "dev", "--dir", folder, "--port", "8898", "--events-port", "0"], {
       env: { ...process.env, KONAE_KERNEL_BIN: binary }, stdout: "pipe", stderr: "pipe",
     });
-    const waitForStart = async () => {
+    const waitForStart = async (child?: ReturnType<typeof Bun.spawn>, output?: { stdout: string; stderr: string }) => {
       for (let attempt = 0; attempt < 200; attempt++) {
         if (await stat(marker).then(() => true, () => false)) return;
+        if (child?.exitCode !== null && child?.exitCode !== undefined) throw Error(`The dev process exited ${child.exitCode}. ${output?.stderr ?? ""}`);
         await Bun.sleep(25);
       }
-      throw Error("The development Kernel did not start.");
+      throw Error(`The development Kernel did not start. stdout: ${output?.stdout ?? ""} stderr: ${output?.stderr ?? ""}`);
     };
-    const drain = (child: ReturnType<typeof Bun.spawn>) => {
-      void new Response(child.stdout).text();
-      void new Response(child.stderr).text();
+    const drain = (child: ReturnType<typeof Bun.spawn>, output: { stdout: string; stderr: string }) => {
+      void (async () => { for await (const chunk of child.stdout as ReadableStream<Uint8Array>) output.stdout += new TextDecoder().decode(chunk); })();
+      void (async () => { for await (const chunk of child.stderr as ReadableStream<Uint8Array>) output.stderr += new TextDecoder().decode(chunk); })();
     };
 
-    let child = launch();
-    drain(child);
-    await waitForStart();
-    expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true)).toBe(true);
-    child.kill("SIGINT");
-    expect(await child.exited).toBe(130);
-    expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let output = { stdout: "", stderr: "" };
+    try {
+      child = launch();
+      drain(child, output);
+      await waitForStart(child, output);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true)).toBe(true);
+      child.kill("SIGINT");
+      expect(await child.exited).toBe(130);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
 
-    await rm(marker, { force: true });
-    child = launch();
-    drain(child);
-    await waitForStart();
-    child.kill("SIGTERM");
-    expect(await child.exited).toBe(143);
-    expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+      await rm(marker, { force: true });
+      output = { stdout: "", stderr: "" };
+      child = launch();
+      drain(child, output);
+      await waitForStart(child, output);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(143);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+    } catch (error) {
+      throw Error(`${error instanceof Error ? error.message : error}\nstdout: ${output.stdout}\nstderr: ${output.stderr}`);
+    } finally {
+      if (child && child.exitCode === null) { child.kill("SIGTERM"); await child.exited; }
+    }
+  }, 30_000);
+
+  test("SIGINT during a delayed reload waits for the build and never starts another Kernel", async () => {
+    const folder = path.join(directory, "reload-app");
+    await initLocal(folder, { name: "Reload app", template: "tasks" });
+    const settings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
+    settings.signupPolicy = { mode: "open" };
+    await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings));
+    await mkdir(path.join(folder, "node_modules"));
+    await mkdir(path.join(folder, "scripts"), { recursive: true });
+    await writeFile(path.join(folder, "package.json"), JSON.stringify({ name: "reload-app", private: true, scripts: { build: "node scripts/delayed-build.mjs" } }));
+    await writeFile(path.join(folder, "scripts/delayed-build.mjs"), `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+appendFileSync(".konae/build-runs", "build\\n");
+await new Promise(resolve => setTimeout(resolve, 1800));
+mkdirSync("dist", { recursive: true });
+writeFileSync("dist/index.html", "<html><body>reload</body></html>");
+`);
+    const binary = path.join(directory, "reload-kernel-stub.js");
+    const started = path.join(folder, ".konae/kernel/stub-started");
+    const pids = path.join(folder, ".konae/kernel/stub-pids");
+    await writeFile(binary, `#!/usr/bin/env node
+const fs = require("node:fs");
+if (process.argv.includes("capabilities")) { process.stdout.write('{"executionTest":1}'); process.exit(0); }
+if (process.argv.includes("secret")) { process.stdout.write('{"secrets":[]}'); process.exit(0); }
+if (process.argv.includes("test")) { process.stdout.write('{"callsRetired":0,"mailRetired":0}'); process.exit(0); }
+fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-started", "x");
+fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-pids", String(process.pid) + "\\n");
+console.log("Serving app at http://localhost:8899/");
+console.log("Kernel listening on 8899");
+setInterval(() => {}, 1000);
+`);
+    await chmod(binary, 0o755);
+    const launch = () => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "dev", "--dir", folder, "--port", "8899", "--events-port", "0"], {
+      env: { ...process.env, KONAE_KERNEL_BIN: binary }, stdout: "pipe", stderr: "pipe",
+    });
+    const track = (child: ReturnType<typeof Bun.spawn>) => {
+      const output = { stdout: "", stderr: "" };
+      void (async () => { for await (const chunk of child.stdout as ReadableStream<Uint8Array>) output.stdout += new TextDecoder().decode(chunk); })();
+      void (async () => { for await (const chunk of child.stderr as ReadableStream<Uint8Array>) output.stderr += new TextDecoder().decode(chunk); })();
+      return output;
+    };
+    const waitFor = async (condition: () => Promise<boolean>, child: ReturnType<typeof Bun.spawn>, output: { stdout: string; stderr: string }) => {
+      for (let attempt = 0; attempt < 240; attempt++) {
+        if (await condition()) return;
+        if (child.exitCode !== null) throw Error(`dev exited ${child.exitCode}; stdout: ${output.stdout}; stderr: ${output.stderr}`);
+        await Bun.sleep(25);
+      }
+      throw Error(`Timed out waiting for dev; stdout: ${output.stdout}; stderr: ${output.stderr}`);
+    };
+    const pidsAreStopped = async () => {
+      const values = (await readFile(pids, "utf8").catch(() => "")).trim().split(/\s+/).filter(Boolean).map(Number);
+      return values.every((pid) => {
+        try { process.kill(pid, 0); return false; }
+        catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+      });
+    };
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let output = { stdout: "", stderr: "" };
+    try {
+      child = launch();
+      output = track(child);
+      await waitFor(async () => await stat(started).then(() => true, () => false), child, output);
+      await waitFor(async () => await stat(path.join(folder, ".konae/dev.json")).then(() => true, () => false), child, output);
+      await Bun.sleep(150);
+      expect((await readFile(path.join(folder, ".konae/build-runs"), "utf8")).trim().split("\n")).toHaveLength(1);
+
+      await writeFile(path.join(folder, "app/index.html"), "<main>changed</main>");
+      await waitFor(async () => (await readFile(path.join(folder, ".konae/build-runs"), "utf8").catch(() => "")).trim().split("\n").length >= 2, child, output);
+      await Bun.sleep(150);
+      child.kill("SIGINT");
+      expect(await child.exited).toBe(130);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+      expect((await readFile(started, "utf8")).length).toBe(1);
+      expect(await pidsAreStopped()).toBe(true);
+
+      await rm(started, { force: true });
+      child = launch();
+      output = track(child);
+      await waitFor(async () => await stat(started).then(() => true, () => false), child, output);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true)).toBe(true);
+      expect((await readFile(pids, "utf8")).trim().split("\n")).toHaveLength(2);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(143);
+      expect(await pidsAreStopped()).toBe(true);
+
+      await rm(started, { force: true });
+      child = launch();
+      output = track(child);
+      await waitFor(async () => (await readFile(path.join(folder, ".konae/build-runs"), "utf8").catch(() => "")).trim().split("\n").length >= 4, child, output);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(143);
+      expect(await stat(started).then(() => true, () => false)).toBe(false);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+      expect((await readFile(pids, "utf8")).trim().split("\n")).toHaveLength(2);
+      expect(await pidsAreStopped()).toBe(true);
+    } finally {
+      if (child && child.exitCode === null) { child.kill("SIGTERM"); await child.exited; }
+    }
   }, 30_000);
 
   test("a failed effect retirement restores app data and both local queues", async () => {
