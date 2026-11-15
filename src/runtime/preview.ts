@@ -179,7 +179,13 @@ function rewritePreviewAssets(document: string, assets: Map<string, string>, sty
     if (kind === "link" && rel.toLowerCase().split(/\s+/).includes("stylesheet") && href) {
       const target = resolveReferenceOrNull(href, "index.html");
       const sheet = target && stylesheets.get(target);
-      if (sheet) return `<style>${rewriteCss(sheet, target)}</style>`;
+      if (target !== null && typeof sheet === "string") {
+        const media = readAttribute(attributes, "media");
+        const disabled = hasBooleanAttribute(attributes, "disabled");
+        if (!disabled) return `<style${media === undefined ? "" : ` media="${escapeAttribute(media)}"`}>${rewriteCss(sheet, target)}</style>`;
+        const restoredMedia = media ?? "";
+        return `<style media="not all" data-konae-media="${escapeAttribute(restoredMedia)}">${rewriteCss(sheet, target)}</style><script>var style=document.currentScript.previousElementSibling;style.media=style.dataset.konaeMedia;style.disabled=true</script>`;
+      }
     }
     const isIcon = kind === "link" && /(?:^|\s)(?:icon|apple-touch-icon|mask-icon)(?:\s|$)/i.test(rel);
     const permitted = kind === "img" || kind === "source" || isIcon;
@@ -213,6 +219,14 @@ function readAttribute(attributes: string, name: string): string | undefined {
   return match?.[1] ?? match?.[2] ?? match?.[3];
 }
 
+function hasBooleanAttribute(attributes: string, name: string): boolean {
+  return new RegExp(`(?:^|\\s)${name}(?:\\s|=|$)`, "i").test(attributes);
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
 function resolveReferenceOrNull(raw: string, from: string): string | null {
   try { return resolveReference(raw, from); } catch { return null; }
 }
@@ -243,7 +257,11 @@ function rewriteSrcset(value: string, asset: (raw: string) => string | null): st
 function previewAsset(raw: string, from: string, assets: Map<string, string>): string | null {
   let target: string | null;
   try { target = resolveReference(raw, from); } catch { return null; }
-  return target === null ? null : assets.get(target) ?? null;
+  if (target === null) return null;
+  const asset = assets.get(target);
+  if (!asset) return null;
+  const fragmentAt = raw.indexOf("#");
+  return fragmentAt === -1 ? asset : `${asset}${raw.slice(fragmentAt)}`;
 }
 
 function mediaType(path: string): string {

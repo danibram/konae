@@ -104,7 +104,7 @@ describe("preview document", () => {
       files: { ...project.files, "index.html": '<img src="./public/../images/a.png?x#y">', "public/images/a.png": encodeBase64(png) },
       encodings: { "public/images/a.png": "base64" },
     };
-    expect(createPreviewDocument(source)).toContain(`src="${data}"`);
+    expect(createPreviewDocument(source)).toContain(`src="${data}#y"`);
   });
 
   test("inlines a linked public stylesheet and resolves its relative image", () => {
@@ -122,8 +122,40 @@ describe("preview document", () => {
     };
     const document = createPreviewDocument(source);
     expect(document).toContain("<style>.hero { color: rgb(16, 32, 48); background: url(");
-    expect(document).toContain(`url("${data}")`);
+    expect(document).toContain(`url("${data}#hero")`);
     expect(document).not.toContain('href="/theme.css"');
+  });
+
+  test("preserves linked stylesheet media and disables a stylesheet that started disabled", () => {
+    const source = {
+      ...project,
+      files: {
+        ...project.files,
+        "index.html": '<link rel="stylesheet" href="/print.css" media="print"><link rel="stylesheet" href="/disabled.css" media="screen" disabled><p class="print-only">Print</p>',
+        "public/print.css": ".print-only{color:rgb(16,32,48)}",
+        "public/disabled.css": ".print-only{background-color:rgb(16,32,48)}",
+      },
+    };
+    const document = createPreviewDocument(source);
+    expect(document).toContain('<style media="print">.print-only{color:rgb(16,32,48)}</style>');
+    expect(document).toContain('<style media="not all" data-konae-media="screen">.print-only{background-color:rgb(16,32,48)}</style><script>var style=document.currentScript.previousElementSibling;style.media=style.dataset.konaeMedia;style.disabled=true</script>');
+  });
+
+  test("keeps SVG fragments on HTML and CSS data URLs without changing their payload", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><view id="focus" viewBox="0 0 4 4"/></svg>';
+    const data = `data:image/svg+xml;base64,${encodeBase64(new TextEncoder().encode(svg))}`;
+    const source = {
+      ...project,
+      files: {
+        ...project.files,
+        "index.html": '<img src="/views.svg?version=1#focus"><div class="svg-background"></div>',
+        "styles.css": '.svg-background{background-image:url("/views.svg?version=1#focus")}',
+        "public/views.svg": svg,
+      },
+    };
+    const document = createPreviewDocument(source);
+    expect(document).toContain(`src="${data}#focus"`);
+    expect(document).toContain(`url("${data}#focus")`);
   });
 
   test("preserves data-prefixed attributes on image elements", () => {

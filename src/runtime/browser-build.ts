@@ -84,7 +84,8 @@ function projectFilesPlugin(files: Record<string, string>, project: MiniAppProje
           const source = Object.keys(project.files).find((path) => path === target)
             ?? Object.keys(project.files).find((path) => servedPath(path) === target);
           if (!source) throw new Error(`${args.importer} references ${args.path}, but the Capsule holds no ${target}.`);
-          return { path: source, namespace: "konae-asset" };
+          const bytes = sourceBytes(project, source);
+          return { path: `data:${mediaType(target)};base64,${bytesToBase64(bytes)}${fragmentSuffix(args.path)}`, external: true };
         }
         // esbuild names an entry ./<path> when a file of that name sits in its working directory, as src/main.tsx does in this checkout.
         if (!args.importer) return { path: requireProjectFile(args.path.replace(/^\.\//, "")), namespace: "konae" };
@@ -100,9 +101,24 @@ function projectFilesPlugin(files: Record<string, string>, project: MiniAppProje
         if (contents === undefined) throw new Error(`Project file not found: ${args.path}`);
         return { contents, loader: loaderFor(args.path), resolveDir: args.path.includes("/") ? args.path.slice(0, args.path.lastIndexOf("/")) : "" };
       });
-      build.onLoad({ filter: /.*/, namespace: "konae-asset" }, (args) => ({ contents: sourceBytes(project, args.path), loader: "dataurl" }));
     },
   };
+}
+
+function fragmentSuffix(raw: string): string {
+  const fragmentAt = raw.indexOf("#");
+  return fragmentAt === -1 ? "" : raw.slice(fragmentAt);
+}
+
+function mediaType(path: string): string {
+  const extension = path.split(".").pop()?.toLowerCase();
+  return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon", avif: "image/avif", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf", eot: "application/vnd.ms-fontobject" } as Record<string, string>)[extension ?? ""] ?? "application/octet-stream";
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
 }
 
 /**

@@ -108,4 +108,12 @@ describe("a file that is not text in the editor's build", () => {
     });
     expect(built.styles.match(/url\(data:image\/png;base64,/g)).toHaveLength(2);
   });
+
+  test("an imported CSS file keeps an SVG view fragment after its data payload", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><view id="focus" viewBox="0 0 4 4"/></svg>';
+    const capsule = project({ "app.js": 'import "./theme.css"; document.body.dataset.ready = "yes";', "theme.css": '.icon { background: url("./public/views.svg?version=1#focus"); }' });
+    const built = await compileProjectInBrowser({ ...capsule, files: { ...capsule.files, "public/views.svg": svg } });
+    const payload = `data:image/svg+xml;base64,${encodeBase64(new TextEncoder().encode(svg))}`;
+    expect(built.styles).toContain(`url(${payload}#focus)`);
+  });
 });

@@ -86,7 +86,9 @@ async function seedRetainedBinary(page: Page, projectId: string) {
   source.files["public/applied.png"] = appliedImage;
   source.files["public/candidate.png"] = candidateImage;
   source.files["public/theme.css"] = '.asset-stylesheet-probe { color: rgb(16, 32, 48); background-image: url("./applied.png?from=theme#background"); }';
-  source.files["index.html"] += '<link rel="stylesheet" href="/theme.css"><p id="stylesheet-probe" class="asset-stylesheet-probe">Stylesheet proof</p><img id="asset-image" alt="Applied public asset" width="48" height="48" src="/applied.png?version=applied#preview">';
+  source.files["public/print.css"] = '.media-print-probe { color: rgb(16, 32, 48); }';
+  source.files["public/disabled.css"] = '.media-disabled-probe { background-color: rgb(16, 32, 48); }';
+  source.files["index.html"] += '<link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/print.css" media="print"><link rel="stylesheet" href="/disabled.css" media="screen" disabled><p id="stylesheet-probe" class="asset-stylesheet-probe">Stylesheet proof</p><p id="media-default-probe">Default screen style</p><p class="media-print-probe">Print only</p><p class="media-disabled-probe">Initially disabled</p><img id="asset-image" alt="Applied public asset" width="48" height="48" src="/applied.png?version=applied#preview">';
   source.encodings = { ...source.encodings, "public/retained.png": "base64", "public/applied.png": "base64", "public/candidate.png": "base64" };
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
   await client.call("project_sources_save", { projectId, transferId: transfer.transferId, expectedRevision: inspected.sourcesRevision });
@@ -152,7 +154,7 @@ async function installProposalFixture(page: Page) {
   let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "drift" | "build-fail" | "preview-behind" = "discard";
   let step = 0;
   const html = "<main><h1>PROPOSAL PREVIEW</h1><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>";
-  const assetHtml = (useApplied: boolean) => `<link rel='stylesheet' href='/theme.css'><main><h1>PROPOSAL PREVIEW</h1><p id='stylesheet-probe' class='asset-stylesheet-probe'>Stylesheet proof</p><img id='asset-image' alt='Candidate public asset' width='48' height='48' src='/${useApplied ? "applied.png?version=alternate" : "candidate.png?version=candidate"}#proposal'><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>`;
+  const assetHtml = (useApplied: boolean) => `<link rel='stylesheet' href='/theme.css'><link rel='stylesheet' href='/print.css' media='print'><link rel='stylesheet' href='/disabled.css' media='screen' disabled><main><h1>PROPOSAL PREVIEW</h1><p id='stylesheet-probe' class='asset-stylesheet-probe'>Stylesheet proof</p><p id='media-default-probe'>Default screen style</p><p class='media-print-probe'>Print only</p><p class='media-disabled-probe'>Initially disabled</p><img id='asset-image' alt='Candidate public asset' width='48' height='48' src='/${useApplied ? "applied.png?version=alternate" : "candidate.png?version=candidate"}#proposal'><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>`;
   const proposalScript = (mutate: boolean) => `
 const rows = await miniapp.actions.call('tasks.list');
 document.querySelector('#proposal-rows').textContent = rows.map(row => row.title).join(', ');
@@ -421,6 +423,18 @@ test("public image bytes stay with each proposal through Discard and Apply", asy
   await expect.poll(() => appliedImage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
   await expect.poll(() => preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
   expect(await preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("data:image/png;base64,");
+  const screenMedia = await preview.locator("#media-default-probe").evaluate((node) => {
+    const defaultStyle = getComputedStyle(node);
+    const printStyle = getComputedStyle(document.querySelector(".media-print-probe")!);
+    const disabledStyle = getComputedStyle(document.querySelector(".media-disabled-probe")!);
+    const disabledSheet = [...document.styleSheets].find((sheet) => (sheet.ownerNode as HTMLStyleElement).dataset.konaeMedia !== undefined);
+    return { defaultColor: defaultStyle.color, printColor: printStyle.color, defaultBackground: defaultStyle.backgroundColor, disabledBackground: disabledStyle.backgroundColor, disabled: disabledSheet?.disabled, disabledMedia: (disabledSheet?.ownerNode as HTMLStyleElement | undefined)?.media, printMedia: [...document.querySelectorAll("style")].find((style) => style.media === "print")?.media };
+  });
+  expect(screenMedia.printColor).toBe(screenMedia.defaultColor);
+  expect(screenMedia.disabledBackground).toBe(screenMedia.defaultBackground);
+  expect(screenMedia.disabled).toBe(true);
+  expect(screenMedia.disabledMedia).toBe("screen");
+  expect(screenMedia.printMedia).toBe("print");
   const appliedDataUrl = await appliedImage.getAttribute("src");
   expect(appliedDataUrl).toContain("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+");
 
@@ -448,10 +462,19 @@ test("public image bytes stay with each proposal through Discard and Apply", asy
     const candidate = page.frameLocator('iframe[title="Mini-app preview"]').locator("#asset-image");
     await expect.poll(() => candidate.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
     await expect.poll(() => page.frameLocator('iframe[title="Mini-app preview"]').locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+    const candidateMedia = await page.frameLocator('iframe[title="Mini-app preview"]').locator("#media-default-probe").evaluate((node) => {
+      const defaultStyle = getComputedStyle(node);
+      return { defaultColor: defaultStyle.color, printColor: getComputedStyle(document.querySelector(".media-print-probe")!).color };
+    });
+    expect(candidateMedia.printColor).toBe(candidateMedia.defaultColor);
     const candidateDataUrl = await candidate.getAttribute("src");
     expect(candidateDataUrl).toContain("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+");
-    if (useAlternateImage) expect(candidateDataUrl).toBe(appliedDataUrl);
-    else expect(candidateDataUrl).not.toBe(appliedDataUrl);
+    const candidateBytesUrl = candidateDataUrl?.split("#", 1)[0];
+    const appliedBytesUrl = appliedDataUrl?.split("#", 1)[0];
+    if (useAlternateImage) expect(candidateBytesUrl).toBe(appliedBytesUrl);
+    else expect(candidateBytesUrl).not.toBe(appliedBytesUrl);
+    await candidate.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(100);
     await page.screenshot({ path: "/tmp/konae-u1b2-assets-luna/proposal-public-image.png" });
     const candidateFrame = page.frames().find((frame) => frame.parentFrame() !== null);
     expect(await candidateFrame?.evaluate(() => [...document.images].map((image) => image.src))).toContain(await candidate.getAttribute("src"));
