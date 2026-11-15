@@ -33,7 +33,7 @@ impl ExecutionMode {
 pub const TEST_CAPABILITY_VERSION: u8 = 1;
 
 pub fn capabilities() -> serde_json::Value {
-    serde_json::json!({"executionTest": TEST_CAPABILITY_VERSION})
+    serde_json::json!({"executionTest": TEST_CAPABILITY_VERSION, "schemaTransforms": 1})
 }
 
 #[cfg(test)]
@@ -74,6 +74,6 @@ mod tests {
 
     #[test]
     fn capabilities_publish_the_supported_test_policy_version() {
-        assert_eq!(capabilities(), serde_json::json!({"executionTest": 1}));
+        assert_eq!(capabilities(), serde_json::json!({"executionTest": 1, "schemaTransforms": 1}));
     }
 }

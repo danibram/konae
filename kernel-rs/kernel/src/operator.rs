@@ -34,6 +34,7 @@ pub fn usage() -> &'static str {
   kernel sql <statement>
   kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>
   kernel capabilities
+  kernel schema fingerprint --schema <schema.sql> | --database <database.sqlite>
   kernel test status [--app <id>]
   kernel test schedule <action> [--app <id>]
   kernel test calls [--app <id>]
@@ -85,6 +86,16 @@ pub async fn command(installation: &Installation) -> Result<bool> {
         println!("{}", serde_json::to_string_pretty(&crate::execution::capabilities())?);
         return Ok(true);
     }
+    if args.first().is_some_and(|name| name == "schema") {
+        let mut words = Arguments::new(&args[1..]);
+        ensure!(words.next().as_deref() == Some("fingerprint"), "{}", usage());
+        let schema = words.option("schema")?;
+        let database = words.option("database")?;
+        ensure!(words.rest().is_empty(), "{}", usage());
+        let fingerprint = schema_fingerprint(schema.as_deref(), database.as_deref())?;
+        println!("{}", json!({"fingerprint": fingerprint}));
+        return Ok(true);
+    }
     if matches!(args.first().map(String::as_str), Some("help" | "--help")) {
         println!("{}", usage());
         return Ok(true);
@@ -100,6 +111,21 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let answer = if name == "test" { test_command(&state, &id, &mut words).await? } else { run(&state, &id, name, &mut words).await? };
     println!("{}", serde_json::to_string_pretty(&answer)?);
     Ok(true)
+}
+
+fn schema_fingerprint(schema: Option<&str>, database: Option<&str>) -> Result<String> {
+    match (schema, database) {
+        (Some(path), None) => {
+            let sql = std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
+            Ok(crate::schema_transform::fingerprint_schema(&sql)?)
+        }
+        (None, Some(path)) => {
+            let connection = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .with_context(|| format!("Cannot read {path}"))?;
+            Ok(crate::schema_transform::fingerprint(&connection)?)
+        }
+        _ => bail!("Choose exactly one of --schema <schema.sql> or --database <database.sqlite>."),
+    }
 }
 
 async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {

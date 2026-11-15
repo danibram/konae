@@ -35,9 +35,9 @@ export async function bootLocalKernel(kernel: { binary: string; env: Record<stri
 }
 
 /** Creates the local Deployment record, then imports the snapshot through the Kernel operator. */
-export async function importWithLocalKernel(kernel: { binary: string; env: Record<string, string | undefined>; run(args: string[]): Promise<string> }, snapshot: string) {
+export async function importWithLocalKernel(kernel: { binary: string; env: Record<string, string | undefined>; run(args: string[]): Promise<string> }, snapshot: string, confirmation?: string) {
   await bootLocalKernel(kernel);
-  return kernel.run(["import", snapshot]);
+  return kernel.run(["import", snapshot, ...(confirmation ? ["--confirm-schema", confirmation] : [])]);
 }
 
 /** Copies current app sources and build into scratch, then imports the immutable pulled data. */

@@ -174,7 +174,10 @@ pull      --dir <folder> [--url <installation URL>]
           It replaces local sources and settings only when their saved digests match; otherwise it
           stages published files and preserves local edits. dev --reset imports pulled data after a backup.
           A pending pull blocks push until that import finishes.
-rehearse  --dir <folder>
+schema    fingerprint --dir <folder> [--data] [--json]
+          Prints the fingerprint of app/schema.sql, or data/database.sqlite with --data.
+          Reads structure only and does not start the app or change its data.
+rehearse  --dir <folder> [--confirm-schema <confirmation>]
           Runs the Kernel's data import with the current app/, settings and build against the data
           snapshot in .konae/pull, in a scratch folder. It reports candidate and baseline digests without changing data/.
 push      --dir <folder> [--url <installation URL>] [--yes] [--confirm-schema <confirmation>]
@@ -635,7 +638,7 @@ function typecheckApp(root: string) {
  * policy and `warn` gets one line when konae.json names another.
  */
 async function productionRequirements(root: string, confirmation?: string | null) {
-  const requirements = confirmation ? [`Pass --confirm-schema ${confirmation} when applying this loss plan.`] : [];
+  const requirements = confirmation ? [`Pass --confirm-schema ${confirmation} when applying this database change.`] : [];
   try {
     const actions = (JSON.parse(await readFile(path.join(appDir(root), "actions.json"), "utf8")) as { actions?: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }> }).actions ?? {};
     const secrets = new Set<string>();
@@ -989,6 +992,33 @@ export type LocalKernel = { binary: string; env: Record<string, string | undefin
  */
 const LOCAL_FILES_QUOTA = String(1024 ** 4);
 
+/** Locates a compatible Kernel without creating an app runtime. */
+async function resolveLocalKernel(options: { build?: boolean } = {}) {
+  let binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : toolRoot ? path.join(toolRoot, "kernel-rs/target/debug/kernel") : "";
+  if (!process.env.KONAE_KERNEL_BIN && toolRoot && options.build !== false && !existsSync(binary)) {
+    console.error("Building the Kernel with cargo. The first build takes about a minute.");
+    const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml"), "-p", "kernel"], { stdout: "inherit", stderr: "inherit" });
+    if (await compilation.exited !== 0) throw Error("Could not build the Kernel. Install Rust, or set KONAE_KERNEL_BIN to a kernel binary built from this checkout.");
+  }
+  if (!process.env.KONAE_KERNEL_BIN && !existsSync(binary)) binary = await downloadKernel(KERNEL_VERSION);
+  if (!existsSync(binary)) throw Error(`No kernel binary at ${binary}. Run dev once, or set KONAE_KERNEL_BIN.`);
+  const capabilities = await requireTestKernel(binary);
+  return { binary, capabilities };
+}
+
+/** Reads the source schema or local data structure without opening an app runtime. */
+export async function fingerprintLocal(root: string, data = false): Promise<string> {
+  const { binary, capabilities } = await resolveLocalKernel();
+  if (capabilities.schemaTransforms !== 1) throw Error("This Kernel does not support schema fingerprints. Update the Kernel or set KONAE_KERNEL_BIN to a compatible binary.");
+  const file = path.join(root, data ? "data/database.sqlite" : "app/schema.sql");
+  const child = Bun.spawn([binary, "schema", "fingerprint", data ? "--database" : "--schema", file], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  if (code !== 0) throw Error(error.trim().replace(/^Error: /, "") || "Could not fingerprint the schema.");
+  const answer = JSON.parse(output) as { fingerprint?: unknown };
+  if (typeof answer.fingerprint !== "string" || !/^sha256:[a-f0-9]{64}$/.test(answer.fingerprint)) throw Error("Kernel returned an invalid schema fingerprint.");
+  return answer.fingerprint;
+}
+
 /**
  * The `kernel` binary on this machine and the environment that points it at
  * the folder. Its data directory is `.konae/kernel`, where `apps/<id>` links
@@ -997,15 +1027,7 @@ const LOCAL_FILES_QUOTA = String(1024 ** 4);
  * run instead of compiling one.
  */
 export async function localKernel(root: string, settings: AppSettings, options: { port?: string; confirmSchema?: string; build?: boolean } = {}): Promise<LocalKernel> {
-  let binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : toolRoot ? path.join(toolRoot, "kernel-rs/target/debug/kernel") : "";
-  if (!process.env.KONAE_KERNEL_BIN && toolRoot && options.build !== false && !existsSync(binary)) {
-    console.log("Building the Kernel with cargo. The first build takes about a minute.");
-    const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml"), "-p", "kernel"], { stdout: "inherit", stderr: "inherit" });
-    if (await compilation.exited !== 0) throw Error("Could not build the Kernel. Install Rust, or set KONAE_KERNEL_BIN to a kernel binary built from this checkout.");
-  }
-  if (!process.env.KONAE_KERNEL_BIN && !existsSync(binary)) binary = await downloadKernel(KERNEL_VERSION);
-  if (!existsSync(binary)) throw Error(`No kernel binary at ${binary}. Run dev once, or set KONAE_KERNEL_BIN.`);
-  await requireTestKernel(binary);
+  const { binary } = await resolveLocalKernel(options);
   const data = path.join(root, ".konae/kernel");
   const link = path.join(data, "apps", settings.id);
   await mkdir(path.dirname(link), { recursive: true });
@@ -1295,7 +1317,7 @@ export async function main() {
     return;
   }
   if (SERVER_COMMANDS.includes(command)) throw Error(serverCommandMessage(command));
-  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "rehearse", "sql", "events", "test", "domain", "hostname", "push", "secret", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "rehearse", "schema", "sql", "events", "test", "domain", "hostname", "push", "secret", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -1304,13 +1326,19 @@ export async function main() {
     return value;
   };
   const root = path.resolve(option("dir", process.cwd())!);
+  if (command === "schema") {
+    if (args[0] !== "fingerprint") throw Error("Use schema fingerprint --dir <folder> [--data].");
+    const fingerprint = await fingerprintLocal(root, args.includes("--data"));
+    console.log(args.includes("--json") ? JSON.stringify({ fingerprint, source: args.includes("--data") ? "data" : "schema" }) : fingerprint);
+    return;
+  }
   if (command === "rehearse") {
     const settings = await readSettings(root);
     await refreshActionTypes(root);
     await buildLocal(root, { development: true });
     const result = await rehearsePulledSnapshot(root, settings, async (scratch, snapshot) => {
       const kernel = await localKernel(scratch, settings);
-      return importWithLocalKernel(kernel, snapshot);
+      return importWithLocalKernel(kernel, snapshot, option("confirm-schema"));
     });
     console.log(JSON.stringify({ ...result, source: "current candidate against konae pull data", rehearsal: "passed" }, null, 2));
     return;
@@ -1399,8 +1427,7 @@ export async function main() {
         console.log(`Sources ${value.sourceDigest}; artifact ${value.artifactDigest}; remote sources revision ${value.sourceRevision.planned}.`);
         console.log(value.expiresAt === null ? "This local-only baseline has no remote plan ID or expiry." : `Plan expires ${value.expiresAt}.`);
         if (value.plan.schema) {
-          if (value.plan.schema.losses.length) console.log(describeSchemaChange(value.plan.schema).join("\n"));
-          else console.log(["The Kernel will run these schema statements:", ...value.plan.schema.statements.map((statement: string) => `  ${statement};`)].join("\n"));
+          console.log(describeSchemaChange(value.plan.schema).join("\n"));
         }
         for (const requirement of value.productionRequirements) console.log(requirement);
       }
