@@ -55,7 +55,10 @@ async function plan({ id, files, manifest }: Release) {
   }
   const project = { id, name: id, slug: id.replaceAll("_", "-"), files, manifest };
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify({ project, visibility: "private", artifact })), id);
-  try { return await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId }); }
+  try {
+    const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    return await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
+  }
   finally { await client.cancel(transfer.transferId).catch(() => {}); }
 }
 

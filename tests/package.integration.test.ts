@@ -62,7 +62,8 @@ function payload(id: string) {
 async function release(client: McpClient, request: object, projectId: string) {
   const upload = await client.upload(new TextEncoder().encode(JSON.stringify(request)), projectId);
   try {
-    const plan = await client.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+    const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
+    const plan = await client.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
     return { planId: plan.planId, receipt: await client.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId }) };
   } finally { await client.cancel(upload.transferId).catch(() => {}); }
 }
@@ -161,6 +162,7 @@ describe("chunked package", () => {
     };
     await save(original);
     const { receipt } = await release(owner, { ...request, project: source }, id);
+    revision = 2; // A release advances the source revision with the app/ it installed.
     const ahead = async () => {
       const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
       try { return exported.sourcesAhead; }
@@ -205,7 +207,7 @@ describe("chunked package", () => {
 
     const { "public/logo.png": _logo, ...withoutLogo } = files;
     const next = await owner.upload(new TextEncoder().encode(JSON.stringify({ ...source, files: withoutLogo, encodings: undefined, updatedAt: 2 })), id);
-    try { await owner.call("project_sources_save", { projectId: id, transferId: next.transferId, expectedRevision: 1 }); }
+    try { await owner.call("project_sources_save", { projectId: id, transferId: next.transferId, expectedRevision: 2 }); }
     finally { await owner.cancel(next.transferId); }
     const after = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
     for (const transfer of [after.folder, ...Object.values(after.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});

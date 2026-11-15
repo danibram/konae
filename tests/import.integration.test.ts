@@ -101,10 +101,20 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   // Both: the release's schema applies to the exported data before it serves.
   const again = await exportedPackage(deploymentId, id);
   const both = payload(id, schema, "v3");
-  const bothUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(both)), id);
-  const replaced = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { deploymentId, replace: "both", transferId: bothUpload.transferId, package: again });
-  await kernel.owner.cancel(bothUpload.transferId);
+  const { artifact: baseArtifact, ...releasePayload } = both;
+  const artifact = {
+    ...baseArtifact,
+    files: { ...baseArtifact.files, "public/logo.png": encodeBase64(logo) },
+    encodings: { "public/logo.png": "base64" },
+  };
+  const { files, ...project } = releasePayload.project;
+  const bothUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify({ ...releasePayload, project })), id);
+  const sourceUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify({ files })), id);
+  const artifactUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(artifact)), id);
+  const replaced = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { deploymentId, replace: "both", transferId: bothUpload.transferId, sourcesTransferId: sourceUpload.transferId, artifactTransferId: artifactUpload.transferId, package: again });
+  for (const transferId of [bothUpload.transferId, sourceUpload.transferId, artifactUpload.transferId]) await kernel.owner.cancel(transferId);
   expect(replaced).toMatchObject({ imported: true, backup: { holds: ["data", "sources"] } });
+  expect(new Uint8Array(await readFile(path.join(root, "data", "apps", id, "dist", "public", "logo.png")))).toEqual(logo);
   await ana.call("actions_invoke", { name: "notes.add", input: { title: "third" } });
   expect(await titles()).toEqual(["first", "second", "third"]);
 

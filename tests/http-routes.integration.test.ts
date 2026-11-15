@@ -86,7 +86,8 @@ function release(id: string, files: Record<string, string>, initial: object = {}
       artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Orders</main>" } },
     })), id);
     try {
-      const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+      const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+      const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
       return await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     } finally { await owner.cancel(transfer.transferId); }
   })();

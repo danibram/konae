@@ -92,7 +92,8 @@ export async function account(kernel: Kernel, hostname: string, route: "signup" 
 export async function release(client: McpClient, payload: object, projectId: string) {
   const upload = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), projectId);
   try {
-    const plan = await client.call<{ planId: string; applied?: boolean; receipt?: Deployment }>("release_plan", { transferId: upload.transferId });
+    const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
+    const plan = await client.call<{ planId: string; applied?: boolean; receipt?: Deployment }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
     const receipt = await client.call<Deployment>("release_apply", { planId: plan.planId });
     return { plan, receipt };
   } finally { await client.cancel(upload.transferId).catch(() => {}); }

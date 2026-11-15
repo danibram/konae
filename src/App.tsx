@@ -223,6 +223,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [schemaChange, setSchemaChange] = useState<{ change: SchemaChange; resolve: (confirmed: boolean) => void } | null>(null);
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState("");
+  const [sourceConflict, setSourceConflict] = useState(false);
   const [operationError, setOperationError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
@@ -245,6 +246,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const demoProject = useRef<MiniAppProject | null>(null);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
+  const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
+  const conflictedRevision = useRef<number | null>(null);
+  const previewBuildVersion = useRef(0);
   const pendingSaves = useRef(0);
   const failedSave = useRef(false);
   const failedProjects = useRef(new Set<string>());
@@ -409,6 +413,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, [deployments, project, projects, workspaceStorage, drafts]);
 
   useEffect(() => {
+    if (publishing) return;
     const timeout = window.setTimeout(() => {
       for (const item of projects) {
         const snapshot = JSON.stringify(item);
@@ -416,7 +421,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         synchronized.current.set(item.id, snapshot);
         pendingSaves.current++;
         setSaved(false);
-        void sources.save(item).catch((error) => {
+        void sources.save(item).then(() => { serverSnapshots.current.set(item.id, snapshot); }).catch((error) => {
           failedSave.current = true;
           failedProjects.current.add(item.id);
           setSaveError(error instanceof Error ? error.message : String(error));
@@ -427,7 +432,119 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       }
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [projects, sources, saveAttempt]);
+  }, [projects, publishing, sources, saveAttempt]);
+
+  useEffect(() => {
+    if (!activeDeployment) return;
+    let active = true;
+    const check = async () => {
+      let reloadPending = false;
+      try {
+        const revision = await sources.inspectRevision(project.id);
+        if (!active || revision === sources.revision(project.id) || conflictedRevision.current === revision) return;
+        const clean = JSON.stringify(projectRef.current) === serverSnapshots.current.get(project.id);
+        if (!clean) {
+          conflictedRevision.current = revision;
+          setSourceConflict(true);
+          return;
+        }
+        const baseline = JSON.stringify(projectRef.current);
+        const latest = await sources.reload(project.id);
+        reloadPending = true;
+        if (!active || !latest.project || projectRef.current.id !== project.id || JSON.stringify(projectRef.current) !== baseline) {
+          sources.cancelReload(project.id);
+          if (active && projectRef.current.id === project.id) {
+            conflictedRevision.current = latest.revision;
+            setSourceConflict(true);
+          }
+          return;
+        }
+        const compiled = await compilePreviewSnapshot(latest.project);
+        if (!active || projectRef.current.id !== project.id || JSON.stringify(projectRef.current) !== baseline) {
+          sources.cancelReload(project.id);
+          if (active && projectRef.current.id === project.id) {
+            conflictedRevision.current = latest.revision;
+            setSourceConflict(true);
+          }
+          return;
+        }
+        if (await sources.inspectRevision(project.id) !== latest.revision) {
+          sources.cancelReload(project.id);
+          conflictedRevision.current = null;
+          return;
+        }
+        sources.acceptReload(project.id, latest);
+        reloadPending = false;
+        serverSnapshots.current.set(project.id, JSON.stringify(latest.project));
+        synchronized.current.set(project.id, JSON.stringify(latest.project));
+        failedProjects.current.delete(project.id);
+        failedSave.current = failedProjects.current.size > 0;
+        setSaveError("");
+        setProject(latest.project);
+        setProjects((current) => current.map((item) => item.id === project.id ? latest.project! : item));
+        if (compiled) {
+          setPreviewProject(compiled);
+          setPreviewEpoch((value) => value + 1);
+        }
+        setSourceConflict(false);
+        conflictedRevision.current = null;
+      } catch {
+        if (reloadPending) sources.cancelReload(project.id);
+        /* The normal save or next poll reports a stale owner session. */
+      }
+    };
+    const timer = window.setInterval(() => { void check(); }, 2500);
+    void check();
+    return () => { active = false; window.clearInterval(timer); };
+  }, [activeDeployment?.id, project.id, sources]);
+
+  const reloadConflictingSources = async () => {
+    const id = project.id;
+    const baseline = JSON.stringify(projectRef.current);
+    try {
+      const latest = await sources.reload(id);
+      if (!latest.project || projectRef.current.id !== id || JSON.stringify(projectRef.current) !== baseline) {
+        sources.cancelReload(id);
+        if (projectRef.current.id === id) {
+          conflictedRevision.current = latest.revision;
+          setSourceConflict(true);
+          setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+        }
+        return;
+      }
+      const compiled = await compilePreviewSnapshot(latest.project);
+      if (projectRef.current.id !== id || JSON.stringify(projectRef.current) !== baseline) {
+        sources.cancelReload(id);
+        conflictedRevision.current = latest.revision;
+        setSourceConflict(true);
+        setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+        return;
+      }
+      if (await sources.inspectRevision(id) !== latest.revision) {
+        sources.cancelReload(id);
+        conflictedRevision.current = null;
+        setSourceConflict(true);
+        return;
+      }
+      sources.acceptReload(id, latest);
+      serverSnapshots.current.set(id, JSON.stringify(latest.project));
+      synchronized.current.set(id, JSON.stringify(latest.project));
+      failedProjects.current.delete(id);
+      failedSave.current = failedProjects.current.size > 0;
+      setSaveError("");
+      setProject(latest.project);
+      setProjects((current) => current.map((item) => item.id === id ? latest.project! : item));
+      if (compiled) {
+        setPreviewProject(compiled);
+        setPreviewEpoch((value) => value + 1);
+      }
+      setSourceConflict(false);
+      conflictedRevision.current = null;
+    } catch (error) {
+      sources.cancelReload(id);
+      setSaveError(`Could not reload saved sources: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   const retrySave = () => {
     if (pendingSaves.current) return;
@@ -574,14 +691,29 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
    * beside Files when Files is showing, so the person sees what the edit did.
    * A failed build shows nothing new; the "Build failed" alert says why.
    */
+  const compilePreviewSnapshot = async (snapshot: MiniAppProject): Promise<MiniAppProject | null> => {
+    const version = ++previewBuildVersion.current;
+    setOperationError("");
+    try {
+      const compiled = await compileProjectInBrowser(snapshot);
+      if (version !== previewBuildVersion.current) return null;
+      return {
+        ...snapshot,
+        files: { ...snapshot.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
+      };
+    } catch (error) {
+      if (version === previewBuildVersion.current) setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  };
+
   const runPreview = ({ show: reveal = false }: { show?: boolean } = {}) => {
     setOperationError("");
-    void compileProjectInBrowser(project)
+    const snapshot = project;
+    void compilePreviewSnapshot(snapshot)
       .then((compiled) => {
-        setPreviewProject({
-          ...project,
-          files: { ...project.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
-        });
+        if (!compiled || JSON.stringify(projectRef.current) !== JSON.stringify(snapshot)) return;
+        setPreviewProject(compiled);
         setPreviewEpoch((value) => value + 1);
         // Files already stands beside the preview; elsewhere the preview comes forward.
         if (reveal && shownSection !== "code") show("preview");
@@ -593,17 +725,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     let cancelled = false;
     // A build failure belongs to the project that failed. Opening another one starts clean.
     setOperationError("");
-    void compileProjectInBrowser(project)
-      .then((compiled) => {
-        if (!cancelled) setPreviewProject({
-          ...project,
-          files: { ...project.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
-        });
-      })
-      .catch((error) => {
-        if (!cancelled) setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    return () => { cancelled = true; };
+    const snapshot = project;
+    void compilePreviewSnapshot(snapshot).then((compiled) => {
+      if (!cancelled && compiled && projectRef.current.id === snapshot.id && JSON.stringify(projectRef.current) === JSON.stringify(snapshot)) setPreviewProject(compiled);
+    });
+    return () => { cancelled = true; previewBuildVersion.current++; };
   }, [project.id]);
 
   projectRef.current = project;
@@ -836,17 +962,25 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPublishing(true);
     setDeployError("");
     try {
-      // The Kernel compares a release's actions with the saved sources, so the
-      // save of what this Deploy releases lands first. A failed save shows in
-      // the editor already, and the release goes ahead.
-      await sources.save(project).catch(() => undefined);
+      // The release names the revision written by this save. A save failure
+      // stops publishing before the Kernel can change the running app.
+      synchronized.current.set(project.id, JSON.stringify(project));
+      const observedSourcesRevision = await sources.save(project);
+      serverSnapshots.current.set(project.id, JSON.stringify(project));
       const artifact = await buildProjectInBrowser(project);
       // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
-      const record = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy);
+      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision);
+      const record = published.receipt;
       // Taking the release's manifest is not an edit of the person's, so "Edited" keeps its time.
-      setProject((current) => ({ ...current, manifest: record.manifest }));
+      const releasedProject = { ...project, manifest: record.manifest };
+      const releasedSnapshot = JSON.stringify(releasedProject);
+      sources.markPublished(project.id, published.sourcesRevision, releasedProject);
+      serverSnapshots.current.set(project.id, releasedSnapshot);
+      synchronized.current.set(project.id, releasedSnapshot);
+      setProject((current) => current.id === project.id && JSON.stringify(current) === JSON.stringify(project) ? releasedProject : current);
+      setProjects((current) => current.map((item) => item.id === project.id && JSON.stringify(item) === JSON.stringify(project) ? releasedProject : item));
       setExportAhead(false);
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
@@ -1425,6 +1559,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       <div className="stage-notices">
         {operationError && <Alert tone="danger" action={<Button size="sm" onClick={() => setOperationError("")}>Dismiss</Button>}>{operationError}</Alert>}
+        {sourceConflict && <Alert tone="warning" action={<Button size="sm" onClick={() => void reloadConflictingSources()}>Reload saved sources</Button>}>This app changed on another machine. Your draft is still here. Reload the saved sources to continue.</Alert>}
         {exportAhead && <Alert tone="warning" title="The export runs your last deploy" action={<Button size="sm" onClick={() => setExportAhead(false)}>Dismiss</Button>}>The folder holds your saved files. An app started from it runs your last deploy. Deploy changes, then export again, to make them match.</Alert>}
         {describedRefusal && agentThread.footer.kind === "blocked" && (
           <Alert tone="danger" title="A check refused the proposed change" action={<Button size="sm" onClick={() => show("agent")}>Open Describe</Button>}>

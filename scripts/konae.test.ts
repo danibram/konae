@@ -35,6 +35,7 @@ beforeAll(() => {
       if (name === "transfer_write") uploads[uploads.length - 1] += atob(String(args.data));
       const results: Record<string, unknown> = {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
+        project_inspect: { deployment: null, sourcesRevision: 0 },
         transfer_begin: { transferId: `transfer_${uploads.length}`, size: 0, sha256: "", chunkBytes: 65_536 },
         release_plan: { planId: "plan_1", schema: { statements: [], losses: [], confirmation: null } },
         release_apply: { id: "dep_1", url: "http://test.localhost/" },
@@ -149,7 +150,7 @@ describe("konae CLI", () => {
     expect(Object.keys(sources.files).sort()).toEqual(["app.js", "index.html", "public/logo.png"]);
     expect(sources.encodings).toEqual({ "public/logo.png": "base64" });
     expect(releaseUpload().project).toEqual({ id: "app_test", name: "Test", slug: "test", manifest: {} });
-    expect(calls.find((call) => call.name === "release_plan")!.arguments).toEqual({ transferId: "transfer_2", sourcesTransferId: "transfer_1" });
+    expect(calls.find((call) => call.name === "release_plan")!.arguments).toEqual({ transferId: "transfer_2", sourcesTransferId: "transfer_1", observedSourcesRevision: 0 });
     expect(calls.filter((call) => call.name === "transfer_cancel").map((call) => call.arguments.transferId)).toEqual(["transfer_1", "transfer_2"]);
   });
 

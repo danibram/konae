@@ -25,8 +25,10 @@ import {
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
 import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
+import { sourceDigest } from "../src/deployments/source-digest";
 import { skippedName } from "../src/lib/source-rules";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
+import { settingsDigest } from "./settings-digest";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -147,8 +149,11 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           because nothing is sent. --json prints one object per line and --follow keeps printing.
           Only --prod reads the published Deployment.
 pull      --dir <folder> [--url <installation URL>]
-          Exports the published app's data (database, accounts, files, Usage) into
-          <folder>/.konae/pull/data. Needs a credential from login --export-data. dev --reset imports it.
+          Exports app/, dist/ and data (database, accounts, files, Usage) into
+          <folder>/.konae/pull. Needs login --export-data. dev --reset imports its data/.
+          It replaces app/ and konae.json only when both match their last published values;
+          otherwise it stages the published files at .konae/pull/app and .konae/pull/konae.json.
+          Copy the staged files into place, then pull again to record their source revision.
 push      --dir <folder> [--url <installation URL>] [--yes] [--confirm-schema <confirmation>]
           Replaces the published app's data with <folder>/data: database, accounts, files and Usage.
           Rows are never merged. Without --yes it prints rows here against published rows and sends
@@ -577,19 +582,31 @@ export async function publishLocal(root: string, config: Config, token: string, 
   const { signupPolicy: _, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
   let first = false;
+  let observedSourcesRevision: number | undefined;
+  let publishedSourceDigest = "";
   const { plan, receipt } = await publishProject<{ id: string; url: string }>(client, project, async () => {
     // project_inspect needs the project that project_create registers on a first publish.
-    const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId: project.id });
+    const remote = await client.call<{ deployment?: { id: string } | null; sourcesRevision: number }>("project_inspect", { projectId: project.id });
     first = !remote.deployment;
+    const marker = await json<{ sourcesRevision: number }>(path.join(root, ".konae/source-revision.json")).catch(() => undefined);
+    observedSourcesRevision = marker?.sourcesRevision ?? (!remote.deployment && remote.sourcesRevision === 0 ? 0 : undefined);
     const { artifact, source } = await buildLocal(root);
+    publishedSourceDigest = await sourceDigest(source);
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
       initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
     };
   }, confirm, (error) => console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
     if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
-  });
+  }, () => observedSourcesRevision);
   await mkdir(path.join(root, ".konae"), { recursive: true });
+  let publishedSettings: unknown;
+  try { publishedSettings = JSON.parse(await readFile(path.join(root, SETTINGS_FILE), "utf8")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    publishedSettings = { project: config.project, contactEmail: config.contactEmail };
+  }
+  await writeFile(path.join(root, ".konae/source-revision.json"), JSON.stringify({ sourcesRevision: plan.expectedSourcesRevision + 1, sourceDigest: publishedSourceDigest, settingsDigest: settingsDigest(publishedSettings) }, null, 2), { mode: 0o600 });
   await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
   if (!first && wanted) {
@@ -1168,7 +1185,8 @@ async function main() {
   if (command === "pull") {
     const url = await installation();
     const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id);
-    console.log(`Exported the data ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
+    console.log(`Exported app/, dist/ and data ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
+    if (!pulled.sourcesInstalled) console.log(`Local app/ has edits or no recorded base, so pull kept it. The published sources are staged at ${path.join(root, PULL_DIRECTORY, "app")}. Copy those files into app/ when you are ready, then run pull again to record the new source revision.`);
     console.log(`Import it into the local app with: bun run konae -- dev --dir ${root} --reset`);
     return;
   }

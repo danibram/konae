@@ -1,0 +1,11 @@
+{
+  "about": "A publish names the source revision its caller read. The client and Kernel use this sentence when that revision changed.",
+  "cases": [
+    {
+      "case": "a caller's observed revision is stale",
+      "observed": 1,
+      "error": "Sources changed since revision 1. Run konae pull --dir <folder>, then publish again.",
+      "code": "sources.revision-conflict"
+    }
+  ]
+}

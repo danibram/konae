@@ -995,9 +995,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             };
         }
     };
-    // An app the editor never saved keeps the release's sources in app/, so
-    // its folder is whole. They wait beside app/ until dist/ switches.
-    let staged_sources = match sources::stage_release(&state.data_root, &id, &release_sources).await {
+    // These sources travel with this build, so app/ and dist/ change together.
+    let source_metadata = json!({
+        "name": deployment.project_name, "slug": deployment.slug, "manifest": deployment.manifest,
+        "directories": [], "updatedAt": now_ms(),
+    });
+    let staged_sources = match sources::stage_release(&state.data_root, &id, &release_sources, &source_metadata).await {
         Ok(staged) => staged,
         Err(error_value) => {
             remove_database_files(&staged_database);
@@ -1005,13 +1008,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The sources of this release could not be written beside app/: {error_value:#}"));
         }
     };
-    let discard_sources = |staged: Option<sources::StagedRelease>| async move {
-        if let Some(staged) = staged {
-            staged.discard().await;
-        }
-    };
     if let Err(error_value) = release_step(&id, "stage_sources") {
-        discard_sources(staged_sources).await;
+        staged_sources.discard().await;
         remove_database_files(&staged_database);
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
@@ -1024,7 +1022,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_database_files(&staged_database);
         false
     } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
-        discard_sources(staged_sources).await;
+        staged_sources.discard().await;
         remove_database_files(&staged_database);
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The changed database could not take the place of the live one: {error_value}"));
@@ -1044,33 +1042,25 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     {
         recorded.put_back().await;
         undo_database();
-        discard_sources(staged_sources).await;
+        staged_sources.discard().await;
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
     // A swap that fails part way puts the old app/ back itself, so only a
     // swap that went through needs putting back.
-    let swapped_sources = match staged_sources.as_ref() {
-        None => Ok(()),
-        Some(staged) => match staged.swap().await {
-            Err(error_value) => Err((error_value, false)),
-            Ok(()) => release_step(&id, "swap_sources").map_err(|error_value| (error_value, true)),
-        },
+    let swapped_sources = match staged_sources.swap().await {
+        Err(error_value) => Err((error_value, false)),
+        Ok(()) => release_step(&id, "swap_sources").map_err(|error_value| (error_value, true)),
     };
     if let Err((error_value, swapped_app)) = swapped_sources {
-        match staged_sources {
-            Some(staged) if swapped_app => staged.put_back().await,
-            staged => discard_sources(staged).await,
-        }
+        if swapped_app { staged_sources.put_back().await; } else { staged_sources.discard().await; }
         recorded.put_back().await;
         undo_database();
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new sources could not take the place of app/: {error_value:#}"));
     }
     if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
-        if let Some(staged) = staged_sources {
-            staged.put_back().await;
-        }
+        staged_sources.put_back().await;
         recorded.put_back().await;
         undo_database();
         remove_staged_dist(&state, &id, &artifact_version).await;
@@ -1085,9 +1075,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if swapped {
         remove_database_files(&replaced);
     }
-    if let Some(staged) = staged_sources {
-        staged.finish().await;
-    }
+    staged_sources.finish().await;
     http::routes_published(&deployment);
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
@@ -5177,6 +5165,7 @@ pub mod tests {
             let live = state.deployments.read().await.values().next().cloned().unwrap();
             let app = crate::layout::sources(&root, &id);
             let first_actions = std::fs::read(app.join("actions.json")).unwrap();
+            let first_source_metadata = std::fs::read(crate::layout::private(&root, &id).join(crate::layout::SOURCES_METADATA)).unwrap();
 
             // The next release drops tags, confirmed as release_plan would confirm it.
             let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
@@ -5209,6 +5198,7 @@ pub mod tests {
             assert_eq!(read_artifact(&state, &serving, "index.html").await.unwrap(), b"<p>one</p>", "{step}");
             assert_eq!(std::fs::read(crate::layout::dist(&root, &id).join("index.html")).unwrap(), b"<p>one</p>", "{step}: dist/ is the first release's");
             assert_eq!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the first release's");
+            assert_eq!(std::fs::read(crate::layout::private(&root, &id).join(crate::layout::SOURCES_METADATA)).unwrap(), first_source_metadata, "{step}: source metadata is the first release's");
             assert!(staged_or_retired(&root, &id).is_empty(), "{step}: no staged files stay");
             let staged_sources: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())

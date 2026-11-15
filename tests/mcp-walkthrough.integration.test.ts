@@ -506,7 +506,7 @@ describe("the MCP walkthrough", () => {
     r.add("json", JSON.stringify({ ...payload, project: { ...payload.project, files: "<path: text of every source file>" }, artifact: "<version 1, entrypoint index.html, and the text of every file in dist/>", initialPackage: { manifest: "<the manifest project_export returned>", components: uploads } }, null, 2));
     const release = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), s.projectId);
     r.name(release.transferId, "<release upload>");
-    const plan = await tool("release_plan", { transferId: release.transferId }, { token: s.tokenB, kernel: b });
+    const plan = await tool("release_plan", { transferId: release.transferId, observedSourcesRevision: 0 }, { token: s.tokenB, kernel: b });
     r.name((plan.result as any).planId, "<plan id>");
     const applied = await tool("release_apply", { planId: (plan.result as any).planId }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, hostname: value.hostname, url: value.url, signupPolicy: value.signupPolicy }) });
     Object.assign(s, { deploymentB: (applied.result as any).id, hostnameB: (applied.result as any).hostname });

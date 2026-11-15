@@ -52,7 +52,8 @@ beforeAll(async () => {
     visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Public shell</main>" } },
   })), project.id);
   try {
-    const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId: project.id });
+    const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     appHost = (await client.call<{ hostname: string }>("release_apply", { planId: plan.planId })).hostname;
   } finally { await client.cancel(transfer.transferId); }
 }, 120_000);
@@ -145,7 +146,8 @@ async function publish(id: string, visibility: "public" | "private", files: Reco
     visibility, artifact: { version: 1, entrypoint: "index.html", files },
   })), id);
   try {
-    const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     return (await client.call<{ hostname: string }>("release_apply", { planId: plan.planId })).hostname;
   } finally { await client.cancel(transfer.transferId); }
 }

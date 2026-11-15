@@ -1,6 +1,7 @@
 import type { McpClient, Transfer } from "../mcp/client";
 import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
+import { refusal } from "../kernel/refusal";
 
 /** What a schema change loses, as the Kernel words it. */
 export type SchemaLoss = { table: string; column: string | null; sentence: string };
@@ -18,7 +19,7 @@ export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirm
  * first release (`firstRelease`) they are the name it will take, null when the
  * slug and its coded name are both taken.
  */
-export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
+export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; expectedSourcesRevision: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
 
 /** Asks the owner about a schema change that loses data. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
@@ -36,7 +37,12 @@ export class SchemaChangeDeclined extends Error {
  * `sourcesTransferId` the upload of the files of app/, which travel apart so
  * each upload stays under its own limit.
  */
-export type ReleaseUploads = { transferId: string; sourcesTransferId?: string };
+export type ReleaseUploads = { transferId: string; sourcesTransferId?: string; observedSourcesRevision?: number };
+
+/** The shared refusal for a publish whose caller did not read the current sources. */
+export function sourceRevisionConflict(observed: number) {
+  return refusal("sources.revision-conflict", `Sources changed since revision ${observed}. Run konae pull --dir <folder>, then publish again.`);
+}
 
 /**
  * Releases with release_plan, then release_apply. The editor and `konae publish`
@@ -87,6 +93,7 @@ export async function publishProject<Receipt>(
   confirm: ConfirmSchema,
   cancelFailed: (error: unknown) => void = () => {},
   onPlan?: (plan: ReleasePlan) => void,
+  observedSourcesRevision?: number | (() => number | undefined),
 ): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
   await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
@@ -104,7 +111,8 @@ export async function publishProject<Receipt>(
     transfers.push(sourcesTransfer);
     const releaseTransfer = await client.upload(payload, project.id);
     transfers.push(releaseTransfer);
-    return await release<Receipt>(client, { transferId: releaseTransfer.transferId, sourcesTransferId: sourcesTransfer.transferId }, confirm, onPlan);
+    const observed = typeof observedSourcesRevision === "function" ? observedSourcesRevision() : observedSourcesRevision;
+    return await release<Receipt>(client, { transferId: releaseTransfer.transferId, sourcesTransferId: sourcesTransfer.transferId, observedSourcesRevision: observed }, confirm, onPlan);
   } finally {
     for (const transfer of transfers) await client.cancel(transfer.transferId).catch(cancelFailed);
   }

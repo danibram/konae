@@ -284,7 +284,7 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await app.screenshot({ path: testInfo.outputPath("published-app.png"), fullPage: true });
 });
 
-test("the Deploy dialog says when the editor holds other files than a release published from an app folder", async ({ page, baseURL }) => {
+test("the editor reloads sources published from an app folder", async ({ page, baseURL }, testInfo) => {
   const projectId = (await createProject(page, `Folder publish ${Date.now()}`)).split("/").pop()!;
   await publish(page);
   // The owner's browser session delegates a token, as `konae login` does.
@@ -299,24 +299,125 @@ test("the Deploy dialog says when the editor holds other files than a release pu
   }, projectId);
   // An exported folder with one changed query, published through publishProject as `konae publish` does.
   const folder = new McpClient(new URL("/mcp", baseURL).href, { token });
-  const saved = await folder.call<{ transfer: Transfer }>("project_sources_read", { projectId });
+  const saved = await folder.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
   const project = JSON.parse(new TextDecoder().decode(await folder.download(saved.transfer)));
   project.files["actions.json"] = project.files["actions.json"].replace("LIMIT 100", "LIMIT 50");
+  project.files["app.js"] = "window.folderRelease = true;";
   const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": "<p>Published from a folder</p>" } };
-  await publishProject(folder, project, () => ({ project, visibility: "public", artifact }), async () => true);
+  await publishProject(folder, project, () => ({ project, visibility: "public", artifact }), async () => true, undefined, undefined, saved.revision);
 
-  const warning = "The editor holds other files than the published app runs, after edits here or a publish from an app folder. Deploy replaces what runs with these files. Its accounts and rows stay.";
   const dialog = page.getByRole("dialog", { name: /^Deploy / });
-  await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
-  await expect(dialog.getByText(warning)).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath("deploy-dialog-sources-differ.png") });
-  await dialog.getByRole("button", { name: /^Deploy (public|changes)$/ }).click();
-  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Done", exact: true }).click();
-  // After the editor's own release the published app runs these files again, so the dialog no longer says they differ.
+  const app = await openFile(page, "app.js");
+  await expect(app).toHaveValue("window.folderRelease = true;", { timeout: 15_000 });
   await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(warning)).toHaveCount(0);
+  await expect(dialog.getByText(/The editor holds other files/)).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("editor-after-folder-publish.png"), fullPage: true });
+});
+
+test("the editor reloads clean sources and keeps a dirty draft when another tab saves", async ({ page }, testInfo) => {
+  const projectId = (await createProject(page, `Source conflict ${Date.now()}`, "tasks")).split("/").pop()!;
+  await publish(page);
+  const token = await page.evaluate(async (projectId) => {
+    const rpc = async (method: string, params: object) => (await (await fetch("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+    })).json()).result;
+    await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
+    return (await rpc("tools/call", { name: "token_create", arguments: { scopes: ["read", "write"], projectIds: [projectId], ttlSeconds: 600 } })).structuredContent.result.token as string;
+  }, projectId);
+  const outside = new McpClient(new URL("/mcp", page.url()).href, { token });
+  const saved = await outside.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const project = JSON.parse(new TextDecoder().decode(await outside.download(saved.transfer)));
+  const app = await openFile(page, "app.js");
+  await expect(app).toBeVisible();
+
+  const saveOutside = async (filesToChange: Record<string, string>, revision: number) => {
+    const files = { ...project.files, ...filesToChange };
+    const upload = await outside.upload(new TextEncoder().encode(JSON.stringify({ ...project, files, updatedAt: Date.now() })), projectId);
+    try { return await outside.call<{ revision: number }>("project_sources_save", { projectId, transferId: upload.transferId, expectedRevision: revision }); }
+    finally { await outside.cancel(upload.transferId); }
+  };
+
+  const remoteFiles = (value: string) => ({
+    "app.js": 'import { remoteLabel } from "./remote.ts"; document.body.dataset.remoteLabel = remoteLabel;',
+    "remote.ts": `export const remoteLabel: string = "${value}";`,
+  });
+  const revision = (await saveOutside(remoteFiles("clean TypeScript reload"), saved.revision)).revision;
+  await expect(app).toHaveValue(remoteFiles("clean TypeScript reload")["app.js"], { timeout: 15_000 });
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').locator("body")).toHaveAttribute("data-remote-label", "clean TypeScript reload", { timeout: 15_000 });
+  let releaseRead!: () => void;
+  let readPending!: () => void;
+  const releaseHeldRead = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const heldRead = new Promise<void>((resolve) => { readPending = resolve; });
+  let delayRead = true;
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (delayRead && body.includes('"project_sources_read"')) {
+      delayRead = false;
+      const response = await route.fetch();
+      readPending();
+      await releaseHeldRead;
+      await route.fulfill({ response });
+      return;
+    }
+    await route.continue();
+  });
+  const newer = saveOutside(remoteFiles("newer TypeScript source"), revision);
+  await newer;
+  await heldRead;
+  await app.fill("window.localDraft = 'keep this';");
+  releaseRead();
+  await expect(app).toHaveValue("window.localDraft = 'keep this';");
+  await expect(page.getByText("This app changed on another machine. Your draft is still here.")).toBeVisible();
+  await page.unroute("**/mcp");
+  await page.screenshot({ path: testInfo.outputPath("dirty-source-conflict.png"), fullPage: true });
+  await page.getByRole("button", { name: "Reload saved sources" }).click();
+  await expect(app).toHaveValue(remoteFiles("newer TypeScript source")["app.js"]);
+});
+
+test("the editor keeps edits made while a release response is pending", async ({ page }) => {
+  await createProject(page, `Publish draft ${Date.now()}`, "tasks");
+  await publish(page);
+  const editor = await openFile(page, "app.js");
+  await editor.fill("window.releaseSource = true;");
+  await waitForKernelSave(page);
+
+  let releaseResponseReady!: () => void;
+  let releaseResponse!: () => void;
+  const responseReady = new Promise<void>((resolve) => { releaseResponseReady = resolve; });
+  const held = new Promise<void>((resolve) => { releaseResponse = resolve; });
+  let holdApply = true;
+  let sourceSavesWhileHeld = 0;
+  page.on("request", (request) => {
+    const body = request.postData() ?? "";
+    if (body.includes('"project_sources_save"')) sourceSavesWhileHeld++;
+  });
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (holdApply && body.includes('"release_apply"')) {
+      holdApply = false;
+      releaseResponseReady();
+      await held;
+      await route.continue();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Deploy changes", exact: true }).click();
+  await responseReady;
+  await editor.fill("window.draftDuringPublish = true;", { force: true });
+  await page.waitForTimeout(800);
+  expect(sourceSavesWhileHeld).toBe(0);
+  releaseResponse();
+  await expect(editor).toHaveValue("window.draftDuringPublish = true;");
+  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.unroute("**/mcp");
+  await waitForKernelSave(page);
 });
 
 test("public notes authenticate users and isolate private rows", async ({ page, context }, testInfo) => {

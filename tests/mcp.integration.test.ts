@@ -88,7 +88,8 @@ function payload(id: string, visibility: "public" | "private" = "public") {
 async function release(id: string, visibility: "public" | "private" = "public") {
   await alice.call("project_create", { projectId: id, name: "MCP proof" });
   const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify(payload(id, visibility))), id);
-  const plan = await alice.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+  const observed = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+  const plan = await alice.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
   const receipt = await alice.call<{ id: string; hostname: string; url: string }>("release_apply", { planId: plan.planId });
   await alice.cancel(transfer.transferId);
   return { receipt, plan };
@@ -148,6 +149,55 @@ describe("authenticated MCP", () => {
       expect(loaded.projects.find((item) => item.id === project.id)).toEqual(edited);
       expect(loaded.missing).toHaveLength(0);
     } finally {
+      await proxy.stop(true);
+    }
+  });
+
+  test("a save in flight when the editor reloads cannot write over the newer remote revision", async () => {
+    const project = createWorkspaceProject("Reload during save", []);
+    await alice.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+    let holdUpload = false;
+    let entered!: () => void;
+    let release!: () => void;
+    const uploadEntered = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const postedRevisions: number[] = [];
+    const proxy = Bun.serve({ port: 0, async fetch(request) {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (rpc.params?.name === "transfer_write" && holdUpload) {
+        holdUpload = false;
+        entered();
+        await held;
+      }
+      if (rpc.params?.name === "project_sources_save") postedRevisions.push(rpc.params.arguments.expectedRevision);
+      return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+    } });
+    try {
+      const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await sources.load();
+      await sources.save(project);
+      postedRevisions.length = 0;
+      holdUpload = true;
+      const oldDraft = { ...project, files: { ...project.files, "index.html": "old local draft" }, updatedAt: project.updatedAt + 1 };
+      const save = sources.save(oldDraft);
+      await uploadEntered;
+
+      const remote = { ...project, files: { ...project.files, "index.html": "new remote source" }, updatedAt: project.updatedAt + 2 };
+      const remoteUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(remote)), project.id);
+      await alice.call("project_sources_save", { projectId: project.id, transferId: remoteUpload.transferId, expectedRevision: 1 });
+      await alice.cancel(remoteUpload.transferId);
+
+      const reload = sources.reload(project.id);
+      release();
+      await expect(save).rejects.toThrow("superseded by a source reload");
+      const saved = await reload;
+      expect(saved.revision).toBe(2);
+      expect(saved.project?.files["index.html"]).toBe("new remote source");
+      expect(postedRevisions).toEqual([]);
+      sources.acceptReload(project.id, saved);
+    } finally {
+      release();
       await proxy.stop(true);
     }
   });
@@ -300,7 +350,8 @@ describe("authenticated MCP", () => {
       await expect(alice.call("release_plan", { transferId: both.transferId, sourcesTransferId: sources.transferId })).rejects.toThrow("Send the files of app/ in sourcesTransferId or in project.files, not in both.");
       await expect(alice.call("release_plan", { transferId: releaseJson.transferId, sourcesTransferId: component.transferId })).rejects.toThrow("This upload names the database component of an export.");
       await expect(alice.call("release_plan", { transferId: component.transferId })).rejects.toThrow("This upload names the database component of an export.");
-      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: releaseJson.transferId, sourcesTransferId: sources.transferId });
+      const observed = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: releaseJson.transferId, sourcesTransferId: sources.transferId, observedSourcesRevision: observed.sourcesRevision });
       await alice.call("release_apply", { planId: plan.planId });
     } finally {
       for (const transfer of [sources, both, component, releaseJson]) await alice.cancel(transfer.transferId);
@@ -314,7 +365,8 @@ describe("authenticated MCP", () => {
     const id = "release_bad_path";
     await release(id);
     const app = path.join(root, "apps", id);
-    const before = { dist: await readFile(path.join(app, "dist/index.html"), "utf8"), actions: await readFile(path.join(app, "app/actions.json"), "utf8"), version: (await alice.call<any>("project_inspect", { projectId: id })).deployment.artifactVersion };
+    const inspected = await alice.call<any>("project_inspect", { projectId: id });
+    const before = { dist: await readFile(path.join(app, "dist/index.html"), "utf8"), actions: await readFile(path.join(app, "app/actions.json"), "utf8"), version: inspected.deployment.artifactVersion, sourcesRevision: inspected.sourcesRevision };
     const bad = payload(id);
     (bad.project.files as Record<string, string>)["../evil.txt"] = "x";
     bad.project.files["actions.json"] = JSON.stringify({ version: 1, actions: {} });
@@ -322,7 +374,7 @@ describe("authenticated MCP", () => {
     const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(bad)), id);
     try {
       for (const attempt of [
-        () => alice.call("release_plan", { transferId: upload.transferId }),
+        () => alice.call("release_plan", { transferId: upload.transferId, observedSourcesRevision: before.sourcesRevision }),
         () => alice.call("project_import", { deploymentId: id, replace: "sources", transferId: upload.transferId }),
       ]) {
         const refused = await attempt().then(() => null, (error) => error);
@@ -393,7 +445,8 @@ describe("authenticated MCP", () => {
     const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
     let receipt: { hostname: string };
     try {
-      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+      const observed = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
       receipt = await alice.call("release_apply", { planId: plan.planId });
     } finally { await alice.cancel(transfer.transferId); }
     const visitor = runtimeClient(receipt.hostname);
@@ -461,14 +514,14 @@ describe("authenticated MCP", () => {
     request.project.files["actions.json"] = JSON.stringify(program);
     const rejected = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
     try {
-      await expect(alice.call("release_plan", { transferId: rejected.transferId })).rejects.toThrow("cannot use RETURNING");
+      await expect(alice.call("release_plan", { transferId: rejected.transferId, observedSourcesRevision: 0 })).rejects.toThrow("cannot use RETURNING");
     } finally { await alice.cancel(rejected.transferId); }
     program.actions["notes.literal"].statement = "INSERT INTO notes(title,user_id) VALUES('RETURNING',?1) /* RETURNING id */";
     request.project.files["actions.json"] = JSON.stringify(program);
     const accepted = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
     let receipt: { hostname: string };
     try {
-      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: accepted.transferId });
+      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: accepted.transferId, observedSourcesRevision: 0 });
       receipt = await alice.call("release_apply", { planId: plan.planId });
     } finally { await alice.cancel(accepted.transferId); }
     const member = await appUser(receipt.hostname, "returning@app.test");
@@ -496,12 +549,12 @@ describe("authenticated MCP", () => {
     const config = { project: settings };
     // init made the ID without a Kernel, and the first publish registered the project.
     const state = await alice.call<{ revision: number; sourcesRevision: number }>("project_inspect", { projectId: config.project.id });
-    expect(state).toMatchObject({ revision: 1, sourcesRevision: 0 });
+    expect(state).toMatchObject({ revision: 1, sourcesRevision: 1 });
     // The project published from the folder takes the editor's saves too.
-    expect(await alice.call("project_sources_read", { projectId: config.project.id })).toEqual({ revision: 0, transfer: null });
+    expect(await alice.call<{ revision: number; transfer: unknown }>("project_sources_read", { projectId: config.project.id })).toMatchObject({ revision: 1, transfer: expect.any(Object) });
     const editorFiles = { id: config.project.id, name: config.project.name, slug: config.project.slug, files: { "index.html": "<main>From the editor</main>" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const editorUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(editorFiles)), config.project.id);
-    expect(await alice.call("project_sources_save", { projectId: config.project.id, transferId: editorUpload.transferId, expectedRevision: 0 })).toEqual({ revision: 1 });
+    expect(await alice.call("project_sources_save", { projectId: config.project.id, transferId: editorUpload.transferId, expectedRevision: 1 })).toEqual({ revision: 2 });
     await alice.cancel(editorUpload.transferId);
     const port = String(18950 + Math.floor(Math.random() * 50));
     const dev = Bun.spawn([process.execPath, "run", "scripts/konae.ts", "dev", "--dir", directory, "--port", port], {
@@ -573,13 +626,38 @@ describe("authenticated MCP", () => {
     const id = "release_proof";
     await alice.call("project_create", { projectId: id, name: "Release" });
     const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(payload(id))), id);
-    const one = await alice.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
-    const two = await alice.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+    const observed = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const one = await alice.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
+    const two = await alice.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
     const first = await alice.call("release_apply", { planId: one.planId });
     expect(await alice.call("release_apply", { planId: one.planId })).toEqual(first);
     await expect(alice.call("release_apply", { planId: two.planId })).rejects.toThrow("revision changed");
     await expect(bob.call("release_apply", { planId: one.planId })).rejects.toThrow();
     await alice.cancel(upload.transferId);
+  });
+
+  test("a save after release_plan refuses apply before a Deployment changes", async () => {
+    const id = "save_after_release_plan";
+    await alice.call("project_create", { projectId: id, name: "Plan race" });
+    const request = payload(id);
+    const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
+    const plan = await alice.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: 0 });
+    const changed = {
+      id, name: "Plan race", slug: id.replaceAll("_", "-"), files: { ...request.project.files, "index.html": "<main>saved later</main>" },
+      directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: Date.now(),
+    };
+    const sourceUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(changed)), id);
+    try {
+      await alice.call("project_sources_save", { projectId: id, transferId: sourceUpload.transferId, expectedRevision: 0 });
+      const refused = await alice.call("release_apply", { planId: plan.planId }).then(() => null, (error) => error);
+      expect(refused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(refused?.message).toBe("Sources changed since revision 0. Run konae pull --dir <folder>, then publish again.");
+      expect((await alice.call<any>("project_inspect", { projectId: id })).deployment).toBeNull();
+      expect(await Bun.file(path.join(root, "apps", id, "app/index.html")).text()).toBe("<main>saved later</main>");
+    } finally {
+      await alice.cancel(upload.transferId);
+      await alice.cancel(sourceUpload.transferId);
+    }
   });
 
   test("a browser upload sends its bytes in one PUT and a kept file revalidates with 304", async () => {
@@ -715,7 +793,8 @@ describe("authenticated MCP", () => {
     const publishWith = async (client: McpClient, body: object) => {
       const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(body)), id);
       try {
-        const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+        const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+        const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
         return await client.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
       } finally { await client.cancel(transfer.transferId).catch(() => {}); }
     };
@@ -1101,7 +1180,8 @@ describe("app accounts under required verification", () => {
     const id = "strict_app";
     await owner.call("project_create", { projectId: id, name: "Strict" });
     const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(payload(id))), id);
-    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     host = receipt.hostname;
     await owner.call("signup_policy_set", { deploymentId: receipt.id, mode: "open" });
@@ -1155,12 +1235,12 @@ describe("app accounts under required verification", () => {
     const refused = await owner.upload(new TextEncoder().encode(JSON.stringify(release({
       "me.role": { kind: "query", access: "anonymous", statement: "SELECT ?1 AS role LIMIT 1", bindings: [{ source: "actor", field: "role" }] },
     }))), id);
-    await expect(owner.call("release_plan", { transferId: refused.transferId })).rejects.toThrow("Invalid binding 0 in me.role.");
+    await expect(owner.call("release_plan", { transferId: refused.transferId, observedSourcesRevision: 0 })).rejects.toThrow("Invalid binding 0 in me.role.");
     await owner.cancel(refused.transferId);
     const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(release({
       "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id, title FROM notes WHERE user_id = ?1 LIMIT 50", bindings: [{ source: "actor", field: "id" }] },
     }))), id);
-    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: 0 });
     const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     await owner.cancel(transfer.transferId);
     const inspected = await owner.call<{ deployment: { contactEmail?: string } }>("project_inspect", { projectId: id });

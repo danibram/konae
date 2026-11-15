@@ -182,13 +182,17 @@ pub(super) fn store(state: &Konae) -> Result<Connection> {
     store_at(&state.data_root)
 }
 
+fn source_revision_refusal(observed: u64) -> anyhow::Error {
+    super::refusal::refuse("sources.revision-conflict", format!("Sources changed since revision {observed}. Run konae pull --dir <folder>, then publish again.")).into()
+}
+
 fn store_at(root: &Path) -> Result<Connection> {
     let db = Connection::open(root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
-        CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT);
+        CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT, source_revision INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, actor TEXT NOT NULL, tool TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);")?;
     let has_audience: bool = db
@@ -219,6 +223,8 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_sources {
         db.execute("ALTER TABLE plans ADD COLUMN sources TEXT", [])?;
     }
+    let has_source_revision = db.prepare("PRAGMA table_info(plans)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?.iter().any(|name| name == "source_revision");
+    if !has_source_revision { db.execute("ALTER TABLE plans ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0", [])?; }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
     install_imports(&db)?;
@@ -504,10 +510,19 @@ struct ReleaseSources {
 /// release imports. The files of `app/` travel in `sources_id`, an upload of
 /// their own, so each upload stays under its own limit. A payload that holds
 /// `project.files` itself, as `project_import` takes, needs no second upload.
-async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>) -> Result<DeployInput> {
+async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>, artifact_id: Option<&str>) -> Result<DeployInput> {
     let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
     anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload", "Upload is not complete.");
-    let mut input: DeployInput = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
+    let mut payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
+    if let Some(artifact_id) = artifact_id {
+        anyhow::ensure!(payload.get("artifact").is_none(), "Send artifact in the release JSON or artifactTransferId, not both.");
+        let project_id = payload["project"]["id"].as_str().ok_or_else(|| anyhow::anyhow!("Release has no project ID."))?;
+        let artifact_upload = transfer(state, principal, &json!({"transferId": artifact_id}))?;
+        anyhow::ensure!(artifact_upload["complete"] == true && artifact_upload["direction"] == "upload" && artifact_upload["projectId"] == project_id, "Completed artifact upload for this project required.");
+        ensure_no_component(&artifact_upload)?;
+        payload["artifact"] = serde_json::from_slice(&tokio::fs::read(transfer_path(state, artifact_id)?).await?)?;
+    }
+    let mut input: DeployInput = serde_json::from_value(payload)?;
     anyhow::ensure!(upload["projectId"] == input.project.id, "Artifact belongs to another project.");
     if let Some(sources_id) = sources_id {
         anyhow::ensure!(input.project.files.is_empty() && input.project.encodings.is_empty(), "Send the files of app/ in sourcesTransferId or in project.files, not in both.");
@@ -585,7 +600,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             &["projectId"],
             true,
         ),
-        tool("project_sources_read", "Download the project sources the editor or project_sources_save saved last.", json!({"projectId":text}), &["projectId"], true),
+        tool("project_sources_read", "Download the project sources the editor or project_sources_save saved last. metadataOnly returns id, name, slug and manifest without creating a source transfer.", json!({"projectId":text,"metadataOnly":{"type":"boolean"}}), &["projectId"], true),
         tool(
             "database_execute",
             "Administer a deployment database. Mutations require write permission.",
@@ -671,8 +686,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
             tool(
                 "release_plan",
-                "Validate a release, pin the current project revision and answer the schema change the release makes: its statements, what they lose, and the confirmation release_apply needs when they lose data. transferId is the completed upload of the release JSON. sourcesTransferId is the completed upload of the files of app/ as { files, encodings }, which leaves project.files out of the release JSON so each upload stays under its own limit.",
-                json!({"transferId":text,"sourcesTransferId":text}),
+                "Validate a release against the source revision this caller read. Existing apps need observedSourcesRevision from project_inspect or project_sources_read. If sources changed, run konae pull --dir <folder> and publish again. transferId is the release JSON; sourcesTransferId is app/ as { files, encodings }.",
+                json!({"transferId":text,"sourcesTransferId":text,"observedSourcesRevision":{"type":"integer","minimum":0}}),
                 &["transferId"],
                 false,
             ),
@@ -688,8 +703,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tools.extend(path_tools());
         tools.push(tool(
             "project_import",
-            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, an upload of the release JSON of the publishing topic built from the folder's dist/, with the files of app/ inside project as files and encodings. replace data or both takes package { manifest, components: { <name>: <transferId> } }, uploaded as the portability topic says. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
-            json!({"deploymentId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
+            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, the release JSON, and may take sourcesTransferId for app/ and artifactTransferId for { version, entrypoint, files, encodings }. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
+            json!({"deploymentId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"sourcesTransferId":text,"artifactTransferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
             &["deploymentId", "replace"],
             false,
         ));
@@ -1358,7 +1373,8 @@ async fn admin_call(
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             match super::sources::read(&state.data_root, id).await? {
-                Some(source) if revision > 0 => Ok(json!({"revision":revision,"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
+                Some(source) if a["metadataOnly"] == true => Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":null})),
+                Some(source) => Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
                 _ => Ok(json!({"revision":0,"transfer":null})),
             }
         }
@@ -1586,9 +1602,16 @@ async fn admin_call(
         "release_plan" => {
             let transfer_id = a["transferId"].as_str().unwrap();
             let sources_id = a["sourcesTransferId"].as_str();
-            let input = release_input(state, principal, transfer_id, sources_id).await?;
+            let input = release_input(state, principal, transfer_id, sources_id, None).await?;
             let artifact_sha256 = transfer(state, principal, &json!({"transferId": transfer_id}))?["sha256"].clone();
+            let _guard = database_lock(state, &format!("project:{}", input.project.id)).await;
             let (_, revision) = owned_project(state, owner, &input.project.id, "publish")?;
+            let source_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [&input.project.id], |r| r.get(0))?;
+            let has_deployment = find_project_deployment(&*state.deployments.read().await, &input.project.id).is_some();
+            let observed = a["observedSourcesRevision"].as_u64();
+            if (has_deployment || source_revision > 0) && observed != Some(source_revision) {
+                return Err(source_revision_refusal(observed.unwrap_or(0)));
+            }
             if let Some(package) = input.initial_package.as_ref() {
                 // The same export again answers with the first import.
                 if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
@@ -1607,17 +1630,17 @@ async fn admin_call(
             let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
-            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id])?;
+            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision])?;
             if let Some(package) = input.initial_package.as_ref() {
                 remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }
             Ok(
-                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
+                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"expectedSourcesRevision":source_revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
             )
         }
         "release_apply" => {
             let id = a["planId"].as_str().unwrap();
-            let row: (String,u64,String,u64,Option<String>,Option<String>)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
+            let row: (String,u64,String,u64,Option<String>,Option<String>,u64)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources,source_revision FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))?;
             let _guard = database_lock(state, &format!("project:{}", row.0)).await;
             let (mut metadata, revision) = owned_project(state, owner, &row.0, "publish")?;
             let receipt: Option<String> =
@@ -1631,7 +1654,11 @@ async fn admin_call(
                 revision == row.1,
                 "Project revision changed. Create a new release plan."
             );
-            let mut input = release_input(state, principal, &row.2, row.5.as_deref()).await?;
+            let source_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [&row.0], |r| r.get(0))?;
+            if source_revision != row.6 {
+                return Err(source_revision_refusal(row.6));
+            }
+            let mut input = release_input(state, principal, &row.2, row.5.as_deref(), None).await?;
             anyhow::ensure!(input.project.id == row.0, "Artifact belongs to another project.");
             // Notify to the owner sends to konae.json's address, else the app's, else the owner's.
             input.contact_email = contact_email(state, owner, &row.0, input.contact_email.as_deref()).await?;
@@ -1644,7 +1671,7 @@ async fn admin_call(
             let receipt = response_value(deploy_input(state, input).await).await?;
             let mut db = store(state)?;
             let tx = db.transaction()?;
-            tx.execute("UPDATE projects SET revision=revision+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3",params![row.0,owner.id,revision,metadata.to_string()])?;
+            tx.execute("UPDATE projects SET revision=revision+1,sources=sources+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3 AND sources=?5",params![row.0,owner.id,revision,metadata.to_string(),source_revision])?;
             tx.execute(
                 "UPDATE plans SET receipt=?1 WHERE id=?2",
                 params![receipt.to_string(), id],
@@ -1699,6 +1726,8 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     };
     anyhow::ensure!(data == a.get("package").is_some(), "Pass package exactly when replace is data or both.");
     anyhow::ensure!(sources == a.get("transferId").is_some(), "Pass transferId exactly when replace is sources or both.");
+    anyhow::ensure!(!a.get("sourcesTransferId").is_some() || sources, "Pass sourcesTransferId only when replace is sources or both.");
+    anyhow::ensure!(!a.get("artifactTransferId").is_some() || sources, "Pass artifactTransferId only when replace is sources or both.");
     let package: Option<super::package::InitialPackage> = a.get("package").map(|value| serde_json::from_value(value.clone())).transpose()?;
     let confirmation = a["confirmSchema"].as_str();
     let project = deployment.project_id.clone();
@@ -1711,8 +1740,16 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         Some(transfer_id) => {
             let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == project.as_str(), "Completed upload for this project required.");
-            let payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
-            let input: DeployInput = serde_json::from_value(payload.clone())?;
+            let mut payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
+            let input = release_input(state, principal, transfer_id, a["sourcesTransferId"].as_str(), a["artifactTransferId"].as_str()).await?;
+            payload["project"]["files"] = json!(&input.project.files);
+            payload["project"]["encodings"] = json!(&input.project.encodings);
+            payload["artifact"] = json!({
+                "version": input.artifact.version,
+                "entrypoint": input.artifact.entrypoint,
+                "files": input.artifact.files,
+                "encodings": input.artifact.encodings,
+            });
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
             anyhow::ensure!(
                 input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none(),
@@ -1726,14 +1763,14 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
                 return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
             }
-            Some((payload, input, change))
+            Some((payload, change))
         }
         None => None,
     };
     let (backup, change) = match &package {
         Some(package) => {
             let target = match &release {
-                Some((_, input, _)) => Target::release(input)?,
+                Some((payload, _)) => Target::release(&serde_json::from_value::<DeployInput>(payload.clone())?)?,
                 None => Target::live(state, &deployment)?,
             };
             match super::import::import_data(state, &deployment, package, &target, confirmation, sources).await? {
@@ -1741,10 +1778,10 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 Outcome::Imported { backup, change } => (backup, change),
             }
         }
-        None => (super::import::backup_sources(state, &deployment).await?, release.as_ref().map(|(_, _, change)| change.clone()).unwrap_or_default()),
+        None => (super::import::backup_sources(state, &deployment).await?, release.as_ref().map(|(_, change)| change.clone()).unwrap_or_default()),
     };
     let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
-    if let Some((mut payload, input, _)) = release {
+    if let Some((mut payload, _)) = release {
         payload["contactEmail"] = contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?.map_or(Value::Null, Value::String);
         payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
         for key in ["name", "slug", "manifest"] {
@@ -1752,16 +1789,10 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 metadata[key] = value.clone();
             }
         }
-        let receipt = response_value(deploy(state, payload.to_string().as_bytes()).await).await?;
-        // The editor opens the imported sources, not the ones it saved before.
-        let mut saved = json!({
-            "id": project, "name": input.project.name, "slug": input.project.slug, "files": input.project.files,
-            "directories": [], "manifest": input.project.manifest, "updatedAt": now_ms(),
-        });
-        if !input.project.encodings.is_empty() {
-            saved["encodings"] = json!(input.project.encodings);
-        }
-        super::sources::write(&state.data_root, &project, &saved).await?;
+        let receipt = match response_value(deploy(state, payload.to_string().as_bytes()).await).await {
+            Ok(receipt) => receipt,
+            Err(error) => return restore_import_after_release_failure(state, &deployment, package.is_some(), &backup, error).await,
+        };
         store(state)?.execute(
             "UPDATE projects SET revision=revision+1, sources=sources+1, body=?3 WHERE id=?1 AND revision=?2",
             params![project, revision, metadata.to_string()],
@@ -1769,6 +1800,19 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         answer["deployment"] = receipt;
     }
     Ok(answer)
+}
+
+/// Restores the data and source backup when the release after an import fails.
+async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Value> {
+    if has_package {
+        let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
+        let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
+        let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
+        let _data = database_lock(state, &deployment.id).await;
+        super::import::restore_held(&state.kernel, deployment, &record).await
+            .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
+    }
+    Err(error)
 }
 
 /// The email of the owner account that invites, for the message. Owners
@@ -2107,6 +2151,80 @@ async fn owner_page(State(state): State<Konae>, headers: HeaderMap) -> Response 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_revision_conflicts_match_the_shared_case() {
+        let fixture: Value = serde_json::from_str(include_str!("../../kernel/src/source-revision-cases.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let refusal = source_revision_refusal(case["observed"].as_u64().unwrap());
+            let refusal = refusal.downcast_ref::<super::super::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, case["code"].as_str().unwrap());
+            assert_eq!(refusal.message, case["error"].as_str().unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_sources_from_an_older_project_revision_remain_readable() {
+        let root = std::env::temp_dir().join(format!("konae-old-sources-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        store(&state).unwrap().execute(
+            "INSERT INTO projects(id,owner,body,revision,sources) VALUES('app_legacy','o','{}',0,0)", [],
+        ).unwrap();
+        let source = json!({
+            "id":"app_legacy", "name":"Legacy", "slug":"legacy", "files":{"index.html":"<main>old source</main>"},
+            "directories":[], "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}}, "updatedAt":1
+        });
+        super::super::sources::write(&state.data_root, "app_legacy", &source).await.unwrap();
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into()], projects:vec![], session:false };
+        let answer = admin_call(&state, &owner, "owner:o", "project_sources_read", json!({"projectId":"app_legacy"})).await.unwrap();
+        assert_eq!(answer["revision"], 0);
+        assert!(answer["transfer"].is_object(), "a saved v0.8 source document remains available for the editor to migrate");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_import_release_restores_the_old_sources_and_rows() {
+        let root = std::env::temp_dir().join(format!("konae-import-release-failure-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let id = "app_import_failure";
+        let deployment: Deployment = serde_json::from_value(json!({
+            "id":id,"projectId":id,"projectName":"Import failure","slug":"import-failure","url":"http://import-failure.localhost",
+            "createdAt":1,"releasedAt":1,"manifest":{"version":1,"visibility":"private"},"hostname":"import-failure.localhost",
+            "actions":"{}","artifactVersion":"v1","signupPolicy":{"mode":"invitation","allowlist":[]},"signInMethods":["password"]
+        })).unwrap();
+        let old_source = json!({
+            "id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"old source"},"directories":[],
+            "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}},"updatedAt":1
+        });
+        super::super::sources::write(&state.data_root, id, &old_source).await.unwrap();
+        let database = kernel::database_path(&state.kernel, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE notes(body TEXT); INSERT INTO notes VALUES('old row');").unwrap();
+
+        let backup_id = "injected-release-failure";
+        let key = "backup-data-and-sources";
+        let backup_root = crate::layout::backups(&state.data_root, id);
+        let backup_folder = backup_root.join(key);
+        tokio::fs::create_dir_all(&backup_folder).await.unwrap();
+        tokio::fs::copy(&database, backup_folder.join("database.sqlite")).await.unwrap();
+        tokio::fs::write(backup_folder.join("sources.json"), serde_json::to_vec(&old_source).unwrap()).await.unwrap();
+        let record = super::DatabaseBackup { id: backup_id.into(), label: "Before import".into(), created_at: 1, size_bytes: 0, key: key.into(), holds: vec!["data".into(), "sources".into()] };
+        tokio::fs::write(backup_root.join(format!("{backup_id}.json")), serde_json::to_vec(&record).unwrap()).await.unwrap();
+
+        rusqlite::Connection::open(&database).unwrap().execute_batch("DELETE FROM notes; INSERT INTO notes VALUES('imported row');").unwrap();
+        let imported_source = json!({"id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"imported source"},"directories":[],"manifest":old_source["manifest"],"updatedAt":2});
+        super::super::sources::write(&state.data_root, id, &imported_source).await.unwrap();
+        let backup = record.view();
+        let error = restore_import_after_release_failure(&state, &deployment, true, &backup, anyhow::anyhow!("Injected release failure")).await.unwrap_err();
+        assert!(error.to_string().contains("Injected release failure"));
+        let row: String = rusqlite::Connection::open(&database).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(row, "old row");
+        let restored = super::super::sources::read(&state.data_root, id).await.unwrap().unwrap();
+        assert_eq!(restored["files"]["index.html"], "old source");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     /// The path host serves apps and the home, so the owner's MCP and owner
     /// sign-in refuse it.

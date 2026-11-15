@@ -78,7 +78,8 @@ async function publishPublic(app: Awaited<ReturnType<typeof installation>>, id: 
     } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": `<!doctype html><main>${id}</main>` } },
   })), id);
   try {
-    const plan = await app.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+    const observed = await app.owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await app.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
     return (await app.owner.call<{ hostname: string }>("release_apply", { planId: plan.planId })).hostname;
   } finally { await app.owner.cancel(upload.transferId); }
 }
@@ -109,7 +110,8 @@ describe("authentication cookie isolation", () => {
     })), id);
     let deployment: { hostname: string };
     try {
-      const plan = await app.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+      const observed = await app.owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+      const plan = await app.owner.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
       deployment = await app.owner.call("release_apply", { planId: plan.planId });
     } finally { await app.owner.cancel(upload.transferId); }
     let memberCookie = "";

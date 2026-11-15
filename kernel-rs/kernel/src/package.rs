@@ -260,13 +260,7 @@ pub async fn export(
         let mut sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
         if let Some(released) = deployment.source_digest.as_deref() {
             // Saved editor files can include paths that a folder publish skips.
-            let saved = match crate::sources::read(&state.data_root, &deployment.id).await? {
-                Some(source) => {
-                    let files = crate::sources::decode_document(&source)?;
-                    crate::sources::digest(files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())))
-                }
-                None => crate::sources::digest_folder(&app_sources).await?,
-            };
+            let saved = crate::sources::digest_folder(&app_sources).await?;
             sources_ahead |= saved != released;
         }
         let components = tokio::task::spawn_blocking(move || {

@@ -110,22 +110,19 @@ pub fn decode_document(source: &Value) -> Result<Files> {
 /// Writes `source` into the app `id`'s `app/` and its metadata into `.konae/`.
 pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
     let files = decode_document(source)?;
-    let directories: Vec<&str> = source["directories"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     let private = layout::private(root, id);
-    let staged = private.join(format!("app-{}", Uuid::new_v4().simple()));
-    let result = async {
-        stage(&staged, &files, &directories).await?;
-        swap(root, id, &staged).await?;
-        let metadata = json!({
-            "name": source["name"], "slug": source["slug"], "manifest": source["manifest"],
-            "directories": source["directories"], "updatedAt": source["updatedAt"],
-        });
-        crate::write_atomic(&private.join(layout::SOURCES_METADATA), &serde_json::to_vec_pretty(&metadata)?).await?;
-        Ok::<_, anyhow::Error>(())
+    tokio::fs::create_dir_all(&private).await?;
+    let metadata = json!({
+        "name": source["name"], "slug": source["slug"], "manifest": source["manifest"],
+        "directories": source["directories"], "updatedAt": source["updatedAt"],
+    });
+    let staged = stage_release(root, id, &files, &metadata).await?;
+    if let Err(error_value) = staged.swap().await {
+        staged.discard().await;
+        return Err(error_value);
     }
-    .await;
-    let _ = tokio::fs::remove_dir_all(&staged).await;
-    result
+    staged.finish().await;
+    Ok(())
 }
 
 /// A release's files written beside `app/`, which the release puts in its
@@ -134,23 +131,30 @@ pub struct StagedRelease {
     app: PathBuf,
     staged: PathBuf,
     retired: PathBuf,
+    metadata: PathBuf,
+    staged_metadata: PathBuf,
+    retired_metadata: PathBuf,
 }
 
-/// Stages a release's files when the editor never saved sources for the
-/// app, so an app published from a folder or over MCP has its sources in its
-/// folder too. Saved sources are never replaced, so this answers `None` then.
-pub async fn stage_release(root: &Path, id: &str, files: &Files) -> Result<Option<StagedRelease>> {
+/// Stages every release's sources so app/ and dist/ describe the same build.
+pub async fn stage_release(root: &Path, id: &str, files: &Files, source_metadata: &Value) -> Result<StagedRelease> {
     let private = layout::private(root, id);
-    if tokio::fs::try_exists(private.join(layout::SOURCES_METADATA)).await? {
-        return Ok(None);
-    }
     let staged = private.join(format!("app-{}", Uuid::new_v4().simple()));
-    if let Err(error_value) = stage(&staged, files, &[]).await {
+    let directories: Vec<&str> = source_metadata["directories"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if let Err(error_value) = stage(&staged, files, &directories).await {
         let _ = tokio::fs::remove_dir_all(&staged).await;
-        return Err(error_value);
+        return Err(error_value.into());
     }
-    let retired = private.join(format!("app-retired-{}", Uuid::new_v4().simple()));
-    Ok(Some(StagedRelease { app: layout::sources(root, id), staged, retired }))
+    let nonce = Uuid::new_v4().simple().to_string();
+    let metadata = private.join(layout::SOURCES_METADATA);
+    let staged_metadata = private.join(format!("sources-{nonce}.json"));
+    if let Err(error_value) = crate::write_atomic(&staged_metadata, &serde_json::to_vec_pretty(source_metadata)?).await {
+        let _ = tokio::fs::remove_dir_all(&staged).await;
+        return Err(error_value.into());
+    }
+    let retired = private.join(format!("app-retired-{nonce}"));
+    let retired_metadata = private.join(format!("sources-retired-{nonce}.json"));
+    Ok(StagedRelease { app: layout::sources(root, id), staged, retired, metadata, staged_metadata, retired_metadata })
 }
 
 impl StagedRelease {
@@ -167,11 +171,38 @@ impl StagedRelease {
             }
             return Err(error_value.into());
         }
+        let had_metadata = match tokio::fs::try_exists(&self.metadata).await {
+            Ok(had) => had,
+            Err(error_value) => {
+                let _ = tokio::fs::remove_dir_all(&self.app).await;
+                if had { let _ = tokio::fs::rename(&self.retired, &self.app).await; }
+                return Err(error_value.into());
+            }
+        };
+        if had_metadata {
+            if let Err(error_value) = tokio::fs::rename(&self.metadata, &self.retired_metadata).await {
+                let _ = tokio::fs::remove_dir_all(&self.app).await;
+                if had { let _ = tokio::fs::rename(&self.retired, &self.app).await; }
+                return Err(error_value.into());
+            }
+        }
+        if let Err(error_value) = tokio::fs::rename(&self.staged_metadata, &self.metadata).await {
+            let _ = tokio::fs::remove_dir_all(&self.app).await;
+            if had { let _ = tokio::fs::rename(&self.retired, &self.app).await; }
+            if had_metadata { let _ = tokio::fs::rename(&self.retired_metadata, &self.metadata).await; }
+            return Err(error_value.into());
+        }
         Ok(())
     }
 
     /// Puts the old `app/` back after a later step of the release failed.
     pub async fn put_back(self) {
+        let _ = tokio::fs::remove_file(&self.metadata).await;
+        if tokio::fs::try_exists(&self.retired_metadata).await.unwrap_or(false) {
+            if let Err(error_value) = tokio::fs::rename(&self.retired_metadata, &self.metadata).await {
+                eprintln!("Could not put back {} after a failed release: {error_value}", self.metadata.display());
+            }
+        }
         if let Err(error_value) = tokio::fs::rename(&self.app, &self.staged).await {
             eprintln!("Could not move the sources of a failed release out of {}: {error_value}", self.app.display());
             return;
@@ -187,11 +218,14 @@ impl StagedRelease {
     /// Removes the old `app/` once the release serves.
     pub async fn finish(self) {
         let _ = tokio::fs::remove_dir_all(&self.retired).await;
+        let _ = tokio::fs::remove_file(&self.retired_metadata).await;
+        let _ = tokio::fs::remove_file(&self.staged_metadata).await;
     }
 
     /// Removes the staged files of a release that never swapped.
     pub async fn discard(self) {
         let _ = tokio::fs::remove_dir_all(&self.staged).await;
+        let _ = tokio::fs::remove_file(&self.staged_metadata).await;
     }
 }
 
@@ -208,18 +242,6 @@ async fn stage(staged: &Path, files: &Files, directories: &[&str]) -> Result<()>
         }
         tokio::fs::write(&target, bytes).await?;
     }
-    Ok(())
-}
-
-/// Puts the staged files in the place of `app/`.
-async fn swap(root: &Path, id: &str, staged: &Path) -> Result<()> {
-    let app = layout::sources(root, id);
-    let retired = layout::private(root, id).join(format!("app-retired-{}", Uuid::new_v4().simple()));
-    if tokio::fs::try_exists(&app).await? {
-        tokio::fs::rename(&app, &retired).await?;
-    }
-    tokio::fs::rename(staged, &app).await?;
-    let _ = tokio::fs::remove_dir_all(&retired).await;
     Ok(())
 }
 
@@ -397,14 +419,15 @@ mod tests {
     async fn a_release_writes_every_file_into_app_as_its_bytes_and_a_failed_one_puts_app_back() {
         let root = std::env::temp_dir().join(format!("konae-sources-{}", Uuid::new_v4()));
         let files: Files = [("index.html".to_owned(), b"<main></main>".to_vec()), ("public/logo.png".to_owned(), vec![0x89, 0, 0xff])].into();
-        let staged = stage_release(&root, "app_a", &files).await.unwrap().unwrap();
+        let metadata = json!({"name":"A","slug":"a","manifest":{"version":1},"directories":[],"updatedAt":1});
+        let staged = stage_release(&root, "app_a", &files, &metadata).await.unwrap();
         assert!(!layout::sources(&root, "app_a").exists(), "staging leaves app/ alone");
         staged.swap().await.unwrap();
         staged.finish().await;
         assert_eq!(std::fs::read(layout::sources(&root, "app_a").join("public/logo.png")).unwrap(), vec![0x89, 0, 0xff]);
 
         let next: Files = [("index.html".to_owned(), b"<main>2</main>".to_vec())].into();
-        let staged = stage_release(&root, "app_a", &next).await.unwrap().unwrap();
+        let staged = stage_release(&root, "app_a", &next, &metadata).await.unwrap();
         staged.swap().await.unwrap();
         assert_eq!(std::fs::read(layout::sources(&root, "app_a").join("index.html")).unwrap(), b"<main>2</main>");
         staged.put_back().await;
