@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "n
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
+import { packageComponentFiles } from "../src/lib/portable-package";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
 import { usageRange } from "../src/lib/usage";
@@ -200,29 +201,44 @@ describe("konae CLI", () => {
 
   test("a failed clean-baseline rehearsal uses pull's snapshot, not edited local data", async () => {
     const folder = await mkdtemp(path.join(tmpdir(), "konae-rehearsal-test-"));
-    const original = path.join(folder, "original");
     const pull = path.join(folder, ".konae/pull");
     const localData = path.join(folder, "data/database.sqlite");
     try {
-      await mkdir(path.join(original, "app"), { recursive: true });
-      await mkdir(path.join(pull, "data"), { recursive: true });
+      await mkdir(path.join(folder, "app"), { recursive: true });
+      await mkdir(path.join(folder, "dist"), { recursive: true });
+      await mkdir(pull, { recursive: true });
+      await mkdir(path.join(folder, "files-archive"), { recursive: true });
       await mkdir(path.dirname(localData), { recursive: true });
-      await writeFile(path.join(original, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", manifest: {} }));
-      await writeFile(path.join(original, "app/actions.json"), "{}");
-      const tar = Bun.spawn(["tar", "-cf", path.join(pull, "folder.tar"), "-C", original, "konae.json", "app"], { stdout: "pipe", stderr: "pipe" });
-      expect(await tar.exited).toBe(0);
+      await writeFile(path.join(folder, "konae.json"), JSON.stringify({ id: "app_test", name: "Candidate", slug: "candidate", manifest: {} }));
+      await writeFile(path.join(folder, "app/actions.json"), "{\"actions\":{}}");
+      await writeFile(path.join(folder, "app/schema.sql"), "CREATE TABLE tasks (id INTEGER PRIMARY KEY);");
+      await writeFile(path.join(folder, "dist/index.html"), "candidate build");
       const remoteBytes = new Uint8Array([1, 2, 3]);
+      const identityBytes = new Uint8Array([4, 5, 6]);
       const localBytes = new Uint8Array([9, 8, 7]);
-      await writeFile(path.join(pull, "data/database.sqlite"), remoteBytes);
+      const archiveIndex = Buffer.from('{"files":[]}');
+      await writeFile(path.join(pull, packageComponentFiles.database), remoteBytes);
+      await writeFile(path.join(pull, packageComponentFiles.identity), identityBytes);
+      await writeFile(path.join(folder, "files-archive/index.json"), archiveIndex);
+      await writeFile(path.join(folder, "files-archive/blob-1"), new Uint8Array([7]));
+      const filesTarPath = path.join(pull, packageComponentFiles.files);
+      const filesTar = Bun.spawn(["tar", "-cf", filesTarPath, "-C", path.join(folder, "files-archive"), "index.json", "blob-1"], { stdout: "pipe", stderr: "pipe" });
+      expect(await filesTar.exited).toBe(0);
+      const filesBytes = new Uint8Array(await readFile(filesTarPath));
       await writeFile(localData, localBytes);
-      const sha256 = createHash("sha256").update(remoteBytes).digest("hex");
-      const manifest = { format: "konae-package", version: 1, packageId: "pkg_baseline", createdAt: 1, deploymentId: "dep_test", projectId: "app_test", visibility: "private", publishedRevision: 1, contents: [{ name: "database", size: remoteBytes.length, sha256 }], excluded: [] };
-      await writeFile(path.join(pull, "pull.json"), JSON.stringify({ manifest, from: "http://localhost", at: 1 }));
+      const component = (name: string, bytes: Uint8Array) => ({ name, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+      const manifest = { format: "konae-package", version: 1, packageId: "pkg_baseline", createdAt: 1, deploymentId: "dep_test", projectId: "app_test", visibility: "private", publishedRevision: 1, contents: [component("database", remoteBytes), component("identity", identityBytes), component("files", filesBytes)], excluded: [] };
+      await writeFile(path.join(pull, "pull.json"), JSON.stringify({ manifest, from: "http://localhost", at: 1, sourceBaseline: { packageId: "pkg_old", sourceDigest: "old-source-digest", sourcesRevision: 8, capturedAt: 1 } }));
 
-      await expect(rehearsePulledSnapshot(folder, async (scratch, snapshot) => {
+      await expect(rehearsePulledSnapshot(folder, { id: "app_test", name: "Candidate", slug: "candidate", visibility: "private", signupPolicy: { mode: "closed" }, signInMethods: ["password"], kernel: "test", manifest: {} }, async (scratch, snapshot) => {
         expect(scratch).not.toBe(folder);
-        expect(await readFile(path.join(scratch, "app/actions.json"), "utf8")).toBe("{}");
+        expect(await readFile(path.join(scratch, "app/schema.sql"), "utf8")).toContain("tasks");
+        expect(await readFile(path.join(scratch, "dist/index.html"), "utf8")).toBe("candidate build");
+        expect(JSON.parse(await readFile(path.join(scratch, "konae.json"), "utf8")).name).toBe("Candidate");
         expect(await readFile(path.join(snapshot, "data/database.sqlite"))).toEqual(remoteBytes);
+        expect(await readFile(path.join(snapshot, "data/identity.sqlite"))).toEqual(identityBytes);
+        expect(await readFile(path.join(snapshot, "data/files/index.json"))).toEqual(archiveIndex);
+        expect(await readFile(path.join(scratch, "app/schema.sql"), "utf8")).not.toContain("old published schema");
         throw Error("schema validation failed");
       })).rejects.toThrow("schema validation failed");
       expect(await readFile(localData)).toEqual(localBytes);

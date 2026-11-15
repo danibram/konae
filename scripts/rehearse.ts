@@ -1,43 +1,66 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkPackageManifest } from "../src/lib/portable-package";
-import { dataEntries, type PackageComponentName } from "../src/lib/app-folder";
-import { readTar } from "../src/lib/tar";
+import { checkPackageManifest, packageComponentFiles, type PackageComponentName } from "../src/lib/portable-package";
+import { dataEntries, SETTINGS_FILE, type AppSettings } from "../src/lib/app-folder";
 import { sourceFilesFrom } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { PULL_DIRECTORY, readPulled } from "./pull";
 
 /** Evidence returned after the Kernel imports the immutable snapshot from pull. */
-export type RehearsalEvidence = { snapshotId: string; sourceDigest: string; folderDigest: string; packageId: string };
+export type RehearsalEvidence = { snapshotId: string; candidateSourceDigest: string; sourceBaselineDigest: string | null; sourceBaselineRevision: number | null; snapshotDigest: string; packageId: string };
+
+/** Starts and stops the Kernel once so operator commands can address the scratch Deployment. */
+export async function bootLocalKernel(kernel: { binary: string; env: Record<string, string | undefined> }) {
+  const server = Bun.spawn([kernel.binary], { env: kernel.env, stdout: "pipe", stderr: "pipe" });
+  let output = "";
+  const collect = async (stream: ReadableStream<Uint8Array>) => {
+    const decoder = new TextDecoder();
+    for await (const chunk of stream) output += decoder.decode(chunk);
+  };
+  const stdout = collect(server.stdout as ReadableStream<Uint8Array>);
+  const stderr = collect(server.stderr as ReadableStream<Uint8Array>);
+  try {
+    for (let attempt = 0; attempt < 150 && !/listening on/.test(output); attempt++) {
+      if (server.exitCode !== null) break;
+      await Bun.sleep(100);
+    }
+    if (!/listening on/.test(output)) throw Error(`The scratch Kernel did not serve the candidate app.\n${output.trim()}`);
+  } finally {
+    server.kill();
+    await server.exited;
+    await Promise.all([stdout, stderr]);
+  }
+}
+
+/** Creates the local Deployment record, then imports the snapshot through the Kernel operator. */
+export async function importWithLocalKernel(kernel: { binary: string; env: Record<string, string | undefined>; run(args: string[]): Promise<string> }, snapshot: string) {
+  await bootLocalKernel(kernel);
+  return kernel.run(["import", snapshot]);
+}
 
 /** Builds a scratch app from the exact folder and data exported by the latest pull, then runs its Kernel import. */
-export async function rehearsePulledSnapshot(root: string, importSnapshot: (appFolder: string, snapshotFolder: string) => Promise<unknown>): Promise<RehearsalEvidence> {
+export async function rehearsePulledSnapshot(root: string, settings: AppSettings, importSnapshot: (appFolder: string, snapshotFolder: string) => Promise<unknown>): Promise<RehearsalEvidence> {
   const pull = path.join(root, PULL_DIRECTORY);
   const pulled = await readPulled(root);
   if (!pulled) throw Error("Run konae pull before rehearse so the exact published snapshot is available.");
   const scratch = await mkdtemp(path.join(tmpdir(), "konae-rehearsal-"));
   try {
-    const folderTar = new Uint8Array(await readFile(path.join(pull, "folder.tar")));
-    const folderDigest = createHash("sha256").update(folderTar).digest("hex");
-    const entries = readTar(folderTar);
-    for (const entry of entries) {
-      const target = path.resolve(scratch, entry.path);
-      if (!target.startsWith(path.resolve(scratch) + path.sep)) throw Error(`Invalid pulled folder path ${entry.path}.`);
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, entry.contents);
-    }
+    await cp(path.join(root, "app"), path.join(scratch, "app"), { recursive: true });
+    await cp(path.join(root, "dist"), path.join(scratch, "dist"), { recursive: true });
+    await writeFile(path.join(scratch, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`);
     const manifest = checkPackageManifest(pulled.manifest);
     const snapshot = path.join(scratch, "snapshot");
     await mkdir(path.join(snapshot, "data"), { recursive: true });
+    const snapshotComponents: string[] = [];
     for (const component of manifest.contents) {
       const name = component.name as PackageComponentName;
-      const relative = name === "database" ? "data/database.sqlite" : name === "accounts" ? "data/identity.sqlite" : name === "files" ? "data/files.json" : name === "usage" ? "data/usage.sqlite" : "";
-      const source = path.join(pull, relative);
+      const source = path.join(pull, packageComponentFiles[name]);
       const bytes = new Uint8Array(await readFile(source));
       const digest = createHash("sha256").update(bytes).digest("hex");
       if (bytes.length !== component.size || digest !== component.sha256) throw Error(`Pulled ${component.name} no longer matches snapshot ${manifest.packageId}. Run konae pull again.`);
+      snapshotComponents.push(`${name}:${component.sha256}:${component.size}`);
       for (const entry of dataEntries(name, bytes)) {
         const target = path.resolve(snapshot, entry.path);
         if (!target.startsWith(snapshot + path.sep)) throw Error(`Invalid snapshot path ${entry.path}.`);
@@ -45,9 +68,13 @@ export async function rehearsePulledSnapshot(root: string, importSnapshot: (appF
         await writeFile(target, entry.contents);
       }
     }
-    const sources = await sourceDigest(sourceFilesFrom(await listSourceFiles(path.join(scratch, "app"))));
+    const candidateSourceDigest = await sourceDigest(sourceFilesFrom(await listSourceFiles(path.join(scratch, "app"))));
+    const sourceBaseline = (pulled as typeof pulled & { sourceBaseline?: { sourceDigest?: string; sourcesRevision?: number } }).sourceBaseline;
+    const sourceBaselineDigest = sourceBaseline?.sourceDigest ?? pulled.sourceDigest ?? null;
+    const sourceBaselineRevision = sourceBaseline?.sourcesRevision ?? pulled.sourcesRevision ?? null;
+    const snapshotDigest = createHash("sha256").update(`${manifest.packageId}\n${snapshotComponents.sort().join("\n")}`).digest("hex");
     await importSnapshot(scratch, snapshot);
-    return { snapshotId: manifest.packageId, packageId: manifest.packageId, sourceDigest: sources, folderDigest };
+    return { snapshotId: manifest.packageId, packageId: manifest.packageId, candidateSourceDigest, sourceBaselineDigest, sourceBaselineRevision, snapshotDigest };
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

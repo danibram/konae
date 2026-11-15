@@ -34,7 +34,7 @@ import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 import { requireTestKernel } from "./test-kernel";
-import { rehearsePulledSnapshot } from "./rehearse";
+import { importWithLocalKernel, rehearsePulledSnapshot } from "./rehearse";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
@@ -170,8 +170,8 @@ pull      --dir <folder> [--url <installation URL>]
           stages published files and preserves local edits. dev --reset imports pulled data after a backup.
           A pending pull blocks push until that import finishes.
 rehearse  --dir <folder>
-          Runs the Kernel's data import against the exact source and data snapshot in .konae/pull,
-          in a scratch app folder. It reports the source digest and snapshot ID without touching app/ or data/.
+          Runs the Kernel's data import with the current app/, settings and build against the data
+          snapshot in .konae/pull, in a scratch folder. It reports candidate and baseline digests without changing data/.
 push      --dir <folder> [--url <installation URL>] [--yes] [--confirm-schema <confirmation>]
           Replaces published data with <folder>/data: database, accounts, files and Usage. Import a
           pending pull with dev --reset first.
@@ -1300,12 +1300,14 @@ export async function main() {
   };
   const root = path.resolve(option("dir", process.cwd())!);
   if (command === "rehearse") {
-    const result = await rehearsePulledSnapshot(root, async (scratch, snapshot) => {
-      const settings = await readSettings(scratch);
+    const settings = await readSettings(root);
+    await refreshActionTypes(root);
+    await buildLocal(root, { development: true });
+    const result = await rehearsePulledSnapshot(root, settings, async (scratch, snapshot) => {
       const kernel = await localKernel(scratch, settings);
-      return kernel.run(["import", snapshot]);
+      return importWithLocalKernel(kernel, snapshot);
     });
-    console.log(JSON.stringify({ ...result, source: "konae pull snapshot", rehearsal: "passed" }, null, 2));
+    console.log(JSON.stringify({ ...result, source: "current candidate against konae pull data", rehearsal: "passed" }, null, 2));
     return;
   }
   if (command === "login") {
