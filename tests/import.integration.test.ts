@@ -36,11 +36,15 @@ afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursiv
 async function exportedPackage(deploymentId: string, projectId: string) {
   const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId });
   const components: Record<string, string> = {};
-  for (const content of exported.manifest.contents) {
-    const bytes = await kernel.owner.download(exported.downloads[content.name]);
-    components[content.name] = (await kernel.owner.upload(bytes, projectId, content.name)).transferId;
+  try {
+    for (const content of exported.manifest.contents) {
+      const bytes = await kernel.owner.download(exported.downloads[content.name]);
+      components[content.name] = (await kernel.owner.upload(bytes, projectId, content.name)).transferId;
+    }
+  } finally {
+    for (const transfer of Object.values(exported.downloads)) await kernel.owner.cancel(transfer.transferId).catch(() => {});
+    await kernel.owner.cancel(exported.folder.transferId).catch(() => {});
   }
-  await kernel.owner.cancel(exported.folder.transferId).catch(() => {});
   return { manifest: exported.manifest, components };
 }
 
@@ -113,6 +117,7 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   const artifactUpload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(artifact)), id);
   const replaced = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { deploymentId, replace: "both", transferId: bothUpload.transferId, sourcesTransferId: sourceUpload.transferId, artifactTransferId: artifactUpload.transferId, package: again });
   for (const transferId of [bothUpload.transferId, sourceUpload.transferId, artifactUpload.transferId]) await kernel.owner.cancel(transferId);
+  for (const transferId of Object.values(again.components)) await kernel.owner.cancel(transferId).catch(() => {});
   expect(replaced).toMatchObject({ imported: true, backup: { holds: ["data", "sources"] } });
   expect(new Uint8Array(await readFile(path.join(root, "data", "apps", id, "dist", "public", "logo.png")))).toEqual(logo);
   await ana.call("actions_invoke", { name: "notes.add", input: { title: "third" } });
@@ -120,3 +125,40 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
 
   await expect(kernel.owner.call("project_import", { deploymentId, replace: "data" })).rejects.toThrow("Pass package exactly when replace is data or both.");
 }, 180_000);
+
+test("invalid release settings refuse before a both import changes live rows or files", async () => {
+  const id = "import_invalid_contact";
+  await kernel.owner.call("project_create", { projectId: id, name: "Invalid contact import" });
+  const { receipt } = await release(kernel.owner, payload(id), id);
+  const deploymentId = receipt.id;
+  const ana = runtime(kernel, receipt.hostname, await account(kernel, receipt.hostname, "signup", "invalid-contact@import.test"));
+  await ana.call("actions_invoke", { name: "notes.add", input: { title: "exported row" } });
+  const exported = await exportedPackage(deploymentId, id);
+  await ana.call("actions_invoke", { name: "notes.add", input: { title: "live row" } });
+
+  const appPath = path.join(root, "data", "apps", id, "app", "actions.json");
+  const distPath = path.join(root, "data", "apps", id, "dist", "index.html");
+  const beforeApp = await readFile(appPath);
+  const beforeDist = await readFile(distPath);
+  const beforeProject = await kernel.owner.call<{ project: { name: string; slug: string; manifest: unknown }; sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: id });
+  const beforeContact = await kernel.owner.call("contact_email_read", { deploymentId });
+  const invalid = { ...payload(id, schema, "must not publish"), contactEmail: "invalid" };
+  const upload = await kernel.owner.upload(new TextEncoder().encode(JSON.stringify(invalid)), id);
+  try {
+    await expect(kernel.owner.call("project_import", {
+      deploymentId,
+      replace: "both",
+      transferId: upload.transferId,
+      package: exported,
+    })).rejects.toThrow("The contact email is not a valid email address.");
+  } finally {
+    await kernel.owner.cancel(upload.transferId).catch(() => {});
+    for (const transferId of Object.values(exported.components)) await kernel.owner.cancel(transferId).catch(() => {});
+  }
+
+  expect((await ana.call<{ title: string }[]>("actions_invoke", { name: "notes.all" })).map((row) => row.title)).toEqual(["exported row", "live row"]);
+  expect(await readFile(appPath)).toEqual(beforeApp);
+  expect(await readFile(distPath)).toEqual(beforeDist);
+  expect(await kernel.owner.call("project_inspect", { projectId: id })).toMatchObject(beforeProject);
+  expect(await kernel.owner.call("contact_email_read", { deploymentId })).toEqual(beforeContact);
+}, 120_000);

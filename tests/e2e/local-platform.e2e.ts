@@ -347,32 +347,51 @@ test("the editor reloads clean sources and keeps a dirty draft when another tab 
   const revision = (await saveOutside(remoteFiles("clean TypeScript reload"), saved.revision)).revision;
   await expect(app).toHaveValue(remoteFiles("clean TypeScript reload")["app.js"], { timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').locator("body")).toHaveAttribute("data-remote-label", "clean TypeScript reload", { timeout: 15_000 });
-  let releaseRead!: () => void;
-  let readPending!: () => void;
-  const releaseHeldRead = new Promise<void>((resolve) => { releaseRead = resolve; });
-  const heldRead = new Promise<void>((resolve) => { readPending = resolve; });
-  let delayRead = true;
-  await page.route("**/mcp", async (route) => {
-    const body = route.request().postData() ?? "";
-    if (delayRead && body.includes('"project_sources_read"')) {
-      delayRead = false;
-      const response = await route.fetch();
-      readPending();
-      await releaseHeldRead;
-      await route.fulfill({ response });
-      return;
-    }
-    await route.continue();
-  });
+  const holdNextInspection = () => {
+    let releaseInspection!: () => void;
+    let inspectionPending!: () => void;
+    const release = new Promise<void>((resolve) => { releaseInspection = resolve; });
+    const held = new Promise<void>((resolve) => { inspectionPending = resolve; });
+    let waitForRead = true;
+    let holdInspection = true;
+    const route = page.route("**/mcp", async (requestRoute) => {
+      const body = requestRoute.request().postData() ?? "";
+      if (body.includes('"project_sources_read"')) {
+        waitForRead = false;
+        await requestRoute.continue();
+        return;
+      }
+      if (!waitForRead && holdInspection && body.includes('"project_inspect"')) {
+        holdInspection = false;
+        const response = await requestRoute.fetch();
+        inspectionPending();
+        await release;
+        await requestRoute.fulfill({ response });
+        return;
+      }
+      await requestRoute.continue();
+    });
+    return { held, release: releaseInspection, route };
+  };
+  let automatic = holdNextInspection();
   const newer = saveOutside(remoteFiles("newer TypeScript source"), revision);
   await newer;
-  await heldRead;
+  await automatic.held;
   await app.fill("window.localDraft = 'keep this';");
-  releaseRead();
+  automatic.release();
   await expect(app).toHaveValue("window.localDraft = 'keep this';");
   await expect(page.getByText("This app changed on another machine. Your draft is still here.")).toBeVisible();
-  await page.unroute("**/mcp");
   await page.screenshot({ path: testInfo.outputPath("dirty-source-conflict.png"), fullPage: true });
+
+  await page.unroute("**/mcp");
+  const explicit = holdNextInspection();
+  await page.getByRole("button", { name: "Reload saved sources" }).click();
+  await explicit.held;
+  await app.fill("window.explicitDraft = 'keep this too';");
+  explicit.release();
+  await expect(app).toHaveValue("window.explicitDraft = 'keep this too';");
+  await expect(page.getByText("This app changed on another machine. Your draft is still here.")).toBeVisible();
+  await page.unroute("**/mcp");
   await page.getByRole("button", { name: "Reload saved sources" }).click();
   await expect(app).toHaveValue(remoteFiles("newer TypeScript source")["app.js"]);
 });

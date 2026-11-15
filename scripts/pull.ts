@@ -14,6 +14,7 @@ import { readTar } from "../src/lib/tar";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { sourceFilesFrom } from "../src/lib/source-files";
 import { settingsDigest } from "./settings-digest";
+import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 
 /** Where the exported data sits in the app folder. .konae is already kept out of Git. */
 export const PULL_DIRECTORY = ".konae/pull";
@@ -153,8 +154,9 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     const target = path.join(root, PULL_DIRECTORY);
     const currentApp = path.join(root, "app");
     const markerPath = path.join(root, ".konae/source-revision.json");
-    let marker: { sourceDigest?: string; settingsDigest?: string } | undefined;
+    let marker: { sourceDigest?: string; settingsDigest?: string; installation?: string; projectId?: string } | undefined;
     try { marker = JSON.parse(await readFile(markerPath, "utf8")) as typeof marker; } catch { marker = undefined; }
+    if (!matchesSourceRevisionScope(marker, from, projectId)) marker = undefined;
     let localAppDigest: string | undefined;
     try { localAppDigest = await sourceDigest(sourceFilesFrom(await listFiles(currentApp))); } catch { localAppDigest = undefined; }
     let localSettingsDigest: string | undefined;
@@ -174,7 +176,7 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     const stagedSettings = path.join(root, `.settings-pull-staged-${nonce}`);
     let movedApp = false; let installedApp = false; let movedSettings = false; let installedSettings = false; let movedPull = false; let installedPull = false; let movedMarker = false; let installedMarker = false;
     if (cleanToReplace) {
-      await writeFile(stagedMarker, JSON.stringify({ sourcesRevision: pulled.sourcesRevision, sourceDigest: pulled.sourceDigest, settingsDigest: remoteSettingsDigest }, null, 2), { mode: 0o600 });
+      await writeFile(stagedMarker, JSON.stringify({ ...sourceRevisionScope(from, projectId), sourcesRevision: pulled.sourcesRevision, sourceDigest: pulled.sourceDigest, settingsDigest: remoteSettingsDigest }, null, 2), { mode: 0o600 });
       await writeFile(stagedSettings, remoteSettingsBytes, { mode: 0o600 });
     }
     try {

@@ -1767,6 +1767,11 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         }
         None => None,
     };
+    // Resolve and validate release settings before an import can replace live data.
+    let resolved_contact_email = match &release {
+        Some((payload, _)) => Some(contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?),
+        None => None,
+    };
     let (backup, change) = match &package {
         Some(package) => {
             let target = match &release {
@@ -1782,7 +1787,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     };
     let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
     if let Some((mut payload, _)) = release {
-        payload["contactEmail"] = contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?.map_or(Value::Null, Value::String);
+        payload["contactEmail"] = resolved_contact_email.flatten().map_or(Value::Null, Value::String);
         payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
         for key in ["name", "slug", "manifest"] {
             if let Some(value) = payload["project"].get(key) {

@@ -249,11 +249,17 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
   const conflictedRevision = useRef<number | null>(null);
   const previewBuildVersion = useRef(0);
+  const workspaceGeneration = useRef(0);
   const pendingSaves = useRef(0);
   const failedSave = useRef(false);
   const failedProjects = useRef(new Set<string>());
   const [saveAttempt, setSaveAttempt] = useState(0);
   workspaceRef.current = { projects, project, deployments };
+
+  useEffect(() => {
+    const generation = ++workspaceGeneration.current;
+    return () => { if (workspaceGeneration.current === generation) workspaceGeneration.current++; };
+  }, []);
 
   useEffect(() => {
     const flush = () => {
@@ -468,7 +474,17 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           }
           return;
         }
-        if (await sources.inspectRevision(project.id) !== latest.revision) {
+        const currentRevision = await sources.inspectRevision(project.id);
+        if (!active || projectRef.current.id !== project.id || JSON.stringify(projectRef.current) !== baseline) {
+          sources.cancelReload(project.id);
+          if (active && projectRef.current.id === project.id) {
+            conflictedRevision.current = latest.revision;
+            setSourceConflict(true);
+            setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+          }
+          return;
+        }
+        if (currentRevision !== latest.revision) {
           sources.cancelReload(project.id);
           conflictedRevision.current = null;
           return;
@@ -500,6 +516,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const reloadConflictingSources = async () => {
     const id = project.id;
+    const generation = workspaceGeneration.current;
     const baseline = JSON.stringify(projectRef.current);
     try {
       const latest = await sources.reload(id);
@@ -520,7 +537,17 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
         return;
       }
-      if (await sources.inspectRevision(id) !== latest.revision) {
+      const currentRevision = await sources.inspectRevision(id);
+      if (generation !== workspaceGeneration.current || projectRef.current.id !== id || JSON.stringify(projectRef.current) !== baseline) {
+        sources.cancelReload(id);
+        if (generation === workspaceGeneration.current && projectRef.current.id === id) {
+          conflictedRevision.current = latest.revision;
+          setSourceConflict(true);
+          setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+        }
+        return;
+      }
+      if (currentRevision !== latest.revision) {
         sources.cancelReload(id);
         conflictedRevision.current = null;
         setSourceConflict(true);

@@ -29,6 +29,7 @@ import { sourceDigest } from "../src/deployments/source-digest";
 import { skippedName } from "../src/lib/source-rules";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 import { settingsDigest } from "./settings-digest";
+import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
@@ -588,8 +589,9 @@ export async function publishLocal(root: string, config: Config, token: string, 
     // project_inspect needs the project that project_create registers on a first publish.
     const remote = await client.call<{ deployment?: { id: string } | null; sourcesRevision: number }>("project_inspect", { projectId: project.id });
     first = !remote.deployment;
-    const marker = await json<{ sourcesRevision: number }>(path.join(root, ".konae/source-revision.json")).catch(() => undefined);
-    observedSourcesRevision = marker?.sourcesRevision ?? (!remote.deployment && remote.sourcesRevision === 0 ? 0 : undefined);
+    const marker = await json<{ sourcesRevision: number; installation?: string; projectId?: string }>(path.join(root, ".konae/source-revision.json")).catch(() => undefined);
+    const scopedMarker = matchesSourceRevisionScope(marker, config.url!, project.id) ? marker : undefined;
+    observedSourcesRevision = scopedMarker?.sourcesRevision ?? (!remote.deployment && remote.sourcesRevision === 0 ? 0 : undefined);
     const { artifact, source } = await buildLocal(root);
     publishedSourceDigest = await sourceDigest(source);
     return {
@@ -606,7 +608,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     publishedSettings = { project: config.project, contactEmail: config.contactEmail };
   }
-  await writeFile(path.join(root, ".konae/source-revision.json"), JSON.stringify({ sourcesRevision: plan.expectedSourcesRevision + 1, sourceDigest: publishedSourceDigest, settingsDigest: settingsDigest(publishedSettings) }, null, 2), { mode: 0o600 });
+  await writeFile(path.join(root, ".konae/source-revision.json"), JSON.stringify({ ...sourceRevisionScope(config.url, project.id), sourcesRevision: plan.expectedSourcesRevision + 1, sourceDigest: publishedSourceDigest, settingsDigest: settingsDigest(publishedSettings) }, null, 2), { mode: 0o600 });
   await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
   if (!first && wanted) {

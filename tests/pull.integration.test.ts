@@ -308,6 +308,54 @@ describe("a file of app/ that is not text", () => {
     expect(await nextAccount.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Kept through source changes", pinned: 0 }]);
   }, 120_000);
 
+  test("a source revision marker is bound to its installation and project", async () => {
+    const port = Number(new URL(origin.url).port) + 2;
+    const other = await start("other-origin", port);
+    try {
+      const source = path.join(root, "scope-source");
+      const sourceSettings = configOf(await initLocal(source, { name: "Scoped source" }));
+      sourceSettings.project.id = "scope_collision";
+      await writeFile(path.join(source, "konae.json"), JSON.stringify(sourceSettings, null, 2) + "\n");
+      await provideLocalAppDependencies(source);
+      await writeFile(path.join(source, "app/app.js"), "window.sourceInstallation = 'first';");
+      await publishLocal(source, { ...sourceSettings, url: origin.url }, origin.token, () => {});
+
+      const collision = path.join(root, "scope-collision");
+      const collisionSettings = configOf(await initLocal(collision, { name: "Other installation copy" }));
+      collisionSettings.project.id = "scope_collision";
+      await writeFile(path.join(collision, "konae.json"), JSON.stringify(collisionSettings, null, 2) + "\n");
+      await provideLocalAppDependencies(collision);
+      await writeFile(path.join(collision, "app/app.js"), "window.sourceInstallation = 'second';");
+      const otherRelease = await publishLocal(collision, { ...collisionSettings, url: other.url }, other.token, () => {});
+      const before = await other.owner.call<{ sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: "scope_collision" });
+      const refused = await publishLocal(source, { ...sourceSettings, url: other.url }, other.token, () => {}).then(() => null, (error) => error);
+      expect(refused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(await other.owner.call("project_inspect", { projectId: "scope_collision" })).toMatchObject(before);
+      expect(await readFile(path.join(root, "other-origin", "apps", otherRelease.id, "app/app.js"), "utf8")).toBe("window.sourceInstallation = 'second';");
+
+      const changedId = path.join(root, "scope-changed-id");
+      const changedSettings = configOf(await initLocal(changedId, { name: "Changed project id" }));
+      changedSettings.project.id = "scope_other_project";
+      await writeFile(path.join(changedId, "konae.json"), JSON.stringify(changedSettings, null, 2) + "\n");
+      await provideLocalAppDependencies(changedId);
+      await publishLocal(changedId, { ...changedSettings, url: other.url }, other.token, () => {});
+      const otherProjectBefore = await other.owner.call<{ sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: "scope_other_project" });
+      sourceSettings.project.id = "scope_other_project";
+      await writeFile(path.join(source, "konae.json"), JSON.stringify(sourceSettings, null, 2) + "\n");
+      const changedProjectRefused = await publishLocal(source, { ...sourceSettings, url: other.url }, other.token, () => {}).then(() => null, (error) => error);
+      expect(changedProjectRefused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(await other.owner.call("project_inspect", { projectId: "scope_other_project" })).toMatchObject(otherProjectBefore);
+
+      await writeFile(path.join(source, ".konae/source-revision.json"), JSON.stringify({ sourcesRevision: 1, sourceDigest: "legacy", settingsDigest: "legacy" }));
+      const unscopedRefused = await publishLocal(source, { ...sourceSettings, url: other.url }, other.token, () => {}).then(() => null, (error) => error);
+      expect(unscopedRefused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(await other.owner.call("project_inspect", { projectId: "scope_other_project" })).toMatchObject(otherProjectBefore);
+    } finally {
+      other.process.kill();
+      await other.process.exited;
+    }
+  }, 120_000);
+
   test("pull stages changed remote settings when the local konae.json has edits, then records them after recovery", async () => {
     const folder = path.join(root, "settings-recovery");
     const settings = configOf(await initLocal(folder, { name: "Settings recovery" }));
