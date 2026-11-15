@@ -1,0 +1,13 @@
+{
+  "note": "Static refusal words for schema_transform.rs and the editor Gate.",
+  "cases": [
+    { "case": "malformed JSON", "error": "schema-transforms.json must be valid JSON.", "code": "schema-transform.document-invalid" },
+    { "case": "unsupported document version", "error": "schema-transforms.json version must be 1.", "code": "schema-transform.document-invalid" },
+    { "case": "destructive SQL", "error": "Use CREATE TABLE/INDEX, ALTER TABLE RENAME/ADD COLUMN, INSERT or UPDATE.", "code": "schema-transform.statement-refused" },
+    { "case": "applied definition changed", "error": "Applied transition rename was changed or moved in schema-transforms.json.", "code": "schema-transform.history-mismatch" },
+    { "case": "legacy starting fingerprint differs", "error": "Transition rename expects sha256:wrong, but the database is at sha256:actual.", "code": "schema-transform.before-mismatch" },
+    { "case": "wrong transition result", "error": "Transition rename produced sha256:actual, but declares sha256:wrong.", "code": "schema-transform.after-mismatch" },
+    { "case": "row cap exceeded", "error": "Transition backfill changed more than its 1 row limit.", "code": "schema-transform.row-limit" },
+    { "case": "final schema differs", "error": "The transformed database does not match schema.sql.", "code": "schema-transform.final-schema-mismatch" }
+  ]
+}

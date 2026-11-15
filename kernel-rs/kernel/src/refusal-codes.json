@@ -120,6 +120,14 @@
   "schema.confirmation-required": { "fix": "owner", "remedy": "Read the losses release_plan lists under schema, then call release_apply with confirmSchema set to that plan's schema.confirmation, or keep the table or column in schema.sql.", "tool": "release_apply" },
   "schema.statement-refused": { "fix": "capsule", "remedy": "Keep only CREATE TABLE and CREATE INDEX in schema.sql. Rows change through mutations." },
 
+  "schema-transform.after-mismatch": { "fix": "capsule", "remedy": "Set the transition after fingerprint to the fingerprint of the SQLite schema its statements produce." },
+  "schema-transform.before-mismatch": { "fix": "capsule", "remedy": "Start the transition at the database fingerprint the app holds." },
+  "schema-transform.document-invalid": { "fix": "capsule", "remedy": "Fix the version, predecessor order, fingerprints, bounds and statements in app/schema-transforms.json." },
+  "schema-transform.final-schema-mismatch": { "fix": "capsule", "remedy": "Make the last transition produce the schema declared by app/schema.sql." },
+  "schema-transform.history-mismatch": { "fix": "capsule", "remedy": "Restore the applied transition definitions and order from the app folder that produced this database." },
+  "schema-transform.row-limit": { "fix": "capsule", "remedy": "Lower the affected rows or split the data change into smaller transitions." },
+  "schema-transform.statement-refused": { "fix": "capsule", "remedy": "Use only CREATE TABLE/INDEX, ALTER TABLE RENAME/ADD COLUMN, INSERT or UPDATE in a transition." },
+
   "secret.google-id-looks-like-secret": { "fix": "owner", "remedy": "Paste the client ID, which ends with .apps.googleusercontent.com, and put the GOCSPX- value in google_client_secret.", "tool": "secret_set" },
   "secret.google-names-only": { "fix": "owner", "remedy": "Name a secret with use google google_client_id or google_client_secret.", "tool": "secret_set" },
   "secret.google-names-reserved": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with use google, or leave use out.", "tool": "secret_set" },

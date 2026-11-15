@@ -60,6 +60,7 @@ pub mod refusal;
 pub mod runtime;
 pub mod schedule;
 pub mod schema_change;
+pub mod schema_transform;
 pub mod security;
 pub mod size;
 pub mod sources;

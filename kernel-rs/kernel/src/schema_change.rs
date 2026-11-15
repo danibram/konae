@@ -78,6 +78,11 @@ pub enum Mode<'a> {
 }
 
 const NEEDS_CONFIRMATION: &str = "schema.confirmation-required";
+const INTERNAL_TABLES: [&str; 2] = ["__konae_schema_state", "__konae_schema_history"];
+
+pub(crate) fn is_internal_table(name: &str) -> bool {
+    INTERNAL_TABLES.iter().any(|internal| name.eq_ignore_ascii_case(internal))
+}
 
 /// Changes the database at `path` to the one `schema` states, in one
 /// transaction, and checks that every action of `program` prepares against
@@ -306,13 +311,42 @@ fn foreign_key_violations(connection: &Connection) -> Result<HashMap<(String, St
 /// `schema.sql` run into an empty database in memory, under the rules the
 /// Kernel always held it to, so it holds tables and indexes and calls no
 /// denied function.
-struct Scratch {
+pub(crate) struct Scratch {
     connection: Connection,
     schema: Schema,
 }
 
 impl Scratch {
     fn load(schema: &str) -> Result<Self> {
+        let connection = schema_connection(schema)?;
+        let schema = Schema::read(&connection)?;
+        Ok(Self { connection, schema })
+    }
+
+    pub(crate) fn connection(schema: &str) -> Result<Connection> {
+        schema_connection(schema)
+    }
+
+    /// The CREATE TABLE of `name` under the name `to`. SQLite renames it,
+    /// with every reference the table makes to itself, and the rename rolls back.
+    fn renamed(&self, name: &str, to: &str) -> Result<String> {
+        self.connection.execute_batch("SAVEPOINT konae_rename")?;
+        let renamed = self
+            .connection
+            .execute_batch(&format!("ALTER TABLE {} RENAME TO {}", quote(name), quote(to)))
+            .map_err(anyhow::Error::from)
+            .and_then(|()| {
+                self.connection
+                    .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name=?1", [to], |row| row.get::<_, String>(0))
+                    .optional()?
+                    .ok_or_else(|| anyhow::anyhow!("SQLite did not rename table {name}."))
+            });
+        self.connection.execute_batch("ROLLBACK TO konae_rename; RELEASE konae_rename")?;
+        renamed
+    }
+}
+
+fn schema_connection(schema: &str) -> Result<Connection> {
         let connection = Connection::open_in_memory()?;
         connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
         connection.authorizer(Some(|context: AuthContext<'_>| match context.action {
@@ -336,28 +370,14 @@ impl Scratch {
             .execute_batch(schema)
             .map_err(|error| anyhow::anyhow!("schema.sql is not idempotent: it fails when it is run a second time. {error}"))?;
         connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
-        let schema = Schema::read(&connection)?;
-        Ok(Self { connection, schema })
-    }
-
-    /// The CREATE TABLE of `name` under the name `to`. SQLite renames it,
-    /// with every reference the table makes to itself, and the rename is
-    /// rolled back.
-    fn renamed(&self, name: &str, to: &str) -> Result<String> {
-        self.connection.execute_batch("SAVEPOINT konae_rename")?;
-        let renamed = self
-            .connection
-            .execute_batch(&format!("ALTER TABLE {} RENAME TO {}", quote(name), quote(to)))
-            .map_err(anyhow::Error::from)
-            .and_then(|()| {
-                self.connection
-                    .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name=?1", [to], |row| row.get::<_, String>(0))
-                    .optional()?
-                    .ok_or_else(|| anyhow::anyhow!("SQLite did not rename table {name}."))
-            });
-        self.connection.execute_batch("ROLLBACK TO konae_rename; RELEASE konae_rename")?;
-        renamed
-    }
+        let reserved: Option<String> = connection.query_row(
+            "SELECT name FROM sqlite_schema WHERE type='table' AND lower(name) IN ('__konae_schema_state','__konae_schema_history') LIMIT 1",
+            [], |row| row.get(0),
+        ).optional()?;
+        if let Some(name) = reserved {
+            anyhow::bail!("schema.sql cannot create the reserved table {name}.");
+        }
+        Ok(connection)
 }
 
 #[derive(Debug)]
@@ -393,7 +413,7 @@ impl Schema {
     fn read(connection: &Connection) -> Result<Self> {
         let mut schema = Schema::default();
         let mut statement = connection.prepare(
-            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY rowid",
+            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY rowid",
         )?;
         let entries = statement
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
@@ -484,7 +504,7 @@ fn tokens(sql: &str) -> Vec<Token> {
             tokens.push(Token { text, start, end: end_of(index) });
         } else if char.is_alphanumeric() || char == '_' || char == '$' {
             let begin = index;
-            while index < chars.len() && (chars[index].1.is_alphanumeric() || matches!(chars[index].1, '_' | '$' | '.') && index > begin) { index += 1; }
+            while index < chars.len() && (chars[index].1.is_alphanumeric() || chars[index].1 == '_' || chars[index].1 == '$' || chars[index].1 == '.' && index > begin) { index += 1; }
             let text: String = chars[begin..index].iter().map(|(_, c)| *c).collect();
             tokens.push(Token { text: text.to_lowercase(), start, end: end_of(index) });
         } else {
@@ -498,17 +518,18 @@ fn tokens(sql: &str) -> Vec<Token> {
 /// Whether two CREATE statements define the same thing. They do when their
 /// tokens match once whitespace, comments, quoting, letter case and IF NOT
 /// EXISTS are set aside.
-fn same_sql(a: &str, b: &str) -> bool {
-    fn normal(sql: &str) -> Vec<String> {
-        let mut words: Vec<String> = tokens(sql).into_iter().map(|token| token.text).collect();
-        if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
-            if at <= 3 {
-                words.drain(at..at + 3);
-            }
+pub(crate) fn canonical_tokens(sql: &str) -> Vec<String> {
+    let mut words: Vec<String> = tokens(sql).into_iter().map(|token| token.text).collect();
+    if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
+        if at <= 3 {
+            words.drain(at..at + 3);
         }
-        words
     }
-    normal(a) == normal(b)
+    words
+}
+
+fn same_sql(a: &str, b: &str) -> bool {
+    canonical_tokens(a) == canonical_tokens(b)
 }
 
 /// The text of one column's definition in a CREATE TABLE, as written there.
