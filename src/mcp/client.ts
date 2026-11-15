@@ -128,5 +128,9 @@ export function encodeBase64(bytes: Uint8Array): string {
 }
 
 export function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+  // A plain loop: Uint8Array.from with a callback takes about 90 ms for 2 MiB, and the editor decodes on every edit.
+  const text = atob(value);
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
+  return bytes;
 }
