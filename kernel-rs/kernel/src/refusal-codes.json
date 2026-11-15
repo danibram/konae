@@ -155,5 +155,9 @@
   "signature.timestamp-prefix-invalid": { "fix": "capsule", "remedy": "Set the timestamp prefix to the field's name and \"=\", such as \"t=\"." },
   "signature.window-invalid": { "fix": "capsule", "remedy": "Set the signature window to a whole number of seconds from 1 to 3600." },
 
+  "sources.file-count": { "fix": "capsule", "remedy": "Keep app/ at 1000 files or fewer. Move files the app does not serve out of app/." },
+  "sources.path-invalid": { "fix": "capsule", "remedy": "Rename the file, or move it out of app/. Dot files and node_modules stay outside the sources." },
+  "sources.size": { "fix": "capsule", "remedy": "Move files the app does not serve out of app/, or make the largest ones smaller, until app/ holds 20 MiB or less." },
+
   "statement.several": { "fix": "capsule", "remedy": "Put one SQL statement in the action." }
 }

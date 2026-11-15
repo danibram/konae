@@ -1,0 +1,424 @@
+{
+ "about": "The rules the sources of app/ meet and the size sentences of a release, which kernel-rs/kernel/src/sources.rs and size.rs and src/lib/source-rules.ts and size.ts both run. files maps each path to its decoded size in bytes. more adds that many one-byte files named more/<n>.txt.",
+ "cases": [
+  {
+   "case": "the tasks template",
+   "files": {
+    "actions.json": 412,
+    "schema.sql": 160,
+    "index.html": 2048,
+    "app.js": 6144,
+    "styles.css": 1800
+   },
+   "error": null
+  },
+  {
+   "case": "a photo and a font under public/",
+   "files": {
+    "actions.json": 412,
+    "schema.sql": 160,
+    "index.html": 2048,
+    "app.js": 6144,
+    "styles.css": 1800,
+    "public/photo.jpg": 3145728,
+    "public/font.woff2": 90000
+   },
+   "error": null
+  },
+  {
+   "case": "1000 files",
+   "files": {},
+   "more": 1000,
+   "error": null
+  },
+  {
+   "case": "1001 files",
+   "files": {},
+   "more": 1001,
+   "error": "app/ holds 1001 files. A project's sources hold at most 1000 files.",
+   "code": "sources.file-count"
+  },
+  {
+   "case": "the count comes before a path",
+   "files": {
+    "../x": 1
+   },
+   "more": 1001,
+   "error": "app/ holds 1002 files. A project's sources hold at most 1000 files.",
+   "code": "sources.file-count"
+  },
+  {
+   "case": "a parent part",
+   "files": {
+    "actions.json": 412,
+    "schema.sql": 160,
+    "index.html": 2048,
+    "app.js": 6144,
+    "styles.css": 1800,
+    "../evil.txt": 1
+   },
+   "error": "The sources cannot hold the path \"../evil.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "an absolute path",
+   "files": {
+    "/tmp/evil.txt": 1
+   },
+   "error": "The sources cannot hold the path \"/tmp/evil.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "an empty part",
+   "files": {
+    "a//b.txt": 1
+   },
+   "error": "The sources cannot hold the path \"a//b.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a trailing slash",
+   "files": {
+    "public/": 1
+   },
+   "error": "The sources cannot hold the path \"public/\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "an empty path",
+   "files": {
+    "": 1
+   },
+   "error": "The sources cannot hold the path \"\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a dot part",
+   "files": {
+    "a/./b.txt": 1
+   },
+   "error": "The sources cannot hold the path \"a/./b.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a dot file",
+   "files": {
+    "public/.DS_Store": 6148
+   },
+   "error": "The sources cannot hold the path \"public/.DS_Store\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a dot folder",
+   "files": {
+    ".git/config": 10
+   },
+   "error": "The sources cannot hold the path \".git/config\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "node_modules",
+   "files": {
+    "node_modules/x/index.js": 10
+   },
+   "error": "The sources cannot hold the path \"node_modules/x/index.js\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a name that only starts with node_modules",
+   "files": {
+    "lib/node_modules.js": 10,
+    "notes/node_modules-list.txt": 1
+   },
+   "error": null
+  },
+  {
+   "case": "a backslash",
+   "files": {
+    "a\\b.txt": 1
+   },
+   "error": "The sources cannot hold the path \"a\\\\b.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a leading space",
+   "files": {
+    " a.txt": 1
+   },
+   "error": "The sources cannot hold the path \" a.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a trailing space",
+   "files": {
+    "a.txt ": 1
+   },
+   "error": "The sources cannot hold the path \"a.txt \". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a leading no-break space",
+   "files": {
+    " a.txt": 1
+   },
+   "error": "The sources cannot hold the path \" a.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a leading byte order mark is not a space",
+   "files": {
+    "﻿a.txt": 1
+   },
+   "error": null
+  },
+  {
+   "case": "a space inside a name",
+   "files": {
+    "public/my photo.jpg": 1
+   },
+   "error": null
+  },
+  {
+   "case": "a tab",
+   "files": {
+    "tab\t.txt": 1
+   },
+   "error": "The sources cannot hold the path \"tab\\t.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a control character",
+   "files": {
+    "\u0001x.txt": 1
+   },
+   "error": "The sources cannot hold the path \"\\u0001x.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a delete character",
+   "files": {
+    "x.txt": 1
+   },
+   "error": "The sources cannot hold the path \"x.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "240 bytes",
+   "files": {
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt": 1
+   },
+   "error": null
+  },
+  {
+   "case": "241 bytes",
+   "files": {
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt": 1
+   },
+   "error": "The sources cannot hold the path \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "240 bytes in two-byte characters",
+   "files": {
+    "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé": 1
+   },
+   "error": null
+  },
+  {
+   "case": "242 bytes in two-byte characters",
+   "files": {
+    "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé": 1
+   },
+   "error": "The sources cannot hold the path \"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "the first bad path in byte order",
+   "files": {
+    "z/../a": 1,
+    "b/.x": 1
+   },
+   "error": "The sources cannot hold the path \"b/.x\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "byte order, not UTF-16 order",
+   "files": {
+    "😀/.x": 1,
+    "～/.x": 1
+   },
+   "error": "The sources cannot hold the path \"～/.x\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "a path comes before the size",
+   "files": {
+    "../x": 31457280
+   },
+   "error": "The sources cannot hold the path \"../x\". A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+   "code": "sources.path-invalid"
+  },
+  {
+   "case": "20 MiB in all",
+   "files": {
+    "raw/big.bin": 20969472,
+    "index.html": 2048
+   },
+   "error": null
+  },
+  {
+   "case": "20 MiB and one byte",
+   "files": {
+    "raw/big.bin": 20971521
+   },
+   "error": "app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest file is raw/big.bin (20.1 MiB).",
+   "code": "sources.size"
+  },
+  {
+   "case": "20 MiB under raw/ beside the template",
+   "files": {
+    "actions.json": 412,
+    "schema.sql": 160,
+    "index.html": 2048,
+    "app.js": 6144,
+    "styles.css": 1800,
+    "raw/big.bin": 20971520
+   },
+   "error": "app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are raw/big.bin (20.0 MiB), app.js (6.0 KiB) and index.html (2.0 KiB).",
+   "code": "sources.size"
+  },
+  {
+   "case": "12 MiB in public/ and 20 MiB under raw/",
+   "files": {
+    "actions.json": 412,
+    "schema.sql": 160,
+    "index.html": 2048,
+    "app.js": 6144,
+    "styles.css": 1800,
+    "public/big.bin": 12582912,
+    "raw/big.bin": 20971520
+   },
+   "error": "app/ holds 32.1 MiB. A project's sources hold at most 20 MiB. The largest files are raw/big.bin (20.0 MiB), public/big.bin (12.0 MiB) and app.js (6.0 KiB).",
+   "code": "sources.size"
+  },
+  {
+   "case": "two files",
+   "files": {
+    "a": 20000000,
+    "b": 1000000
+   },
+   "error": "app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are a (19.1 MiB) and b (976.6 KiB).",
+   "code": "sources.size"
+  },
+  {
+   "case": "a tie in size names the paths in byte order",
+   "files": {
+    "b.bin": 10485760,
+    "a.bin": 10485760,
+    "d.txt": 100,
+    "c.txt": 100
+   },
+   "error": "app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are a.bin (10.0 MiB), b.bin (10.0 MiB) and c.txt (100 bytes).",
+   "code": "sources.size"
+  }
+ ],
+ "sizes": [
+  {
+   "bytes": 0,
+   "text": "0 bytes"
+  },
+  {
+   "bytes": 1,
+   "text": "1 byte"
+  },
+  {
+   "bytes": 2,
+   "text": "2 bytes"
+  },
+  {
+   "bytes": 1023,
+   "text": "1023 bytes"
+  },
+  {
+   "bytes": 1024,
+   "text": "1.0 KiB"
+  },
+  {
+   "bytes": 1025,
+   "text": "1.1 KiB"
+  },
+  {
+   "bytes": 1536,
+   "text": "1.5 KiB"
+  },
+  {
+   "bytes": 104857,
+   "text": "102.4 KiB"
+  },
+  {
+   "bytes": 1048575,
+   "text": "1.0 MiB"
+  },
+  {
+   "bytes": 1048576,
+   "text": "1.0 MiB"
+  },
+  {
+   "bytes": 1048577,
+   "text": "1.1 MiB"
+  },
+  {
+   "bytes": 16777216,
+   "text": "16.0 MiB"
+  },
+  {
+   "bytes": 16777217,
+   "text": "16.1 MiB"
+  },
+  {
+   "bytes": 20971520,
+   "text": "20.0 MiB"
+  },
+  {
+   "bytes": 268435456,
+   "text": "256.0 MiB"
+  }
+ ],
+ "sentences": [
+  {
+   "case": "an artifact over 16 MiB",
+   "limit": "artifact",
+   "files": {
+    "index.html": 41122,
+    "big.bin": 16777216,
+    "runtime.js": 30000,
+    "logo.png": 2000
+   },
+   "sentence": "dist/ holds 16.1 MiB. A Build Artifact holds at most 16 MiB. The largest files are big.bin (16.0 MiB), index.html (40.2 KiB) and runtime.js (29.3 KiB)."
+  },
+  {
+   "case": "a release one byte over",
+   "limit": "release",
+   "bytes": 26000001,
+   "sentence": "The release is 26.1 MB of JSON. A release holds at most 26 MB."
+  },
+  {
+   "case": "a release well over",
+   "limit": "release",
+   "bytes": 31415926,
+   "sentence": "The release is 31.5 MB of JSON. A release holds at most 26 MB."
+  },
+  {
+   "case": "an upload over 32 MiB",
+   "limit": "upload",
+   "bytes": 34952968,
+   "sentence": "The upload is 33.4 MiB. An upload holds 1 byte to 32 MiB."
+  },
+  {
+   "case": "an empty upload",
+   "limit": "upload",
+   "bytes": 0,
+   "sentence": "The upload is 0 bytes. An upload holds 1 byte to 32 MiB."
+  }
+ ]
+}

@@ -19,9 +19,57 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::layout;
+use crate::refusal::{refuse, Refusal};
 
 /// The bytes of each file, by its path inside `app/`.
 pub type Files = BTreeMap<String, Vec<u8>>;
+
+/// The most files the sources of a project hold.
+pub const MAX_FILES: usize = 1_000;
+/// The most bytes every file of `app/` holds together, decoded. As base64 in
+/// the JSON of a save or a release, they fit one 32 MiB upload.
+pub const MAX_BYTES: usize = 20 * 1024 * 1024;
+/// The longest path inside `app/`, in UTF-8 bytes.
+pub const MAX_PATH_BYTES: usize = 240;
+
+/// Whether `path` names a file the sources may hold. The folder readers skip
+/// a part that starts with a dot or is `node_modules`, so the rule refuses it.
+pub fn holds(path: &str) -> bool {
+    path.len() <= MAX_PATH_BYTES
+        && !path.starts_with(char::is_whitespace)
+        && !path.ends_with(char::is_whitespace)
+        && !path.chars().any(char::is_control)
+        && !path.contains('\\')
+        && path.split('/').all(|part| !part.is_empty() && !part.starts_with('.') && part != "node_modules")
+}
+
+/// The rules the sources of a project meet, from each file's path and decoded
+/// size: the file count, then each path in byte order, then the total. The
+/// CLI, the editor's save and its import run src/lib/source-rules.ts before
+/// they upload, and the `cases` of sources-cases.json hold what both answer.
+pub fn check<'a>(files: impl IntoIterator<Item = (&'a str, usize)>) -> Result<(), Refusal> {
+    let mut files: Vec<(&str, usize)> = files.into_iter().collect();
+    files.sort_by(|a, b| a.0.cmp(b.0));
+    if files.len() > MAX_FILES {
+        return Err(refuse("sources.file-count", format!("app/ holds {} files. A project's sources hold at most {MAX_FILES} files.", files.len())));
+    }
+    if let Some((path, _)) = files.iter().find(|(path, _)| !holds(path)) {
+        return Err(refuse("sources.path-invalid", format!(
+            "The sources cannot hold the path {}. A path inside app/ is at most {MAX_PATH_BYTES} bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.",
+            serde_json::to_string(path).unwrap_or_default()
+        )));
+    }
+    let total: usize = files.iter().map(|(_, bytes)| bytes).sum();
+    if total > MAX_BYTES {
+        return Err(refuse("sources.size", format!("app/ holds {}. A project's sources hold at most 20 MiB. {}", crate::size::text(total), crate::size::largest(files))));
+    }
+    Ok(())
+}
+
+/// [`check`] on the bytes of each file.
+pub fn check_files(files: &Files) -> Result<(), Refusal> {
+    check(files.iter().map(|(path, bytes)| (path.as_str(), bytes.len())))
+}
 
 /// The bytes of `files`. A path `encodings` names is base64; every other file
 /// is UTF-8 text. Each refusal names the file as `app/<path>`.
@@ -80,22 +128,71 @@ pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
     result
 }
 
-/// Writes a release's files into `app/` when the editor never saved
-/// sources for the app, so an app published from a folder or over MCP has
-/// its sources in its folder too. Saved sources are never replaced.
-pub async fn write_release(root: &Path, id: &str, files: &Files) -> Result<()> {
-    if tokio::fs::try_exists(layout::private(root, id).join(layout::SOURCES_METADATA)).await? {
-        return Ok(());
-    }
+/// A release's files written beside `app/`, which the release puts in its
+/// place together with `dist/`.
+pub struct StagedRelease {
+    app: PathBuf,
+    staged: PathBuf,
+    retired: PathBuf,
+}
+
+/// Stages a release's files when the editor never saved sources for the
+/// app, so an app published from a folder or over MCP has its sources in its
+/// folder too. Saved sources are never replaced, so this answers `None` then.
+pub async fn stage_release(root: &Path, id: &str, files: &Files) -> Result<Option<StagedRelease>> {
     let private = layout::private(root, id);
-    let staged = private.join(format!("app-{}", Uuid::new_v4().simple()));
-    let result = async {
-        stage(&staged, files, &[]).await?;
-        swap(root, id, &staged).await
+    if tokio::fs::try_exists(private.join(layout::SOURCES_METADATA)).await? {
+        return Ok(None);
     }
-    .await;
-    let _ = tokio::fs::remove_dir_all(&staged).await;
-    result
+    let staged = private.join(format!("app-{}", Uuid::new_v4().simple()));
+    if let Err(error_value) = stage(&staged, files, &[]).await {
+        let _ = tokio::fs::remove_dir_all(&staged).await;
+        return Err(error_value);
+    }
+    let retired = private.join(format!("app-retired-{}", Uuid::new_v4().simple()));
+    Ok(Some(StagedRelease { app: layout::sources(root, id), staged, retired }))
+}
+
+impl StagedRelease {
+    /// Puts the staged files in the place of `app/`. The old `app/` stays
+    /// aside until [`Self::finish`] removes it or [`Self::put_back`] restores it.
+    pub async fn swap(&self) -> Result<()> {
+        let had = tokio::fs::try_exists(&self.app).await?;
+        if had {
+            tokio::fs::rename(&self.app, &self.retired).await?;
+        }
+        if let Err(error_value) = tokio::fs::rename(&self.staged, &self.app).await {
+            if had {
+                let _ = tokio::fs::rename(&self.retired, &self.app).await;
+            }
+            return Err(error_value.into());
+        }
+        Ok(())
+    }
+
+    /// Puts the old `app/` back after a later step of the release failed.
+    pub async fn put_back(self) {
+        if let Err(error_value) = tokio::fs::rename(&self.app, &self.staged).await {
+            eprintln!("Could not move the sources of a failed release out of {}: {error_value}", self.app.display());
+            return;
+        }
+        if tokio::fs::try_exists(&self.retired).await.unwrap_or(false) {
+            if let Err(error_value) = tokio::fs::rename(&self.retired, &self.app).await {
+                eprintln!("Could not put back {} after a failed release: {error_value}", self.app.display());
+            }
+        }
+        let _ = tokio::fs::remove_dir_all(&self.staged).await;
+    }
+
+    /// Removes the old `app/` once the release serves.
+    pub async fn finish(self) {
+        let _ = tokio::fs::remove_dir_all(&self.retired).await;
+    }
+
+    /// Removes the staged files of a release that never swapped.
+    pub async fn discard(self) {
+        let _ = tokio::fs::remove_dir_all(&self.staged).await;
+    }
 }
 
 async fn stage(staged: &Path, files: &Files, directories: &[&str]) -> Result<()> {
@@ -146,10 +243,10 @@ pub fn digest<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Strin
     hex::encode(hasher.finalize())
 }
 
-/// The digest of the files in `app/`. Like `konae publish`, it skips dot
-/// entries and `node_modules` at any depth.
-pub async fn digest_folder(app: &Path) -> Result<String> {
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+/// Every file of `app/`, by its path inside it. Like `konae publish` and the
+/// editor's import, it skips dot entries and `node_modules` at any depth.
+async fn walk(app: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut files = Vec::new();
     let mut pending: Vec<PathBuf> = vec![app.to_path_buf()];
     while let Some(directory) = pending.pop() {
         let mut entries = tokio::fs::read_dir(&directory).await.with_context(|| format!("{} is not readable.", directory.display()))?;
@@ -164,9 +261,18 @@ pub async fn digest_folder(app: &Path) -> Result<String> {
                 pending.push(entry.path());
             } else if kind.is_file() {
                 let relative = entry.path().strip_prefix(app)?.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
-                files.push((relative, tokio::fs::read(entry.path()).await?));
+                files.push((relative, entry.path()));
             }
         }
+    }
+    Ok(files)
+}
+
+/// The digest of the files in `app/`.
+pub async fn digest_folder(app: &Path) -> Result<String> {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for (relative, path) in walk(app).await? {
+        files.push((relative, tokio::fs::read(path).await?));
     }
     Ok(digest(files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice()))))
 }
@@ -183,25 +289,16 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
     let app = layout::sources(root, id);
     let mut files = Map::new();
     let mut encodings = Map::new();
-    let mut pending: Vec<PathBuf> = vec![app.clone()];
-    while let Some(directory) = pending.pop() {
-        let mut entries = tokio::fs::read_dir(&directory).await.with_context(|| format!("{} is not readable.", directory.display()))?;
-        while let Some(entry) = entries.next_entry().await? {
-            if entry.file_type().await?.is_dir() {
-                pending.push(entry.path());
-                continue;
+    for (relative, path) in walk(&app).await? {
+        let bytes = tokio::fs::read(path).await.with_context(|| format!("app/{relative} is not readable."))?;
+        let contents = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                encodings.insert(relative.clone(), Value::String("base64".into()));
+                base64::engine::general_purpose::STANDARD.encode(error.into_bytes())
             }
-            let relative = entry.path().strip_prefix(&app)?.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
-            let bytes = tokio::fs::read(entry.path()).await.with_context(|| format!("app/{relative} is not readable."))?;
-            let contents = match String::from_utf8(bytes) {
-                Ok(text) => text,
-                Err(error) => {
-                    encodings.insert(relative.clone(), Value::String("base64".into()));
-                    base64::engine::general_purpose::STANDARD.encode(error.into_bytes())
-                }
-            };
-            files.insert(relative, Value::String(contents));
-        }
+        };
+        files.insert(relative, Value::String(contents));
     }
     let mut source = json!({
         "id": id, "name": metadata["name"], "slug": metadata["slug"], "files": files,
@@ -297,11 +394,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_release_writes_every_file_into_app_as_its_bytes() {
+    async fn a_release_writes_every_file_into_app_as_its_bytes_and_a_failed_one_puts_app_back() {
         let root = std::env::temp_dir().join(format!("konae-sources-{}", Uuid::new_v4()));
         let files: Files = [("index.html".to_owned(), b"<main></main>".to_vec()), ("public/logo.png".to_owned(), vec![0x89, 0, 0xff])].into();
-        write_release(&root, "app_a", &files).await.unwrap();
+        let staged = stage_release(&root, "app_a", &files).await.unwrap().unwrap();
+        assert!(!layout::sources(&root, "app_a").exists(), "staging leaves app/ alone");
+        staged.swap().await.unwrap();
+        staged.finish().await;
         assert_eq!(std::fs::read(layout::sources(&root, "app_a").join("public/logo.png")).unwrap(), vec![0x89, 0, 0xff]);
+
+        let next: Files = [("index.html".to_owned(), b"<main>2</main>".to_vec())].into();
+        let staged = stage_release(&root, "app_a", &next).await.unwrap().unwrap();
+        staged.swap().await.unwrap();
+        assert_eq!(std::fs::read(layout::sources(&root, "app_a").join("index.html")).unwrap(), b"<main>2</main>");
+        staged.put_back().await;
+        assert_eq!(std::fs::read(layout::sources(&root, "app_a").join("index.html")).unwrap(), b"<main></main>", "a failed release puts the old app/ back");
+        assert!(layout::sources(&root, "app_a").join("public/logo.png").exists());
+        let leftovers = std::fs::read_dir(layout::private(&root, "app_a")).unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().starts_with("app-"))
+            .count();
+        assert_eq!(leftovers, 0, "no staged or retired sources stay behind");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_source_rules_match_every_case_the_editor_runs() {
+        let file: Value = serde_json::from_str(include_str!("sources-cases.json")).unwrap();
+        let cases = file["cases"].as_array().unwrap();
+        assert!(cases.len() >= 20);
+        for case in cases {
+            let mut files: Vec<(String, usize)> = case["files"].as_object().unwrap().iter().map(|(path, bytes)| (path.clone(), bytes.as_u64().unwrap() as usize)).collect();
+            files.extend((0..case["more"].as_u64().unwrap_or(0)).map(|n| (format!("more/{n}.txt"), 1)));
+            crate::refusal::assert_case(case, check(files.iter().map(|(path, bytes)| (path.as_str(), *bytes))));
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_sources_and_the_digest_skip_dot_entries_and_node_modules() {
+        let root = std::env::temp_dir().join(format!("konae-sources-{}", Uuid::new_v4()));
+        let source = json!({"id": "app_a", "name": "A", "slug": "a", "files": {"index.html": "<main></main>"}, "directories": [], "manifest": {"version": 1}, "updatedAt": 5});
+        write(&root, "app_a", &source).await.unwrap();
+        let app = layout::sources(&root, "app_a");
+        std::fs::write(app.join(".DS_Store"), [0u8, 0, 0, 1, 0xff]).unwrap();
+        std::fs::create_dir_all(app.join("public/.cache")).unwrap();
+        std::fs::write(app.join("public/.cache/x"), "1").unwrap();
+        std::fs::create_dir_all(app.join("node_modules/x")).unwrap();
+        std::fs::write(app.join("node_modules/x/index.js"), "1").unwrap();
+        assert_eq!(read(&root, "app_a").await.unwrap().unwrap(), source);
+        assert_eq!(digest_folder(&app).await.unwrap(), digest([("index.html", b"<main></main>".as_slice())]));
         let _ = std::fs::remove_dir_all(root);
     }
 }

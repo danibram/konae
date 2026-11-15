@@ -60,6 +60,7 @@ pub mod runtime;
 pub mod schedule;
 pub mod schema_change;
 pub mod security;
+pub mod size;
 pub mod sources;
 pub mod sql_rules;
 pub mod transfers;
@@ -424,6 +425,9 @@ pub struct ProjectInput {
     pub name: String,
     pub slug: String,
     /// The files of `app/` by path. A path `encodings` names is base64.
+    /// Konae's `release_plan` fills them from the sources transfer when the
+    /// payload leaves them out.
+    #[serde(default)]
     pub files: HashMap<String, String>,
     #[serde(default)]
     pub encodings: HashMap<String, String>,
@@ -760,8 +764,8 @@ pub fn backup_dir(state: &AppState, id: &str) -> PathBuf {
 /// Installs a release from its JSON payload: the project, the build and
 /// what a first release imports.
 pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
-    if body.len() > 26_000_000 {
-        return error(StatusCode::BAD_REQUEST, "Deployment request is too large.");
+    if body.len() > size::RELEASE_BYTES {
+        return error(StatusCode::BAD_REQUEST, &size::release_refused(body.len()));
     }
     let input: DeployInput = match serde_json::from_slice(body) {
         Ok(value) => value,
@@ -772,6 +776,13 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             );
         }
     };
+    deploy_input(state, input).await
+}
+
+/// Installs a release: the project, the build and what a first release
+/// imports. `app/`, `dist/`, the database and the record change together, or
+/// none of them does.
+pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
         return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
@@ -984,14 +995,36 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             };
         }
     };
-    // The database, the record, dist/ and the Deployment in memory change
-    // together. A step that fails puts back the ones before it.
+    // An app the editor never saved keeps the release's sources in app/, so
+    // its folder is whole. They wait beside app/ until dist/ switches.
+    let staged_sources = match sources::stage_release(&state.data_root, &id, &release_sources).await {
+        Ok(staged) => staged,
+        Err(error_value) => {
+            remove_database_files(&staged_database);
+            remove_staged_dist(&state, &id, &artifact_version).await;
+            return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The sources of this release could not be written beside app/: {error_value:#}"));
+        }
+    };
+    let discard_sources = |staged: Option<sources::StagedRelease>| async move {
+        if let Some(staged) = staged {
+            staged.discard().await;
+        }
+    };
+    if let Err(error_value) = release_step(&id, "stage_sources") {
+        discard_sources(staged_sources).await;
+        remove_database_files(&staged_database);
+        remove_staged_dist(&state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    }
+    // The database, the record, app/, dist/ and the Deployment in memory
+    // change together. A step that fails puts back the ones before it.
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
     let swapped = if change.statements.is_empty() {
         remove_database_files(&staged_database);
         false
     } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
+        discard_sources(staged_sources).await;
         remove_database_files(&staged_database);
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The changed database could not take the place of the live one: {error_value}"));
@@ -1011,10 +1044,33 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     {
         recorded.put_back().await;
         undo_database();
+        discard_sources(staged_sources).await;
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
+    // A swap that fails part way puts the old app/ back itself, so only a
+    // swap that went through needs putting back.
+    let swapped_sources = match staged_sources.as_ref() {
+        None => Ok(()),
+        Some(staged) => match staged.swap().await {
+            Err(error_value) => Err((error_value, false)),
+            Ok(()) => release_step(&id, "swap_sources").map_err(|error_value| (error_value, true)),
+        },
+    };
+    if let Err((error_value, swapped_app)) = swapped_sources {
+        match staged_sources {
+            Some(staged) if swapped_app => staged.put_back().await,
+            staged => discard_sources(staged).await,
+        }
+        recorded.put_back().await;
+        undo_database();
+        remove_staged_dist(&state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new sources could not take the place of app/: {error_value:#}"));
+    }
     if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
+        if let Some(staged) = staged_sources {
+            staged.put_back().await;
+        }
         recorded.put_back().await;
         undo_database();
         remove_staged_dist(&state, &id, &artifact_version).await;
@@ -1029,9 +1085,8 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     if swapped {
         remove_database_files(&replaced);
     }
-    // An app the editor never saved keeps the release's sources in app/, so its folder is whole.
-    if let Err(error_value) = sources::write_release(&state.data_root, &id, &release_sources).await {
-        eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
+    if let Some(staged) = staged_sources {
+        staged.finish().await;
     }
     http::routes_published(&deployment);
     remove_stale_dist(&state, &id).await;
@@ -5107,7 +5162,7 @@ pub mod tests {
         let list = |table: &str, column: &str| json!({"kind": "query", "access": "anonymous", "statement": format!("SELECT {column} FROM {table} ORDER BY id LIMIT 50"), "bindings": []});
         let both = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n";
         let notes_only = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n";
-        for step in ["stage_local_artifact", "open_auth", "schema_change", "persist_deployment", "switch_dist"] {
+        for step in ["stage_local_artifact", "open_auth", "schema_change", "stage_sources", "persist_deployment", "swap_sources", "switch_dist"] {
             let root = std::env::temp_dir().join(format!("konae-release-step-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);
@@ -5120,6 +5175,8 @@ pub mod tests {
             Connection::open(database_path(&state, &id)).unwrap()
                 .execute_batch("INSERT INTO notes(body) VALUES ('kept note'); INSERT INTO tags(name) VALUES ('old tag');").unwrap();
             let live = state.deployments.read().await.values().next().cloned().unwrap();
+            let app = crate::layout::sources(&root, &id);
+            let first_actions = std::fs::read(app.join("actions.json")).unwrap();
 
             // The next release drops tags, confirmed as release_plan would confirm it.
             let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
@@ -5150,7 +5207,13 @@ pub mod tests {
             let record: Value = serde_json::from_slice(&std::fs::read(crate::layout::record(&root, &id)).unwrap()).unwrap();
             assert_eq!(record["artifactVersion"], json!(live.artifact_version), "{step}: the record names the release memory serves");
             assert_eq!(read_artifact(&state, &serving, "index.html").await.unwrap(), b"<p>one</p>", "{step}");
+            assert_eq!(std::fs::read(crate::layout::dist(&root, &id).join("index.html")).unwrap(), b"<p>one</p>", "{step}: dist/ is the first release's");
+            assert_eq!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the first release's");
             assert!(staged_or_retired(&root, &id).is_empty(), "{step}: no staged files stay");
+            let staged_sources: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with("app-")).collect();
+            assert!(staged_sources.is_empty(), "{step}: {staged_sources:?}");
             let leftovers: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())
                 .filter(|name| name.starts_with("release-")).collect();
@@ -5158,6 +5221,7 @@ pub mod tests {
 
             // The same release goes through once nothing fails.
             assert_eq!(deploy(&state, second.to_string().as_bytes()).await.status(), StatusCode::OK, "{step}");
+            assert_ne!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the second release's");
             assert_eq!(call("tags.list").await.0, StatusCode::NOT_FOUND, "{step}");
             assert!(call("notes.list").await.1.contains("kept note"), "{step}");
             let _ = tokio::fs::remove_dir_all(root).await;
