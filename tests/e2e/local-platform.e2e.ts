@@ -704,6 +704,23 @@ test("the editor reloads sources published from an app folder", async ({ page, b
   await page.screenshot({ path: testInfo.outputPath("editor-after-folder-publish.png"), fullPage: true });
 });
 
+test("a direct reload compiles the selected TypeScript project before its first preview", async ({ page }, testInfo) => {
+  const projectPath = await createProject(page, `Direct TypeScript load ${Date.now()}`, "tasks");
+  const explorer = await openExplorer(page);
+  await explorer.getByRole("button", { name: "New file" }).click();
+  await page.getByLabel("File path").fill("src/greeting.ts");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByLabel("src/greeting.ts code editor").fill('export const greeting: string = "Compiled on direct reload";');
+  await explorer.getByRole("button", { name: "app.js" }).click();
+  await page.getByLabel("app.js code editor").fill('import { greeting } from "./src/greeting.ts"; document.body.innerHTML = `<h1>${greeting}</h1>`;');
+  await waitForKernelSave(page);
+
+  await page.goto(projectPath);
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(preview.getByRole("heading", { name: "Compiled on direct reload" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("direct-typescript-reload.png"), fullPage: true });
+});
+
 test("the editor reloads clean sources and keeps a dirty draft when another tab saves", async ({ page }, testInfo) => {
   const projectId = (await createProject(page, `Source conflict ${Date.now()}`, "tasks")).split("/").pop()!;
   await publish(page);
