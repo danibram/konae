@@ -20,7 +20,7 @@ export const PULL_DIRECTORY = ".konae/pull";
 const RECORD = "pull.json";
 
 /** What pull.json holds: the export's manifest, the installation it came from and when. */
-export type Pulled = { manifest: PackageManifest; from: string; at: number; snapshotId?: string; dataOnly?: boolean; sourcesRevision?: number; sourceDigest?: string; sourcesInstalled?: boolean };
+export type Pulled = { manifest: PackageManifest; from: string; at: number; snapshotId?: string; dataOnly?: boolean; sourceBaseline?: { packageId: string; sourceDigest?: string; sourcesRevision?: number; capturedAt: number }; sourcesRevision?: number; sourceDigest?: string; sourcesInstalled?: boolean };
 
 export const NEEDS_EXPORT_DATA = "Downloading live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.";
 
@@ -236,7 +236,14 @@ async function pullDataOnly(root: string, client: McpClient, from: string, proje
         await writeFile(target, entry.contents);
       }
     }
-    const pulled: Pulled = { manifest, from, at: Date.now(), snapshotId: randomUUID(), dataOnly: true };
+    const previous = await readPulled(root);
+    const sourceBaseline = previous?.sourceBaseline ?? (previous ? {
+      packageId: previous.manifest.packageId,
+      sourcesRevision: previous.sourcesRevision ?? previous.manifest.sourcesRevision ?? undefined,
+      sourceDigest: previous.sourceDigest,
+      capturedAt: previous.at,
+    } : undefined);
+    const pulled: Pulled = { manifest, from, at: Date.now(), snapshotId: randomUUID(), dataOnly: true, ...(sourceBaseline ? { sourceBaseline } : {}) };
     const target = path.join(root, PULL_DIRECTORY);
     const merged = path.join(root, `.konae-pull-data-staged-${randomUUID()}`);
     const retired = path.join(root, `.konae-pull-data-retired-${randomUUID()}`);
@@ -246,6 +253,14 @@ async function pullDataOnly(root: string, client: McpClient, from: string, proje
       if (await exists(target)) await cp(target, merged, { recursive: true, errorOnExist: true });
       await rm(path.join(merged, "data"), { recursive: true, force: true });
       await renameDirectory(path.join(scratch, "data"), path.join(merged, "data"));
+      for (const file of Object.values(packageComponentFiles)) await rm(path.join(merged, file), { force: true });
+      for (const { name, file } of files) await cp(file, path.join(merged, packageComponentFiles[name as PackageComponentName]));
+      const stagedFolder = path.join(merged, "folder.tar");
+      const oldBaseline = path.join(merged, "folder-baseline.tar");
+      if (await exists(stagedFolder)) {
+        if (!await exists(oldBaseline)) await fsRename(stagedFolder, oldBaseline);
+        else await rm(stagedFolder, { force: true });
+      }
       await cp(record, path.join(merged, RECORD));
       if (await exists(target)) await operations.rename(target, retired);
       try { await operations.rename(merged, target); }

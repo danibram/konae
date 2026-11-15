@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -711,29 +712,104 @@ describe("konae CLI", () => {
     await releaseAgain();
   });
 
+  test("SIGINT releases the lifecycle lock so the same app can restart", async () => {
+    const folder = path.join(directory, "restart-app");
+    await initLocal(folder, { name: "Restart app", template: "tasks" });
+    const settings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
+    settings.signupPolicy = { mode: "open" };
+    await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings));
+    const binary = path.join(directory, "kernel-stub.js");
+    const marker = path.join(folder, ".konae/kernel/stub-started");
+    await writeFile(binary, `#!/usr/bin/env node
+const fs = require("node:fs");
+if (process.argv.includes("secret")) { process.stdout.write('{"secrets":[]}'); process.exit(0); }
+if (process.argv.includes("test")) { process.stdout.write('{"callsRetired":0,"mailRetired":0}'); process.exit(0); }
+fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-started", "x");
+console.log("Serving app at http://localhost:8898/");
+console.log("Kernel listening on 8898");
+setInterval(() => {}, 1000);
+`);
+    await chmod(binary, 0o755);
+    const launch = () => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "dev", "--dir", folder, "--port", "8898", "--events-port", "0"], {
+      env: { ...process.env, KONAE_KERNEL_BIN: binary }, stdout: "pipe", stderr: "pipe",
+    });
+    const waitForStart = async () => {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (await stat(marker).then(() => true, () => false)) return;
+        await Bun.sleep(25);
+      }
+      throw Error("The development Kernel did not start.");
+    };
+    const drain = (child: ReturnType<typeof Bun.spawn>) => {
+      void new Response(child.stdout).text();
+      void new Response(child.stderr).text();
+    };
+
+    let child = launch();
+    drain(child);
+    await waitForStart();
+    expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true)).toBe(true);
+    child.kill("SIGINT");
+    expect(await child.exited).toBe(130);
+    expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+
+    await rm(marker, { force: true });
+    child = launch();
+    drain(child);
+    await waitForStart();
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(143);
+    expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+  }, 30_000);
+
   test("a failed effect retirement restores app data and both local queues", async () => {
     await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
     await mkdir(path.join(directory, "data"));
     await mkdir(path.join(directory, "kernel"));
-    await writeFile(path.join(directory, "data/database.sqlite"), "before");
-    await writeFile(path.join(directory, "kernel/mail.sqlite"), "mail before");
-    await writeFile(path.join(directory, "kernel/calls.sqlite"), "calls before");
+    const createQueue = (file: string, value: string) => {
+      const db = new Database(file);
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE reset_probe(value TEXT);");
+      db.query("INSERT INTO reset_probe VALUES (?)").run(value);
+      db.close();
+    };
+    const readQueue = (file: string) => {
+      const db = new Database(file);
+      const result = db.query("SELECT value FROM reset_probe").get() as { value: string };
+      db.close();
+      return result.value;
+    };
+    createQueue(path.join(directory, "data/database.sqlite"), "app before");
+    createQueue(path.join(directory, "kernel/mail.sqlite"), "mail before");
+    createQueue(path.join(directory, "kernel/mail-test.sqlite"), "test mail before");
+    createQueue(path.join(directory, "kernel/calls.sqlite"), "calls before");
+    await writeFile(path.join(directory, "kernel/mail-testbox.jsonl"), "test mailbox before");
     const kernel = {
       data: path.join(directory, "kernel"),
       async run(args: string[]) {
         if (args[0] === "import") {
-          await writeFile(path.join(directory, "data/database.sqlite"), "imported");
+          const db = new Database(path.join(directory, "data/database.sqlite"));
+          db.query("UPDATE reset_probe SET value = 'imported'").run();
+          db.close();
           return JSON.stringify({ backup: { id: "kernel-backup" } });
         }
-        if (args[0] === "test") throw Error("retirement stopped");
+        if (args[0] === "test") {
+          for (const file of ["mail.sqlite", "mail-test.sqlite", "calls.sqlite"]) {
+            const db = new Database(path.join(directory, "kernel", file));
+            db.query("UPDATE reset_probe SET value = 'retired'").run();
+            db.close();
+          }
+          throw Error("retirement stopped");
+        }
         throw Error(`Unexpected command ${args.join(" ")}`);
       },
     };
     const pulled = { snapshotId: "snapshot_1", manifest: { packageId: "package_1" } } as never;
     await expect(resetData(directory, kernel, pulled)).rejects.toThrow("retirement stopped");
-    expect(await readFile(path.join(directory, "data/database.sqlite"), "utf8")).toBe("before");
-    expect(await readFile(path.join(directory, "kernel/mail.sqlite"), "utf8")).toBe("mail before");
-    expect(await readFile(path.join(directory, "kernel/calls.sqlite"), "utf8")).toBe("calls before");
+    expect(readQueue(path.join(directory, "data/database.sqlite"))).toBe("app before");
+    expect(readQueue(path.join(directory, "kernel/mail.sqlite"))).toBe("mail before");
+    expect(readQueue(path.join(directory, "kernel/mail-test.sqlite"))).toBe("test mail before");
+    expect(await readFile(path.join(directory, "kernel/mail-testbox.jsonl"), "utf8")).toBe("test mailbox before");
+    expect(readQueue(path.join(directory, "kernel/calls.sqlite"))).toBe("calls before");
     await expect(readFile(path.join(directory, ".konae/local-state.json"))).rejects.toThrow();
   });
 
@@ -743,6 +819,8 @@ describe("konae CLI", () => {
     await mkdir(path.join(directory, "kernel"));
     await writeFile(path.join(directory, "data/database.sqlite"), "before");
     await writeFile(path.join(directory, "kernel/mail.sqlite"), "mail before");
+    await writeFile(path.join(directory, "kernel/mail-test.sqlite"), "test mail before");
+    await writeFile(path.join(directory, "kernel/mail-testbox.jsonl"), "test mailbox before");
     await writeFile(path.join(directory, "kernel/calls.sqlite"), "calls before");
     const commands: string[] = [];
     const kernel = {
@@ -762,6 +840,8 @@ describe("konae CLI", () => {
     expect(commands.map((command) => command.split(" ")[0])).toEqual(["import", "test"]);
     expect(await readFile(path.join(reset.backup, "data/database.sqlite"), "utf8")).toBe("before");
     expect(await readFile(path.join(reset.backup, "queues/mail.sqlite"), "utf8")).toBe("mail before");
+    expect(await readFile(path.join(reset.backup, "queues/mail-test.sqlite"), "utf8")).toBe("test mail before");
+    expect(await readFile(path.join(reset.backup, "queues/mail-testbox.jsonl"), "utf8")).toBe("test mailbox before");
     expect(await readFile(path.join(reset.backup, "queues/calls.sqlite"), "utf8")).toBe("calls before");
     expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8"))).toMatchObject({ snapshotId: "snapshot_2", callsRetired: 2, mailRetired: 3 });
     expect(JSON.parse(await readFile(path.join(directory, ".konae/pull-imported.json"), "utf8"))).toMatchObject({ packageId: "package_2", snapshotId: "snapshot_2", executionId: reset.executionId });

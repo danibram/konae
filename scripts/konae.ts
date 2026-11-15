@@ -1166,7 +1166,7 @@ async function snapshotLocalState(root: string, kernelData: string, backup: stri
   const data = path.join(root, DATA_FOLDER);
   if (await exists(data)) await cp(data, path.join(backup, DATA_FOLDER), { recursive: true, errorOnExist: true });
   const queueFiles: string[] = [];
-  for (const name of ["mail.sqlite", "calls.sqlite"]) {
+  for (const name of ["mail-test.sqlite", "mail.sqlite", "calls.sqlite"]) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
       const source = path.join(kernelData, name + suffix);
       if (await exists(source)) {
@@ -1174,6 +1174,10 @@ async function snapshotLocalState(root: string, kernelData: string, backup: stri
         queueFiles.push(name + suffix);
       }
     }
+  }
+  if (await exists(path.join(kernelData, "mail-testbox.jsonl"))) {
+    await cp(path.join(kernelData, "mail-testbox.jsonl"), path.join(backup, "queues/mail-testbox.jsonl"));
+    queueFiles.push("mail-testbox.jsonl");
   }
   for (const marker of [IMPORTED_MARKER, ".konae/local-state.json"]) {
     if (await exists(path.join(root, marker))) await cp(path.join(root, marker), path.join(backup, path.basename(marker)));
@@ -1188,7 +1192,7 @@ async function restoreLocalState(root: string, kernelData: string, backup: strin
   if (record.dataPresent) await cp(path.join(backup, DATA_FOLDER), staged, { recursive: true, errorOnExist: true });
   if (await exists(data)) await rm(data, { recursive: true, force: true });
   if (record.dataPresent) await rename(staged, data);
-  for (const name of ["mail.sqlite", "calls.sqlite"]) {
+  for (const name of ["mail-test.sqlite", "mail.sqlite", "calls.sqlite"]) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) await rm(path.join(kernelData, name + suffix), { force: true });
   }
   for (const file of record.queueFiles) await cp(path.join(backup, "queues", file), path.join(kernelData, file));
@@ -1534,9 +1538,23 @@ export async function main() {
       return served;
     };
     const stop = async () => { if (child && child.exitCode === null) { child.kill(); await child.exited; } };
-    process.once("SIGINT", () => { void stop().then(() => process.exit(130)); });
-    process.once("SIGTERM", () => { void stop().then(() => process.exit(143)); });
-    process.once("exit", () => { child?.kill(); });
+    let resolveShutdown!: () => void;
+    const shutdown = new Promise<void>((resolve) => { resolveShutdown = resolve; });
+    let watcher: ReturnType<typeof watch> | undefined;
+    let cleaned = false;
+    const cleanup = async () => {
+      if (cleaned) return;
+      cleaned = true;
+      watcher?.close();
+      clearTimeout(timer);
+      await stop();
+      feed?.stop();
+      await rm(devSession, { force: true });
+      await releaseLifecycleLock();
+    };
+    process.once("SIGINT", () => { process.exitCode = 130; resolveShutdown(); });
+    process.once("SIGTERM", () => { process.exitCode = 143; resolveShutdown(); });
+    let timer: ReturnType<typeof setTimeout>;
     try {
       console.log(await start());
       // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
@@ -1567,13 +1585,12 @@ export async function main() {
         working = false;
       };
       let timer: ReturnType<typeof setTimeout>;
-      const watcher = watch(appDir(root), { recursive: true }, (_, filename) => {
+      watcher = watch(appDir(root), { recursive: true }, (_, filename) => {
         if (!filename || filename.startsWith(".") || filename.includes("node_modules") || !/\.(?:html|css|js|jsx|ts|tsx|json|sql)$/.test(filename)) return;
         clearTimeout(timer); timer = setTimeout(() => void restart(), 200);
       });
-      await new Promise(() => {});
-      watcher.close();
-    } finally { await stop(); feed?.stop(); await rm(devSession, { force: true }); await releaseLifecycleLock(); }
+      await shutdown;
+    } finally { await cleanup(); }
     return;
   }
 }

@@ -42,6 +42,10 @@ describe("data-only pull", () => {
     await writeFile(path.join(root, "konae.json"), before.settings);
     await writeFile(path.join(root, ".konae/source-revision.json"), before.marker);
     await writeFile(path.join(root, ".konae/pull/app/index.js"), "staged source stays");
+    const priorManifest = { ...manifest, packageId: "pkg_old", sourcesRevision: 7 };
+    await writeFile(path.join(root, PULL_DIRECTORY, "pull.json"), JSON.stringify({ manifest: priorManifest, from: "http://localhost", at: 10, snapshotId: "snapshot_old", sourcesRevision: 7, sourceDigest: "old-source-digest" }));
+    await writeFile(path.join(root, PULL_DIRECTORY, "folder.tar"), "old source archive");
+    await writeFile(path.join(root, PULL_DIRECTORY, "identity.sqlite"), "stale identity component");
     await writeFile(path.join(root, ".konae/pull/data/database.sqlite"), "old snapshot");
 
     const pulled = await pullLocal(root, client, "http://localhost", "app_1", { dataOnly: true });
@@ -54,5 +58,9 @@ describe("data-only pull", () => {
     expect(await readFile(path.join(root, ".konae/source-revision.json"))).toEqual(before.marker);
     expect(await readFile(path.join(root, PULL_DIRECTORY, "app/index.js"), "utf8")).toBe("staged source stays");
     expect(await readFile(path.join(root, PULL_DIRECTORY, "data/database.sqlite"))).toEqual(data);
+    expect(await readFile(path.join(root, PULL_DIRECTORY, "database.sqlite"))).toEqual(data);
+    expect(await readFile(path.join(root, PULL_DIRECTORY, "folder-baseline.tar"), "utf8")).toBe("old source archive");
+    expect(await readFile(path.join(root, PULL_DIRECTORY, "identity.sqlite")).then(() => "present", () => "absent")).toBe("absent");
+    expect(JSON.parse(await readFile(path.join(root, PULL_DIRECTORY, "pull.json"), "utf8")).sourceBaseline).toEqual({ packageId: "pkg_old", sourceDigest: "old-source-digest", sourcesRevision: 7, capturedAt: 10 });
   });
 });
