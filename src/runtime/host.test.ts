@@ -3,6 +3,7 @@ import { cloneStarter } from "../lib/starter";
 import { handlePreviewMcp } from "../mcp/preview";
 import { sdkContract } from "../sdk/contract";
 import { MiniAppRuntimeHost } from "./host";
+import { ProposalHostLifecycle } from "./proposal-host";
 
 const localValues = new Map<string, string>();
 const previousLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -280,6 +281,52 @@ describe("runtime host", () => {
     expect(host.getFiles()).toEqual([]);
     await expect(host.handle("files.url", { fileId: draft.id })).rejects.toThrow("File not found.");
     await expect(host.handle("files.delete", { fileId: draft.id })).rejects.toThrow("File not found.");
+  });
+});
+
+describe("proposal preview host lifecycle", () => {
+  test("copies rows, files and actor, then isolates discard, apply and replacement", async () => {
+    const lifecycle = new ProposalHostLifecycle("review_applied", { schema, actions });
+    const applied = lifecycle.appliedHost;
+    await applied.handle("actions.invoke", { name: "tasks.create", input: { title: "Saved row" } });
+    applied.setPreviewActor("alice");
+    const originalFile = await applied.handle("files.upload", {
+      name: "saved.txt", type: "text/plain", size: 3, dataUrl: "data:text/plain,old",
+    }) as { id: string; ownerId: string };
+
+    const first = await lifecycle.prepareProposal("proposal:first", { schema, actions });
+    expect(first).not.toBeNull();
+    expect(first!.getPreviewActor()).toBe("alice");
+    expect(await first!.handle("actions.invoke", { name: "tasks.list" })).toMatchObject([{ title: "Saved row" }]);
+    expect(await first!.handle("files.list")).toMatchObject([{ name: "saved.txt", ownerId: originalFile.ownerId }]);
+    await first!.handle("actions.invoke", { name: "tasks.create", input: { title: "Scratch row" } });
+    await first!.handle("files.delete", { fileId: originalFile.id });
+
+    expect(await applied.handle("actions.invoke", { name: "tasks.list" })).toMatchObject([{ title: "Saved row" }]);
+    expect(applied.getFiles()).toHaveLength(1);
+    expect(applied.getPreviewActor()).toBe("alice");
+    await lifecycle.discardProposal("proposal:first");
+    expect(localValues.has("konae:database:proposal:first")).toBe(false);
+    expect(localValues.has("konae:files:proposal:first")).toBe(false);
+    expect(lifecycle.appliedHost).toBe(applied);
+    expect(applied.getPreviewActor()).toBe("alice");
+
+    const second = await lifecycle.prepareProposal("proposal:second", { schema, actions });
+    expect(second).not.toBeNull();
+    expect(localValues.has("konae:database:proposal:first")).toBe(false);
+    expect(await lifecycle.applyProposal("proposal:second", { schema, actions })).toBe(true);
+    expect(lifecycle.appliedHost).toBe(applied);
+    expect(applied.getPreviewActor()).toBe("alice");
+    expect(await applied.handle("actions.invoke", { name: "tasks.list" })).toMatchObject([{ title: "Saved row" }]);
+    expect(applied.getFiles()).toHaveLength(1);
+    expect(localValues.has("konae:database:proposal:second")).toBe(false);
+    expect(localValues.has("konae:files:proposal:second")).toBe(false);
+
+    await lifecycle.prepareProposal("proposal:third", { schema, actions });
+    await lifecycle.prepareProposal("proposal:fourth", { schema, actions });
+    expect(localValues.has("konae:database:proposal:third")).toBe(false);
+    await lifecycle.dispose();
+    expect(localValues.has("konae:database:proposal:fourth")).toBe(false);
   });
 });
 

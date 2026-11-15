@@ -27,7 +27,7 @@ export type AgentThreadInput = {
   threadResetToken: number;
   keyVersion: number;
   /** Returns false when the proposal could not be landed, so nothing was written. */
-  onApply: (proposal: AgentProposal) => boolean;
+  onApply: (proposal: AgentProposal) => boolean | Promise<boolean>;
   onDiscard: () => void;
   providers?: readonly ProviderConfig[];
   /**
@@ -69,7 +69,7 @@ export type AgentThread = {
   running: boolean;
   canSend: boolean;
   submit: () => Promise<void>;
-  apply: () => void;
+  apply: () => Promise<void>;
   discard: () => void;
   dismissError: () => void;
   interrupt: () => void;
@@ -153,11 +153,11 @@ export function useAgentThread({
     dispatch({ type: "settled", snapshot: readSnapshot(handle) });
   }
 
-  function apply() {
+  async function apply() {
     // The gate's verdict travels with the proposal, so the button cannot outrun it.
     if (!footer.canApply || !state.proposal?.validation?.ok) return;
     const files = state.proposal.changedFiles.join(", ");
-    if (!onApply(state.proposal)) {
+    if (!await onApply(state.proposal)) {
       // Refused, so nothing was written: say so instead of reporting an Apply.
       dispatch({ type: "discard" });
       dispatch({ type: "note", text: "The Capsule changed after this was validated, so nothing was applied. Ask again to redo it against the current files." });

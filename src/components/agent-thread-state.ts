@@ -6,6 +6,7 @@ import type {
   ProviderConfig,
   ValidationResult,
   ValidationStage,
+  ValidationWarning,
 } from "../agent/contracts";
 import type { ProjectFile } from "../lib/types";
 
@@ -184,7 +185,7 @@ export type ProposalFooter =
    * `checked` is what the pass covers; the panel may not claim more than this.
    * `owner` is a release refusal only the owner clears: Apply stays open, Deploy refuses.
    */
-  | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal };
+  | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal; warnings: ValidationWarning[] };
 
 /** The Kernel's sentence for a refusal the owner clears in Access > Integrations, and who acts. */
 export type OwnerRefusal = { message: string; detail?: string };
@@ -219,6 +220,7 @@ export function proposalFooter(state: AgentThreadState): ProposalFooter {
       changedFiles: gate.changedFiles,
       canApply: true,
       checked: gate.result.checked,
+      warnings: (gate.result.warnings ?? []).filter((warning) => !warning.owner),
       ...(owner ? { owner: { message: owner.message, ...(owner.detail ? { detail: owner.detail } : {}) } } : {}),
     };
   }

@@ -4,7 +4,7 @@ import type { MiniAppProject } from "../lib/types";
 
 export type ProposalPreview = {
   id: string;
-  actor: "guest" | "alice" | "bob";
+  proposal: AgentProposal;
   project: MiniAppProject;
 };
 

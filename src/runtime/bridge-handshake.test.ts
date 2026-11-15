@@ -16,7 +16,7 @@ describe("runtime handshake", () => {
     // project list, so the effect ran once against a null iframe and never again.
     expect(bridge).toContain("iframe: HTMLIFrameElement | null");
     expect(bridge).not.toContain("iframeRef: RefObject");
-    expect(bridge).toContain("}, [appId, iframe]);");
+    expect(bridge).toContain("}, [host, iframe]);");
   });
 
   test("the host offers three ways to complete the handshake", () => {

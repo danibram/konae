@@ -27,6 +27,8 @@ type Props = {
   onOpenSettings: () => void;
   /** Changes this app does not make yet, offered before anyone types. */
   suggestions?: string[];
+  proposalReady?: boolean;
+  proposalError?: string;
 };
 
 /**
@@ -39,7 +41,7 @@ type Props = {
  * which is always there. With no model connected a picked suggestion still
  * fills the composer, and the send button says what it needs.
  */
-export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [] }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -141,6 +143,14 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
           {footer.kind === "blocked" && footer.hint && <p className="agent-proposal-detail">Try this. {footer.hint.remedy}</p>}
           {footer.kind === "blocked" && footer.code && <p className="agent-proposal-detail">Check code: {footer.code}</p>}
           {footer.kind === "blocked" && footer.remainingErrors > 0 && <p className="agent-proposal-detail">{footer.remainingErrors} more {footer.remainingErrors === 1 ? "problem needs" : "problems need"} fixing.</p>}
+          {footer.kind === "validated" && !proposalReady && <p className="agent-proposal-detail" role="status">{proposalError ? `The proposal preview could not be prepared. ${proposalError}` : "Preparing the proposal preview before Apply."}</p>}
+          {footer.kind === "validated" && footer.warnings.map((warning, index) => (
+            <div className="agent-proposal-warning" role="status" key={`${warning.stage}:${index}`}>
+              <p><strong>{stageName(warning.stage)}.</strong> {warning.message}</p>
+              {warning.detail && <p>{warning.detail}</p>}
+              {warning.hint && <p>Try this. {warning.hint.remedy}</p>}
+            </div>
+          ))}
           {footer.kind === "validated" && footer.owner && (
             <div className="agent-proposal-owner" role="status">
               <CircleAlert size={13} />
@@ -149,7 +159,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
           )}
           <div className="agent-proposal-actions">
             <button className="agent-discard" onClick={thread.discard}>Discard</button>
-            <button className="agent-apply" disabled={!footer.canApply || running} onClick={thread.apply}>
+            <button className="agent-apply" disabled={!footer.canApply || running || (footer.kind === "validated" && !proposalReady)} onClick={() => void thread.apply()}>
               <Send size={12} /> Apply
             </button>
           </div>

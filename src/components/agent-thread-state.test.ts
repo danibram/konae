@@ -254,6 +254,7 @@ describe("agent thread apply gate", () => {
       changedFiles: ["actions.json"],
       canApply: true,
       checked: ["schema", "actions"],
+      warnings: [{ stage: "actions", message: "A result column has no name." }],
       owner: {
         message: "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.",
         detail: "Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.",
@@ -304,6 +305,7 @@ describe("agent thread apply gate", () => {
       changedFiles: ["styles.css"],
       canApply: true,
       checked: ["schema", "actions", "preview-rows"],
+      warnings: [],
     });
     expect(state.proposal?.changedFiles).toEqual(["styles.css"]);
   });
@@ -317,6 +319,21 @@ describe("agent thread apply gate", () => {
     expect(validationSummary(["sources", "schema", "actions", "preview-rows"])).toBe("Validated. Sources, schema, preview rows and actions hold.");
     expect(validationSummary(["sources", "schema", "actions"])).toBe("Validated. Sources, schema and actions hold. The preview rows were not checked.");
     expect(validationSummary([])).toBe("Validated.");
+  });
+
+  test("a preview-behind pass keeps its warning and remedy visible beside skipped row checks", () => {
+    const warning = {
+      stage: "preview-rows" as const,
+      message: "The preview's test database is behind schema.sql, so the preview cannot run the actions that need the change.",
+      detail: "Its table tasks has no due_at. Publishing applies the change. Try it on konae dev or a published Deployment.",
+    };
+    const result: ValidationResult = { ok: true, errors: [], checked: ["sources", "schema", "actions"], warnings: [warning] };
+    const state = run([
+      { type: "settled", snapshot: snapshot({ state: "ready", changedFiles: ["schema.sql"], result }, result) },
+    ]);
+
+    expect(validationSummary(proposalFooter(state).kind === "validated" ? proposalFooter(state).checked : [])).toContain("The preview rows were not checked.");
+    expect(proposalFooter(state)).toMatchObject({ kind: "validated", warnings: [warning] });
   });
 
   test("discard empties the footer but keeps the thread", () => {

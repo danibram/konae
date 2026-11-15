@@ -88,6 +88,7 @@ import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
+import { ProposalHostLifecycle } from "./runtime/proposal-host";
 
 const WhatHappenedView = heldLazy(() => import("./components/WhatHappenedView").then((module) => module.WhatHappenedView));
 const CapabilityWorkspace = heldLazy(() => import("./components/CapabilityWorkspace").then((module) => module.CapabilityWorkspace));
@@ -243,6 +244,26 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const agentRef = useRef<KonaeAgentHandle | null>(null);
   const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
   const projectRef = useRef(project);
+  const hostLifecycleRef = useRef<{ projectId: string; lifecycle: ProposalHostLifecycle } | null>(null);
+  if (hostLifecycleRef.current?.projectId !== project.id) {
+    hostLifecycleRef.current = {
+      projectId: project.id,
+      lifecycle: new ProposalHostLifecycle(project.id, {
+        schema: project.files["schema.sql"],
+        actions: project.files["actions.json"],
+        fileAccess: project.manifest.fileAccess,
+      }),
+    };
+  }
+  const hostLifecycle = hostLifecycleRef.current.lifecycle;
+  useEffect(() => hostLifecycle.retain(), [hostLifecycle]);
+  useEffect(() => {
+    void hostLifecycle.updateAppliedSource({
+      schema: project.files["schema.sql"],
+      actions: project.files["actions.json"],
+      fileAccess: project.manifest.fileAccess,
+    });
+  }, [hostLifecycle, project.files["schema.sql"], project.files["actions.json"], project.manifest.fileAccess]);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
   const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
@@ -350,31 +371,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setStage(panel);
   };
   const [proposalPreview, setProposalPreview] = useState<ProposalPreview | null>(null);
-  const activeProposalPreview = proposalPreview?.project.id === project.id ? proposalPreview : null;
-  const activePreviewProject = activeProposalPreview?.project ?? previewProject;
-  const activePreviewId = activeProposalPreview?.id ?? project.id;
+  const [proposalPreparation, setProposalPreparation] = useState<{ proposal: AgentProposal; error?: string } | null>(null);
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
-  const hostRef = useRuntimeBridge(
-    previewFrame,
-    activePreviewId,
-    activePreviewProject.files["schema.sql"],
-    activePreviewProject.files["actions.json"],
-    activePreviewProject.manifest.fileAccess,
-    Boolean(activeProposalPreview),
-    project.id,
-    activeProposalPreview?.actor ?? "guest",
-  );
-  const appliedHostRef = useRef(hostRef.current);
-  if (!activeProposalPreview) appliedHostRef.current = hostRef.current;
-  const previewProblems = usePreviewProblems(hostRef, activePreviewId);
-
-  const previewDocument = useMemo(() => createPreviewDocument(activePreviewProject), [activePreviewProject]);
-  /**
-   * Assigning a new srcDoc to a live iframe is a navigation that adds a browser
-   * history entry, so the editor's Back button stepped through old previews.
-   * A new document gets a new iframe instead.
-   */
-  const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
   // Data, Uploads, Access, What happened and App settings load while the browser is idle, so their first open shows no loader.
   useEffect(() => {
     const preload = () => { for (const panel of [CapabilityWorkspace, WhatHappenedView, AppSettingsDialog]) panel.preload().catch(() => {}); };
@@ -800,10 +798,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         .then(({ createKonaeAgent }) => {
           const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
             // The Validation Gate's preview-rows stage needs the live database, not just a fresh one.
-            liveDatabase: () => appliedHostRef.current.exportDatabase(),
+            liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
             sourceFiles: () => projectRef.current,
             // The other half of the gate: what the running preview actually threw.
-            previewErrors: () => appliedHostRef.current.previewErrors(),
+            previewErrors: () => hostLifecycleRef.current!.lifecycle.appliedHost.previewErrors(),
             // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
             releaseFacts: async () => {
               const current = projectRef.current;
@@ -917,17 +915,25 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
-  const applyAgentProposal = (proposal: AgentProposal): boolean => {
+  const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean> => {
     // The Validation Gate is structural here, not just a disabled button in the
     // panel. The merge refuses a proposal whose untouched files have moved since
     // the gate saw them, because that combination was never validated.
     const applied = applyProposal(project, proposal);
     if (!applied) return false;
+    const approvedPreview = proposalPreview?.proposal === proposal ? proposalPreview : null;
+    if (!approvedPreview || !hostLifecycle.isProposalReady(approvedPreview.id)) return false;
     const next = applied.project;
-    const approvedPreview = activeProposalPreview?.project;
+    const hostApplied = await hostLifecycle.applyProposal(approvedPreview.id, {
+      schema: next.files["schema.sql"],
+      actions: next.files["actions.json"],
+      fileAccess: next.manifest.fileAccess,
+    });
+    if (!hostApplied) return false;
     setProposalPreview(null);
+    setProposalPreparation(null);
     setProject(next);
-    setPreviewProject(approvedPreview ?? next);
+    setPreviewProject(approvedPreview.project);
     agentRef.current?.reseed(next.files, next.encodings);
     if (applied.changedFiles[0] && isEditorFile(applied.changedFiles[0])) {
       setActiveFile(applied.changedFiles[0]);
@@ -944,7 +950,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     keyVersion,
     onApply: applyAgentProposal,
     onDiscard: () => {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
+      setProposalPreparation(null);
       agentRef.current?.discard();
     },
     providers: PROVIDERS,
@@ -956,39 +964,83 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   useEffect(() => {
     const proposal = agentThread.state.proposal;
     if (agentThread.footer.kind !== "validated" || !proposal) {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
+      setProposalPreparation(null);
       return;
     }
+    if (proposalPreview?.proposal === proposal && hostLifecycle.isProposalReady(proposalPreview.id)) return;
     const candidate = proposalPreviewProject(project, proposal);
     if (!candidate) {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
+      setProposalPreparation(null);
       return;
     }
     let current = true;
     setProposalPreview(null);
+    setProposalPreparation({ proposal });
     setOperationError("");
     const id = `proposal:${project.id}:${crypto.randomUUID()}`;
-    const actor = appliedHostRef.current.getPreviewActor();
-    void compileProjectInBrowser(candidate).then((compiled) => {
-      if (!current) return;
-      setProposalPreview({
-        id,
-        actor,
-        project: {
-          ...candidate,
-          files: { ...candidate.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
-        },
-      });
-      setStage("preview");
-    }).catch((error) => {
-      if (current) setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    return () => { current = false; };
-  }, [agentThread.footer.kind, agentThread.state.proposal, project]);
+    void (async () => {
+      try {
+        const compiled = await compileProjectInBrowser(candidate);
+        if (!current) return;
+        const host = await hostLifecycle.prepareProposal(id, {
+          schema: candidate.files["schema.sql"],
+          actions: candidate.files["actions.json"],
+          fileAccess: candidate.manifest.fileAccess,
+        });
+        if (!host || !current) {
+          await hostLifecycle.discardProposal(id);
+          return;
+        }
+        setProposalPreview({
+          id,
+          proposal,
+          project: {
+            ...candidate,
+            files: { ...candidate.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
+          },
+        });
+        setProposalPreparation(null);
+        setStage("preview");
+      } catch (error) {
+        if (current) setProposalPreparation({ proposal, error: error instanceof Error ? error.message : String(error) });
+        await hostLifecycle.discardProposal(id);
+      }
+    })();
+    return () => {
+      current = false;
+      void hostLifecycle.discardProposal(id);
+    };
+  }, [agentThread.footer.kind, agentThread.state.proposal, project, hostLifecycle]);
+
+  const activeProposalPreview = proposalPreview?.project.id === project.id
+    && proposalPreview.proposal === agentThread.state.proposal
+    && hostLifecycle.isProposalReady(proposalPreview.id)
+    ? proposalPreview
+    : null;
+  const activePreviewProject = activeProposalPreview?.project ?? previewProject;
+  const activeRuntimeHost = activeProposalPreview ? hostLifecycle.proposalHost ?? hostLifecycle.appliedHost : hostLifecycle.appliedHost;
+  const hostRef = useRuntimeBridge(previewFrame, activeRuntimeHost);
+  const activePreviewId = activeProposalPreview?.id ?? project.id;
+  const previewProblems = usePreviewProblems(hostRef, activePreviewId);
+  const proposalReady = Boolean(activeProposalPreview);
+  const proposalError = proposalPreparation?.proposal === agentThread.state.proposal ? proposalPreparation.error : undefined;
+
+  const previewDocument = useMemo(() => createPreviewDocument(activePreviewProject), [activePreviewProject]);
+  /**
+   * Assigning a new srcDoc to a live iframe is a navigation that adds a browser
+   * history entry, so the editor's Back button stepped through old previews.
+   * A new document gets a new iframe instead.
+   */
+  const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
 
   const resetProject = () => {
     const fresh = resetWorkspaceProject(project);
-    hostRef.current.reset();
+    hostLifecycle.appliedHost.reset();
+    void hostLifecycle.discardProposal();
     setProject(fresh);
     setPreviewProject(fresh);
     setThreadResetToken((token) => token + 1);
@@ -1540,7 +1592,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   };
 
-  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} />;
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",

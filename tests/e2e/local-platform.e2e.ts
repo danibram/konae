@@ -109,6 +109,7 @@ async function showSection(page: Page, name: "Preview" | "Describe" | "Access" |
   const tab = page.getByRole("navigation", { name: "Workspace sections" }).getByRole("tab", { name, exact: true });
   if (await tab.count()) {
     await tab.click();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
     return;
   }
   if (name === "Describe") {
@@ -142,9 +143,18 @@ function providerReply(tool?: { name: string; input: Record<string, unknown> }, 
 }
 
 async function installProposalFixture(page: Page) {
-  let scenario: "discard" | "apply" | "blocked" | "drift" = "discard";
+  let scenario: "discard" | "apply" | "blocked" | "drift" | "build-fail" | "preview-behind" = "discard";
   let step = 0;
-  const html = "<main><h1>PROPOSAL PREVIEW</h1><p>Review this change before applying it.</p></main>";
+  const html = "<main><h1>PROPOSAL PREVIEW</h1><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>";
+  const proposalScript = (mutate: boolean) => `
+const rows = await miniapp.actions.call('tasks.list');
+document.querySelector('#proposal-rows').textContent = rows.map(row => row.title).join(', ');
+const session = await miniapp.auth.session();
+document.querySelector('#proposal-actor').textContent = session.name;
+const files = await miniapp.files.list();
+document.querySelector('#proposal-files').textContent = files.map(file => file.name).join(', ');
+${mutate ? "await miniapp.actions.call('tasks.create', { title: 'Scratch row' }); if (files[0]) await miniapp.files.delete(files[0].id);" : ""}
+`;
   const invalidActions = JSON.stringify({ version: 1, actions: {
     "tasks.update": { kind: "mutation", access: "anonymous", statement: "UPDATE tasks SET done=1 WHERE id=1", bindings: [], notify: { to: "owner", changes: ["missing"], subject: "Changed", body: "{changes}" } },
     "tasks.list": { kind: "query", access: "anonymous", statement: "SELECT missing FROM tasks LIMIT 5", bindings: [] },
@@ -159,9 +169,19 @@ async function installProposalFixture(page: Page) {
       if (step === 0) tool = { name: "write", input: { path: "/workspace/actions.json", content: invalidActions } };
       else if (step === 1) tool = { name: "validate_capsule", input: {} };
     } else if (step === 0) {
-      tool = { name: "write", input: { path: "/workspace/index.html", content: html } };
+      const path = scenario === "preview-behind" ? "/workspace/schema.sql" : "/workspace/index.html";
+      const content = scenario === "preview-behind" ? `
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  due_at INTEGER
+);
+` : html;
+      tool = { name: "write", input: { path, content } };
     } else if (step === 1) {
-      tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" ? "void miniapp.actions.call('tasks.create', { title: 'Scratch row' });" : "document.documentElement.dataset.proposal = 'ready';" } };
+      tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" || scenario === "apply" ? proposalScript(scenario === "discard") : scenario === "build-fail" ? "const = ;" : "document.documentElement.dataset.proposal = 'ready';" } };
     } else if (step === 2) {
       tool = { name: "validate_capsule", input: {} };
     }
@@ -273,12 +293,19 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await preview.locator("#task-input").fill("Saved row");
   await preview.getByRole("button", { name: "Add task" }).click();
   await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await preview.locator('input[type="file"]').setInputFiles({ name: "proposal-proof.png", mimeType: "image/png", buffer: Buffer.from("preview-image-bytes") });
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
 
   const fixture = await installProposalFixture(page);
   await connectProposalFixture(page);
   fixture.setScenario("discard");
   await askFixture(page, "Discard this preview proposal after checking it.");
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  let proposalFrame = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(proposalFrame.locator("#proposal-rows")).toHaveText("Saved row");
+  await expect(proposalFrame.locator("#proposal-actor")).toHaveText("Alice");
+  await expect(proposalFrame.locator("#proposal-files")).toHaveText("proposal-proof.png");
   await showSection(page, "Describe");
   await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
@@ -294,15 +321,25 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await showSection(page, "Preview");
   preview = page.frameLocator('iframe[title="Mini-app preview"]');
   await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
 
   fixture.setScenario("apply");
   await showSection(page, "Describe");
   await askFixture(page, "Show the checked proposal and apply it.");
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  proposalFrame = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(proposalFrame.locator("#proposal-rows")).toHaveText("Saved row");
+  await expect(proposalFrame.locator("#proposal-actor")).toHaveText("Alice");
+  await expect(proposalFrame.locator("#proposal-files")).toHaveText("proposal-proof.png");
   await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Apply", exact: true }).click();
   await showSection(page, "Preview");
-  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible();
+  proposalFrame = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(proposalFrame.getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible();
+  await expect(proposalFrame.locator("#proposal-rows")).toHaveText("Saved row");
+  await expect(proposalFrame.locator("#proposal-actor")).toHaveText("Alice");
+  await expect(proposalFrame.locator("#proposal-files")).toHaveText("proposal-proof.png");
   await openFile(page, "index.html");
   expect(await page.getByLabel("index.html code editor").inputValue()).toContain("PROPOSAL PREVIEW");
   await waitForKernelSave(page);
@@ -319,10 +356,29 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "BLOCKED PROPOSAL" })).toHaveCount(0);
   await page.getByRole("button", { name: "Discard", exact: true }).click();
 
+  fixture.setScenario("preview-behind");
+  await showSection(page, "Describe");
+  await askFixture(page, "Show the schema change and explain what the preview could not check.");
+  await expect(page.getByText("Validated. Sources, schema and actions hold. The preview rows were not checked.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/The preview's test database is behind schema\.sql/)).toBeVisible();
+  await expect(page.getByText("Its table tasks has no due_at.", { exact: true })).toBeVisible();
+  await expect(page.getByText(/try the change on konae dev or a published Deployment\./i)).toBeVisible();
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+  fixture.setScenario("build-fail");
+  await showSection(page, "Describe");
+  await askFixture(page, "Try an invalid script so preview preparation fails.");
+  const applyButton = page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true });
+  await expect(applyButton).toBeDisabled({ timeout: 30_000 });
+  await expect(page.getByText(/The proposal preview could not be prepared\./)).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
   fixture.setScenario("drift");
   await askFixture(page, "Make a proposal, then keep my file edit.");
+  await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toBeEnabled({ timeout: 30_000 });
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
   const styles = await openFile(page, "styles.css");
+  await expect(styles).toBeVisible();
   await styles.fill(`${await styles.inputValue()}\n/* Manual owner edit */`);
   await showSection(page, "Describe");
   await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toHaveCount(0);

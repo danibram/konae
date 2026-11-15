@@ -70,6 +70,11 @@ export type RuntimeSession = {
 
 export type PreviewActor = "guest" | "alice" | "bob";
 
+export type RuntimeHostOptions = {
+  fileAccess?: "app-users";
+  actorAppId?: string;
+};
+
 export type DatabaseAdminHost = {
   inspectDatabase(): Promise<DatabaseTable[]>;
   runSql(sql: string): Promise<DatabaseRunResult>;
@@ -142,6 +147,8 @@ export class MiniAppRuntimeHost {
   private schemaFailure: string | null = null;
   private actionProgram: ServerActionProgram = emptyActionProgram;
   private actionsFailure: string | null = null;
+  private fileAccess?: "app-users";
+  private readonly actorAppId: string;
 
   /**
    * Never throws on bad Capsule files: the host is built during render, and a
@@ -152,9 +159,10 @@ export class MiniAppRuntimeHost {
     private readonly appId: string,
     schema: string,
     actions: string,
-    private fileAccess?: "app-users",
-    private readonly actorAppId = appId,
+    options: RuntimeHostOptions = {},
   ) {
+    this.fileAccess = options.fileAccess;
+    this.actorAppId = options.actorAppId ?? appId;
     this.requestedSchema = schema;
     this.setActions(actions);
     this.dbPromise = this.openDatabase();
@@ -280,6 +288,32 @@ export class MiniAppRuntimeHost {
 
   async exportDatabase(): Promise<Uint8Array> {
     return (await this.dbPromise).export();
+  }
+
+  async cloneForProposal(appId: string, schema: string, actions: string, fileAccess?: "app-users") {
+    const db = await this.dbPromise;
+    const database = db.export();
+    const files = this.getFiles();
+    const backups = localStorage.getItem(this.databaseBackupsKey);
+    const databaseKey = `konae:database:${appId}`;
+    const filesKey = `konae:files:${appId}`;
+    const backupsKey = `konae:database-backups:${appId}`;
+    let clone: MiniAppRuntimeHost | null = null;
+    try {
+      localStorage.setItem(databaseKey, bytesToBase64(database));
+      localStorage.setItem(filesKey, JSON.stringify(files));
+      if (backups === null) localStorage.removeItem(backupsKey);
+      else localStorage.setItem(backupsKey, backups);
+
+      clone = new MiniAppRuntimeHost(appId, schema, actions, { fileAccess, actorAppId: this.actorAppId });
+      clone.setPreviewActor(this.previewActor);
+      await clone.exportDatabase();
+      return clone;
+    } catch (error) {
+      if (clone) await clone.dispose(true);
+      else for (const key of [databaseKey, filesKey, backupsKey]) localStorage.removeItem(key);
+      throw error;
+    }
   }
 
   async listDatabaseBackups(): Promise<DatabaseBackup[]> {
