@@ -479,6 +479,45 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Applies a changed-file upload to the complete saved document. The caller
+/// holds the project lock and has checked the expected source revision.
+fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value> {
+    anyhow::ensure!(delta["format"] == "delta", "Invalid source update format.");
+    let mut merged = current.clone();
+    let mut files = merged["files"].as_object().cloned().ok_or_else(|| anyhow::anyhow!("Saved project files are unavailable."))?;
+    let mut encodings = merged["encodings"].as_object().cloned().unwrap_or_default();
+    let changed = delta["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid changed project files."))?;
+    let changed_encodings = delta["encodings"].as_object();
+    if let Some(encodings) = changed_encodings {
+        anyhow::ensure!(encodings.iter().all(|(path, encoding)| changed.contains_key(path) && encoding == "base64"), "Invalid changed project file encoding.");
+    }
+    for (path, contents) in changed {
+        anyhow::ensure!(contents.is_string(), "Invalid changed project file.");
+        files.insert(path.clone(), contents.clone());
+        if changed_encodings.is_some_and(|items| items.get(path).is_some()) {
+            encodings.insert(path.clone(), json!("base64"));
+        } else {
+            encodings.remove(path);
+        }
+    }
+    let removals = delta["removedPaths"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid removed project paths."))?;
+    for path in removals {
+        let path = path.as_str().ok_or_else(|| anyhow::anyhow!("Invalid removed project path."))?;
+        files.remove(path);
+        encodings.remove(path);
+    }
+    merged["files"] = Value::Object(files);
+    if encodings.is_empty() { merged.as_object_mut().unwrap().remove("encodings"); }
+    else { merged["encodings"] = Value::Object(encodings); }
+    let metadata = delta["metadata"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project metadata update."))?;
+    for key in ["name", "slug", "directories", "manifest", "updatedAt"] {
+        let value = metadata.get(key).ok_or_else(|| anyhow::anyhow!("Source metadata is missing {key}."))?;
+        merged[key] = value.clone();
+    }
+    merged["id"] = json!(id);
+    Ok(merged)
+}
+
 /// Refuses an upload that names a component of an export. Such an upload may
 /// reach that component's quota, which saved sources and a release never take.
 fn ensure_no_component(upload: &Value) -> Result<()> {
@@ -612,7 +651,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
             tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. To save the editor's files with it, upload the project JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
-            tool("project_sources_save", "Save the project sources the editor opens if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, encodings, directories, manifest, updatedAt }, the format the editor saves and docs/reference/projects-and-releases.md describes. A file that is not UTF-8 text is base64 in files, and encodings names it with \"base64\"; omit encodings when every file is text.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+        tool("project_sources_save", "Save project sources if expectedRevision still matches. Upload the full document for compatibility, or { format: \"delta\", metadata: { name, slug, directories, manifest, updatedAt }, files: { changedPath: contents }, encodings, removedPaths } to send changed files only. Base64 files use encodings: { path: \"base64\" }.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
         ]);
     }
@@ -1372,10 +1411,15 @@ async fn admin_call(
             // A save swaps app/ under this lock, so a read never sees half of one.
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
+            if a["metadataOnly"] == true {
+                return match super::sources::read_metadata(&state.data_root, id).await? {
+                    Some(project) => Ok(json!({"revision":revision,"project":project,"transfer":null})),
+                    None => Ok(json!({"revision":0,"transfer":null})),
+                };
+            }
             match super::sources::read(&state.data_root, id).await? {
-                Some(source) if a["metadataOnly"] == true => Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":null})),
                 Some(source) => Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
-                _ => Ok(json!({"revision":0,"transfer":null})),
+                None => Ok(json!({"revision":0,"transfer":null})),
             }
         }
         "project_sources_save" => {
@@ -1385,13 +1429,19 @@ async fn admin_call(
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == id, "Completed upload for this project required.");
             ensure_no_component(&upload)?;
             let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-            let source: Value = serde_json::from_slice(&bytes)?;
-            validate_sources(&source, id)?;
+            let update: Value = serde_json::from_slice(&bytes)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             owned_project(state, owner, id, "write")?;
             let db = store(state)?;
             let current: u64 = db.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
+            let source = if update["format"] == "delta" {
+                let saved = super::sources::read(&state.data_root, id).await?.ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
+                merge_source_delta(&saved, &update, id)?
+            } else {
+                update
+            };
+            validate_sources(&source, id)?;
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
             super::sources::write(&state.data_root, id, &source).await?;
             db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision])?;
@@ -2684,6 +2734,27 @@ mod tests {
         with_png(&mut binary);
         assert!(validate_sources(&binary, "app_a").is_ok());
         assert_eq!(refusal(&|s| { with_png(s); s["encodings"] = json!({"public/logo.png": 1}); }), "The sources' encodings must map each path to \"base64\".");
+    }
+
+    #[test]
+    fn source_deltas_merge_changed_files_and_recheck_the_whole_document() {
+        let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
+        let current = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"old","public/logo.png":"iVBORw0KGgo="},"encodings":{"public/logo.png":"base64"},"directories":["public"],"manifest":manifest,"updatedAt":1});
+        let delta = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":["public"],"manifest":manifest,"updatedAt":2},"files":{"index.html":"new"},"removedPaths":[]});
+        let merged = merge_source_delta(&current, &delta, "app_a").unwrap();
+        assert_eq!(merged["files"]["index.html"], "new");
+        assert_eq!(merged["files"]["public/logo.png"], "iVBORw0KGgo=");
+        assert_eq!(merged["encodings"]["public/logo.png"], "base64");
+        assert!(validate_sources(&merged, "app_a").is_ok());
+
+        let remove = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":[],"manifest":manifest,"updatedAt":3},"files":{},"removedPaths":["public/logo.png"]});
+        let merged = merge_source_delta(&merged, &remove, "app_a").unwrap();
+        assert!(merged["files"].get("public/logo.png").is_none());
+        assert!(merged.get("encodings").is_none());
+        assert!(validate_sources(&merged, "app_a").is_ok());
+
+        let invalid = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":[],"manifest":manifest,"updatedAt":4},"files":{"public/.secret":"x"},"removedPaths":[]});
+        assert!(validate_sources(&merge_source_delta(&merged, &invalid, "app_a").unwrap(), "app_a").is_err());
     }
 
     /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every

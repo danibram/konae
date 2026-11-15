@@ -29,4 +29,58 @@ describe("McpClient.upload", () => {
     await client.upload(new Uint8Array([1, 2, 3]), "app_1");
     expect(calls[0].arguments).not.toHaveProperty("component");
   });
+
+  test("cancels a transfer when the signal aborts during transfer_begin", async () => {
+    const calls: string[] = [];
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "initialize") return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25" } }));
+      if (request.method !== "tools/call") return new Response(null, { status: 202 });
+      const name = request.params.name as string;
+      calls.push(name);
+      if (name === "transfer_begin") { enter(); await held; }
+      const result = name === "transfer_begin" ? { transferId: "begun", size: 3, sha256: request.params.arguments.sha256, chunkBytes: 3 } : { ok: true };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result } } }));
+    }) as typeof globalThis.fetch;
+    const client = new McpClient("http://kernel.test/mcp", { fetch });
+    const controller = new AbortController();
+    const upload = client.upload(new Uint8Array([1, 2, 3]), "app_1", undefined, controller.signal);
+    await entered;
+    controller.abort();
+    release();
+    await expect(upload).rejects.toThrow();
+    expect(calls).toEqual(["transfer_begin", "transfer_cancel"]);
+  });
+
+  test("cancels after a completed upload is refused and uses keepalive for cleanup", async () => {
+    const calls: { name: string; keepalive?: boolean }[] = [];
+    const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "initialize") return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25" } }));
+      if (request.method !== "tools/call") return new Response(null, { status: 202 });
+      const name = request.params.name as string;
+      calls.push({ name, keepalive: init?.keepalive });
+      const result = name === "transfer_begin"
+        ? { transferId: "begun", size: 3, sha256: request.params.arguments.sha256, chunkBytes: 3 }
+        : { ok: true };
+      const toolResult = name === "transfer_complete"
+        ? { isError: true, content: [{ text: "Completion refused" }], structuredContent: { result: null } }
+        : { structuredContent: { result } };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: toolResult }));
+    }) as typeof globalThis.fetch;
+    const client = new McpClient("http://kernel.test/mcp", { fetch });
+    await expect(client.upload(new Uint8Array([1, 2, 3]), "app_1")).rejects.toThrow("Completion refused");
+    expect(calls.map(({ name }) => name)).toEqual(["transfer_begin", "transfer_write", "transfer_complete", "transfer_cancel"]);
+    expect(calls.at(-1)?.keepalive).toBe(true);
+  });
+
+  test("cancels a download whose response has an invalid size", async () => {
+    const { calls, client } = endpoint();
+    await expect(client.download({ transferId: "bad", size: 32 * 1024 * 1024 + 1, sha256: "", chunkBytes: 1 })).rejects.toThrow("Invalid MCP download size");
+    expect(calls.map((call) => call.name)).toEqual(["transfer_cancel"]);
+  });
 });

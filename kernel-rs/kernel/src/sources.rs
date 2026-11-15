@@ -332,6 +332,26 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
     Ok(Some(source))
 }
 
+/// Reads the saved source metadata without walking `app/` or opening its files.
+pub async fn read_metadata(root: &Path, id: &str) -> Result<Option<Value>> {
+    let path = layout::private(root, id).join(layout::SOURCES_METADATA);
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let metadata: Value = serde_json::from_slice(&bytes)?;
+            Ok(Some(json!({
+                "id": id,
+                "name": metadata["name"],
+                "slug": metadata["slug"],
+                "manifest": metadata["manifest"],
+                "directories": metadata["directories"],
+                "updatedAt": metadata["updatedAt"],
+            })))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +403,23 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0, "no staged or retired sources stay behind");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn metadata_read_does_not_open_saved_files() {
+        let root = std::env::temp_dir().join(format!("konae-source-metadata-{}", Uuid::new_v4()));
+        let source = json!({
+            "id":"app_a", "name":"A", "slug":"a", "files":{"image.png":"AA=="},
+            "encodings":{"image.png":"base64"}, "directories":[], "manifest":{"version":1}, "updatedAt":5
+        });
+        write(&root, "app_a", &source).await.unwrap();
+        tokio::fs::remove_file(layout::sources(&root, "app_a").join("image.png")).await.unwrap();
+        let metadata = read_metadata(&root, "app_a").await.unwrap().unwrap();
+        assert_eq!(metadata["id"], "app_a");
+        assert_eq!(metadata["name"], "A");
+        assert_eq!(metadata["manifest"]["version"], 1);
+        assert!(read_metadata(&root, "missing").await.unwrap().is_none());
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]

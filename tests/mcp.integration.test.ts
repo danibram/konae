@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
-import { ProjectSources } from "../src/lib/project-sources";
+import { ProjectSources, SaveSupersededError } from "../src/lib/project-sources";
 import { createWorkspaceProject } from "../src/lib/workspace";
 import { signupModes } from "../src/deployments/client";
 import { provideLocalAppDependencies } from "./local-app-deps";
@@ -146,7 +146,8 @@ describe("authenticated MCP", () => {
       const edited = { ...project, files: { ...project.files, "index.html": "edited" } };
       await sources.save(edited);
       const loaded = await sources.load();
-      expect(loaded.projects.find((item) => item.id === project.id)).toEqual(edited);
+      expect(loaded.projects.find((item) => item.id === project.id)?.files).toEqual({});
+      expect(await sources.loadProject(project.id)).toEqual(edited);
       expect(loaded.missing).toHaveLength(0);
     } finally {
       await proxy.stop(true);
@@ -266,30 +267,277 @@ describe("authenticated MCP", () => {
   });
 
   test("the editor saves a file that is not text as its bytes, and reads it back as base64", async () => {
-    const proxy = Bun.serve({ port: 0, fetch: async (request) => fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body: await request.text() }) });
+    const sourceTransferBytes: number[] = [];
+    const sourceDownloadBytes: number[] = [];
+    let sourceReadBlocks = 0;
+    const proxy = Bun.serve({ port: 0, fetch: async (request) => {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (rpc.params?.name === "transfer_begin" && rpc.params.arguments.projectId) sourceTransferBytes.push(rpc.params.arguments.size);
+      if (rpc.params?.name === "transfer_read") sourceReadBlocks++;
+      const response = await fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+      if (rpc.params?.name === "project_sources_read" && rpc.params.arguments.metadataOnly !== true) {
+        const result = await response.clone().json();
+        if (result.result?.structuredContent?.result?.transfer) sourceDownloadBytes.push(result.result.structuredContent.result.transfer.size);
+      }
+      return response;
+    } });
     try {
       const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
-      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff, 0xfe]);
+      const png = new Uint8Array(512 * 1024);
+      png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      for (let index = 8; index < png.length; index++) png[index] = index % 251;
       const base = createWorkspaceProject("Binary sources", []);
       const project = { ...base, files: { ...base.files, "public/logo.png": encodeBase64(png) }, encodings: { "public/logo.png": "base64" as const }, directories: ["public"] };
       await sources.save(project);
       const onDisk = path.join(root, "apps", project.id, "app/public/logo.png");
       expect(new Uint8Array(await readFile(onDisk))).toEqual(png);
+      for (let index = 0; index < 2; index++) {
+        const other = createWorkspaceProject(`Binary project ${index}`, []);
+        const document = { ...other, files: { ...other.files, "public/large.png": encodeBase64(png) }, encodings: { "public/large.png": "base64" as const }, directories: ["public"] };
+        await sources.save(document);
+      }
       const edited = { ...project, files: { ...project.files, "styles.css": "p { margin: 0; }" }, updatedAt: project.updatedAt + 1 };
       await sources.save(edited);
-      const loaded = await new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`).load();
-      expect(loaded.projects.find((item) => item.id === project.id)).toEqual(edited);
+      expect(sourceTransferBytes[0]).toBeLessThan(new TextEncoder().encode(JSON.stringify(edited)).length);
+      const loadedSources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      const loaded = await loadedSources.load();
+      expect(loaded.projects.find((item) => item.id === project.id)?.files).toEqual({});
+      expect(sourceReadBlocks).toBe(0);
+      expect(sourceDownloadBytes).toHaveLength(0);
+      expect(await loadedSources.loadProject(project.id)).toEqual(edited);
+      expect(sourceReadBlocks).toBeGreaterThan(0);
+      expect(sourceDownloadBytes).toHaveLength(1);
       expect(new Uint8Array(await readFile(onDisk))).toEqual(png);
 
-      const { encodings: _, ...textOnly } = edited;
-      const removed = { ...textOnly, files: Object.fromEntries(Object.entries(edited.files).filter(([file]) => file !== "public/logo.png")), updatedAt: edited.updatedAt + 1 };
-      await sources.save(removed);
+      const { ["public/logo.png"]: _oldLogo, ...withoutOldLogo } = edited.files;
+      const renamed = { ...edited, files: { ...withoutOldLogo, "public/renamed.png": edited.files["public/logo.png"] }, encodings: { "public/renamed.png": "base64" as const }, updatedAt: edited.updatedAt + 1 };
+      await sources.save(renamed);
       expect(await Bun.file(onDisk).exists()).toBe(false);
-      const reloaded = await new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`).load();
-      expect(reloaded.projects.find((item) => item.id === project.id)).toEqual(removed);
+      expect(new Uint8Array(await readFile(path.join(root, "apps", project.id, "app/public/renamed.png")))).toEqual(png);
+      const reloadedSources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await reloadedSources.load();
+      expect(await reloadedSources.loadProject(project.id)).toEqual(renamed);
+
+      const textBytes = new Uint8Array([0xff, 0x00, 0x80]);
+      const textToBinary = { ...renamed, files: { ...renamed.files, "styles.css": encodeBase64(textBytes) }, encodings: { ...renamed.encodings, "styles.css": "base64" as const }, updatedAt: renamed.updatedAt + 1 };
+      await sources.save(textToBinary);
+      expect(new Uint8Array(await readFile(path.join(root, "apps", project.id, "app/styles.css")))).toEqual(textBytes);
+      const verified = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await verified.load();
+      expect(await verified.loadProject(project.id)).toEqual(textToBinary);
+
+      const { ["public/renamed.png"]: _deletedLogo, ...afterDelete } = textToBinary.files;
+      const deleted = { ...textToBinary, files: afterDelete, encodings: { "styles.css": "base64" as const }, updatedAt: textToBinary.updatedAt + 1 };
+      await sources.save(deleted);
+      expect(await Bun.file(path.join(root, "apps", project.id, "app/public/renamed.png")).exists()).toBe(false);
+      const afterDeleteRead = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await afterDeleteRead.load();
+      expect(await afterDeleteRead.loadProject(project.id)).toEqual(deleted);
     } finally {
       await proxy.stop(true);
     }
+  });
+
+  test("source deltas preserve binary bytes and reject stale revisions before mutation", async () => {
+    const id = "source_delta_roundtrip";
+    const project = createWorkspaceProject("Delta sources", []);
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 7, 8, 9]);
+    const base = { ...project, files: { ...project.files, "public/logo.png": encodeBase64(png) }, encodings: { "public/logo.png": "base64" as const }, directories: ["public"] };
+    await alice.call("project_create", { projectId: id, name: base.name, slug: base.slug, manifest: base.manifest });
+    const initial = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...base, id })), id);
+    await alice.call("project_sources_save", { projectId: id, transferId: initial.transferId, expectedRevision: 0 });
+    await alice.cancel(initial.transferId);
+
+    const metadata = await alice.call<{ revision: number; project: { id: string; name: string }; transfer: unknown }>("project_sources_read", { projectId: id, metadataOnly: true });
+    expect(metadata).toMatchObject({ revision: 1, project: { id, name: base.name }, transfer: null });
+    const next = { ...base, files: { ...base.files, "index.html": "changed text" }, updatedAt: base.updatedAt + 1 };
+    const delta = { format: "delta", metadata: { name: next.name, slug: next.slug, directories: next.directories, manifest: next.manifest, updatedAt: next.updatedAt }, files: { "index.html": next.files["index.html"] }, removedPaths: [] };
+    const changed = await alice.upload(new TextEncoder().encode(JSON.stringify(delta)), id);
+    expect(await alice.call("project_sources_save", { projectId: id, transferId: changed.transferId, expectedRevision: 1 })).toEqual({ revision: 2 });
+    await alice.cancel(changed.transferId);
+
+    const stale = await alice.upload(new TextEncoder().encode(JSON.stringify({ ...delta, files: { "index.html": "stale text" } })), id);
+    await expect(alice.call("project_sources_save", { projectId: id, transferId: stale.transferId, expectedRevision: 1 })).rejects.toThrow("Source revision conflict");
+    await alice.cancel(stale.transferId);
+    const saved = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
+    const actual = JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer))) as typeof base;
+    expect(saved.revision).toBe(2);
+    expect(actual.files["index.html"]).toBe("changed text");
+    expect(new Uint8Array(await readFile(path.join(root, "apps", id, "app/public/logo.png")))).toEqual(png);
+  });
+
+  test("pending source saves coalesce to the latest snapshot", async () => {
+    const project = createWorkspaceProject("Coalesced saves", []);
+    const seed = await alice.upload(new TextEncoder().encode(JSON.stringify(project)));
+    await alice.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourcesTransferId: seed.transferId });
+    await alice.cancel(seed.transferId);
+    let hold = true;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let sourceSaves = 0;
+    const proxy = Bun.serve({ port: 0, async fetch(request) {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (rpc.params?.name === "transfer_write" && hold) { hold = false; enter(); await held; }
+      if (rpc.params?.name === "project_sources_save") sourceSaves++;
+      return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+    } });
+    try {
+      const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await sources.load();
+      const first = { ...project, files: { ...project.files, "index.html": "first pending" }, updatedAt: project.updatedAt + 1 };
+      const firstSave = sources.save(first);
+      await entered;
+      const obsolete = sources.save({ ...first, files: { ...first.files, "index.html": "obsolete pending" }, updatedAt: first.updatedAt + 1 });
+      const obsoleteResult = obsolete.then(() => { throw new Error("Obsolete snapshot unexpectedly saved."); }, (error) => error);
+      const latest = { ...first, files: { ...first.files, "index.html": "latest pending" }, updatedAt: first.updatedAt + 2 };
+      const latestSave = sources.save(latest);
+      expect(await obsoleteResult).toBeInstanceOf(SaveSupersededError);
+      release();
+      expect(await firstSave).toBe(2);
+      expect(await latestSave).toBe(3);
+      expect(sourceSaves).toBe(2);
+      const saved = await alice.call<{ transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: project.id });
+      const actual = JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)));
+      expect(actual.files["index.html"]).toBe("latest pending");
+    } finally { release(); await proxy.stop(true); }
+  });
+
+  test("a revert to the acknowledged snapshot queues behind an in-flight save", async () => {
+    const project = createWorkspaceProject("Reverted save", []);
+    const seed = await alice.upload(new TextEncoder().encode(JSON.stringify(project)));
+    await alice.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourcesTransferId: seed.transferId });
+    await alice.cancel(seed.transferId);
+    let hold = true;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let sourceSaves = 0;
+    const proxy = Bun.serve({ port: 0, async fetch(request) {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (rpc.params?.name === "transfer_write" && hold) { hold = false; enter(); await held; }
+      if (rpc.params?.name === "project_sources_save") sourceSaves++;
+      return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+    } });
+    try {
+      const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await sources.loadProject(project.id);
+      const inflight = { ...project, files: { ...project.files, "index.html": "in flight" }, updatedAt: project.updatedAt + 1 };
+      const inflightSave = sources.save(inflight);
+      await entered;
+      const newer = { ...project, files: { ...project.files, "index.html": "queued newer" }, updatedAt: project.updatedAt + 2 };
+      const superseded = sources.save(newer).then(() => "saved", (error) => error);
+      const reverted = sources.save(project);
+      let revertedResolved = false;
+      void reverted.then(() => { revertedResolved = true; });
+      await Bun.sleep(10);
+      expect(revertedResolved).toBe(false);
+      expect(await superseded).toBeInstanceOf(SaveSupersededError);
+      release();
+      expect(await inflightSave).toBe(2);
+      expect(await reverted).toBe(3);
+      expect(sourceSaves).toBe(2);
+      const saved = await alice.call<{ transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: project.id });
+      const actual = JSON.parse(new TextDecoder().decode(await alice.download(saved.transfer)));
+      expect(actual.files["index.html"]).toBe(project.files["index.html"]);
+    } finally { release(); await proxy.stop(true); }
+  });
+
+  test("source validation failures reject the save promise", async () => {
+    const project = createWorkspaceProject("Validation promise", []);
+    const sources = new ProjectSources("test-owner");
+    const invalid = { ...project, files: { ...project.files, "public/.secret": "x" } };
+    const result = sources.save(invalid);
+    await expect(result).rejects.toThrow("The sources cannot hold the path");
+  });
+
+  test("canceled source reads and saves release transfers after more than eight attempts", async () => {
+    const project = createWorkspaceProject("Canceled transfers", []);
+    const seed = await alice.upload(new TextEncoder().encode(JSON.stringify(project)));
+    await alice.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourcesTransferId: seed.transferId });
+    await alice.cancel(seed.transferId);
+    let failRead = true;
+    let failWrite = false;
+    let cancels = 0;
+    const proxy = Bun.serve({ port: 0, async fetch(request) {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (rpc.params?.name === "transfer_cancel") cancels++;
+      if (rpc.params?.name === "transfer_read" && failRead) return Response.json({ error: { message: "Canceled read" } }, { status: 503 });
+      if (rpc.params?.name === "transfer_write" && failWrite) return Response.json({ error: { message: "Canceled write" } }, { status: 503 });
+      return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+    } });
+    try {
+      for (let index = 0; index < 10; index++) {
+        const canceled = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+        await canceled.load();
+        await expect(canceled.loadProject(project.id)).rejects.toThrow("Canceled read");
+      }
+      failRead = false;
+      const sources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      const baseline = (await sources.loadProject(project.id))!;
+      failWrite = true;
+      for (let index = 0; index < 10; index++) {
+        const candidate = { ...baseline, files: { ...baseline.files, "index.html": `retry ${index}` }, updatedAt: baseline.updatedAt + index + 1 };
+        await expect(sources.save(candidate)).rejects.toThrow("Canceled write");
+      }
+      failWrite = false;
+      const final = { ...baseline, files: { ...baseline.files, "index.html": "saved after cancellation" }, updatedAt: baseline.updatedAt + 20 };
+      expect(await sources.save(final)).toBe(2);
+      expect(cancels).toBeGreaterThanOrEqual(20);
+      const observed = await alice.call<{ transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: project.id });
+      const saved = JSON.parse(new TextDecoder().decode(await alice.download(observed.transfer)));
+      expect(saved.files["index.html"]).toBe("saved after cancellation");
+    } finally { await proxy.stop(true); }
+  });
+
+  test("navigation during a source-read response cancels the transfer the server already created", async () => {
+    const project = createWorkspaceProject("Read response cancellation", []);
+    const seed = await alice.upload(new TextEncoder().encode(JSON.stringify(project)));
+    await alice.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourcesTransferId: seed.transferId });
+    await alice.cancel(seed.transferId);
+    let gate: { enter: () => void; held: Promise<void> } | null = null;
+    let cancels = 0;
+    const proxy = Bun.serve({ port: 0, async fetch(request) {
+      const body = await request.text();
+      const rpc = JSON.parse(body);
+      if (rpc.params?.name === "transfer_cancel") cancels++;
+      const response = await fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
+      if (rpc.params?.name === "project_sources_read" && rpc.params.arguments.metadataOnly !== true && gate) {
+        const current = gate;
+        gate = null;
+        const result = await response.clone().json();
+        expect(result.result.structuredContent.result.transfer.transferId).toBeDefined();
+        current.enter();
+        await current.held;
+      }
+      return response;
+    } });
+    try {
+      for (let index = 0; index < 10; index++) {
+        let openEntered!: () => void;
+        let releaseOpen!: () => void;
+        const openResponse = new Promise<void>((resolve) => { openEntered = resolve; });
+        const openHeld = new Promise<void>((resolve) => { releaseOpen = resolve; });
+        const opening = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+        await opening.load();
+        gate = { enter: openEntered, held: openHeld };
+        const loading = opening.loadProject(project.id);
+        await openResponse;
+        opening.cancelProject(project.id);
+        releaseOpen();
+        await expect(loading).rejects.toThrow();
+      }
+      const final = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await final.load();
+      expect((await final.loadProject(project.id))?.files["index.html"]).toBe(project.files["index.html"]);
+      expect(cancels).toBeGreaterThanOrEqual(10);
+    } finally { await proxy.stop(true); }
   });
 
   test("a saved document past a limit is refused with a sentence that names the file and the limit", async () => {

@@ -51,15 +51,19 @@ export class McpClient {
    * upload reach that component's limit instead of 32 MiB; a release then
    * names the transfer in `initialPackage.components`.
    */
-  async upload(bytes: Uint8Array, projectId?: string, component?: string): Promise<Transfer> {
+  async upload(bytes: Uint8Array, projectId?: string, component?: string, signal?: AbortSignal): Promise<Transfer> {
     if (!component && (bytes.length === 0 || bytes.length > UPLOAD_BYTES)) throw new McpError(uploadRefused(bytes.length));
     const sha256 = await checksum(bytes);
+    // Keep begin un-aborted so the transfer ID is known and can be canceled if
+    // the caller leaves while the server is creating it.
     const transfer = await this.call<Transfer>("transfer_begin", { size: bytes.length, sha256, ...(projectId ? { projectId } : {}), ...(component ? { component } : {}) });
     try {
+      signal?.throwIfAborted();
+      blockLimit(transfer);
       for (let offset = 0; offset < bytes.length; offset += transfer.chunkBytes) {
-        await this.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(bytes.subarray(offset, offset + transfer.chunkBytes)) });
+        await this.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(bytes.subarray(offset, offset + transfer.chunkBytes)) }, signal);
       }
-      await this.call("transfer_complete", { transferId: transfer.transferId });
+      await this.call("transfer_complete", { transferId: transfer.transferId }, signal);
       return transfer;
     } catch (error) {
       await this.cancel(transfer.transferId).catch(() => {});
@@ -67,13 +71,14 @@ export class McpClient {
     }
   }
 
-  async download(transfer: Transfer): Promise<Uint8Array> {
-    if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || transfer.size > 32 * 1024 * 1024) throw new McpError("Invalid MCP download size.");
-    const bytes = new Uint8Array(transfer.size);
+  async download(transfer: Transfer, signal?: AbortSignal): Promise<Uint8Array> {
     try {
+      if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || transfer.size > 32 * 1024 * 1024) throw new McpError("Invalid MCP download size.");
+      blockLimit(transfer);
+      const bytes = new Uint8Array(transfer.size);
       let offset = 0;
       while (offset < transfer.size) {
-        const block = await this.call<{ data: string; offset: number; nextOffset: number }>("transfer_read", { transferId: transfer.transferId, offset });
+        const block = await this.call<{ data: string; offset: number; nextOffset: number }>("transfer_read", { transferId: transfer.transferId, offset }, signal);
         const data = decodeBase64(block.data);
         if (block.offset !== offset || !data.length || data.length > blockLimit(transfer) || block.nextOffset !== offset + data.length || block.nextOffset > bytes.length) throw new McpError("Invalid MCP download block.");
         bytes.set(data, offset);
@@ -92,6 +97,7 @@ export class McpClient {
     const id = crypto.randomUUID();
     const response = await (this.options.fetch ?? globalThis.fetch)(this.endpoint, {
       method: "POST", credentials: "same-origin", signal,
+      keepalive: params && (params as { name?: string }).name === "transfer_cancel",
       headers: {
         "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25",
         ...(this.options.token ? { authorization: `Bearer ${this.options.token}` } : {}),
