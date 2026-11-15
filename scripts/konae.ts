@@ -179,11 +179,12 @@ build     --dir <folder>                 Builds app/ into dist/ with the shared 
           the built-in builder. Install imported npm packages first.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
           actions.d.ts, which types miniapp.actions.call.
-publish   --dir <folder> [--url <installation URL>] [--confirm-schema <confirmation>]
+publish   --dir <folder> [--url <installation URL>] [--plan [--json]] [--confirm-schema <confirmation>]
           Builds and publishes to --url or the installation login saved. Set each signing secret
           with secret set first. The Kernel changes the database to what schema.sql states. A
           change that drops a table or a column, or changes a column's type, prints its plan and
-          asks; without a terminal, pass the plan's confirmation.
+          asks; without a terminal, pass the plan's confirmation. --plan prepares a remote plan
+          without applying it or saving publish markers; --json prints the plan as JSON.
 conform   --url <app URL> --contract <file> [--token <app session>] [--key <API key>]
           [--secret <name>=<value>] [--inputs <file>]
           Calls every action and checks the answers against the contract. It runs each mutation once,
@@ -624,7 +625,7 @@ function typecheckApp(root: string) {
  * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
  * policy and `warn` gets one line when konae.json names another.
  */
-export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, confirm: ConfirmSchema = keepData) {
+export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, confirm: ConfirmSchema = keepData, planOnly = false) {
   if (!config.url) throw Error(NO_INSTALLATION);
   const client = new McpClient(endpoint(config.url), { token });
   const wanted = manifestSignupPolicy(config.project.manifest);
@@ -645,7 +646,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   let first = false;
   let observedSourcesRevision: number | undefined;
   let publishedSourceDigest = "";
-  const { plan, receipt } = await publishProject<{ id: string; url: string }>(client, project, async () => {
+  const result = await publishProject<{ id: string; url: string }>(client, project, async () => {
     // project_inspect needs the project that project_create registers on a first publish.
     const remote = await client.call<{ deployment?: { id: string } | null; sourcesRevision: number }>("project_inspect", { projectId: project.id });
     first = !remote.deployment;
@@ -660,7 +661,20 @@ export async function publishLocal(root: string, config: Config, token: string, 
     };
   }, confirm, (error) => console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
     if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
-  }, () => observedSourcesRevision);
+  }, () => observedSourcesRevision, !planOnly);
+  const { plan } = result;
+  if (planOnly) {
+    return {
+      target: { projectId: project.id, projectName: project.name, installation: config.url },
+      sourceRevision: { observed: observedSourcesRevision ?? null, planned: plan.expectedSourcesRevision },
+      sourceDigest: publishedSourceDigest,
+      artifactDigest: createHash("sha256").update(JSON.stringify(prepared.artifact)).digest("hex"),
+      plan,
+      expiresAt: (plan as typeof plan & { expiresAt?: number }).expiresAt ?? null,
+      productionRequirements: plan.schema?.confirmation ? [`Pass --confirm-schema ${plan.schema.confirmation} to apply this data loss.`] : [],
+    };
+  }
+  const receipt = result.receipt!;
   await mkdir(path.join(root, ".konae"), { recursive: true });
   let publishedSettings: unknown;
   try { publishedSettings = JSON.parse(await readFile(path.join(root, SETTINGS_FILE), "utf8")); }
@@ -1323,7 +1337,18 @@ export async function main() {
   }
   if (command === "publish") {
     const url = await installation();
-    console.log((await publishLocal(root, { ...config, url }, await credentials(root), console.warn, confirmOnTerminal(option("confirm-schema")))).url);
+    const planned = args.includes("--plan");
+    const result = await publishLocal(root, { ...config, url }, await credentials(root), console.warn, confirmOnTerminal(option("confirm-schema")), planned);
+    if (planned) {
+      if (args.includes("--json")) console.log(JSON.stringify(result, null, 2));
+      else {
+        const value = result as Awaited<ReturnType<typeof publishLocal>>;
+        console.log(`Plan for ${value.target.projectName} (${value.target.projectId}) at ${value.target.installation}`);
+        console.log(`Sources ${value.sourceDigest}; artifact ${value.artifactDigest}; remote sources revision ${value.sourceRevision.planned}.`);
+        console.log(`Plan expires ${value.expiresAt === null ? "as defined by the Kernel; no expiry was returned" : new Date(value.expiresAt).toISOString()}.`);
+        if (value.plan.schema) console.log([...describeSchemaChange(value.plan.schema), ...value.productionRequirements].join("\n"));
+      }
+    } else console.log((result as { url: string }).url);
     return;
   }
   if (command === "secret") {

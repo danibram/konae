@@ -152,6 +152,23 @@ test("downloadKernel verifies the release checksum and repairs a changed cached 
 });
 
 describe("konae CLI", () => {
+  test("publish --plan calls release_plan only, leaves success markers alone, and releases uploads", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, ".konae-source-marker"), "untouched");
+    await mkdir(path.join(directory, ".konae"));
+    await writeFile(path.join(directory, ".konae/source-revision.json"), "marker-before");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    const plan = await publishLocal(directory, config, "token", undefined, undefined, true);
+
+    expect(calls.map((call) => call.name)).toContain("release_plan");
+    expect(calls.map((call) => call.name)).not.toContain("release_apply");
+    expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(2);
+    expect(await readFile(path.join(directory, ".konae/source-revision.json"), "utf8")).toBe("marker-before");
+    expect(await stat(path.join(directory, ".konae/published.json")).then(() => true, () => false)).toBe(false);
+    expect(plan.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   test.each(["release_plan", "release_apply"])("a failed %s releases its upload so later publishes can proceed", async (step) => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     failing.add(step);

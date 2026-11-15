@@ -50,12 +50,18 @@ export function sourceRevisionConflict(observed: number) {
  * the same losses.
  */
 export async function release<Receipt>(client: Pick<McpClient, "call">, uploads: ReleaseUploads, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
-  const plan = await client.call<ReleasePlan>("release_plan", uploads);
-  onPlan?.(plan);
+  const plan = await planRelease(client, uploads, onPlan);
   const confirmation = plan.schema?.confirmation;
   if (plan.schema && confirmation && !await confirm(plan.schema)) throw new SchemaChangeDeclined(plan.schema);
   const receipt = await client.call<Receipt>("release_apply", { planId: plan.planId, ...(confirmation ? { confirmSchema: confirmation } : {}) });
   return { plan, receipt };
+}
+
+/** Asks the Kernel to plan a release without applying it. */
+export async function planRelease(client: Pick<McpClient, "call">, uploads: ReleaseUploads, onPlan?: (plan: ReleasePlan) => void): Promise<ReleasePlan> {
+  const plan = await client.call<ReleasePlan>("release_plan", uploads);
+  onPlan?.(plan);
+  return plan;
 }
 
 /** The project record project_create registers. */
@@ -86,6 +92,9 @@ export type ReleaseContents = {
  * can read the project that call registered. Both uploads are cancelled
  * whatever happens, and `cancelFailed` hears when a cancel fails.
  */
+export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed?: (error: unknown) => void, onPlan?: (plan: ReleasePlan) => void, observedSourcesRevision?: number | (() => number | undefined)): Promise<{ plan: ReleasePlan; receipt: Receipt }>;
+export function publishProject(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: false): Promise<{ plan: ReleasePlan }>;
+export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: boolean): Promise<{ plan: ReleasePlan; receipt?: Receipt }>;
 export async function publishProject<Receipt>(
   client: Pick<McpClient, "call" | "upload" | "cancel">,
   project: ProjectIdentity,
@@ -94,7 +103,8 @@ export async function publishProject<Receipt>(
   cancelFailed: (error: unknown) => void = () => {},
   onPlan?: (plan: ReleasePlan) => void,
   observedSourcesRevision?: number | (() => number | undefined),
-): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
+  apply = true,
+): Promise<{ plan: ReleasePlan; receipt?: Receipt }> {
   await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
   const sources: CarriedFiles & { directories: string[] } = {
@@ -116,7 +126,9 @@ export async function publishProject<Receipt>(
     const releaseTransfer = await client.upload(payload, project.id);
     transfers.push(releaseTransfer);
     const observed = typeof observedSourcesRevision === "function" ? observedSourcesRevision() : observedSourcesRevision;
-    return await release<Receipt>(client, { transferId: releaseTransfer.transferId, sourcesTransferId: sourcesTransfer.transferId, observedSourcesRevision: observed }, confirm, onPlan);
+    const uploads = { transferId: releaseTransfer.transferId, sourcesTransferId: sourcesTransfer.transferId, observedSourcesRevision: observed };
+    if (!apply) return { plan: await planRelease(client, uploads, onPlan) };
+    return await release<Receipt>(client, uploads, confirm, onPlan);
   } finally {
     for (const transfer of transfers) await client.cancel(transfer.transferId).catch(cancelFailed);
   }
