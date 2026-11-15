@@ -319,6 +319,39 @@ describe("chunked package", () => {
     for (const id of Object.values(components)) await owner.cancel(id);
   }, 60_000);
 
+  test("retries component cleanup after first-party cancellation removes the release JSON", async () => {
+    const directory = await mkdtemp(path.join(root, "cleanup-replay-"));
+    const { exported, files } = await sourcePackage("pkg_cleanup_source", directory);
+    const targetId = "pkg_cleanup_replay";
+    await owner.call("project_create", { projectId: targetId, name: "Cleanup replay" });
+    const components = await uploadPackage(owner, exported.manifest, files, targetId);
+    const request = { ...payload(targetId), initialPackage: { manifest: exported.manifest, components } };
+    const releaseUpload = await owner.upload(new TextEncoder().encode(JSON.stringify(request)), targetId);
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: releaseUpload.transferId, observedSourcesRevision: 0 });
+    const held = components.database;
+    const transfersDb = new Database(path.join(root, "data", "transfers.sqlite"));
+    try {
+      transfersDb.exec(`CREATE TRIGGER refuse_component_cleanup BEFORE DELETE ON transfers WHEN OLD.id='${held}' BEGIN SELECT RAISE(ABORT, 'injected component cleanup failure'); END;`);
+      await expect(owner.call("release_apply", { planId: plan.planId })).rejects.toThrow("injected component cleanup failure");
+      // First-party publishers cancel all uploads in finally, including the
+      // release JSON needed by the old cleanup implementation.
+      for (const transferId of [releaseUpload.transferId, ...Object.values(components)]) await owner.cancel(transferId).catch(() => {});
+      transfersDb.exec("DROP TRIGGER refuse_component_cleanup");
+
+      const receipt = await owner.call("release_apply", { planId: plan.planId });
+      expect(await owner.call("release_apply", { planId: plan.planId })).toEqual(receipt);
+      for (const transferId of [releaseUpload.transferId, ...Object.values(components)]) {
+        await expect(owner.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
+        expect(await Bun.file(path.join(root, "data", "transfers", transferId)).exists()).toBe(false);
+      }
+    } finally {
+      transfersDb.exec("DROP TRIGGER IF EXISTS refuse_component_cleanup");
+      transfersDb.close();
+      for (const transfer of [...Object.values(exported.downloads), exported.folder]) await owner.cancel(transfer.transferId).catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("refuses a package for a project that already has a deployment", async () => {
     const directory = await mkdtemp(path.join(root, "export-"));
     const { exported, files } = await sourcePackage("pkg_over_source", directory);

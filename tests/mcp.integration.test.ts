@@ -7,6 +7,7 @@ import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
 import { ProjectSources, SaveSupersededError } from "../src/lib/project-sources";
 import { createWorkspaceProject } from "../src/lib/workspace";
 import { signupModes } from "../src/deployments/client";
+import { publishProject } from "../src/deployments/release";
 import { provideLocalAppDependencies } from "./local-app-deps";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -1004,6 +1005,40 @@ describe("authenticated MCP", () => {
     await expect(alice.call("transfer_status", { transferId: otherUpload.transferId })).rejects.toThrow("not found");
     expect(await bob.call("transfer_status", { transferId: otherUpload.transferId })).toMatchObject({ complete: true });
     await bob.cancel(otherUpload.transferId);
+  });
+
+  test("a scoped publisher can cancel its consumed upload but cannot cancel an out-of-grant upload", async () => {
+    const grantedId = "scoped_cancel_granted";
+    const otherId = "scoped_cancel_other";
+    await alice.call("project_create", { projectId: grantedId, name: "Scoped cancel" });
+    await alice.call("project_create", { projectId: otherId, name: "Other project" });
+    const token = await alice.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], projectIds: [grantedId], ttlSeconds: 300 });
+    const scoped = new McpClient(`${url}/mcp`, { token: token.token });
+    const uploads: string[] = [];
+    const publishingClient = {
+      call: scoped.call.bind(scoped),
+      cancel: scoped.cancel.bind(scoped),
+      upload: async (...args: Parameters<McpClient["upload"]>) => {
+        const upload = await scoped.upload(...args);
+        uploads.push(upload.transferId);
+        return upload;
+      },
+    };
+    const request = payload(grantedId);
+    const inspected = await scoped.call<{ sourcesRevision: number }>("project_inspect", { projectId: grantedId });
+    await publishProject(publishingClient, request.project, () => request, async () => true, () => {}, undefined, inspected.sourcesRevision);
+    expect(uploads).toHaveLength(2);
+    // publishProject's finally path cancels both uploads after apply. Repeating
+    // cancellation remains safe for a scoped token after those rows are gone.
+    for (const transferId of uploads) {
+      await expect(scoped.cancel(transferId)).resolves.toMatchObject({ ok: true });
+      await expect(alice.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
+    }
+
+    const elsewhere = await alice.upload(new TextEncoder().encode("another project's upload"), otherId);
+    await expect(scoped.cancel(elsewhere.transferId)).rejects.toThrow("outside this token's grants");
+    await expect(alice.call("transfer_status", { transferId: elsewhere.transferId })).resolves.toMatchObject({ complete: true });
+    await alice.cancel(elsewhere.transferId);
   });
 
   test("publishes, rejects stale plans, and returns the same receipt on retry", async () => {

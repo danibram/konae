@@ -13,6 +13,8 @@ describe("signup policy", () => {
   test("reads and saves the policy through the owner MCP tools", async () => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];
     let policy = { mode: "open", allowlist: [] as string[] };
+    let publishedVisibility: "public" | "private" = "private";
+    let draftVisibility: "public" | "private" = "public";
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body));
       if (request.method.startsWith("notifications/")) return new Response(null, { status: 202 });
@@ -21,13 +23,18 @@ describe("signup policy", () => {
       calls.push({ name, args });
       if (request.params.name === "signup_policy_set") policy = { mode: args.mode, allowlist: args.allowlist };
       const value = request.params.name === "project_inspect"
-        ? { project: { id: args.projectId }, deployment: { id: args.projectId, visibility: "public", signupPolicy: policy } }
+        ? { project: { id: args.projectId, manifest: { visibility: draftVisibility } }, deployment: { id: args.projectId, manifest: { visibility: publishedVisibility }, signupPolicy: policy } }
         : policy;
       return Response.json({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: value }, content: [], isError: false } });
     }) as typeof fetch;
-    expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open" });
+    expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open", visibility: "private" });
+    // A saved draft may have a different visibility from the published app.
+    publishedVisibility = "public";
+    draftVisibility = "private";
+    expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open", visibility: "public" });
     expect(await saveSignupPolicy("deploy/a", "allowlist", ["@example.com"])).toMatchObject({ mode: "allowlist", allowlist: ["@example.com"] });
     expect(calls).toEqual([
+      { name: "project_inspect", args: { projectId: "deploy/a" } },
       { name: "project_inspect", args: { projectId: "deploy/a" } },
       { name: "signup_policy_set", args: { projectId: "deploy/a", mode: "allowlist", allowlist: ["@example.com"] } },
       { name: "project_inspect", args: { projectId: "deploy/a" } },

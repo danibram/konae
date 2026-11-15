@@ -74,6 +74,10 @@ pub fn completed_upload(state: &AppState, principal: &str, id: &str) -> Result<b
 
 
 pub fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
+    owned_transfer(state, principal, a)?.ok_or_else(|| anyhow::anyhow!("Transfer not found or expired."))
+}
+
+pub fn owned_transfer(state: &AppState, principal: &str, a: &Value) -> Result<Option<Value>> {
     let id = a["transferId"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Transfer ID required."))?;
@@ -85,9 +89,7 @@ pub fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
             |r| r.get(0),
         )
         .optional()?;
-    Ok(serde_json::from_str(&body.ok_or_else(|| {
-        anyhow::anyhow!("Transfer not found or expired.")
-    })?)?)
+    body.map(|value| serde_json::from_str(&value).map_err(Into::into)).transpose()
 }
 
 
@@ -289,13 +291,23 @@ pub async fn transfer_call(
     let path = transfer_path(state, id)?;
     let _guard = database_lock(state, &format!("transfer:{id}")).await;
     if name == "transfer_cancel" && !principal.starts_with("runtime:") {
-        let removed = store(state)?.execute(
+        // A guessed transfer ID must never let one owner remove another
+        // owner's file, even though cancellation of a missing ID is a no-op.
+        if owned_transfer(state, principal, a)?.is_none() {
+            return Ok(json!({"ok":true}));
+        }
+        // Remove bytes before the row. If unlinking fails, the upload remains
+        // discoverable and a later cancel can retry. If deleting the row
+        // fails, a missing file is harmless on retry.
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error_value) => return Err(error_value.into()),
+        }
+        store(state)?.execute(
             "DELETE FROM transfers WHERE id=?1 AND principal=?2",
             params![id, principal],
         )?;
-        if removed == 1 {
-            let _ = tokio::fs::remove_file(path).await;
-        }
         return Ok(json!({"ok":true}));
     }
     let mut t = transfer(state, principal, a)?;
@@ -386,6 +398,35 @@ pub async fn transfer_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn owner_cancel_keeps_retry_state_when_unlink_fails_and_isolated_for_other_principals() {
+        let root = std::env::temp_dir().join(format!("konae-transfer-cancel-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let begun = new_transfer(&state, "owner:alice", json!({"direction":"upload","size":1,"sha256":"00","complete":false,"projectId":"app_a"})).await.unwrap();
+        let id = begun["transferId"].as_str().unwrap();
+        let path = transfer_path(&state, id).unwrap();
+
+        // A directory at the transfer path makes remove_file fail on each
+        // supported platform, while retaining the same transfer row.
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::create_dir(&path).await.unwrap();
+        let failed = transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap_err();
+        assert!(!failed.to_string().is_empty(), "{failed}");
+        assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_some());
+
+        // A different owner gets the idempotent missing/foreign no-op, and
+        // cannot unlink the original owner's path.
+        transfer_call(&state, "owner:bob", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
+        assert!(tokio::fs::metadata(&path).await.unwrap().is_dir());
+        assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_some());
+
+        tokio::fs::remove_dir(&path).await.unwrap();
+        transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
+        assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_none());
+        transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     #[tokio::test]
     async fn one_body_completes_an_upload_and_a_wrong_one_leaves_it_open() {

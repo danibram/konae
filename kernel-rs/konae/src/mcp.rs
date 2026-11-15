@@ -189,7 +189,7 @@ fn store_at(root: &Path) -> Result<Connection> {
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
-        CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT, source_revision INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT, source_revision INTEGER NOT NULL DEFAULT 0, cleanup_uploads TEXT NOT NULL DEFAULT '[]');
         CREATE TABLE IF NOT EXISTS source_read_requests(owner TEXT NOT NULL, request_id TEXT NOT NULL, project TEXT NOT NULL, transfer TEXT, cancelled INTEGER NOT NULL DEFAULT 0, expires INTEGER NOT NULL, PRIMARY KEY(owner, request_id));
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, actor TEXT NOT NULL, tool TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);")?;
@@ -223,6 +223,8 @@ fn store_at(root: &Path) -> Result<Connection> {
     }
     let has_source_revision = db.prepare("PRAGMA table_info(plans)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?.iter().any(|name| name == "source_revision");
     if !has_source_revision { db.execute("ALTER TABLE plans ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0", [])?; }
+    let has_cleanup_uploads = db.prepare("PRAGMA table_info(plans)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?.iter().any(|name| name == "cleanup_uploads");
+    if !has_cleanup_uploads { db.execute("ALTER TABLE plans ADD COLUMN cleanup_uploads TEXT NOT NULL DEFAULT '[]'", [])?; }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
     install_imports(&db)?;
@@ -539,17 +541,40 @@ async fn release_upload_ids(
 }
 
 async fn cleanup_release_uploads(state: &Konae, owner: &Owner, principal: &str, plan_id: &str) -> Result<()> {
-    let (release_id, sources_id): (String, Option<String>) = {
+    let (release_id, sources_id, recorded_ids): (String, Option<String>, String) = {
         let db = store(state)?;
-        db.query_row("SELECT transfer,sources FROM plans WHERE id=?1 AND owner=?2", params![plan_id, owner.id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        db.query_row("SELECT transfer,sources,cleanup_uploads FROM plans WHERE id=?1 AND owner=?2", params![plan_id, owner.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
     };
-    for transfer_id in release_upload_ids(state, principal, &release_id, sources_id.as_deref()).await? {
+    // New plans keep every consumed ID durably. Older plans can still recover
+    // from their release JSON while that upload remains available.
+    let mut ids: Vec<String> = serde_json::from_str(&recorded_ids)?;
+    if ids.is_empty() {
+        ids = release_upload_ids(state, principal, &release_id, sources_id.as_deref()).await?;
+    }
+    for transfer_id in ids {
         let still_available = super::transfers::completed_upload(&state.kernel, principal, &transfer_id)?;
         if still_available {
             transfer_call(state, principal, "transfer_cancel", &json!({"transferId":transfer_id}), false).await?;
         }
     }
     Ok(())
+}
+
+fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, transfer_id: &str) -> Result<Option<String>> {
+    if let Some(upload) = super::transfers::owned_transfer(&state.kernel, principal, &json!({"transferId":transfer_id}))? {
+        return Ok(upload["projectId"].as_str().map(str::to_owned));
+    }
+    let db = store(state)?;
+    let mut query = db.prepare("SELECT project,transfer,sources,cleanup_uploads FROM plans WHERE owner=?1")?;
+    let plans = query.query_map([&owner.id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (project, release_id, sources_id, cleanup_json) in plans {
+        let cleanup_ids: Vec<String> = serde_json::from_str(&cleanup_json)?;
+        if release_id == transfer_id || sources_id.as_deref() == Some(transfer_id) || cleanup_ids.iter().any(|id| id == transfer_id) {
+            return Ok(Some(project));
+        }
+    }
+    Ok(None)
 }
 
 /// The files of `app/` that travel in an upload of their own beside a release.
@@ -1053,6 +1078,8 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             let mut result = if name.starts_with("transfer_") {
                 let project = if name == "transfer_begin" {
                     arguments["projectId"].as_str().map(str::to_owned)
+                } else if name == "transfer_cancel" {
+                    transfer_project_for_owner(&state, &owner, &principal, arguments["transferId"].as_str().unwrap_or_default()).ok().flatten()
                 } else {
                     transfer(&state, &principal, &arguments)
                         .ok()
@@ -1081,7 +1108,14 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                         .unwrap_or(accepted[0])
                 };
                 let permission = if name == "transfer_cancel" {
-                    authorize(held(&["read", "publish", "write", "export_data"]))
+                    match project.as_deref() {
+                        Some(id) => owner.require(held(&["read", "publish", "write", "export_data"]), Some(id)),
+                        // An unknown or already-consumed ID has no resource to
+                        // access. Require one cancellation-capable scope, while
+                        // using a retained plan mapping above when one exists.
+                        None if ["read", "publish", "write", "export_data"].iter().any(|scope| owner.scopes.iter().any(|held| held == scope)) => Ok(()),
+                        None => Err(anyhow::anyhow!("Permission denied for read.")),
+                    }
                 } else if scope == "publish" {
                     authorize(held(&["publish", "write"]))
                 } else {
@@ -1755,7 +1789,10 @@ async fn admin_call(
             let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
-            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision])?;
+            // Persist every upload that a successful apply consumes. Cleanup
+            // must survive client finally cancellation of the release JSON.
+            let cleanup_uploads = release_upload_ids(state, principal, transfer_id, sources_id).await?;
+            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision,cleanup_uploads) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision,serde_json::to_string(&cleanup_uploads)?])?;
             if let Some(package) = input.initial_package.as_ref() {
                 remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }

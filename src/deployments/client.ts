@@ -35,9 +35,9 @@ export type SignupMode = (typeof signupModes)[number];
 export type SignupPolicy = { projectId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
 
 export async function readSignupPolicy(projectId: string) {
-  const inspected = await platformMcp.call<{ deployment: { id: string; visibility: DeploymentVisibility; signupPolicy: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId });
+  const inspected = await platformMcp.call<{ deployment: { id: string; manifest: { visibility: DeploymentVisibility }; signupPolicy: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId });
   if (!inspected.deployment) throw new Error("Publish this project before reading its Signup Policy.");
-  return { projectId, visibility: inspected.deployment.visibility, mode: inspected.deployment.signupPolicy.mode, allowlist: inspected.deployment.signupPolicy.allowlist ?? [] };
+  return { projectId, visibility: inspected.deployment.manifest.visibility, mode: inspected.deployment.signupPolicy.mode, allowlist: inspected.deployment.signupPolicy.allowlist ?? [] };
 }
 
 /** Saves the policy, then reads the deployed value through project_inspect. */
