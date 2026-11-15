@@ -350,7 +350,6 @@ describe("agent thread composer and providers", () => {
     expect(submitBlocker(anthropic, false, "claude-sonnet-4-6")).toContain("API key");
     expect(submitBlocker(anthropic, true, "   ")).toContain("model id");
     expect(submitBlocker(anthropic, true, "claude-sonnet-4-6")).toBe("");
-    expect(submitBlocker({ ...anthropic, needsKey: false }, false, "claude-sonnet-4-6")).toBe("");
 
     const blocker = submitBlocker(anthropic, false, "claude-sonnet-4-6");
     expect(canSubmit(initialAgentThreadState, "hola", false, blocker)).toBe(false);
@@ -387,10 +386,8 @@ describe("agent thread composer and providers", () => {
     expect(isCustomModelId(resolveProvider(PROVIDERS, "anthropic"), "claude-from-the-future")).toBe(true);
   });
 
-  test("key state follows custody, not the provider list", () => {
-    const anthropic = resolveProvider(PROVIDERS, "anthropic");
-    expect(keyState(anthropic, false)).toBe("missing");
-    expect(keyState(anthropic, true)).toBe("stored");
-    expect(keyState({ ...anthropic, needsKey: false }, false)).toBe("not-needed");
+  test("every provider needs a key", () => {
+    expect(keyState(false)).toBe("missing");
+    expect(keyState(true)).toBe("stored");
   });
 });

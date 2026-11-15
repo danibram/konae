@@ -16,7 +16,6 @@ export const PROVIDERS: readonly ProviderConfig[] = [
   {
     id: "anthropic",
     label: "Anthropic",
-    needsKey: true,
     keyPage: "https://platform.claude.com/settings/keys",
     supportsCustomModelId: true,
     defaultModels: [
@@ -28,7 +27,6 @@ export const PROVIDERS: readonly ProviderConfig[] = [
   {
     id: "openai",
     label: "OpenAI",
-    needsKey: true,
     keyPage: "https://platform.openai.com/api-keys",
     supportsCustomModelId: true,
     defaultModels: [
@@ -40,7 +38,6 @@ export const PROVIDERS: readonly ProviderConfig[] = [
   {
     id: "openrouter",
     label: "OpenRouter",
-    needsKey: true,
     keyPage: "https://openrouter.ai/keys",
     supportsCustomModelId: true,
     defaultModels: [
@@ -76,9 +73,8 @@ export function defaultModelIdFor(provider: ProviderConfig): string {
   return provider.defaultModels[0]?.id ?? "";
 }
 
-export type KeyState = "not-needed" | "missing" | "stored";
+export type KeyState = "missing" | "stored";
 
-export function keyState(provider: ProviderConfig, hasKey: boolean): KeyState {
-  if (!provider.needsKey) return "not-needed";
+export function keyState(hasKey: boolean): KeyState {
   return hasKey ? "stored" : "missing";
 }

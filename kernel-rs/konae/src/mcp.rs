@@ -1865,7 +1865,7 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
             // key, the page fills it in, as `bun run dev:local` expects. Nowhere else.
             let local = url::Url::parse(&state.public_origin).ok().and_then(|u| u.host_str().map(crate::is_local_host)).unwrap_or(false);
             let default_key = local && state.setup_key == crate::DEFAULT_SETUP_KEY;
-            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
+            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"emailVerificationRequired":state.accounts.verification == auth::Verification::Required,"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
         }
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }

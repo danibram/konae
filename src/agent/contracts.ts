@@ -22,8 +22,6 @@ export type ProviderModelOption = {
 export type ProviderConfig = {
   id: ProviderId;
   label: string;
-  /** False only for providers reached through a Kernel proxy that owns the key. */
-  needsKey: boolean;
   defaultModels: ProviderModelOption[];
   supportsCustomModelId: boolean;
   /** The provider's own page where a person creates an API key. */

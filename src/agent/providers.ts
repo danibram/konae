@@ -58,7 +58,7 @@ export function createAgentModels(): MutableModels {
 }
 
 export function providerIsConfigured(provider: ProviderId, keyStore: AgentKeyStore) {
-  return !providerConfig(provider).needsKey || keyStore.getKey(provider) !== null;
+  return keyStore.getKey(provider) !== null;
 }
 
 /**
@@ -92,7 +92,7 @@ export function buildAuth(
 ): AgentAuth {
   const config = providerConfig(provider);
   const cacheRetention = options.cacheRetention ?? "short";
-  const readKey = () => (config.needsKey ? keyStore.getKey(provider) ?? undefined : undefined);
+  const readKey = () => keyStore.getKey(provider) ?? undefined;
   return {
     provider,
     getApiKey: (requested) => (requested === provider ? readKey() : undefined),

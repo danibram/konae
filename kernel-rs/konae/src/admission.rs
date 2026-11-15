@@ -675,6 +675,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn required_signup_discards_any_password_until_verification() {
+        let fixture = fixture(Verification::Required, KEY);
+        let supplied = "password that signup must discard";
+        assert_eq!(fixture.signup(json!({"email": "ada@example.test", "password": supplied, "setupKey": KEY})).await.status(), StatusCode::ACCEPTED);
+        let auth = super::owners::creator_store(&fixture.state).unwrap();
+        assert!(matches!(auth.login("ada@example.test", supplied), Err(AuthError::InvalidCredentials)));
+
+        fixture.verify(&fixture.last_link()).unwrap();
+        assert!(matches!(auth.login("ada@example.test", supplied), Err(AuthError::InvalidCredentials)));
+        assert!(auth.login("ada@example.test", PASSWORD).is_ok());
+    }
+
+    #[tokio::test]
     async fn a_code_admits_one_creator_who_verifies_without_the_key() {
         let fixture = fixture(Verification::Required, KEY);
         // An operator who bootstrapped with the key, then opened admission.

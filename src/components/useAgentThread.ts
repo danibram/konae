@@ -120,7 +120,7 @@ export function useAgentThread({
 
   const provider = resolveProvider(providers, sessionConfig.provider);
   const hasKey = useMemo(() => Boolean(keyStore.getKey(provider.id)), [keyStore, provider.id, keyVersion]);
-  const live = keyState(provider, hasKey) !== "missing";
+  const live = keyState(hasKey) !== "missing";
   const blocker = live ? submitBlocker(provider, hasKey, sessionConfig.modelId) : "";
   const footer = proposalFooter(state);
   const running = state.busy;

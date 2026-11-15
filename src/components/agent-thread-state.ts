@@ -254,7 +254,7 @@ export function canSubmit(state: AgentThreadState, draft: string, busy: boolean,
  * only arrives after the draft was cleared and shown as if it had been sent.
  */
 export function submitBlocker(provider: ProviderConfig, hasKey: boolean, modelId: string): string {
-  if (keyState(provider, hasKey) === "missing") return `Add your ${provider.label} API key first.`;
+  if (keyState(hasKey) === "missing") return `Add your ${provider.label} API key first.`;
   if (modelId.trim().length === 0) return "Choose a model id first.";
   return "";
 }
