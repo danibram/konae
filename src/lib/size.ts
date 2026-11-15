@@ -89,3 +89,8 @@ export function checkArtifact(artifact: { files: Record<string, string>; encodin
 export function checkRelease(bytes: Uint8Array): void {
   if (bytes.length > RELEASE_BYTES) throw new Error(releaseRefused(bytes.length));
 }
+
+/** Refuses a serialized source document that exceeds the owner's transfer limit. */
+export function checkSourceUpload(bytes: number): void {
+  if (bytes > UPLOAD_BYTES) throw new Error(uploadRefused(bytes));
+}

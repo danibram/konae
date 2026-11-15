@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import file from "../../kernel-rs/kernel/src/sources-cases.json";
 import { refusalOf } from "../kernel/refusal";
-import { artifactRefused, carriedBytes, releaseRefused, sizeText, uploadRefused } from "./size";
+import { artifactRefused, carriedBytes, checkSourceUpload, releaseRefused, sizeText, uploadRefused, UPLOAD_BYTES } from "./size";
 import { checkSourceFiles, checkSources } from "./source-rules";
 
 type Case = { case: string; files: Record<string, number>; more?: number; error: string | null; code?: string };
@@ -29,6 +29,10 @@ describe("the rules the sources of app/ meet", () => {
     const big = "A".repeat(Math.ceil((20 * 1024 * 1024 + 1) / 3) * 4);
     expect(() => checkSourceFiles({ files: { "index.html": "<main></main>", "public/big.bin": big }, encodings: { "public/big.bin": "base64" } })).toThrow("app/ holds 20.1 MiB. A project's sources hold at most 20 MiB.");
     expect(() => checkSourceFiles({ files: { "index.html": big } })).toThrow("app/ holds 26.7 MiB.");
+  });
+
+  test("a serialized source document names the transfer size and limit before upload", () => {
+    expect(() => checkSourceUpload(UPLOAD_BYTES + 1)).toThrow(uploadRefused(UPLOAD_BYTES + 1));
   });
 });
 

@@ -3,6 +3,7 @@ import type { MiniAppProject } from "./types";
 import type { DeploymentReceipt } from "../deployments/client";
 import { repairDroppedPreviewUpload } from "./starter";
 import { checkSourceFiles } from "./source-rules";
+import { checkSourceUpload } from "./size";
 
 export type ProjectMetadata = { id: string; name: string; slug: string };
 type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null };
@@ -48,8 +49,10 @@ export class ProjectSources {
     const previous = this.tails.get(project.id) ?? Promise.resolve();
     const next = previous.then(async () => {
       checkSourceFiles(project);
+      const bytes = new TextEncoder().encode(JSON.stringify(project));
+      checkSourceUpload(bytes.length);
       if (!this.revisions.has(project.id)) {
-        const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)));
+        const upload = await this.client.upload(bytes);
         try {
           const created = await this.client.call<ProjectMetadata & { sourcesRevision: number }>("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest, sourcesTransferId: upload.transferId });
           this.revisions.set(project.id, created.sourcesRevision);
@@ -58,7 +61,7 @@ export class ProjectSources {
         }
         return;
       }
-      const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)), project.id);
+      const upload = await this.client.upload(bytes, project.id);
       try {
         const result = await this.client.call<{ revision: number }>("project_sources_save", { projectId: project.id, transferId: upload.transferId, expectedRevision: this.revisions.get(project.id) });
         this.revisions.set(project.id, result.revision);

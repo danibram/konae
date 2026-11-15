@@ -1,5 +1,5 @@
 import type { McpClient, Transfer } from "../mcp/client";
-import { checkArtifact, checkRelease } from "../lib/size";
+import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
 
 /** What a schema change loses, as the Kernel words it. */
@@ -96,9 +96,11 @@ export async function publishProject<Receipt>(
   const identity = { id: sent.id, name: sent.name, slug: sent.slug, manifest: sent.manifest };
   const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(contactEmail ? { contactEmail } : {}) }));
   checkRelease(payload);
+  const sourceBytes = new TextEncoder().encode(JSON.stringify(sources));
+  checkSourceUpload(sourceBytes.length);
   const transfers: Transfer[] = [];
   try {
-    const sourcesTransfer = await client.upload(new TextEncoder().encode(JSON.stringify(sources)), project.id);
+    const sourcesTransfer = await client.upload(sourceBytes, project.id);
     transfers.push(sourcesTransfer);
     const releaseTransfer = await client.upload(payload, project.id);
     transfers.push(releaseTransfer);

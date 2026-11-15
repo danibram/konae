@@ -316,7 +316,7 @@ describe("chunked package", () => {
     await owner.call("project_create", { projectId: "pkg_quota", name: "Quota" });
     const sha256 = "a".repeat(64);
     await expect(owner.call("transfer_begin", { projectId: "pkg_quota", size: 64 * 1024 * 1024 + 1, sha256, component: "identity" })).rejects.toThrow("for the identity component");
-    await expect(owner.call("transfer_begin", { projectId: "pkg_quota", size: 32 * 1024 * 1024 + 1, sha256 })).rejects.toThrow("outside the limit");
+    await expect(owner.call("transfer_begin", { projectId: "pkg_quota", size: 32 * 1024 * 1024 + 1, sha256 })).rejects.toThrow("An upload holds 1 byte to 32 MiB.");
     const accepted = await owner.call<Transfer>("transfer_begin", { projectId: "pkg_quota", size: 256 * 1024 * 1024, sha256, component: "database" });
     await owner.cancel(accepted.transferId);
   });
