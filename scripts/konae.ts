@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -36,7 +36,7 @@ import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revisi
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
-type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string };
+type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string; typeScriptLibs: Record<string, string> };
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
 /** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
@@ -572,7 +572,24 @@ function typecheckApp(root: string) {
   const configFile = ts.readConfigFile(path.join(root, "tsconfig.json"), ts.sys.readFile);
   if (configFile.error) throw Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
   const config = ts.parseJsonConfigFileContent(configFile.config, ts.sys, root);
-  const diagnostics = [...config.errors, ...ts.getPreEmitDiagnostics(ts.createProgram(config.fileNames, config.options))];
+  const host = ts.createCompilerHost(config.options);
+  const libDirectory = path.dirname(ts.getDefaultLibFilePath(config.options));
+  const embeddedLibrary = (fileName: string) => {
+    if (path.resolve(path.dirname(fileName)) !== path.resolve(libDirectory)) return undefined;
+    return embeddedResources?.typeScriptLibs[path.basename(fileName)];
+  };
+  const originalFileExists = host.fileExists.bind(host);
+  const originalReadFile = host.readFile.bind(host);
+  const originalGetSourceFile = host.getSourceFile.bind(host);
+  host.fileExists = (fileName) => embeddedLibrary(fileName) !== undefined || originalFileExists(fileName);
+  host.readFile = (fileName) => embeddedLibrary(fileName) ?? originalReadFile(fileName);
+  host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+    const library = embeddedLibrary(fileName);
+    return library === undefined
+      ? originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile)
+      : ts.createSourceFile(fileName, library, languageVersion);
+  };
+  const diagnostics = [...config.errors, ...ts.getPreEmitDiagnostics(ts.createProgram(config.fileNames, config.options, host))];
   if (diagnostics.length) {
     const formatted = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
       getCurrentDirectory: ts.sys.getCurrentDirectory,
@@ -976,11 +993,13 @@ export async function downloadKernel(version: string): Promise<string> {
   if (actual !== expected.toLowerCase()) throw Error(`${name} failed SHA-256 verification. Expected ${expected}, got ${actual}.`);
   const temporary = `${binary}.download-${crypto.randomUUID()}`;
   await writeFile(temporary, bytes, { flag: "wx" });
-  await writeFile(sumsFile, sums);
-  await chmod(temporary, 0o755);
-  await writeFile(binary, await readFile(temporary));
-  await chmod(binary, 0o755);
-  await rm(temporary, { force: true });
+  try {
+    await writeFile(sumsFile, sums);
+    await chmod(temporary, 0o755);
+    await rename(temporary, binary);
+  } finally {
+    await rm(temporary, { force: true });
+  }
   return binary;
 }
 

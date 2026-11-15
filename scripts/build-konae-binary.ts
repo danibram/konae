@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { version } from "../package.json";
@@ -10,12 +10,17 @@ if (!os || !arch) throw Error(`No konae binary release target for ${process.plat
 
 const esbuildPlatform = `${process.platform === "darwin" ? "darwin" : "linux"}-${arch}`;
 const generated = path.join(root, "scripts/.konae-compile.generated.ts");
-const output = path.join(root, `out/konae-${version}-${os}-${arch}`);
+const output = path.resolve(process.env.KONAE_BINARY_OUTFILE ?? path.join(root, `out/konae-${version}-${os}-${arch}`));
+const typeScriptLibDirectory = path.join(root, "node_modules/typescript/lib");
+const typeScriptLibs = Object.fromEntries(await Promise.all((await readdir(typeScriptLibDirectory))
+  .filter((name) => /^lib\..+\.d\.ts$/.test(name))
+  .map(async (name) => [name, await readFile(path.join(typeScriptLibDirectory, name), "utf8")] as const)));
 const embeddedResources = {
   templates: await readFile(path.join(root, "kernel-rs/konae/src/project-templates.json"), "utf8"),
   runtime: await readFile(path.join(root, "src/mcp/runtime.js"), "utf8"),
   staticArtifact: await readFile(path.join(root, "src/lib/static-artifact.js"), "utf8"),
   localBuilder: await readFile(path.join(root, "src/lib/local-builder.js"), "utf8"),
+  typeScriptLibs,
 };
 const source = `
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";

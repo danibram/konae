@@ -300,7 +300,7 @@ bun run konae -- init --dir /tmp/orders --name Orders
 ```
 
 ```text
-Created Orders in /tmp/orders. Run it with: bun run konae -- dev --dir /tmp/orders
+Created Orders in /tmp/orders. Run it with: konae dev --dir /tmp/orders
 ```
 
 ```sh

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
@@ -120,6 +120,11 @@ test("downloadKernel verifies the release checksum and repairs a changed cached 
   const os = process.platform === "darwin" ? "darwin" : "linux";
   const arch = process.arch === "arm64" ? "arm64" : "x64";
   const name = `kernel-test-${os}-${arch}`;
+  const kernelDirectory = path.join(folder, "kernels", "test");
+  const cachedBinary = path.join(kernelDirectory, name);
+  await mkdir(kernelDirectory, { recursive: true });
+  await writeFile(cachedBinary, new Uint8Array([9]));
+  const priorInode = (await stat(cachedBinary)).ino;
   let downloads = 0;
   process.env.KONAE_CACHE_DIR = folder;
   globalThis.fetch = async (input) => {
@@ -131,6 +136,9 @@ test("downloadKernel verifies the release checksum and repairs a changed cached 
   try {
     const binary = await downloadKernel("test");
     expect(await readFile(binary)).toEqual(bytes);
+    expect((await stat(binary)).ino).not.toBe(priorInode);
+    expect((await stat(binary)).mode & 0o777).toBe(0o755);
+    expect((await readdir(kernelDirectory)).sort()).toEqual(["SHA256SUMS", name]);
     expect(downloads).toBe(2);
     await writeFile(binary, new Uint8Array([9]));
     expect(await downloadKernel("test")).toBe(binary);
