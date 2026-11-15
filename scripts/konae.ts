@@ -526,6 +526,8 @@ async function quietly(command: string[], cwd: string) {
  * node_modules folder, that script writes dist/ and this packs it. Otherwise
  * the built-in bundler runs, so a folder nobody ran npm install in builds too.
  * `development` asks that script for an unminified build, which `dev` serves.
+ * Answers the artifact, `source`, every file of `app/` as a release carries
+ * it, and `files`, the text files of `app/` by path.
  */
 export async function buildLocal(root: string, options: { development?: boolean } = {}) {
   const source = await sources(root);
@@ -540,7 +542,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
     const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };
-    return { artifact, source };
+    return { artifact, source, files };
   }
   const settings = await readSettings(root).catch(() => undefined);
   const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
@@ -558,7 +560,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
     warn: (message) => console.warn(`Warning: ${message}`),
   });
   await writeDist(root, artifact);
-  return { artifact, source };
+  return { artifact, source, files };
 }
 
 /**

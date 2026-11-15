@@ -23,9 +23,9 @@ describe("konae contract", () => {
       expect(await readFile(path.join(root, "action-contract.md"), "utf8")).toContain("# Action Contract for Status feed");
       expect(JSON.parse(await readFile(path.join(root, "action-contract.schema.json"), "utf8")).$defs.action).toBeDefined();
       expect(await readFile(path.join(root, "actions.d.ts"), "utf8")).toContain("call<Name extends keyof KonaeActions>");
-      const { files } = await buildLocal(root);
-      expect(Object.keys(files).filter((file) => file.startsWith("action-contract") || file === "konae.json")).toEqual([]);
-      expect(files["actions.json"]).toBeDefined();
+      const { source } = await buildLocal(root);
+      expect(Object.keys(source.files).filter((file) => file.startsWith("action-contract") || file === "konae.json")).toEqual([]);
+      expect(source.files["actions.json"]).toBeDefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
