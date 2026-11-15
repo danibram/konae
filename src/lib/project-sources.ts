@@ -7,7 +7,7 @@ import { checkSourceUpload } from "./size";
 import { isEncoded } from "./source-files";
 
 export type ProjectMetadata = { id: string; name: string; slug: string; manifest?: MiniAppProject["manifest"]; directories?: string[]; updatedAt?: number };
-type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null; project?: ProjectMetadata };
+type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null; project?: ProjectMetadata; cancelled?: boolean };
 export type ReloadedSources = { revision: number; project: MiniAppProject | null; serverSnapshot?: string };
 export class SaveSupersededError extends Error { constructor() { super("This save was replaced by a newer draft before it reached the server."); } }
 
@@ -82,12 +82,19 @@ export class ProjectSources {
     active.add(controller);
     this.downloads.set(projectId, active);
     const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    const requestId = crypto.randomUUID();
+    const cancelRead = () => { void this.client.cancelSourceRead(projectId, requestId).catch(() => {}); };
+    activeSignal.addEventListener("abort", cancelRead, { once: true });
     try {
       // This call may create a download before its response arrives. Keep the
-      // request alive until the transfer ID is known, then cancel through download().
-      const saved = await this.client.call<SourceResult>("project_sources_read", { projectId });
+      // request alive until the transfer ID is known. The request ID lets pagehide
+      // cancel the server transfer even if navigation hides the response.
+      const saved = await this.client.call<SourceResult>("project_sources_read", { projectId, requestId });
+      if (activeSignal.aborted && saved.transfer) await this.client.cancel(saved.transfer.transferId).catch(() => {});
+      activeSignal.throwIfAborted();
+      if (saved.cancelled) throw new Error("This project source read was canceled.");
       this.revisions.set(projectId, saved.revision);
-      if (!saved.transfer) { activeSignal.throwIfAborted(); this.sourcesExist.delete(projectId); return null; }
+      if (!saved.transfer) { this.sourcesExist.delete(projectId); return null; }
       const bytes = await this.client.download(saved.transfer, activeSignal);
       const source = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
       if (source.id !== projectId) throw new Error("The saved source does not match its project.");
@@ -97,6 +104,7 @@ export class ProjectSources {
       this.snapshots.set(projectId, JSON.stringify(source));
       return repaired;
     } finally {
+      activeSignal.removeEventListener("abort", cancelRead);
       active.delete(controller);
       if (!active.size) this.downloads.delete(projectId);
     }
@@ -116,12 +124,18 @@ export class ProjectSources {
     const active = this.downloads.get(projectId) ?? new Set<AbortController>();
     active.add(controller);
     this.downloads.set(projectId, active);
+    const requestId = crypto.randomUUID();
+    const cancelRead = () => { void this.client.cancelSourceRead(projectId, requestId).catch(() => {}); };
+    controller.signal.addEventListener("abort", cancelRead, { once: true });
     const pending = this.pending.get(projectId);
     if (pending) { this.pending.delete(projectId); pending.reject(new Error("This save was canceled by a source reload.")); }
     this.controllers.get(projectId)?.abort();
     try {
       while (this.running.has(projectId)) await new Promise((resolve) => setTimeout(resolve, 0));
-      const saved = await this.client.call<SourceResult>("project_sources_read", { projectId });
+      const saved = await this.client.call<SourceResult>("project_sources_read", { projectId, requestId });
+      if (controller.signal.aborted && saved.transfer) await this.client.cancel(saved.transfer.transferId).catch(() => {});
+      controller.signal.throwIfAborted();
+      if (saved.cancelled) throw new Error("This project source read was canceled.");
       if (!saved.transfer) { controller.signal.throwIfAborted(); return { revision: saved.revision, project: null }; }
       const bytes = await this.client.download(saved.transfer, controller.signal);
       const source = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
@@ -131,6 +145,7 @@ export class ProjectSources {
       this.reloading.delete(projectId);
       throw error;
     } finally {
+      controller.signal.removeEventListener("abort", cancelRead);
       active.delete(controller);
       if (!active.size) this.downloads.delete(projectId);
     }

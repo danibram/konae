@@ -266,6 +266,25 @@ describe("authenticated MCP", () => {
 
   });
 
+  test("a source read request can cancel an allocated or not-yet-started download", async () => {
+    const project = createWorkspaceProject("Cancelable source read", []);
+    await alice.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+    const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(project)), project.id);
+    await alice.call("project_sources_save", { projectId: project.id, transferId: upload.transferId, expectedRevision: 0 });
+    await alice.cancel(upload.transferId);
+
+    const allocatedRequest = crypto.randomUUID();
+    const allocated = await alice.call<{ transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: project.id, requestId: allocatedRequest });
+    expect(allocated.transfer.transferId).toBeTruthy();
+    await alice.cancelSourceRead(project.id, allocatedRequest);
+    await expect(alice.call("transfer_status", { transferId: allocated.transfer.transferId })).rejects.toThrow("Transfer not found or expired");
+
+    const pendingRequest = crypto.randomUUID();
+    await alice.cancelSourceRead(project.id, pendingRequest);
+    const pending = await alice.call<{ cancelled: boolean; transfer: null }>("project_sources_read", { projectId: project.id, requestId: pendingRequest });
+    expect(pending).toEqual({ revision: 1, transfer: null, cancelled: true });
+  });
+
   test("the editor saves a file that is not text as its bytes, and reads it back as base64", async () => {
     const sourceTransferBytes: number[] = [];
     const sourceDownloadBytes: number[] = [];
@@ -470,7 +489,7 @@ describe("authenticated MCP", () => {
     const proxy = Bun.serve({ port: 0, async fetch(request) {
       const body = await request.text();
       const rpc = JSON.parse(body);
-      if (rpc.params?.name === "transfer_cancel") cancels++;
+      if (rpc.params?.name === "transfer_cancel" || (rpc.params?.name === "project_sources_read" && rpc.params.arguments.cancelRequestId)) cancels++;
       if (rpc.params?.name === "transfer_read" && failRead) return Response.json({ error: { message: "Canceled read" } }, { status: 503 });
       if (rpc.params?.name === "transfer_write" && failWrite) return Response.json({ error: { message: "Canceled write" } }, { status: 503 });
       return fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
@@ -506,10 +525,17 @@ describe("authenticated MCP", () => {
     await alice.cancel(seed.transferId);
     let gate: { enter: () => void; held: Promise<void> } | null = null;
     let cancels = 0;
+    let knownTransferCancels = 0;
+    let failRequestCancel = 2;
     const proxy = Bun.serve({ port: 0, async fetch(request) {
       const body = await request.text();
       const rpc = JSON.parse(body);
-      if (rpc.params?.name === "transfer_cancel") cancels++;
+      if (rpc.params?.name === "transfer_cancel" || (rpc.params?.name === "project_sources_read" && rpc.params.arguments.cancelRequestId)) cancels++;
+      if (rpc.params?.name === "transfer_cancel") knownTransferCancels++;
+      if (rpc.params?.name === "project_sources_read" && rpc.params.arguments.cancelRequestId && failRequestCancel > 0) {
+        failRequestCancel--;
+        return Response.json({ error: { message: "Transient request cancellation failure" } }, { status: 503 });
+      }
       const response = await fetch(`${url}/mcp`, { method: "POST", headers: { "content-type": "application/json", cookie: aliceCookie }, body });
       if (rpc.params?.name === "project_sources_read" && rpc.params.arguments.metadataOnly !== true && gate) {
         const current = gate;
@@ -536,10 +562,24 @@ describe("authenticated MCP", () => {
         releaseOpen();
         await expect(loading).rejects.toThrow();
       }
+      failRequestCancel = 1;
+      const reloading = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
+      await reloading.loadProject(project.id);
+      let reloadEntered!: () => void;
+      let releaseReload!: () => void;
+      const reloadResponse = new Promise<void>((resolve) => { reloadEntered = resolve; });
+      const reloadHeld = new Promise<void>((resolve) => { releaseReload = resolve; });
+      gate = { enter: reloadEntered, held: reloadHeld };
+      const reload = reloading.reload(project.id);
+      await reloadResponse;
+      reloading.cancelProject(project.id);
+      releaseReload();
+      await expect(reload).rejects.toThrow();
       const final = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
       await final.load();
       expect((await final.loadProject(project.id))?.files["index.html"]).toBe(project.files["index.html"]);
-      expect(cancels).toBeGreaterThanOrEqual(10);
+      expect(cancels).toBeGreaterThanOrEqual(12);
+      expect(knownTransferCancels).toBeGreaterThanOrEqual(3);
     } finally { await proxy.stop(true); }
   });
 

@@ -84,3 +84,19 @@ describe("McpClient.upload", () => {
     expect(calls.map((call) => call.name)).toEqual(["transfer_cancel"]);
   });
 });
+
+describe("McpClient.cancelSourceRead", () => {
+  test("names the pending source request and keeps the cancellation alive", async () => {
+    const calls: { name: string; arguments: Record<string, unknown>; keepalive?: boolean }[] = [];
+    const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "initialize") return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25" } }));
+      if (request.method !== "tools/call") return new Response(null, { status: 202 });
+      calls.push({ ...request.params, keepalive: init?.keepalive });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: { cancelled: true } } } }));
+    }) as typeof globalThis.fetch;
+    const client = new McpClient("http://kernel.test/mcp", { fetch });
+    await client.cancelSourceRead("app_1", "request-1");
+    expect(calls).toEqual([{ name: "project_sources_read", arguments: { projectId: "app_1", cancelRequestId: "request-1" }, keepalive: true }]);
+  });
+});

@@ -93,11 +93,19 @@ export class McpClient {
 
   cancel(transferId: string) { return this.call("transfer_cancel", { transferId }); }
 
+  cancelSourceRead(projectId: string, requestId: string) {
+    const params = { name: "project_sources_read", arguments: { projectId, cancelRequestId: requestId } };
+    // A source read can only exist after initialize completed. Skip `call()`'s
+    // await here so pagehide dispatches the keepalive request before unload.
+    return this.connecting ? this.request("tools/call", params) : this.call("project_sources_read", params.arguments);
+  }
+
   private async request(method: string, params?: object, notification = false, signal?: AbortSignal): Promise<any> {
     const id = crypto.randomUUID();
+    const toolCall = params as { name?: string; arguments?: { cancelRequestId?: string } } | undefined;
     const response = await (this.options.fetch ?? globalThis.fetch)(this.endpoint, {
       method: "POST", credentials: "same-origin", signal,
-      keepalive: params && (params as { name?: string }).name === "transfer_cancel",
+      keepalive: toolCall?.name === "transfer_cancel" || (toolCall?.name === "project_sources_read" && Boolean(toolCall.arguments?.cancelRequestId)),
       headers: {
         "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25",
         ...(this.options.token ? { authorization: `Bearer ${this.options.token}` } : {}),

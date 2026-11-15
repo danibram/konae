@@ -193,6 +193,7 @@ fn store_at(root: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
         CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT, source_revision INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS source_read_requests(owner TEXT NOT NULL, request_id TEXT NOT NULL, project TEXT NOT NULL, transfer TEXT, cancelled INTEGER NOT NULL DEFAULT 0, expires INTEGER NOT NULL, PRIMARY KEY(owner, request_id));
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, actor TEXT NOT NULL, tool TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);")?;
     let has_audience: bool = db
@@ -639,7 +640,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             &["projectId"],
             true,
         ),
-        tool("project_sources_read", "Download the project sources the editor or project_sources_save saved last. metadataOnly returns id, name, slug and manifest without creating a source transfer.", json!({"projectId":text,"metadataOnly":{"type":"boolean"}}), &["projectId"], true),
+        tool("project_sources_read", "Download the saved project sources, or cancel a pending source read with cancelRequestId. metadataOnly returns id, name, slug and manifest without creating a source transfer. Pass requestId to make an in-progress download cancelable on page departure.", json!({"projectId":text,"metadataOnly":{"type":"boolean"},"requestId":text,"cancelRequestId":text}), &["projectId"], true),
         tool(
             "database_execute",
             "Administer a deployment database. Mutations require write permission.",
@@ -1092,6 +1093,13 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     Err(e) => Err(e),
                 }
             };
+            if name == "transfer_cancel" && result.is_ok() {
+                if let Some(transfer_id) = arguments["transferId"].as_str() {
+                    if let Ok(db) = store(&state) {
+                        let _ = db.execute("DELETE FROM source_read_requests WHERE transfer=?1", [transfer_id]);
+                    }
+                }
+            }
             match export_transfer.as_ref().filter(|_| name == "transfer_read") {
                 // One row per component download, written at its first
                 // block or on a refusal, so a 256 MiB database read in
@@ -1408,8 +1416,43 @@ async fn admin_call(
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
             owned_project(state, owner, id, "read")?;
+            let request_id = a["requestId"].as_str();
+            let cancel_request_id = a["cancelRequestId"].as_str();
+            anyhow::ensure!(request_id.is_none() || cancel_request_id.is_none(), "Choose requestId or cancelRequestId.");
+            for request_id in request_id.into_iter().chain(cancel_request_id) {
+                anyhow::ensure!(
+                    !request_id.is_empty() && request_id.len() <= 64 && request_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+                    "Invalid source read request ID."
+                );
+            }
+            let owner_principal = format!("owner:{}", owner.id);
+            if let Some(request_id) = cancel_request_id {
+                let _guard = database_lock(state, &format!("project:{id}")).await;
+                let db = store(state)?;
+                db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
+                let existing: Option<(String, Option<String>)> = db
+                    .query_row(
+                        "SELECT project,transfer FROM source_read_requests WHERE owner=?1 AND request_id=?2",
+                        params![owner.id, request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((project, transfer_id)) = existing {
+                    anyhow::ensure!(project == id, "Source read request ID belongs to another project.");
+                    if let Some(transfer_id) = transfer_id {
+                        let _ = transfer_call(state, &owner_principal, "transfer_cancel", &json!({"transferId":transfer_id}), false).await;
+                    }
+                }
+                db.execute(
+                    "INSERT INTO source_read_requests(owner,request_id,project,transfer,cancelled,expires) VALUES(?1,?2,?3,NULL,1,?4) ON CONFLICT(owner,request_id) DO UPDATE SET cancelled=1,expires=excluded.expires",
+                    params![owner.id, request_id, id, now_ms().saturating_add(300_000)],
+                )?;
+                return Ok(json!({"cancelled":true}));
+            }
             // A save swaps app/ under this lock, so a read never sees half of one.
             let _guard = database_lock(state, &format!("project:{id}")).await;
+            let db = store(state)?;
+            db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
             let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             if a["metadataOnly"] == true {
                 return match super::sources::read_metadata(&state.data_root, id).await? {
@@ -1417,8 +1460,31 @@ async fn admin_call(
                     None => Ok(json!({"revision":0,"transfer":null})),
                 };
             }
+            if let Some(request_id) = request_id {
+                let existing: Option<(String, bool)> = db
+                    .query_row(
+                        "SELECT project,cancelled FROM source_read_requests WHERE owner=?1 AND request_id=?2",
+                        params![owner.id, request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((project, cancelled)) = existing {
+                    anyhow::ensure!(project == id, "Source read request ID belongs to another project.");
+                    if cancelled { return Ok(json!({"revision":revision,"transfer":null,"cancelled":true})); }
+                    anyhow::bail!("Source read request ID is already active.");
+                }
+            }
             match super::sources::read(&state.data_root, id).await? {
-                Some(source) => Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
+                Some(source) => {
+                    let transfer = download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?;
+                    if let Some(request_id) = request_id {
+                        db.execute(
+                            "INSERT INTO source_read_requests(owner,request_id,project,transfer,cancelled,expires) VALUES(?1,?2,?3,?4,0,?5)",
+                            params![owner.id, request_id, id, transfer["transferId"].as_str(), now_ms().saturating_add(300_000)],
+                        )?;
+                    }
+                    Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":transfer}))
+                }
                 None => Ok(json!({"revision":0,"transfer":null})),
             }
         }

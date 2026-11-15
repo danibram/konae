@@ -70,6 +70,17 @@ async function createProject(page: Page, name: string, template: keyof typeof te
   return new URL(page.url()).pathname;
 }
 
+async function writeTypedPreview(page: Page, message: string) {
+  const explorer = await openExplorer(page);
+  await explorer.getByRole("button", { name: "New file" }).click();
+  await page.getByLabel("File path").fill("src/greeting.ts");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByLabel("src/greeting.ts code editor").fill(`export const greeting: string = ${JSON.stringify(message)};`);
+  await explorer.getByRole("button", { name: "app.js" }).click();
+  await page.getByLabel("app.js code editor").fill('import { greeting } from "./src/greeting.ts"; document.body.innerHTML = `<h1>${greeting}</h1>`;');
+  await waitForKernelSave(page);
+}
+
 async function seedRetainedBinary(page: Page, projectId: string) {
   const cookies = await page.context().cookies();
   const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
@@ -230,8 +241,8 @@ async function fromMore(page: Page, item: "Export" | "App settings") {
 // Files has a File list button that opens New file and New folder beside the editor.
 async function openExplorer(page: Page) {
   await showSection(page, "Files");
-  await page.getByRole("button", { name: "File list", exact: true }).click();
   const explorer = page.getByRole("navigation", { name: "Project files" });
+  if (!await explorer.isVisible()) await page.getByRole("button", { name: "File list", exact: true }).click();
   await expect(explorer).toBeVisible();
   return explorer;
 }
@@ -706,19 +717,155 @@ test("the editor reloads sources published from an app folder", async ({ page, b
 
 test("a direct reload compiles the selected TypeScript project before its first preview", async ({ page }, testInfo) => {
   const projectPath = await createProject(page, `Direct TypeScript load ${Date.now()}`, "tasks");
-  const explorer = await openExplorer(page);
-  await explorer.getByRole("button", { name: "New file" }).click();
-  await page.getByLabel("File path").fill("src/greeting.ts");
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await page.getByLabel("src/greeting.ts code editor").fill('export const greeting: string = "Compiled on direct reload";');
-  await explorer.getByRole("button", { name: "app.js" }).click();
-  await page.getByLabel("app.js code editor").fill('import { greeting } from "./src/greeting.ts"; document.body.innerHTML = `<h1>${greeting}</h1>`;');
-  await waitForKernelSave(page);
+  await writeTypedPreview(page, "Compiled on direct reload");
 
   await page.goto(projectPath);
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
   await expect(preview.getByRole("heading", { name: "Compiled on direct reload" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("direct-typescript-reload.png"), fullPage: true });
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  const projectCard = page.locator(`a.project-card-link[href="${projectPath}"]`);
+  await expect(projectCard).toBeVisible();
+  await projectCard.click();
+  await expect(preview.getByRole("heading", { name: "Compiled on direct reload" })).toBeVisible();
+});
+
+test("switching between cached TypeScript projects compiles each selected source", async ({ page }) => {
+  const firstPath = await createProject(page, `Typed first ${Date.now()}`, "tasks");
+  await writeTypedPreview(page, "First cached app");
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill(`Typed second ${Date.now()}`);
+  await page.getByText("Start from a template instead", { exact: true }).click();
+  await page.getByRole("radio", { name: /^Shared list/ }).check();
+  await page.getByRole("button", { name: /^Create/ }).click();
+  const secondPath = new URL(page.url()).pathname;
+  await writeTypedPreview(page, "Second cached app");
+
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.locator(`a.project-card-link[href="${secondPath}"]`).click();
+  await expect(preview.getByRole("heading", { name: "Second cached app" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.locator(`a.project-card-link[href="${firstPath}"]`).click();
+  await expect(preview.getByRole("heading", { name: "First cached app" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.locator(`a.project-card-link[href="${secondPath}"]`).click();
+  await expect(preview.getByRole("heading", { name: "Second cached app" })).toBeVisible();
+});
+
+test("Try again compiles sources after a project load fails", async ({ page }) => {
+  const projectPath = await createProject(page, `Retry TypeScript ${Date.now()}`, "tasks");
+  await writeTypedPreview(page, "Retry succeeded");
+  let failNextRead = true;
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (failNextRead && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+      failNextRead = false;
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
+  await page.unroute("**/mcp");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Retry succeeded" })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`${projectPath}$`));
+});
+
+test("a delayed Try again response cannot select a project after leaving it", async ({ page }) => {
+  const projectPath = await createProject(page, `Abandoned retry ${Date.now()}`, "tasks");
+  await writeTypedPreview(page, "Retry after leaving");
+  await page.addInitScript(() => {
+    const state = window as typeof window & { __holdNextSourceRead?: boolean; __sourceReadHeld?: Promise<void>; __releaseSourceRead?: () => void };
+    let signalHeld!: () => void;
+    state.__sourceReadHeld = new Promise<void>((resolve) => { signalHeld = resolve; });
+    let releaseHeld!: () => void;
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      const response = await original(input, init);
+      if (state.__holdNextSourceRead && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+        state.__holdNextSourceRead = false;
+        signalHeld();
+        await new Promise<void>((resolve) => { releaseHeld = resolve; });
+      }
+      return response;
+    };
+    state.__releaseSourceRead = () => releaseHeld?.();
+  });
+  let failNextRead = true;
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (failNextRead && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+      failNextRead = false;
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
+  await page.unroute("**/mcp");
+  await page.evaluate(() => { (window as typeof window & { __holdNextSourceRead?: boolean }).__holdNextSourceRead = true; });
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.evaluate(async () => { await (window as typeof window & { __sourceReadHeld?: Promise<void> }).__sourceReadHeld; });
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { __releaseSourceRead?: () => void }).__releaseSourceRead?.());
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await page.locator(`a.project-card-link[href="${projectPath}"]`).click();
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Retry after leaving" })).toBeVisible();
+});
+
+test("full document navigation cancels allocated source reads before their responses arrive", async ({ page }) => {
+  const projectPath = await createProject(page, `Reload transfer probe ${Date.now()}`, "tasks");
+  const allocatedTransfers: string[] = [];
+  let completedCancels = 0;
+  let holdNext = false;
+  let signalReady: () => void = () => {};
+  let releaseResponse: () => void = () => {};
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (body.includes('"cancelRequestId"')) {
+      const response = await route.fetch();
+      completedCancels++;
+      await route.fulfill({ response }).catch(() => {});
+      return;
+    }
+    if (holdNext && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+      holdNext = false;
+      const response = await route.fetch();
+      const responseText = await response.text();
+      const result = JSON.parse(responseText).result.structuredContent.result;
+      expect(result.transfer.transferId).toBeTruthy();
+      allocatedTransfers.push(result.transfer.transferId);
+      signalReady();
+      await new Promise<void>((resolve) => { releaseResponse = resolve; });
+      await route.fulfill({ response }).catch(() => {});
+      return;
+    }
+    await route.continue();
+  });
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    const ready = new Promise<void>((resolve) => { signalReady = resolve; });
+    holdNext = true;
+    await page.goto("/");
+    await page.locator(`a.project-card-link[href="${projectPath}"]`).click();
+    await ready;
+    // Leave the document while the allocated source response is still held.
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect.poll(() => completedCancels).toBe(attempt + 1);
+    releaseResponse();
+  }
+  await page.unroute("**/mcp");
+  expect(allocatedTransfers).toHaveLength(9);
+  expect(completedCancels).toBeGreaterThanOrEqual(9);
+  await page.goto(projectPath);
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Tiny Tasks" })).toBeVisible();
 });
 
 test("the editor reloads clean sources and keeps a dirty draft when another tab saves", async ({ page }, testInfo) => {
