@@ -1,16 +1,17 @@
 // Reads an app folder, as the editor's Export writes it in a tar, back into
-// what `project_import` takes: a release payload for the sources and the
-// export's manifest and parts for the data. It is the inverse of export-project.ts and
+// what `project_import` takes. The sources go as a release payload, and the
+// data as the export's manifest and parts. It is the inverse of export-project.ts and
 // `dataEntries` in app-folder.ts.
 import { checksum, encodeBase64 } from "../mcp/client";
 import { sourceFilesFrom, type SourceFiles } from "./source-files";
+import { skippedName } from "./source-rules";
 import { DATA_FOLDER, DIST_FOLDER, SETTINGS_FILE, SOURCES_FOLDER, dataPaths, type AppSettings } from "./app-folder";
 import { packageFormat, packageVersion, type PackageComponentName, type PackageContent, type PackageManifest } from "./portable-package";
 import { createTar, readTar } from "./tar";
 
 export type ImportedFolder = {
   settings: AppSettings;
-  /** The files of `app/`, by path inside it: text, or base64 that `encodings` names. */
+  /** The files of `app/`, by path inside it, as text or as base64 that `encodings` names. */
   sources: SourceFiles;
   /** The files of `dist/`, by path inside it. */
   dist: Record<string, Uint8Array>;
@@ -29,7 +30,8 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
   const inside = new Map(entries.filter((entry) => entry.path.startsWith(prefix)).map((entry) => [entry.path.slice(prefix.length), entry.contents]));
   const settings = JSON.parse(text.decode(inside.get(SETTINGS_FILE)!)) as AppSettings;
   const under = (folder: string) => [...inside].filter(([path]) => path.startsWith(`${folder}/`)).map(([path, contents]) => [path.slice(folder.length + 1), contents] as const);
-  const sources = sourceFilesFrom(under(SOURCES_FOLDER));
+  // Like konae publish, the sources leave out dot entries and node_modules at any depth.
+  const sources = sourceFilesFrom(under(SOURCES_FOLDER).filter(([path]) => !path.split("/").some(skippedName)));
   const dist = Object.fromEntries(under(DIST_FOLDER));
   const data: ImportedFolder["data"] = {};
   for (const name of ["database", "identity", "usage"] as const) {

@@ -25,6 +25,7 @@ import {
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
 import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
+import { skippedName } from "../src/lib/source-rules";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -417,7 +418,7 @@ async function credentials(root: string) {
 /** The folder's sources: `app/`. */
 export function appDir(root: string) { return path.join(root, SOURCES_FOLDER); }
 
-/** Every file of `app/`, which a release carries as the project's files: text, or base64 that `encodings` names. */
+/** Every file of `app/`, which a release carries as the project's files, as text or as base64 that `encodings` names. */
 async function sources(root: string): Promise<SourceFiles> {
   const paths = await capsulePaths(root);
   return sourceFilesFrom(await Promise.all(paths.map(async (relative) => [relative, new Uint8Array(await readFile(path.join(appDir(root), relative)))] as const)));
@@ -427,7 +428,7 @@ async function sources(root: string): Promise<SourceFiles> {
 async function capsulePaths(root: string, prefix = ""): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(path.join(appDir(root), prefix), { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    if (skippedName(entry.name)) continue;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) result.push(...await capsulePaths(root, relative));
     else if (entry.isFile()) result.push(relative);
@@ -738,7 +739,7 @@ export async function exportLocal(root: string, output: string, remote?: { url: 
   const settings = await readSettings(root);
   await buildLocal(root);
   await mkdir(output, { recursive: true });
-  await cp(appDir(root), path.join(output, SOURCES_FOLDER), { recursive: true, filter: (source) => !path.basename(source).startsWith(".") && path.basename(source) !== "node_modules" });
+  await cp(appDir(root), path.join(output, SOURCES_FOLDER), { recursive: true, filter: (source) => !skippedName(path.basename(source)) });
   await cp(path.join(root, DIST_FOLDER), path.join(output, DIST_FOLDER), { recursive: true });
   await writeFile(path.join(output, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`);
   await writeEntries(output, await folderFiles(root, settings));

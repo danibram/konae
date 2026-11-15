@@ -14,7 +14,9 @@ const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
 /** Answers a test sets for one tool, over the defaults below. */
 const answers: Record<string, unknown> = {};
-let uploaded = "";
+/** The JSON of each upload, in order. A publish uploads the files of app/, then the release. */
+const uploads: string[] = [];
+const releaseUpload = () => JSON.parse(uploads.at(-1)!);
 let server: ReturnType<typeof Bun.serve>;
 
 beforeAll(() => {
@@ -29,10 +31,11 @@ beforeAll(() => {
       const { name, arguments: args } = message.params!;
       calls.push({ name, arguments: args });
       if (failing.has(name)) return reply({ isError: true, content: [{ type: "text", text: `${name} failed` }] });
-      if (name === "transfer_write") uploaded += atob(String(args.data));
+      if (name === "transfer_begin") uploads.push("");
+      if (name === "transfer_write") uploads[uploads.length - 1] += atob(String(args.data));
       const results: Record<string, unknown> = {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
-        transfer_begin: { transferId: "transfer_1", size: 0, sha256: "", chunkBytes: 65_536 },
+        transfer_begin: { transferId: `transfer_${uploads.length}`, size: 0, sha256: "", chunkBytes: 65_536 },
         release_plan: { planId: "plan_1", schema: { statements: [], losses: [], confirmation: null } },
         release_apply: { id: "dep_1", url: "http://test.localhost/" },
       };
@@ -48,7 +51,7 @@ beforeEach(async () => {
   calls.length = 0;
   failing.clear();
   for (const name of Object.keys(answers)) delete answers[name];
-  uploaded = "";
+  uploads.length = 0;
   directory = await mkdtemp(path.join(tmpdir(), "konae-cli-"));
   await mkdir(path.join(directory, "app"));
 });
@@ -100,7 +103,8 @@ describe("konae CLI", () => {
     for (let attempt = 0; attempt < 9; attempt++) {
       await expect(publishLocal(directory, config, "token")).rejects.toThrow(`${step} failed`);
     }
-    expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(9);
+    // Each attempt cancels both of its uploads, the files of app/ and the release.
+    expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(18);
     failing.clear();
     expect((await publishLocal(directory, config, "token")).url).toBe("http://test.localhost/");
   });
@@ -125,9 +129,39 @@ describe("konae CLI", () => {
     expect(receipt.url).toBe("http://test.localhost/");
     expect(calls.map((call) => call.name)).toContain("transfer_cancel");
     // No visibility in the manifest publishes private, the same default as the exported deploy script.
-    expect(JSON.parse(uploaded).visibility).toBe("private");
+    expect(releaseUpload().visibility).toBe("private");
     const html = await readFile(path.join(directory, "dist/index.html"), "utf8");
     expect(html).toContain("<script data-konae-runtime>");
+  });
+
+  test("a publish sends the files of app/ in an upload of their own and names both uploads to release_plan", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "index.html"), "<main id=app></main>");
+    await mkdir(path.join(directory, "app", "public"));
+    await writeFile(path.join(directory, "app", "public", "logo.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]));
+    await writeFile(path.join(directory, "app", "public", ".DS_Store"), new Uint8Array([0, 0, 0, 1, 0xff]));
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    await publishLocal(directory, config, "token");
+
+    expect(uploads).toHaveLength(2);
+    const sources = JSON.parse(uploads[0]);
+    expect(Object.keys(sources.files).sort()).toEqual(["app.js", "index.html", "public/logo.png"]);
+    expect(sources.encodings).toEqual({ "public/logo.png": "base64" });
+    expect(releaseUpload().project).toEqual({ id: "app_test", name: "Test", slug: "test", manifest: {} });
+    expect(calls.find((call) => call.name === "release_plan")!.arguments).toEqual({ transferId: "transfer_2", sourcesTransferId: "transfer_1" });
+    expect(calls.filter((call) => call.name === "transfer_cancel").map((call) => call.arguments.transferId)).toEqual(["transfer_1", "transfer_2"]);
+  });
+
+  test("a publish past the sources limit is refused before a byte travels, naming the total, the limit and the largest files", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "index.html"), "<main id=app></main>");
+    await mkdir(path.join(directory, "app", "raw"));
+    await writeFile(path.join(directory, "app", "raw", "big.bin"), new Uint8Array(20 * 1024 * 1024));
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow("app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are raw/big.bin (20.0 MiB), index.html (20 bytes) and app.js (18 bytes).");
+    expect(calls.map((call) => call.name)).not.toContain("transfer_begin");
   });
 
   test("login adds manage_users and export_data only when a flag asks", () => {
@@ -470,7 +504,7 @@ describe("konae CLI", () => {
 
     await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
-    const payload = JSON.parse(uploaded);
+    const payload = releaseUpload();
     expect(payload.initialSignupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
     expect(payload.project.manifest).toEqual({ visibility: "private" });
     expect(calls.find((call) => call.name === "project_create")!.arguments.manifest).toEqual({ visibility: "private" });
@@ -488,7 +522,7 @@ describe("konae CLI", () => {
     const receipt = await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
     expect(receipt.url).toBe("http://test.localhost/");
-    expect(JSON.parse(uploaded)).not.toHaveProperty("initialSignupPolicy");
+    expect(releaseUpload()).not.toHaveProperty("initialSignupPolicy");
     expect(calls.find((call) => call.name === "signup_policy_read")!.arguments).toEqual({ deploymentId: "dep_1" });
     expect(warnings).toEqual([
       "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",

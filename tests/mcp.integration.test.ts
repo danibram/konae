@@ -254,13 +254,88 @@ describe("authenticated MCP", () => {
         await alice.cancel(upload.transferId);
       }
     };
-    expect(await save({ files: Object.fromEntries(Array.from({ length: 1001 }, (_, index) => [`f${index}.txt`, ""])) })).toContain("The sources hold 1001 files. A project holds at most 1000.");
-    expect(await save({ files: { "public/.env": "x" } })).toContain("app/public/.env is not a path the sources can hold.");
+    expect(await save({ files: Object.fromEntries(Array.from({ length: 1001 }, (_, index) => [`f${index}.txt`, ""])) })).toBe("app/ holds 1001 files. A project's sources hold at most 1000 files.");
+    expect(await save({ files: { "public/.env": "x" } })).toStartWith("The sources cannot hold the path \"public/.env\". A path inside app/ is at most 240 bytes");
     expect(await save({ files: { "a.png": "AA==" }, encodings: { "b.png": "base64" } })).toContain("The sources name an encoding for app/b.png, which they do not hold.");
     expect(await save({ files: { "a.png": "AA==" }, encodings: { "a.png": "gzip" } })).toContain("The sources encode app/a.png as gzip. The only encoding is base64.");
     expect(await save({ files: { "a.png": "not base64!" }, encodings: { "a.png": "base64" } })).toContain("app/a.png is marked base64 but is not valid base64.");
     const saved = await alice.call<{ revision: number }>("project_sources_read", { projectId: id });
     expect(saved.revision).toBe(0);
+  });
+
+  test("a save refuses sources past 20 MiB with the code and the largest files, an upload that names a component, and an upload past 32 MiB", async () => {
+    const id = "sources_size";
+    await alice.call("project_create", { projectId: id, name: "Size" });
+    const manifest = { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } };
+    const document = (files: Record<string, string>, encodings?: Record<string, string>) => new TextEncoder().encode(JSON.stringify({ id, name: "Size", slug: "size", directories: [], manifest, updatedAt: 1, files, ...(encodings ? { encodings } : {}) }));
+    const save = async (bytes: Uint8Array, component?: string) => {
+      const upload = await alice.upload(bytes, id, component);
+      try {
+        return await alice.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 }).then(() => null, (error) => error);
+      } finally {
+        await alice.cancel(upload.transferId);
+      }
+    };
+    const big = encodeBase64(new Uint8Array(20 * 1024 * 1024 + 1));
+    const refused = await save(document({ "index.html": "<main></main>", "public/big.bin": big }, { "public/big.bin": "base64" }));
+    expect(refused.message).toBe("app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are public/big.bin (20.1 MiB) and index.html (13 bytes).");
+    expect(refused.refusal).toMatchObject({ code: "sources.size", hint: { fix: "capsule" } });
+    expect((await save(document({ "index.html": "<main></main>" }), "database")).message).toBe("This upload names the database component of an export. Upload sources and releases without a component.");
+    await expect(alice.call("transfer_begin", { size: 34952968, sha256: "0".repeat(64), projectId: id })).rejects.toThrow("The upload is 33.4 MiB. An upload holds 1 byte to 32 MiB.");
+    await expect(alice.upload(new Uint8Array(34952968), id)).rejects.toThrow("The upload is 33.4 MiB. An upload holds 1 byte to 32 MiB.");
+    expect((await alice.call<{ revision: number }>("project_sources_read", { projectId: id })).revision).toBe(0);
+  });
+
+  test("a release carries the files of app/ in an upload of their own and writes them into app/ with dist/", async () => {
+    const id = "release_two_uploads";
+    await alice.call("project_create", { projectId: id, name: "MCP proof" });
+    const { project: { files, ...identity }, ...rest } = payload(id);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff]);
+    const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+    const sources = await alice.upload(encode({ files: { ...files, "public/logo.png": encodeBase64(png) }, encodings: { "public/logo.png": "base64" } }), id);
+    const both = await alice.upload(encode({ ...rest, project: { ...identity, files } }), id);
+    const component = await alice.upload(encode({ files }), id, "database");
+    const releaseJson = await alice.upload(encode({ ...rest, project: identity }), id);
+    try {
+      await expect(alice.call("release_plan", { transferId: both.transferId, sourcesTransferId: sources.transferId })).rejects.toThrow("Send the files of app/ in sourcesTransferId or in project.files, not in both.");
+      await expect(alice.call("release_plan", { transferId: releaseJson.transferId, sourcesTransferId: component.transferId })).rejects.toThrow("This upload names the database component of an export.");
+      await expect(alice.call("release_plan", { transferId: component.transferId })).rejects.toThrow("This upload names the database component of an export.");
+      const plan = await alice.call<{ planId: string }>("release_plan", { transferId: releaseJson.transferId, sourcesTransferId: sources.transferId });
+      await alice.call("release_apply", { planId: plan.planId });
+    } finally {
+      for (const transfer of [sources, both, component, releaseJson]) await alice.cancel(transfer.transferId);
+    }
+    expect(new Uint8Array(await readFile(path.join(root, "apps", id, "app/public/logo.png")))).toEqual(png);
+    expect(await readFile(path.join(root, "apps", id, "app/actions.json"), "utf8")).toBe(files["actions.json"]);
+    expect(await readFile(path.join(root, "apps", id, "dist/index.html"), "utf8")).toContain("MCP proof");
+  });
+
+  test("a release or an import whose sources hold a path outside app/ is refused with its code and changes nothing", async () => {
+    const id = "release_bad_path";
+    await release(id);
+    const app = path.join(root, "apps", id);
+    const before = { dist: await readFile(path.join(app, "dist/index.html"), "utf8"), actions: await readFile(path.join(app, "app/actions.json"), "utf8"), version: (await alice.call<any>("project_inspect", { projectId: id })).deployment.artifactVersion };
+    const bad = payload(id);
+    (bad.project.files as Record<string, string>)["../evil.txt"] = "x";
+    bad.project.files["actions.json"] = JSON.stringify({ version: 1, actions: {} });
+    bad.artifact.files["index.html"] = "<main>changed</main>";
+    const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(bad)), id);
+    try {
+      for (const attempt of [
+        () => alice.call("release_plan", { transferId: upload.transferId }),
+        () => alice.call("project_import", { deploymentId: id, replace: "sources", transferId: upload.transferId }),
+      ]) {
+        const refused = await attempt().then(() => null, (error) => error);
+        expect(refused?.message).toStartWith("The sources cannot hold the path \"../evil.txt\". A path inside app/ is at most 240 bytes");
+        expect(refused?.refusal?.code).toBe("sources.path-invalid");
+      }
+    } finally {
+      await alice.cancel(upload.transferId);
+    }
+    expect(await readFile(path.join(app, "dist/index.html"), "utf8")).toBe(before.dist);
+    expect(await readFile(path.join(app, "app/actions.json"), "utf8")).toBe(before.actions);
+    expect((await alice.call<any>("project_inspect", { projectId: id })).deployment.artifactVersion).toBe(before.version);
+    expect(await Bun.file(path.join(root, "apps", "evil.txt")).exists()).toBe(false);
   });
 
   test("the account usage monitor isolates owners and paginates accessible projects", async () => {

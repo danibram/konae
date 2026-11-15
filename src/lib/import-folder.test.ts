@@ -20,6 +20,10 @@ function exported() {
     { path: "app/actions.json", contents: "{\"version\":1,\"actions\":{}}" },
     { path: "app/schema.sql", contents: "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);" },
     { path: "app/public/logo.png", contents: new Uint8Array([0x89, 0x50, 0xff, 0x00]) },
+    // macOS writes .DS_Store beside a file, and node_modules may sit in app/. The sources leave both out.
+    { path: "app/public/.DS_Store", contents: new Uint8Array([0, 0, 0, 1, 0xff]) },
+    { path: "app/.git/config", contents: "[core]" },
+    { path: "app/node_modules/x/index.js", contents: "export {}" },
     { path: "dist/index.html", contents: "<!doctype html><main>Notes</main>" },
     { path: "dist/logo.png", contents: new Uint8Array([0x89, 0x50, 0xff, 0x00]) },
     ...dataEntries("database", bytes("database bytes")),

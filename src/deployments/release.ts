@@ -1,4 +1,6 @@
-import type { McpClient } from "../mcp/client";
+import type { McpClient, Transfer } from "../mcp/client";
+import { checkArtifact, checkRelease } from "../lib/size";
+import { checkSourceFiles } from "../lib/source-rules";
 
 /** What a schema change loses, as the Kernel words it. */
 export type SchemaLoss = { table: string; column: string | null; sentence: string };
@@ -30,12 +32,19 @@ export class SchemaChangeDeclined extends Error {
 }
 
 /**
- * Releases with release_plan, then release_apply. The editor, `konae publish` and
- * `konae dev` all release through here, so each one shows the same plan and
- * asks before the same losses.
+ * What release_plan takes. `transferId` is the upload of the release JSON and
+ * `sourcesTransferId` the upload of the files of app/, which travel apart so
+ * each upload stays under its own limit.
  */
-export async function release<Receipt>(client: Pick<McpClient, "call">, transferId: string, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
-  const plan = await client.call<ReleasePlan>("release_plan", { transferId });
+export type ReleaseUploads = { transferId: string; sourcesTransferId?: string };
+
+/**
+ * Releases with release_plan, then release_apply. The editor and `konae publish`
+ * both release through here, so each one shows the same plan and asks before
+ * the same losses.
+ */
+export async function release<Receipt>(client: Pick<McpClient, "call">, uploads: ReleaseUploads, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
+  const plan = await client.call<ReleasePlan>("release_plan", uploads);
   onPlan?.(plan);
   const confirmation = plan.schema?.confirmation;
   if (plan.schema && confirmation && !await confirm(plan.schema)) throw new SchemaChangeDeclined(plan.schema);
@@ -46,24 +55,30 @@ export async function release<Receipt>(client: Pick<McpClient, "call">, transfer
 /** The project record project_create registers. */
 export type ProjectIdentity = { id: string; name: string; slug: string; manifest: Record<string, unknown> };
 
+/** A document that names its base64 files in `encodings`: the files of app/, or a Build Artifact. */
+type CarriedFiles = { files: Record<string, string>; encodings?: Record<string, string> };
+
 /**
- * What a release uploads. `initialSignupPolicy` goes only with a first
- * release. `contactEmail` is where notices to the owner go.
+ * What a release uploads. `project` holds the files of app/ beside its
+ * identity. `initialSignupPolicy` goes only with a first release.
+ * `contactEmail` is where notices to the owner go.
  */
 export type ReleaseContents = {
-  project: object;
+  project: ProjectIdentity & CarriedFiles;
   visibility: unknown;
-  artifact: object;
+  artifact: CarriedFiles;
   initialSignupPolicy?: { mode: string; allowlist: string[] };
   contactEmail?: string;
 };
 
 /**
- * Publishes a project: project_create, the upload of what the release
- * carries, then release(). The editor and `konae publish` both publish
- * through here. `contents` runs after project_create, so it can read the
- * project that call registered. The upload is cancelled whatever happens,
- * and `cancelFailed` hears when that cancel fails.
+ * Publishes a project: project_create, the upload of the files of app/ and
+ * the upload of the release JSON, then release(). The editor and `konae
+ * publish` both publish through here. The sources, the artifact and the
+ * release JSON meet the Kernel's limits before a byte travels, and a refusal
+ * names the size and the limit. `contents` runs after project_create, so it
+ * can read the project that call registered. Both uploads are cancelled
+ * whatever happens, and `cancelFailed` hears when a cancel fails.
  */
 export async function publishProject<Receipt>(
   client: Pick<McpClient, "call" | "upload" | "cancel">,
@@ -75,12 +90,21 @@ export async function publishProject<Receipt>(
 ): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
   await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
-  const payload = { project: sent, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(contactEmail ? { contactEmail } : {}) };
-  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
+  const sources: CarriedFiles = sent.encodings && Object.keys(sent.encodings).length ? { files: sent.files, encodings: sent.encodings } : { files: sent.files };
+  checkSourceFiles(sources);
+  checkArtifact(artifact);
+  const identity = { id: sent.id, name: sent.name, slug: sent.slug, manifest: sent.manifest };
+  const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(contactEmail ? { contactEmail } : {}) }));
+  checkRelease(payload);
+  const transfers: Transfer[] = [];
   try {
-    return await release<Receipt>(client, transfer.transferId, confirm, onPlan);
+    const sourcesTransfer = await client.upload(new TextEncoder().encode(JSON.stringify(sources)), project.id);
+    transfers.push(sourcesTransfer);
+    const releaseTransfer = await client.upload(payload, project.id);
+    transfers.push(releaseTransfer);
+    return await release<Receipt>(client, { transferId: releaseTransfer.transferId, sourcesTransferId: sourcesTransfer.transferId }, confirm, onPlan);
   } finally {
-    await client.cancel(transfer.transferId).catch(cancelFailed);
+    for (const transfer of transfers) await client.cancel(transfer.transferId).catch(cancelFailed);
   }
 }
 

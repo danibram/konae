@@ -2,6 +2,7 @@ import { McpClient, platformMcp } from "../mcp/client";
 import type { MiniAppProject } from "./types";
 import type { DeploymentReceipt } from "../deployments/client";
 import { repairDroppedPreviewUpload } from "./starter";
+import { checkSourceFiles } from "./source-rules";
 
 export type ProjectMetadata = { id: string; name: string; slug: string };
 type SourceResult = { revision: number; transfer: Parameters<McpClient["download"]>[0] | null };
@@ -42,9 +43,11 @@ export class ProjectSources {
     return { projects, missing, deployments };
   }
 
+  /** Saves the project's sources. They meet the Kernel's source rules before a byte travels, and a refusal names the file or the size and the limit. */
   save(project: MiniAppProject): Promise<void> {
     const previous = this.tails.get(project.id) ?? Promise.resolve();
     const next = previous.then(async () => {
+      checkSourceFiles(project);
       if (!this.revisions.has(project.id)) {
         const upload = await this.client.upload(new TextEncoder().encode(JSON.stringify(project)));
         try {

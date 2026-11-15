@@ -57,6 +57,7 @@ describe("deployment transfer cleanup", () => {
   for (const failedTool of ["release_plan", "release_apply"]) {
     test(`cancels its upload after ${failedTool} fails`, async () => {
       const calls: string[] = [];
+      const cancelled: string[] = [];
       globalThis.fetch = (async (_input, init) => {
         const request = JSON.parse(String(init?.body));
         if (request.method.startsWith("notifications/")) return new Response(null, { status: 202 });
@@ -67,16 +68,17 @@ describe("deployment transfer cleanup", () => {
         if (name === failedTool) result = { isError: true, content: [{ type: "text", text: `${name} refused` }] };
         else {
           let value: unknown = {};
-          if (name === "transfer_begin") value = { transferId: "publish-upload", size: args.size, sha256: args.sha256, chunkBytes: 65_536 };
+          if (name === "transfer_begin") value = { transferId: `publish-upload-${calls.filter((call) => call === "transfer_begin").length}`, size: args.size, sha256: args.sha256, chunkBytes: 65_536 };
           if (name === "release_plan") value = { planId: "publish-plan", schema: noChange };
-          if (name === "transfer_cancel") expect(args.transferId).toBe("publish-upload");
+          if (name === "transfer_cancel") cancelled.push(args.transferId);
           result = { structuredContent: { result: value }, content: [], isError: false };
         }
         return Response.json({ jsonrpc: "2.0", id: request.id, result });
       }) as typeof fetch;
       await expect(deployProject(starterProject, "public", { version: 1, entrypoint: "index.html", files: { "index.html": "<main>Test</main>" } }, askNever)).rejects.toThrow(`${failedTool} refused`);
       expect(calls.at(-1)).toBe("transfer_cancel");
-      expect(calls.filter((name) => name === "transfer_cancel")).toHaveLength(1);
+      // Both uploads, the files of app/ and the release, are cancelled.
+      expect(cancelled).toEqual(["publish-upload-1", "publish-upload-2"]);
       if (failedTool === "release_plan") expect(calls).not.toContain("release_apply");
     });
   }

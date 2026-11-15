@@ -1,5 +1,7 @@
 import { platformMcp, type Transfer } from "../mcp/client";
 import { dataManifest, sourcesPayload, type ImportedFolder } from "../lib/import-folder";
+import { checkArtifact, checkRelease } from "../lib/size";
+import { checkSourceFiles } from "../lib/source-rules";
 import type { SchemaChange } from "./release";
 
 /** What an import replaces in the app. Nothing is merged. */
@@ -17,8 +19,10 @@ export type ImportResult =
 
 /**
  * Imports a folder into the published app: its sources as a release, its
- * data from its export, or both. The Kernel backs up what it replaces first.
- * Call again with the plan's confirmation when the first answer asks for one.
+ * data from its export, or both. The sources, the artifact and the release
+ * JSON meet the Kernel's limits before a byte travels. The Kernel backs up
+ * what it replaces first. Call again with the plan's confirmation when the
+ * first answer asks for one.
  */
 export async function importFolder(input: {
   folder: ImportedFolder;
@@ -33,8 +37,12 @@ export async function importFolder(input: {
   try {
     const args: Record<string, unknown> = { deploymentId: input.deploymentId, replace, ...(input.confirmSchema ? { confirmSchema: input.confirmSchema } : {}) };
     if (replace !== "data") {
+      checkSourceFiles(folder.sources);
       const payload = sourcesPayload(folder, project, input.visibility);
-      const transfer = await platformMcp.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
+      checkArtifact(payload.artifact);
+      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      checkRelease(bytes);
+      const transfer = await platformMcp.upload(bytes, project.id);
       transfers.push(transfer);
       args.transferId = transfer.transferId;
     }
