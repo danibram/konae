@@ -79,7 +79,7 @@ describe("a project born from a template", () => {
       expect(fresh.ok).toBe(true);
       const live = await validator.validate(files, { state: "loaded", bytes: await exportDatabase(files["schema.sql"]) });
       expect(live.errors).toEqual([]);
-      expect(live.checked).toEqual(["schema", "actions", "preview-rows"]);
+      expect(live.checked).toEqual(["sources", "schema", "actions", "preview-rows"]);
     });
 
     test(`${id} declares exactly its own actions in the manifest and keeps the project's identity`, () => {

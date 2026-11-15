@@ -29,10 +29,6 @@ export type AgentThreadInput = {
   /** Returns false when the proposal could not be landed, so nothing was written. */
   onApply: (proposal: AgentProposal) => boolean;
   onDiscard: () => void;
-  /** Offline fallback used while no provider key is stored. */
-  onDemoSend: (text: string) => Promise<{ message: string; changedFiles: string[] }>;
-  /** Writes the demo proposal the owner just accepted. */
-  onDemoApply: () => void;
   providers?: readonly ProviderConfig[];
   /**
    * The project the conversation belongs to. With `draftStorage`, an unsent
@@ -75,12 +71,6 @@ export type AgentThread = {
   submit: () => Promise<void>;
   apply: () => void;
   discard: () => void;
-  /** A demo proposal is waiting. Applying it is a separate step. */
-  demoPending: boolean;
-  applyDemo: () => void;
-  applyExample: () => Promise<void>;
-  undoExample: () => void;
-  discardDemo: () => void;
   dismissError: () => void;
   interrupt: () => void;
 };
@@ -99,8 +89,6 @@ export function useAgentThread({
   keyVersion,
   onApply,
   onDiscard,
-  onDemoSend,
-  onDemoApply,
   providers = PROVIDERS,
   draftKey,
   draftStorage,
@@ -114,7 +102,6 @@ export function useAgentThread({
     setDraftState(value);
     writeDraft(draftStorage, draftKeyRef.current, value);
   };
-  const [demoPending, setDemoPending] = useState(false);
   // Subscription is keyed by instance so a send can attach before it runs.
   const subscription = useRef<{ agent: KonaeAgent; off: () => void } | null>(null);
 
@@ -147,7 +134,6 @@ export function useAgentThread({
   useEffect(() => {
     dispatch({ type: "reset" });
     setDraftState(readDraft(draftStorage, draftKey));
-    setDemoPending(false);
   }, [threadResetToken, draftKey]);
 
   async function submit() {
@@ -155,15 +141,6 @@ export function useAgentThread({
     if (!text || running || blocker) return;
     setDraft("");
     dispatch({ type: "prompt", text });
-
-    if (!live) {
-      const reply = await onDemoSend(text);
-      setDemoPending(reply.changedFiles.length > 0);
-      dispatch({ type: "event", event: { type: "assistant-delta", text: reply.message } });
-      dispatch({ type: "settled" });
-      return;
-    }
-    setDemoPending(false);
 
     const handle = await ensureAgent();
     if (!handle) {
@@ -174,33 +151,6 @@ export function useAgentThread({
     attach(handle);
     await handle.send(text);
     dispatch({ type: "settled", snapshot: readSnapshot(handle) });
-  }
-
-  async function applyExample() {
-    if (running || live) return;
-    const reply = await onDemoSend("add a due date");
-    dispatch({ type: "prompt", text: "Add a due date" });
-    if (reply.changedFiles.length === 0) {
-      dispatch({ type: "event", event: { type: "assistant-delta", text: reply.message } });
-      dispatch({ type: "settled" });
-      return;
-    }
-    onDemoApply();
-    setDemoPending(false);
-    dispatch({ type: "event", event: { type: "assistant-delta", text: "Applied. A due date is on the list. The files were checked first." } });
-    dispatch({ type: "settled" });
-  }
-
-  function undoExample() {
-    setDemoPending(false);
-    dispatch({ type: "note", text: "Undo. The files are unchanged." });
-  }
-
-  function applyDemo() {
-    if (!demoPending) return;
-    onDemoApply();
-    setDemoPending(false);
-    dispatch({ type: "note", text: "Applied." });
   }
 
   function apply() {
@@ -236,14 +186,6 @@ export function useAgentThread({
     submit,
     apply,
     discard,
-    demoPending,
-    applyDemo,
-    applyExample,
-    undoExample,
-    discardDemo: () => {
-      setDemoPending(false);
-      dispatch({ type: "note", text: "Discarded. The files are unchanged." });
-    },
     dismissError: () => dispatch({ type: "dismiss-error" }),
     interrupt: () => subscription.current?.agent.interrupt(),
   };

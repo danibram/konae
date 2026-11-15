@@ -3,6 +3,7 @@ import type { RefusalCode, RefusalHint } from "../kernel/refusal";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ProjectFile } from "../lib/types";
 import type { ReleaseFacts } from "./release-check";
+import type { SourceFiles } from "../lib/source-files";
 
 export type { AgentTool, AgentToolResult, ExecutionEnv, FileError, FileSystem, Result, Shell };
 export type { Api, Model };
@@ -70,7 +71,12 @@ export interface CapsuleWorkspace {
 
 // --- Validation Gate ----------------------------------------------------------
 
-export type ValidationStage = "schema" | "preview-rows" | "actions";
+export type ValidationStage = "sources" | "schema" | "preview-rows" | "actions";
+
+export type ValidationFacts = ReleaseFacts & {
+  /** The complete saved files let the Gate count binary assets the workspace cannot read. */
+  sourceFiles?: SourceFiles;
+};
 
 export type ValidationError = {
   stage: ValidationStage;
@@ -110,7 +116,7 @@ export type ValidationResult = {
  * against the preview's database when that database is not behind.
  */
 export interface CapsuleValidator {
-  validate(files: CapsuleFiles, live?: LiveDatabase, facts?: ReleaseFacts): Promise<ValidationResult>;
+  validate(files: CapsuleFiles, live?: LiveDatabase, facts?: ValidationFacts): Promise<ValidationResult>;
 }
 
 /**

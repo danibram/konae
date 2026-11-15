@@ -6,6 +6,8 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkFileAccess } from "../deployments/manifest";
+import { checkSourceFiles } from "../lib/source-rules";
+import { isEncoded } from "../lib/source-files";
 import type {
   CapsuleFiles,
   CapsuleValidator,
@@ -14,6 +16,7 @@ import type {
   ValidationResult,
   ValidationStage,
   ValidationWarning,
+  ValidationFacts,
 } from "./contracts";
 
 export { ownerFixes, releaseRefusal, type ReleaseFacts };
@@ -49,7 +52,7 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
 }
 
 /**
- * The Validation Gate. Three stages, all in-process on sql.js:
+ * The Validation Gate. Source files and three runtime stages share the rules used by save and release:
  *
  * 1. `schema`. schema.sql must execute on a fresh database, twice, because
  *    the preview re-runs it on every open and the Kernel runs it twice in its
@@ -70,10 +73,20 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
 export class SqlJsCapsuleValidator implements CapsuleValidator {
   constructor(private readonly loadSql: SqlJsLoader = loadBrowserSqlJs) {}
 
-  async validate(files: CapsuleFiles, live: LiveDatabase = { state: "absent" }, facts: ReleaseFacts = {}): Promise<ValidationResult> {
+  async validate(files: CapsuleFiles, live: LiveDatabase = { state: "absent" }, facts: ValidationFacts = {}): Promise<ValidationResult> {
+    try {
+      checkProposalSources(files, facts.sourceFiles);
+    } catch (error) {
+      const refused = refusalOf(error);
+      return failure({
+        stage: "sources",
+        message: describe(error),
+        ...(refused ? { code: refused.code, hint: hintOf(refused.code) } : {}),
+      });
+    }
     const SQL = await this.loadSql();
     const errors: ValidationError[] = [];
-    const checked: ValidationStage[] = [];
+    const checked: ValidationStage[] = ["sources"];
     const warnings: ValidationWarning[] = [];
     let fresh: Database | undefined;
     let clone: Database | undefined;
@@ -82,7 +95,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         checkFileAccess(facts);
       } catch (error) {
-        return failure({ stage: "actions", message: describe(error) });
+        return failure({ stage: "actions", message: describe(error) }, checked);
       }
       // Read before running: sql.js lacks some refused functions, and "no such
       // function" would hide the reason the Kernel gives.
@@ -97,7 +110,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
             "The Kernel applies schema.sql with an authorizer that allows CREATE TABLE and CREATE [UNIQUE] INDEX and nothing else, " +
             "and refuses the functions that load extensions or read and write host files, so any of these fails at deploy. " +
             "schema.sql states what the database should be, and the Kernel derives the change to the published database from it. Rows change through server actions.",
-        });
+        }, checked);
       }
 
       fresh = new SQL.Database();
@@ -108,7 +121,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           stage: "schema",
           message: "schema.sql does not run on an empty database.",
           detail: describe(error),
-        });
+        }, checked);
       }
 
       // The runtime re-runs schema.sql on every database open, so running once proves nothing.
@@ -119,7 +132,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           stage: "schema",
           message: "schema.sql is not idempotent: it fails when it is run a second time.",
           detail: `${describe(error)}. The preview runs schema.sql again on every open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.`,
-        });
+        }, checked);
       }
       checked.push("schema");
 
@@ -171,8 +184,10 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
             behind = [`schema.sql does not run on it: ${describe(error)}.`];
           }
           if (behind.length > 0) warnings.push({ stage: "preview-rows", message: PREVIEW_BEHIND, detail: behind.join(" ") });
-          else if (program) errors.push(...checkActions(clone, program, "preview-rows"));
-          checked.push("preview-rows");
+          else {
+            if (program) errors.push(...checkActions(clone, program, "preview-rows"));
+            checked.push("preview-rows");
+          }
         }
       }
     } finally {
@@ -409,8 +424,19 @@ function tableColumns(db: Database, table: string): string[] {
 }
 
 /** A schema that does not hold stops the run: nothing after it was checked. */
-function failure(error: ValidationError): ValidationResult {
-  return { ok: false, errors: [error], checked: [] };
+function failure(error: ValidationError, checked: ValidationStage[] = []): ValidationResult {
+  return { ok: false, errors: [error], checked };
+}
+
+function checkProposalSources(files: CapsuleFiles, sourceFiles?: ValidationFacts["sourceFiles"]) {
+  if (!sourceFiles?.encodings) {
+    checkSourceFiles({ files });
+    return;
+  }
+  const retained = Object.keys(sourceFiles.encodings).filter((path) => !(path in files) && isEncoded(sourceFiles, path));
+  const binaryFiles = Object.fromEntries(retained.map((path) => [path, sourceFiles.files[path]]));
+  const encodings = Object.fromEntries(retained.map((path) => [path, "base64"]));
+  checkSourceFiles({ files: { ...binaryFiles, ...files }, encodings });
 }
 
 function describe(error: unknown): string {

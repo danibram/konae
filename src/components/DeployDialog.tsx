@@ -298,7 +298,6 @@ function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAp
     {invite.status === "sent" && <p className="receipt-self-invite" role="status" tabIndex={-1} ref={resultRef}>{invite.text}{devMailbox}</p>}
     {invite.status === "failed" && <p className="deploy-contact-missing" role="alert">{invite.text}</p>}
     {offerSelfInvite && !mail.ready && <p id={mailReasonId} className="publish-note">{mail.reason}</p>}
-    {deployment.accessCode && <div className="receipt-code"><small>Private access code</small><code>{deployment.accessCode}</code><p>Keep it private. Anyone with this code can open this deployment.</p></div>}
     {missingContact && <p className="deploy-contact-missing" role="status">{missingContact}{onOpenAppSettings && <> <button type="button" className="link-button" onClick={onOpenAppSettings}>Set a contact email</button></>}</p>}
     <div className="receipt-actions">
       {offerSelfInvite && <Button ref={inviteRef} variant="primary" disabled={!mail.ready} aria-busy={invite.status === "sending" || undefined} aria-describedby={mail.ready ? undefined : mailReasonId} onClick={() => void inviteSelf()}>{invite.status === "sending" ? <><Loader2 className="spin" size={14} aria-hidden="true" /> Inviting…</> : <><Send size={14} aria-hidden="true" /> Invite yourself</>}</Button>}

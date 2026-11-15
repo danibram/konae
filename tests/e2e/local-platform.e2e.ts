@@ -70,6 +70,33 @@ async function createProject(page: Page, name: string, template: keyof typeof te
   return new URL(page.url()).pathname;
 }
 
+async function seedRetainedBinary(page: Page, projectId: string) {
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, {
+    fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
+  });
+  const inspected = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
+  const saved = await client.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const source = JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
+  const asset = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pWQAAAAASUVORK5CYII=";
+  source.files["public/retained.png"] = asset;
+  source.encodings = { ...source.encodings, "public/retained.png": "base64" };
+  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
+  await client.call("project_sources_save", { projectId, transferId: transfer.transferId, expectedRevision: inspected.sourcesRevision });
+  return asset;
+}
+
+async function readSavedSources(page: Page, projectId: string) {
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, {
+    fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
+  });
+  const saved = await client.call<{ transfer: Transfer }>("project_sources_read", { projectId });
+  return JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
+}
+
 // The editor sends project sources to the Kernel 500 ms after the last edit (App.tsx) and
 // shows "Saving" until the Kernel has them. A reload before that loads the older sources.
 async function waitForKernelSave(page: Page) {
@@ -78,8 +105,91 @@ async function waitForKernelSave(page: Page) {
   await expect(page.getByRole("banner").getByText("Not saved")).toHaveCount(0);
 }
 
-async function showSection(page: Page, name: "Preview" | "Access" | "Files" | "Data" | "Uploads") {
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("tab", { name, exact: true }).click();
+async function showSection(page: Page, name: "Preview" | "Describe" | "Access" | "Files" | "Data" | "Uploads") {
+  const tab = page.getByRole("navigation", { name: "Workspace sections" }).getByRole("tab", { name, exact: true });
+  if (await tab.count()) {
+    await tab.click();
+    return;
+  }
+  if (name === "Describe") {
+    const open = page.getByRole("button", { name: "Open Describe", exact: true });
+    if (await open.isVisible()) await open.click();
+    return;
+  }
+  throw new Error(`The ${name} section is not available.`);
+}
+
+function providerEvent(type: string, data: unknown) {
+  return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function providerReply(tool?: { name: string; input: Record<string, unknown> }, text = "The checked change is ready.") {
+  const contentBlock = tool
+    ? { type: "tool_use", id: `toolu_${crypto.randomUUID()}`, name: tool.name, input: {} }
+    : { type: "text", text: "" };
+  const events = [providerEvent("message_start", {
+    type: "message_start",
+    message: { id: `msg_${crypto.randomUUID()}`, type: "message", role: "assistant", model: "claude-3-5-sonnet-latest", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } },
+  })];
+  events.push(providerEvent("content_block_start", { type: "content_block_start", index: 0, content_block: contentBlock }));
+  events.push(providerEvent("content_block_delta", tool
+    ? { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input) } }
+    : { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }));
+  events.push(providerEvent("content_block_stop", { type: "content_block_stop", index: 0 }));
+  events.push(providerEvent("message_delta", { type: "message_delta", delta: { stop_reason: tool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }));
+  events.push(providerEvent("message_stop", { type: "message_stop" }));
+  return events.join("");
+}
+
+async function installProposalFixture(page: Page) {
+  let scenario: "discard" | "apply" | "blocked" | "drift" = "discard";
+  let step = 0;
+  const html = "<main><h1>PROPOSAL PREVIEW</h1><p>Review this change before applying it.</p></main>";
+  const invalidActions = JSON.stringify({ version: 1, actions: {
+    "tasks.update": { kind: "mutation", access: "anonymous", statement: "UPDATE tasks SET done=1 WHERE id=1", bindings: [], notify: { to: "owner", changes: ["missing"], subject: "Changed", body: "{changes}" } },
+    "tasks.list": { kind: "query", access: "anonymous", statement: "SELECT missing FROM tasks LIMIT 5", bindings: [] },
+  } });
+  await page.route("https://api.anthropic.com/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: { "access-control-allow-origin": route.request().headers().origin ?? "*", "access-control-allow-methods": "POST,OPTIONS", "access-control-allow-headers": "*" } });
+      return;
+    }
+    let tool: { name: string; input: Record<string, unknown> } | undefined;
+    if (scenario === "blocked") {
+      if (step === 0) tool = { name: "write", input: { path: "/workspace/actions.json", content: invalidActions } };
+      else if (step === 1) tool = { name: "validate_capsule", input: {} };
+    } else if (step === 0) {
+      tool = { name: "write", input: { path: "/workspace/index.html", content: html } };
+    } else if (step === 1) {
+      tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" ? "void miniapp.actions.call('tasks.create', { title: 'Scratch row' });" : "document.documentElement.dataset.proposal = 'ready';" } };
+    } else if (step === 2) {
+      tool = { name: "validate_capsule", input: {} };
+    }
+    step += 1;
+    if (!tool) step = 0;
+    const origin = route.request().headers().origin ?? "*";
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "access-control-allow-origin": origin, "access-control-allow-headers": "*", "access-control-expose-headers": "*", "cache-control": "no-cache" },
+      body: providerReply(tool),
+    });
+  });
+  return { setScenario(value: typeof scenario) { scenario = value; } };
+}
+
+async function connectProposalFixture(page: Page) {
+  await showSection(page, "Describe");
+  await page.getByRole("button", { name: "Connect a model to send" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect a model" });
+  await dialog.getByLabel("Anthropic API key").fill("fixture-key-unused");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
+async function askFixture(page: Page, prompt: string) {
+  await page.getByRole("textbox", { name: "Message to agent" }).fill(prompt);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
 }
 
 // Export and App settings live in the top bar's More menu.
@@ -150,6 +260,75 @@ test("uploads added through the app appear in the editor file list", async ({ pa
   await showSection(page, "Uploads");
   const uploads = page.getByRole("region", { name: "Uploads", exact: true });
   await expect(uploads.getByText("elena furia.png", { exact: true })).toBeVisible();
+});
+
+test("a Gate-approved proposal previews before Apply and isolates discarded rows", async ({ page }) => {
+  const projectPath = await createProject(page, "Proposal preview", "tasks");
+  const projectId = projectPath.split("/").at(-1)!;
+  const retainedAsset = await seedRetainedBinary(page, projectId);
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await showSection(page, "Preview");
+  let preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await preview.locator("#task-input").fill("Saved row");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+
+  const fixture = await installProposalFixture(page);
+  await connectProposalFixture(page);
+  fixture.setScenario("discard");
+  await askFixture(page, "Discard this preview proposal after checking it.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  await showSection(page, "Describe");
+  await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+  await showSection(page, "Preview");
+  await page.screenshot({ path: "/tmp/konae-u3-proposal/proposal-before-apply.png" });
+
+  const original = await openFile(page, "index.html");
+  expect(await original.inputValue()).not.toContain("PROPOSAL PREVIEW");
+  await showSection(page, "Preview");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible();
+  await showSection(page, "Describe");
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  await showSection(page, "Preview");
+  preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+
+  fixture.setScenario("apply");
+  await showSection(page, "Describe");
+  await askFixture(page, "Show the checked proposal and apply it.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await showSection(page, "Preview");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible();
+  await openFile(page, "index.html");
+  expect(await page.getByLabel("index.html code editor").inputValue()).toContain("PROPOSAL PREVIEW");
+  await waitForKernelSave(page);
+  const savedSources = await readSavedSources(page, projectId);
+  expect(savedSources.files["public/retained.png"]).toBe(retainedAsset);
+  expect(savedSources.encodings?.["public/retained.png"]).toBe("base64");
+
+  fixture.setScenario("blocked");
+  await showSection(page, "Describe");
+  await askFixture(page, "Give me two invalid row-reading actions.");
+  await expect(page.getByText("Check code: notify.column-unknown")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Try this. Name columns of the table the statement changes, in notify \"changes\" and \"to\".")).toBeVisible();
+  await expect(page.getByText("3 more problems need fixing.")).toBeVisible();
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "BLOCKED PROPOSAL" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+  fixture.setScenario("drift");
+  await askFixture(page, "Make a proposal, then keep my file edit.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  const styles = await openFile(page, "styles.css");
+  await styles.fill(`${await styles.inputValue()}\n/* Manual owner edit */`);
+  await showSection(page, "Describe");
+  await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toHaveCount(0);
+  await openFile(page, "styles.css");
+  expect(await page.getByLabel("styles.css code editor").inputValue()).toContain("Manual owner edit");
+  await waitForKernelSave(page);
 });
 
 test("mobile domain settings persist claims, explain TXT checks and confirm changes", async ({ page, context }) => {

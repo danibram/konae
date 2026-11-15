@@ -129,10 +129,6 @@
 .receipt-policy { margin: 0; font: 400 14px/1.5 var(--ds-font); }
 .receipt-self-invite { margin: 0; padding: 10px 12px; border-left: 3px solid var(--ds-accent); background: var(--ds-subtle); color: var(--ds-text); font: 500 14px/1.5 var(--ds-font); overflow-wrap: anywhere; }
 .receipt-self-invite:focus { outline: none; }
-.receipt-code { padding: 10px 12px; border: 1px dashed var(--ds-border); background: var(--ds-subtle); }
-.receipt-code small { display: block; color: var(--ds-muted); font: 600 12px var(--ds-font); }
-.receipt-code code { display: block; margin-top: 4px; font: 14px var(--ds-mono); }
-.receipt-code p { margin: 4px 0 0; color: var(--ds-muted); font-size: 12px; }
 .receipt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .deploy-dialog .deploy-contact-missing { margin: 0; color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
 

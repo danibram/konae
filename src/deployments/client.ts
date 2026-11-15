@@ -6,7 +6,7 @@ import type { BuildArtifact } from "../runtime/artifact";
 import { platformMcp, type Transfer } from "../mcp/client";
 import { publishProject, type ConfirmSchema } from "./release";
 
-export type DeploymentReceipt = DeploymentRecord & { accessCode?: string };
+export type DeploymentReceipt = DeploymentRecord;
 
 /**
  * Publishes the project. `confirmSchema` is asked when the schema change loses

@@ -179,7 +179,7 @@ export type ProposalFooter =
   | { kind: "empty"; canApply: false }
   | { kind: "unvalidated"; changedFiles: ProjectFile[]; canApply: false }
   /** `detail` carries the reason, such as the Kernel's sentence for an action it would refuse. */
-  | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string; detail?: string }
+  | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string; detail?: string; code?: string; hint?: ValidationResult["errors"][number]["hint"]; remainingErrors: number }
   /**
    * `checked` is what the pass covers; the panel may not claim more than this.
    * `owner` is a release refusal only the owner clears: Apply stays open, Deploy refuses.
@@ -189,7 +189,7 @@ export type ProposalFooter =
 /** The Kernel's sentence for a refusal the owner clears in Access > Integrations, and who acts. */
 export type OwnerRefusal = { message: string; detail?: string };
 
-const stageOrder: ValidationStage[] = ["schema", "preview-rows", "actions"];
+const stageOrder: ValidationStage[] = ["sources", "schema", "preview-rows", "actions"];
 
 /**
  * What a passing gate is entitled to say. Naming the stages that ran is the
@@ -237,6 +237,9 @@ function blocked(changedFiles: ProjectFile[], result: ValidationResult): Proposa
     stage: first?.stage ?? "schema",
     message: first ? first.message : "Validation failed.",
     ...(first?.detail ? { detail: first.detail } : {}),
+    ...(first?.code ? { code: first.code } : {}),
+    ...(first?.hint ? { hint: first.hint } : {}),
+    remainingErrors: Math.max(0, result.errors.length - 1),
   };
 }
 

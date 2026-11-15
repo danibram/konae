@@ -47,6 +47,7 @@ import { switcherProjects } from "./components/project-list";
 import { suggestedChanges } from "./components/agent-suggestions";
 import "./components/workbench.css";
 import { AgentPanel } from "./components/AgentPanel";
+import { proposalPreviewProject, type ProposalPreview } from "./components/proposal-preview";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { describeDraftKey, useAgentThread } from "./components/useAgentThread";
 import { focusPanelTab, WorkbenchLayout, type PanelRender } from "./components/WorkbenchLayout";
@@ -73,7 +74,6 @@ import { McpError, platformMcp } from "./mcp/client";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { parseServerActionSource } from "./kernel/actions";
-import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
 import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
@@ -243,7 +243,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const agentRef = useRef<KonaeAgentHandle | null>(null);
   const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
   const projectRef = useRef(project);
-  const demoProject = useRef<MiniAppProject | null>(null);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
   const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
@@ -350,11 +349,26 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     }
     setStage(panel);
   };
+  const [proposalPreview, setProposalPreview] = useState<ProposalPreview | null>(null);
+  const activeProposalPreview = proposalPreview?.project.id === project.id ? proposalPreview : null;
+  const activePreviewProject = activeProposalPreview?.project ?? previewProject;
+  const activePreviewId = activeProposalPreview?.id ?? project.id;
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
-  const hostRef = useRuntimeBridge(previewFrame, project.id, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess);
-  const previewProblems = usePreviewProblems(hostRef, project.id);
+  const hostRef = useRuntimeBridge(
+    previewFrame,
+    activePreviewId,
+    activePreviewProject.files["schema.sql"],
+    activePreviewProject.files["actions.json"],
+    activePreviewProject.manifest.fileAccess,
+    Boolean(activeProposalPreview),
+    project.id,
+    activeProposalPreview?.actor ?? "guest",
+  );
+  const appliedHostRef = useRef(hostRef.current);
+  if (!activeProposalPreview) appliedHostRef.current = hostRef.current;
+  const previewProblems = usePreviewProblems(hostRef, activePreviewId);
 
-  const previewDocument = useMemo(() => createPreviewDocument(previewProject), [previewProject]);
+  const previewDocument = useMemo(() => createPreviewDocument(activePreviewProject), [activePreviewProject]);
   /**
    * Assigning a new srcDoc to a live iframe is a navigation that adds a browser
    * history entry, so the editor's Back button stepped through old previews.
@@ -786,9 +800,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         .then(({ createKonaeAgent }) => {
           const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
             // The Validation Gate's preview-rows stage needs the live database, not just a fresh one.
-            liveDatabase: () => hostRef.current.exportDatabase(),
+            liveDatabase: () => appliedHostRef.current.exportDatabase(),
+            sourceFiles: () => projectRef.current,
             // The other half of the gate: what the running preview actually threw.
-            previewErrors: () => hostRef.current.previewErrors(),
+            previewErrors: () => appliedHostRef.current.previewErrors(),
             // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
             releaseFacts: async () => {
               const current = projectRef.current;
@@ -909,8 +924,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const applied = applyProposal(project, proposal);
     if (!applied) return false;
     const next = applied.project;
+    const approvedPreview = activeProposalPreview?.project;
+    setProposalPreview(null);
     setProject(next);
-    setPreviewProject(next);
+    setPreviewProject(approvedPreview ?? next);
     agentRef.current?.reseed(next.files, next.encodings);
     if (applied.changedFiles[0] && isEditorFile(applied.changedFiles[0])) {
       setActiveFile(applied.changedFiles[0]);
@@ -926,14 +943,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     threadResetToken,
     keyVersion,
     onApply: applyAgentProposal,
-    onDiscard: () => agentRef.current?.discard(),
-    onDemoSend: (text) => sendDemoPrompt(text),
-    onDemoApply: () => {
-      const next = demoProject.current;
-      if (!next) return;
-      demoProject.current = null;
-      setProject(next);
-      setPreviewProject(next);
+    onDiscard: () => {
+      setProposalPreview(null);
+      agentRef.current?.discard();
     },
     providers: PROVIDERS,
     // An unsent draft waits per project in this browser, so a description typed in New project survives leaving and a reload.
@@ -941,13 +953,38 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     draftStorage: workspaceStorage,
   });
 
-  /** Offline fallback: the scripted demo proposes a change and waits to apply it. */
-  const sendDemoPrompt = async (value: string) => {
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
-    const edit = applyLocalAgentEdit(projectRef.current, value);
-    demoProject.current = edit.changedFiles.length > 0 ? edit.project : null;
-    return { message: edit.message, changedFiles: edit.changedFiles };
-  };
+  useEffect(() => {
+    const proposal = agentThread.state.proposal;
+    if (agentThread.footer.kind !== "validated" || !proposal) {
+      setProposalPreview(null);
+      return;
+    }
+    const candidate = proposalPreviewProject(project, proposal);
+    if (!candidate) {
+      setProposalPreview(null);
+      return;
+    }
+    let current = true;
+    setProposalPreview(null);
+    setOperationError("");
+    const id = `proposal:${project.id}:${crypto.randomUUID()}`;
+    const actor = appliedHostRef.current.getPreviewActor();
+    void compileProjectInBrowser(candidate).then((compiled) => {
+      if (!current) return;
+      setProposalPreview({
+        id,
+        actor,
+        project: {
+          ...candidate,
+          files: { ...candidate.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
+        },
+      });
+      setStage("preview");
+    }).catch((error) => {
+      if (current) setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return () => { current = false; };
+  }, [agentThread.footer.kind, agentThread.state.proposal, project]);
 
   const resetProject = () => {
     const fresh = resetWorkspaceProject(project);
@@ -1497,7 +1534,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           </section>
         )}
         <div className={`preview-canvas ${viewport}`}>
-          <iframe key={`${project.id}:${previewEpoch}:${previewDocumentKey}`} ref={setPreviewFrame} title="Mini-app preview" sandbox="allow-scripts allow-forms" srcDoc={previewDocument} />
+          <iframe key={`${activePreviewId}:${previewEpoch}:${previewDocumentKey}`} ref={setPreviewFrame} title="Mini-app preview" sandbox="allow-scripts allow-forms" srcDoc={previewDocument} />
         </div>
       </div>
     ),

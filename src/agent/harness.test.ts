@@ -300,7 +300,7 @@ describe("konae agent", () => {
 
     // One from validate_capsule, one from the gate that re-runs after the last edit.
     expect(gate.facts.length).toBe(2);
-    expect(gate.facts.every((facts) => facts === known)).toBe(true);
+    expect(gate.facts).toEqual([known, known]);
   });
 
   test("a gate that cannot run blocks apply instead of waiting forever", async () => {

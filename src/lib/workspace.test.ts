@@ -75,7 +75,7 @@ describe("workspace project registry", () => {
 
   test("migrates the original single-project draft and deployment", () => {
     const project = cloneStarter();
-    const deployment = { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest, accessCode: "secret" };
+    const deployment = { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest };
     const storage = memoryStorage({
       "konae:project": JSON.stringify(project),
       "konae:active-deployment": JSON.stringify(deployment),
@@ -86,7 +86,7 @@ describe("workspace project registry", () => {
     expect(workspace.projects.some((item) => item.id === architectureProjectId)).toBe(false);
     expect(workspace.activeProjectId).toBe(project.id);
     expect(workspace.deployments[project.id]?.url).toBe(deployment.url);
-    expect(workspace.deployments[project.id]?.accessCode).toBeUndefined();
+    expect(workspace.deployments[project.id]).toEqual(deployment);
   });
 
   test("creates unique project ids and slugs", () => {
@@ -116,14 +116,14 @@ describe("workspace project registry", () => {
     expect(loaded?.files["app.js"]).toContain("Guest");
   });
 
-  test("persists the project index without private access codes", () => {
+  test("persists the project index", () => {
     const project = cloneStarter();
     const storage = memoryStorage();
     persistWorkspace([project], project.id, {
-      [project.id]: { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest, accessCode: "secret" },
+      [project.id]: { id: "deploy_1", projectId: project.id, projectName: project.name, url: "http://tiny.localhost", createdAt: 1, manifest: project.manifest },
     }, storage);
     expect(storage.value("konae:projects")).toContain(project.name);
-    expect(storage.value("konae:deployments")).not.toContain("secret");
+    expect(storage.value("konae:deployments")).toContain(project.name);
   });
 
   test("repairs a starter that cleared the chosen file before sign-in finished", () => {

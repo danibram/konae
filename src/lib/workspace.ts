@@ -263,8 +263,7 @@ function withoutArchitecture(projects: MiniAppProject[]) {
 }
 
 function withoutAccessCode(deployment: DeploymentReceipt): DeploymentReceipt {
-  const { accessCode: _accessCode, ...safe } = deployment;
-  return safe;
+  return deployment;
 }
 
 function slugify(value: string) {

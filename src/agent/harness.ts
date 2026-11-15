@@ -24,7 +24,7 @@ export type { AgentPlatformBinding, PlatformConfirmation, PublishOutcome } from 
 import { createCapsuleValidator, type ReleaseFacts, type SqlJsLoader } from "./gate";
 import { buildAuth, buildModel, createStreamFn } from "./providers";
 import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
-import { createCapsuleTools, readLiveDatabase, readReleaseFacts, type PreviewFailureReport } from "./tools";
+import { createCapsuleTools, readLiveDatabase, readValidationFacts, type PreviewFailureReport } from "./tools";
 
 /**
  * The concrete agent. Beyond the `KonaeAgent` contract it exposes the four
@@ -64,6 +64,8 @@ export type KonaeAgentOptions = {
   previewErrors?: () => PreviewFailureReport[];
   /** The project's secret names and the installation's hosts, read when the Gate runs. */
   releaseFacts?: () => Promise<ReleaseFacts>;
+  /** The full app files include binary assets the agent workspace cannot read. */
+  sourceFiles?: () => MiniAppProject;
 };
 
 export function createKonaeAgent(
@@ -267,6 +269,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
       liveDatabase: this.options.liveDatabase,
       previewErrors: this.options.previewErrors,
       releaseFacts: this.options.releaseFacts,
+      sourceFiles: this.options.sourceFiles,
     });
   }
 
@@ -404,7 +407,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
     if (known && known.signature === signature && !known.retry) return;
     const files = this.workspace.serialize().files;
     try {
-      const result = await this.validator.validate(files, await this.liveDatabase(), await readReleaseFacts({ releaseFacts: this.options.releaseFacts }));
+      const result = await this.validator.validate(files, await this.liveDatabase(), await readValidationFacts({ releaseFacts: this.options.releaseFacts, sourceFiles: this.options.sourceFiles }));
       if (!this.stillCurrent(token, signature)) return;
       this.validated = { signature, result };
       this.emit({ type: "validation", result });

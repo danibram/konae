@@ -148,7 +148,13 @@ export class MiniAppRuntimeHost {
    * throw there would take the whole editor down with it, on every reload. A
    * broken actions.json or schema.sql is reported through `diagnostics()`.
    */
-  constructor(private readonly appId: string, schema: string, actions: string, private fileAccess?: "app-users") {
+  constructor(
+    private readonly appId: string,
+    schema: string,
+    actions: string,
+    private fileAccess?: "app-users",
+    private readonly actorAppId = appId,
+  ) {
     this.requestedSchema = schema;
     this.setActions(actions);
     this.dbPromise = this.openDatabase();
@@ -519,6 +525,18 @@ export class MiniAppRuntimeHost {
     this.dbPromise = this.openDatabase(true);
   }
 
+  async dispose(removeStoredState = false) {
+    const db = await this.dbPromise.catch(() => null);
+    db?.close();
+    if (!removeStoredState) return;
+    for (const key of [this.databaseKey, this.filesKey, this.databaseBackupsKey]) {
+      try { localStorage.removeItem(key); } catch { /* Storage may be unavailable in a restricted preview. */ }
+    }
+    this.sessionListeners.clear();
+    this.fileListeners.clear();
+    this.diagnosticListeners.clear();
+  }
+
   /** Resolves with a usable database even when schema.sql fails; the failure goes to `diagnostics()`. */
   private async openDatabase(ignoreStored = false): Promise<Database> {
     const SQL = await loadSqlJs();
@@ -537,7 +555,7 @@ export class MiniAppRuntimeHost {
   private getRuntimeSession(): RuntimeSession {
     if (this.previewActor === "guest") return { userId: "anonymous", name: "Anonymous", role: "anonymous" };
     return {
-      userId: `${this.previewActor}_${this.appId}`,
+      userId: `${this.previewActor}_${this.actorAppId}`,
       name: this.previewActor === "alice" ? "Alice" : "Bob",
       role: "member",
     };
@@ -590,7 +608,7 @@ export class MiniAppRuntimeHost {
       throw new Error("authentication-required");
     }
     const { action, params } = resolveServerAction(this.actionProgram, String(request.name), request.input, {
-      actorId: this.previewActor === "guest" ? null : `${this.previewActor}_${this.appId}`,
+      actorId: this.previewActor === "guest" ? null : `${this.previewActor}_${this.actorAppId}`,
     });
     // The preview keeps no Usage store. A signal action runs no SQL and answers
     // as the Kernel does, which records the Signal on a Deployment.
@@ -722,7 +740,7 @@ export class MiniAppRuntimeHost {
       url,
       createdAt: Date.now(),
       visibility,
-      ownerId: `${this.previewActor}_${this.appId}`,
+      ownerId: `${this.previewActor}_${this.actorAppId}`,
     };
     const files = this.readFiles();
     localStorage.setItem(this.filesKey, JSON.stringify([file, ...files]));
