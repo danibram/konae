@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { starterProject } from "../lib/starter";
-import { mergeProposal } from "./apply";
+import { textFiles } from "../lib/source-files";
+import type { MiniAppProject } from "../lib/types";
+import { applyProposal, mergeProposal } from "./apply";
 import type { AgentProposal, CapsuleFiles } from "./contracts";
 
 const capsule = (overrides: Partial<CapsuleFiles> = {}): CapsuleFiles => ({ ...starterProject.files, ...overrides });
@@ -52,5 +54,31 @@ describe("landing a proposal", () => {
     const merge = mergeProposal(capsule({ "styles.css": "/* by hand */" }), proposal);
     expect(merge.ok && merge.files["styles.css"]).toBe("/* agent */");
     expect(seen["styles.css"]).not.toBe("/* agent */");
+  });
+});
+
+describe("Apply over a project that holds a file that is not text", () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const project: MiniAppProject = { ...starterProject, files: { ...starterProject.files, "public/logo.png": png }, encodings: { "public/logo.png": "base64" }, directories: ["public"] };
+
+  test("keeps the file and its encoding when the agent changes a text file", () => {
+    const proposed = { ...textFiles(project), "styles.css": "/* agent */" };
+    const applied = applyProposal(project, proposalFor(proposed, ["styles.css"]), 7);
+    expect(applied?.changedFiles).toEqual(["styles.css"]);
+    expect(applied?.project.files["public/logo.png"]).toBe(png);
+    expect(applied?.project.encodings).toEqual({ "public/logo.png": "base64" });
+    expect(applied?.project.files["styles.css"]).toBe("/* agent */");
+    expect(applied?.project.updatedAt).toBe(7);
+  });
+
+  test("drops the encoding when the agent writes text at the same path", () => {
+    const proposed = { ...textFiles(project), "public/logo.png": "<svg/>" };
+    const applied = applyProposal(project, proposalFor(proposed, ["public/logo.png"]));
+    expect(applied?.project.files["public/logo.png"]).toBe("<svg/>");
+    expect(applied?.project.encodings).toBeUndefined();
+  });
+
+  test("answers null when the merge refuses", () => {
+    expect(applyProposal(project, proposalFor(textFiles(project), []))).toBeNull();
   });
 });

@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
-import { mergeProposal } from "./agent/apply";
+import { applyProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
 import type { KonaeAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
@@ -79,9 +79,9 @@ import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
-import { isEncoded, keptEncodings, sourceBytes, textFiles } from "./lib/source-files";
+import { isEncoded, sourceBytes } from "./lib/source-files";
 import { formatBytes } from "./lib/usage";
-import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
+import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, refusedSpot } from "./components/action-readiness";
 import { browserCopy, createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
 import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
@@ -751,24 +751,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const applyAgentProposal = (proposal: AgentProposal): boolean => {
     // The Validation Gate is structural here, not just a disabled button in the
-    // panel: the merge refuses a proposal whose untouched files have moved since
+    // panel. The merge refuses a proposal whose untouched files have moved since
     // the gate saw them, because that combination was never validated.
-    // The agent saw the text files only, so the merge checks those and the files that are not text stay as they are.
-    const merge = mergeProposal(textFiles(project), proposal);
-    if (!merge.ok) return false;
-    const files = { ...project.files, ...merge.files };
-    const next: MiniAppProject = {
-      ...project,
-      files,
-      encodings: keptEncodings(project.encodings, files, { replaced: merge.changedFiles }),
-      directories: [...new Set([...project.directories, ...directoriesForFiles(files)])].sort(),
-      updatedAt: Date.now(),
-    };
+    const applied = applyProposal(project, proposal);
+    if (!applied) return false;
+    const next = applied.project;
     setProject(next);
     setPreviewProject(next);
     agentRef.current?.reseed(next.files, next.encodings);
-    if (merge.changedFiles[0] && isEditorFile(merge.changedFiles[0])) {
-      setActiveFile(merge.changedFiles[0]);
+    if (applied.changedFiles[0] && isEditorFile(applied.changedFiles[0])) {
+      setActiveFile(applied.changedFiles[0]);
     }
     return true;
   };
@@ -1223,7 +1215,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           )}
           {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} onJump={openRefusal} />}
           {activeFile !== "actions.json" && actionsRefusal && <Alert tone="danger" className="code-refusal" title="actions.json is refused" action={<Button size="sm" onClick={openRefusal}>{refusedLabel(project.files["actions.json"] ?? "", actionsRefusal)}</Button>}>{actionsRefusal}</Alert>}
-          {contractOpen ? <ActionContractView state={actionContract} /> : activeEncoded ? <Alert className="code-not-text" title={`${activeFile} is not text`}>The editor saves its {formatBytes(sourceBytes(project, activeFile).length)} with the app as they are, and cannot change them.</Alert> : <div className="code-area">
+          {contractOpen ? <ActionContractView state={actionContract} /> : activeEncoded ? <Alert className="code-not-text" title={`${activeFile} is not text`}>The editor saves its {formatBytes(sourceBytes(project, activeFile).length)} with the app as they are, and cannot change them. To replace it, export the app, put the new file in the folder's app/, and import the folder with Sources only, in App settings under Import.</Alert> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
             </div>
