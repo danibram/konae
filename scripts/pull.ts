@@ -1,7 +1,7 @@
 // `konae pull` stages the published sources, artifact, settings and data in
 // .konae/pull. A clean source tree receives app/ and konae.json; `dev --reset`
 // imports the staged data, and push.ts sends local data/ back to the Deployment.
-import { mkdir, mkdtemp, readFile, readdir, rename as fsRename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename as fsRename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,7 +20,7 @@ export const PULL_DIRECTORY = ".konae/pull";
 const RECORD = "pull.json";
 
 /** What pull.json holds: the export's manifest, the installation it came from and when. */
-export type Pulled = { manifest: PackageManifest; from: string; at: number; sourcesRevision?: number; sourceDigest?: string; sourcesInstalled?: boolean };
+export type Pulled = { manifest: PackageManifest; from: string; at: number; snapshotId?: string; dataOnly?: boolean; sourcesRevision?: number; sourceDigest?: string; sourcesInstalled?: boolean };
 
 export const NEEDS_EXPORT_DATA = "Downloading live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.";
 
@@ -87,7 +87,9 @@ export async function downloadData(client: McpClient, deploymentId: string, fold
  * lands in a folder beside it first, so a pull that fails keeps the data an
  * earlier pull left.
  */
-export async function pullLocal(root: string, client: McpClient, from: string, projectId: string, operations: { rename: typeof fsRename } = { rename: fsRename }): Promise<Pulled> {
+export async function pullLocal(root: string, client: McpClient, from: string, projectId: string, options: { rename?: typeof fsRename; dataOnly?: boolean } = {}): Promise<Pulled> {
+  const operations = { rename: options.rename ?? fsRename };
+  if (options.dataOnly) return pullDataOnly(root, client, from, projectId, operations);
   const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId });
   if (!remote.deployment) throw Error("This project has no Deployment to pull from. Publish it first.");
   await mkdir(path.join(root, ".konae"), { recursive: true });
@@ -149,7 +151,7 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     }
     const source = sourceFilesFrom(await listFiles(stagedApp));
     const digest = await sourceDigest(source);
-    const pulled: Pulled = { manifest, from, at: Date.now(), sourcesRevision: manifest.sourcesRevision ?? 0, sourceDigest: digest };
+    const pulled: Pulled = { manifest, from, at: Date.now(), snapshotId: randomUUID(), sourcesRevision: manifest.sourcesRevision ?? 0, sourceDigest: digest };
     const target = path.join(root, PULL_DIRECTORY);
     const currentApp = path.join(root, "app");
     const markerPath = path.join(root, ".konae/source-revision.json");
@@ -216,6 +218,54 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     await rm(scratch, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** Refreshes only the staged data while retaining staged sources and local source markers. */
+async function pullDataOnly(root: string, client: McpClient, from: string, projectId: string, operations: { rename: typeof fsRename }): Promise<Pulled> {
+  const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId });
+  if (!remote.deployment) throw Error("This project has no Deployment to pull from. Publish it first.");
+  await mkdir(path.join(root, ".konae"), { recursive: true });
+  const scratch = await mkdtemp(path.join(root, ".konae/pull-data-"));
+  try {
+    const { manifest, files } = await downloadPackage(client, remote.deployment.id, scratch, false);
+    for (const { name, file } of files) {
+      for (const entry of dataEntries(name as PackageComponentName, new Uint8Array(await readFile(file)))) {
+        const target = path.resolve(scratch, entry.path);
+        if (!target.startsWith(path.resolve(scratch) + path.sep)) throw Error(`Invalid folder path ${entry.path}.`);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, entry.contents);
+      }
+    }
+    const pulled: Pulled = { manifest, from, at: Date.now(), snapshotId: randomUUID(), dataOnly: true };
+    const target = path.join(root, PULL_DIRECTORY);
+    const merged = path.join(root, `.konae-pull-data-staged-${randomUUID()}`);
+    const retired = path.join(root, `.konae-pull-data-retired-${randomUUID()}`);
+    const record = path.join(scratch, RECORD);
+    await writeFile(record, JSON.stringify(pulled, null, 2), { mode: 0o600 });
+    try {
+      if (await exists(target)) await cp(target, merged, { recursive: true, errorOnExist: true });
+      await rm(path.join(merged, "data"), { recursive: true, force: true });
+      await renameDirectory(path.join(scratch, "data"), path.join(merged, "data"));
+      await cp(record, path.join(merged, RECORD));
+      if (await exists(target)) await operations.rename(target, retired);
+      try { await operations.rename(merged, target); }
+      catch (error) {
+        if (await exists(retired)) await operations.rename(retired, target);
+        throw error;
+      }
+      await rm(retired, { recursive: true, force: true });
+    } finally {
+      await rm(merged, { recursive: true, force: true });
+    }
+    return pulled;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+async function renameDirectory(from: string, to: string) {
+  await mkdir(path.dirname(to), { recursive: true });
+  await fsRename(from, to);
 }
 
 async function exists(file: string) { try { await stat(file); return true; } catch { return false; } }

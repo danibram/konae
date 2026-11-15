@@ -8,7 +8,7 @@ import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templa
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
 import { usageRange } from "../src/lib/usage";
 import type { Sources } from "../src/lib/what-happened";
-import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -588,6 +588,103 @@ describe("konae CLI", () => {
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
+  });
+
+  test("a failed import leaves local data and reset records untouched", async () => {
+    await mkdir(path.join(directory, "data"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "old-db");
+    const pulled = { manifest: { packageId: "pkg_bad" } } as never;
+    await expect(resetData(directory, { data: "kernel", run: async () => { throw Error("invalid import"); } }, pulled)).rejects.toThrow("invalid import");
+    expect(await readFile(path.join(directory, "data/database.sqlite"), "utf8")).toBe("old-db");
+    await expect(readFile(path.join(directory, ".konae/local-state.json"))).rejects.toThrow();
+  });
+
+  test("an empty reset keeps a recoverable backup and local secrets", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    await mkdir(path.join(directory, "data"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "old-db");
+    await writeFile(path.join(directory, "data/secrets.sqlite"), "local-secrets");
+    await writeFile(path.join(directory, "data/operator-note"), "keep in backup");
+    const reset = await resetData(directory, { data: "kernel", run: async () => JSON.stringify({ callsRetired: 0, mailRetired: 0 }) }, undefined);
+    expect(await readFile(path.join(directory, "data/secrets.sqlite"), "utf8")).toBe("local-secrets");
+    expect(await readdir(path.join(directory, "data"))).toEqual(["secrets.sqlite"]);
+    expect(await readFile(path.join(reset.backup, "data/database.sqlite"), "utf8")).toBe("old-db");
+    expect(await readFile(path.join(reset.backup, "data/operator-note"), "utf8")).toBe("keep in backup");
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8")).callsRetired).toBe(0);
+  });
+
+  test("repeated empty resets write distinct execution records", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    const kernel = { data: "kernel", run: async () => JSON.stringify({ callsRetired: 0, mailRetired: 0 }) };
+    const first = await resetData(directory, kernel, undefined);
+    const second = await resetData(directory, kernel, undefined);
+    expect(second.executionId).not.toBe(first.executionId);
+    expect(second.snapshotId).not.toBe(first.snapshotId);
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8")).executionId).toBe(second.executionId);
+  });
+
+  test("a live local process prevents a competing lifecycle operation", async () => {
+    const release = await acquireLocalLifecycleLock(directory);
+    await expect(acquireLocalLifecycleLock(directory)).rejects.toThrow(`pid ${process.pid}`);
+    await release();
+    const releaseAgain = await acquireLocalLifecycleLock(directory);
+    await releaseAgain();
+  });
+
+  test("a failed effect retirement restores app data and both local queues", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    await mkdir(path.join(directory, "data"));
+    await mkdir(path.join(directory, "kernel"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "before");
+    await writeFile(path.join(directory, "kernel/mail.sqlite"), "mail before");
+    await writeFile(path.join(directory, "kernel/calls.sqlite"), "calls before");
+    const kernel = {
+      data: path.join(directory, "kernel"),
+      async run(args: string[]) {
+        if (args[0] === "import") {
+          await writeFile(path.join(directory, "data/database.sqlite"), "imported");
+          return JSON.stringify({ backup: { id: "kernel-backup" } });
+        }
+        if (args[0] === "test") throw Error("retirement stopped");
+        throw Error(`Unexpected command ${args.join(" ")}`);
+      },
+    };
+    const pulled = { snapshotId: "snapshot_1", manifest: { packageId: "package_1" } } as never;
+    await expect(resetData(directory, kernel, pulled)).rejects.toThrow("retirement stopped");
+    expect(await readFile(path.join(directory, "data/database.sqlite"), "utf8")).toBe("before");
+    expect(await readFile(path.join(directory, "kernel/mail.sqlite"), "utf8")).toBe("mail before");
+    expect(await readFile(path.join(directory, "kernel/calls.sqlite"), "utf8")).toBe("calls before");
+    await expect(readFile(path.join(directory, ".konae/local-state.json"))).rejects.toThrow();
+  });
+
+  test("a successful reset records the snapshot and keeps data and queue recovery copies", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    await mkdir(path.join(directory, "data"));
+    await mkdir(path.join(directory, "kernel"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "before");
+    await writeFile(path.join(directory, "kernel/mail.sqlite"), "mail before");
+    await writeFile(path.join(directory, "kernel/calls.sqlite"), "calls before");
+    const commands: string[] = [];
+    const kernel = {
+      data: path.join(directory, "kernel"),
+      async run(args: string[]) {
+        commands.push(args.join(" "));
+        if (args[0] === "import") {
+          await writeFile(path.join(directory, "data/database.sqlite"), "imported");
+          return JSON.stringify({ backup: { id: "kernel-backup" } });
+        }
+        if (args[0] === "test") return JSON.stringify({ callsRetired: 2, mailRetired: 3 });
+        throw Error(`Unexpected command ${args.join(" ")}`);
+      },
+    };
+    const pulled = { snapshotId: "snapshot_2", manifest: { packageId: "package_2" } } as never;
+    const reset = await resetData(directory, kernel, pulled);
+    expect(commands.map((command) => command.split(" ")[0])).toEqual(["import", "test"]);
+    expect(await readFile(path.join(reset.backup, "data/database.sqlite"), "utf8")).toBe("before");
+    expect(await readFile(path.join(reset.backup, "queues/mail.sqlite"), "utf8")).toBe("mail before");
+    expect(await readFile(path.join(reset.backup, "queues/calls.sqlite"), "utf8")).toBe("calls before");
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8"))).toMatchObject({ snapshotId: "snapshot_2", callsRetired: 2, mailRetired: 3 });
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/pull-imported.json"), "utf8"))).toMatchObject({ packageId: "package_2", snapshotId: "snapshot_2", executionId: reset.executionId });
   });
 
   test("push refuses while the folder holds an unimported pull", async () => {

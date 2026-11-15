@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, open, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -163,7 +163,8 @@ events    --dir <folder> [--follow] [--json] [--days 7] [--prod]
           because nothing is sent. --json prints one object per line and --follow keeps printing.
           Only --prod reads the published Deployment.
 pull      --dir <folder> [--url <installation URL>]
-          Downloads app/, dist/, konae.json settings and data into <folder>/.konae/pull. Needs login --export-data.
+          Downloads app/, dist/, konae.json settings and data into <folder>/.konae/pull. Needs login
+          --export-data. Use --data-only to refresh data without changing sources or their base markers.
           It replaces local sources and settings only when their saved digests match; otherwise it
           stages published files and preserves local edits. dev --reset imports pulled data after a backup.
           A pending pull blocks push until that import finishes.
@@ -1063,11 +1064,110 @@ export function kernelRecord(kernel: Pick<LocalKernel, "run">): ReadRecord {
  * the kernel binary's import, or empties it when there is none. `dev
  * --reset` runs it after the build and before the Kernel starts.
  */
-export async function resetData(root: string, kernel: Pick<LocalKernel, "run">, pulled: Pulled | undefined, confirmSchema?: string) {
-  if (!pulled) { await rm(path.join(root, DATA_FOLDER), { recursive: true, force: true }); return; }
-  await kernel.run(["import", path.join(root, PULL_DIRECTORY), ...(confirmSchema ? ["--confirm-schema", confirmSchema] : [])]);
-  await writeFile(path.join(root, IMPORTED_MARKER), JSON.stringify({ packageId: pulled.manifest.packageId }));
+export async function acquireLocalLifecycleLock(root: string): Promise<() => Promise<void>> {
+  const file = path.join(root, ".konae/lifecycle.lock");
+  await mkdir(path.dirname(file), { recursive: true });
+  try {
+    const handle = await open(file, "wx", 0o600);
+    await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+    await handle.close();
+    return async () => { await rm(file, { force: true }); };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const owner = await json<{ pid?: number }>(file).catch(() => undefined);
+    if (owner?.pid && processExists(owner.pid)) throw Error(`A local Kernel process (pid ${owner.pid}) holds ${file}. Stop it before resetting app data.`);
+    throw Error(`A local lifecycle lock at ${file} needs operator recovery. Check that no konae dev process is running, then remove the stale lock.`);
+  }
 }
+
+function processExists(pid: number) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+type LocalResetRecord = { snapshotId: string; executionId: string; packageId?: string; resetAt: number; backup: string; callsRetired: number; mailRetired: number };
+
+export async function resetData(root: string, kernel: Pick<LocalKernel, "run" | "data">, pulled: Pulled | undefined, confirmSchema?: string, options: { lockHeld?: boolean } = {}) {
+  const release = options.lockHeld ? undefined : await acquireLocalLifecycleLock(root);
+  try {
+    const executionId = crypto.randomUUID();
+    const snapshotId = pulled?.snapshotId ?? crypto.randomUUID();
+    const backup = path.join(root, ".konae/backups", `local-reset-${executionId}`);
+    await snapshotLocalState(root, kernel.data, backup);
+    try {
+      if (pulled) {
+        const imported = JSON.parse(await kernel.run(["import", path.join(root, PULL_DIRECTORY), ...(confirmSchema ? ["--confirm-schema", confirmSchema] : [])])) as { backup?: { id?: string } };
+        if (!imported.backup?.id) throw Error("The Kernel imported the data without returning its backup record.");
+      } else {
+        await emptyReset(root);
+      }
+      const effects = JSON.parse(await kernel.run(["test", "reset-effects"])) as { callsRetired: number; mailRetired: number };
+      if (!Number.isSafeInteger(effects.callsRetired) || !Number.isSafeInteger(effects.mailRetired)) throw Error("The Kernel returned an invalid test reset-effects result.");
+      if (pulled) await writeFile(path.join(root, IMPORTED_MARKER), JSON.stringify({ packageId: pulled.manifest.packageId, snapshotId, executionId }));
+      const record: LocalResetRecord = { snapshotId, executionId, ...(pulled ? { packageId: pulled.manifest.packageId } : {}), resetAt: Date.now(), backup, callsRetired: effects.callsRetired, mailRetired: effects.mailRetired };
+      await writeFile(path.join(root, ".konae/local-state.json"), JSON.stringify(record, null, 2), { mode: 0o600 });
+      return record;
+    } catch (error) {
+      try { await restoreLocalState(root, kernel.data, backup); }
+      catch (restoreError) { throw Error(`Reset failed (${error instanceof Error ? error.message : String(error)}); restoring its data and delivery queues also failed (${restoreError instanceof Error ? restoreError.message : String(restoreError)}). Backup ${backup} remains available.`); }
+      throw error;
+    }
+  } finally { await release?.(); }
+}
+
+async function snapshotLocalState(root: string, kernelData: string, backup: string) {
+  await mkdir(path.join(backup, "queues"), { recursive: true });
+  const data = path.join(root, DATA_FOLDER);
+  if (await exists(data)) await cp(data, path.join(backup, DATA_FOLDER), { recursive: true, errorOnExist: true });
+  const queueFiles: string[] = [];
+  for (const name of ["mail.sqlite", "calls.sqlite"]) {
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      const source = path.join(kernelData, name + suffix);
+      if (await exists(source)) {
+        await cp(source, path.join(backup, "queues", name + suffix));
+        queueFiles.push(name + suffix);
+      }
+    }
+  }
+  for (const marker of [IMPORTED_MARKER, ".konae/local-state.json"]) {
+    if (await exists(path.join(root, marker))) await cp(path.join(root, marker), path.join(backup, path.basename(marker)));
+  }
+  await writeFile(path.join(backup, "snapshot.json"), JSON.stringify({ createdAt: Date.now(), dataPresent: await exists(data), queueFiles }, null, 2), { mode: 0o600 });
+}
+
+async function restoreLocalState(root: string, kernelData: string, backup: string) {
+  const data = path.join(root, DATA_FOLDER);
+  const staged = path.join(root, `.data-restore-staged-${crypto.randomUUID()}`);
+  const record = JSON.parse(await readFile(path.join(backup, "snapshot.json"), "utf8")) as { dataPresent: boolean; queueFiles: string[] };
+  if (record.dataPresent) await cp(path.join(backup, DATA_FOLDER), staged, { recursive: true, errorOnExist: true });
+  if (await exists(data)) await rm(data, { recursive: true, force: true });
+  if (record.dataPresent) await rename(staged, data);
+  for (const name of ["mail.sqlite", "calls.sqlite"]) {
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) await rm(path.join(kernelData, name + suffix), { force: true });
+  }
+  for (const file of record.queueFiles) await cp(path.join(backup, "queues", file), path.join(kernelData, file));
+  for (const [saved, target] of [["pull-imported.json", IMPORTED_MARKER], ["local-state.json", ".konae/local-state.json"]]) {
+    const destination = path.join(root, target);
+    const source = path.join(backup, saved);
+    if (await exists(source)) await cp(source, destination);
+    else await rm(destination, { force: true });
+  }
+}
+
+async function emptyReset(root: string) {
+  const data = path.join(root, DATA_FOLDER);
+  const staged = path.join(root, `.data-reset-staged-${crypto.randomUUID()}`);
+  await mkdir(staged, { recursive: true });
+  try {
+    if (await exists(path.join(data, "secrets.sqlite"))) await cp(path.join(data, "secrets.sqlite"), path.join(staged, "secrets.sqlite"));
+    const retired = path.join(root, `.data-reset-retired-${crypto.randomUUID()}`);
+    if (await exists(data)) await rename(data, retired);
+    await rename(staged, data);
+    await rm(retired, { recursive: true, force: true });
+  } finally { await rm(staged, { recursive: true, force: true }); }
+}
+
+async function exists(file: string) { try { await stat(file); return true; } catch { return false; } }
 
 /** Which export of the published app's data `dev --reset` last put in data/. */
 const IMPORTED_MARKER = ".konae/pull-imported.json";
@@ -1303,9 +1403,9 @@ export async function main() {
   }
   if (command === "pull") {
     const url = await installation();
-    const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id);
-    console.log(`Exported app/, dist/ and data ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
-    if (!pulled.sourcesInstalled) console.log(`Local app/ or konae.json has edits or no recorded base, so pull kept both. Their saved copies are staged in ${path.join(root, PULL_DIRECTORY)}. Copy app/ and konae.json from there into the folder when you are ready, then run pull again to record the new source revision.`);
+    const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id, { dataOnly: args.includes("--data-only") });
+    console.log(`${pulled.dataOnly ? "Exported data" : "Exported app/, dist/ and data"} ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
+    if (!pulled.dataOnly && !pulled.sourcesInstalled) console.log(`Local app/ or konae.json has edits or no recorded base, so pull kept both. Their saved copies are staged in ${path.join(root, PULL_DIRECTORY)}. Copy app/ and konae.json from there into the folder when you are ready, then run pull again to record the new source revision.`);
     console.log(`Import it into the local app with: konae dev --dir ${root} --reset`);
     return;
   }
@@ -1330,6 +1430,7 @@ export async function main() {
     const devSession = path.join(root, DEV_SESSION);
     let child: ReturnType<typeof Bun.spawn> | undefined;
     let feed: { url: string; stop(): void } | undefined;
+    const releaseLifecycleLock = await acquireLocalLifecycleLock(root);
     // Builds dist/, sets the local secrets, imports the pulled data on the first start with --reset, and starts the Kernel, which opens the folder as a release.
     const start = async () => {
       for (const line of await setDevSecrets(root, kernel)) console.log(line);
@@ -1337,10 +1438,10 @@ export async function main() {
       await buildLocal(root, { development: true });
       if (reset) {
         reset = false;
-        await resetData(root, kernel, pulled, option("confirm-schema"));
+        const resetRecord = await resetData(root, kernel, pulled, option("confirm-schema"), { lockHeld: true });
         console.log(pulled
-          ? `Replaced data/ with the data ${describePulled(pulled)}, after a backup in ${path.join(root, ".konae/backups")}. Its accounts keep their passwords; to sign in as one without knowing it, ask the app for a password reset and open the link in ${path.join(kernel.data, "mailbox.jsonl")}.`
-          : "Emptied data/. The app starts with no rows and no accounts.");
+          ? `Replaced data/ with the data ${describePulled(pulled)}. Backup ${resetRecord.backup} holds the prior data and local queues. Reset ${resetRecord.executionId} used snapshot ${resetRecord.snapshotId} and retired ${resetRecord.callsRetired} calls and ${resetRecord.mailRetired} emails.`
+          : `Emptied data/. Backup ${resetRecord.backup} holds the prior data and local queues. Reset ${resetRecord.executionId} retired ${resetRecord.callsRetired} calls and ${resetRecord.mailRetired} emails.`);
       }
       const started = Bun.spawn([kernel.binary], { env: kernel.env, stdout: "pipe", stderr: "pipe" });
       child = started;
@@ -1402,7 +1503,7 @@ export async function main() {
       });
       await new Promise(() => {});
       watcher.close();
-    } finally { await stop(); feed?.stop(); await rm(devSession, { force: true }); }
+    } finally { await stop(); feed?.stop(); await rm(devSession, { force: true }); await releaseLifecycleLock(); }
     return;
   }
 }
