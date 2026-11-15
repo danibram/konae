@@ -779,20 +779,6 @@ fn now() -> i64 {
     now_ms() as i64
 }
 
-fn error_kind(error: Option<&str>) -> Option<&'static str> {
-    error.map(|error| match error {
-        "network" => "network",
-        "timeout" => "timeout",
-        "dns-failed" => "dns-failed",
-        "address-refused" => "address-refused",
-        "editor-host" => "editor-host",
-        "app-not-found" => "app-not-found",
-        "secret-unset" => "secret-unset",
-        "secret-unavailable" => "secret-unavailable",
-        _ => "answer-too-large",
-    })
-}
-
 fn sensitive_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     ["authorization", "cookie", "token", "secret", "password", "signature", "credential", "key"]
@@ -868,6 +854,43 @@ pub async fn list_captured_requests_for_app(state: &AppState, app_id: &str) -> R
     Ok(list_captured_requests(state).await?.into_iter().filter(|request| request["deployment"] == app_id).collect())
 }
 
+/// Reads pending test calls and continuations whose outcome is uncertain.
+pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<Vec<Value>> {
+    anyhow::ensure!(state.execution_mode.is_test(), "Test call readback requires test execution mode.");
+    let root = state.data_root.clone();
+    let app_id = app_id.to_owned();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
+        let db = connection(&root)?;
+        let mut query = db.prepare(
+            "SELECT id, action, state, attempts, next_attempt_at, error, method, url, request_body, request_headers,
+                    created_at, updated_at, then_action, then_state, then_message
+             FROM calls WHERE deployment = ?1 AND execution_mode = 'test'
+               AND (state = 'pending' OR then_state IN ('processing', 'interrupted'))
+             ORDER BY created_at, rowid",
+        )?;
+        let rows = query.query_map([app_id], |row| {
+            let call_state: String = row.get(2)?;
+            let next_attempt_at = if call_state == "pending" { Some(row.get::<_, i64>(4)?) } else { None };
+            Ok(json!({
+                "callId": row.get::<_, String>(0)?, "action": row.get::<_, String>(1)?,
+                "state": call_state, "attempts": row.get::<_, i64>(3)?,
+                "responseNumber": row.get::<_, i64>(3)? + 1,
+                "nextAttemptAt": next_attempt_at,
+                "error": row.get::<_, Option<String>>(5)?, "method": row.get::<_, Option<String>>(6)?,
+                "url": row.get::<_, Option<String>>(7)?,
+                "body": row.get::<_, Option<String>>(8)?.and_then(|body| serde_json::from_str::<Value>(&body).ok()),
+                "headers": row.get::<_, Option<String>>(9)?.and_then(|headers| serde_json::from_str::<Value>(&headers).ok()),
+                "createdAt": row.get::<_, i64>(10)?, "updatedAt": row.get::<_, i64>(11)?,
+                "then": row.get::<_, Option<String>>(12)?.map(|action| json!({
+                    "action": action, "state": row.get::<_, Option<String>>(13).ok().flatten(),
+                    "message": row.get::<_, Option<String>>(14).ok().flatten(),
+                })),
+            }))
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }).await?
+}
+
 /// Retires call work when `konae dev --reset` replaces local app data.
 /// Completed rows remain as history, and this function never runs a `then`.
 pub async fn retire_after_local_reset(state: &AppState, app_id: &str) -> Result<usize> {
@@ -882,7 +905,7 @@ pub async fn retire_after_local_reset(state: &AppState, app_id: &str) -> Result<
                then_state = CASE WHEN then_action IS NOT NULL AND then_state = 'processing' THEN 'skipped' ELSE then_state END,
                then_message = CASE WHEN then_action IS NOT NULL AND then_state = 'processing' THEN 'Local data was reset.' ELSE then_message END,
                updated_at = ?1
-             WHERE deployment = ?2 AND (state = 'pending' OR then_state = 'processing')",
+             WHERE deployment = ?2 AND (state = 'pending' OR then_state IN ('processing', 'interrupted'))",
             rusqlite::params![now(), app_id],
         )?;
         tx.commit()?;
@@ -1135,7 +1158,7 @@ fn finish(data_root: &Path, id: &str, attempt: &Attempt, then: Option<(&str, &st
 /// Sends the calls that are due. Returns how many it looked at.
 pub async fn run_once(state: &AppState) -> Result<usize> {
     if state.execution_mode.is_test() {
-        recover_interrupted_test_continuations(state).await?;
+        mark_interrupted_test_continuations(state).await?;
         let data_root = state.data_root.clone();
         let deployments = state.deployments.read().await.clone();
         return tokio::task::spawn_blocking(move || capture_test_requests(&data_root, &deployments)).await?;
@@ -1156,54 +1179,15 @@ pub async fn run_once(state: &AppState) -> Result<usize> {
     Ok(count)
 }
 
-async fn recover_interrupted_test_continuations(state: &AppState) -> Result<()> {
+async fn mark_interrupted_test_continuations(state: &AppState) -> Result<()> {
     let root = state.data_root.clone();
-    let rows = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, String, String, Value, Option<u16>, Option<String>, Vec<u8>, Option<String>, Option<String>)>> {
-        let db = connection(&root)?;
-        let at = now();
-        let mut query = db.prepare(
-            "UPDATE calls SET leased_until = ?1 WHERE id IN (
-               SELECT id FROM calls WHERE execution_mode = 'test' AND state IN ('delivered', 'failed') AND then_state = 'processing'
-                 AND (leased_until IS NULL OR leased_until < ?2) ORDER BY updated_at LIMIT ?3
-             ) RETURNING id, deployment, action, then_action, input, status, error, response_body, method, url",
-        )?;
-        let rows = query.query_map(rusqlite::params![at + LEASE_MS, at, BATCH], |row| {
-            let input: String = row.get(4)?;
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, Option<String>>(3)?.unwrap_or_default(), serde_json::from_str(&input).unwrap_or(json!({})), row.get::<_, Option<u16>>(5)?, row.get(6)?, row.get::<_, Option<Vec<u8>>>(7)?.unwrap_or_default(), row.get(8)?, row.get(9)?))
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    }).await??;
-    for (id, deployment_id, call_name, then_name, input, status, error, answer, method, url) in rows {
-        let deployment = state.deployments.read().await.values().find(|row| row.id == deployment_id).cloned();
-        let Some(deployment) = deployment else {
-            mark_continuation(state, &id, "failed", Some("App is unavailable.".into())).await?;
-            continue;
-        };
-        let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
-        if !program.actions.contains_key(&then_name) {
-            mark_continuation(state, &id, "failed", Some(format!("Action {then_name} is not declared."))).await?;
-            continue;
-        }
-        let call_then = program.actions.get(&call_name).and_then(|definition| check_kind(&call_name, definition).ok().flatten()).and_then(|call| call.then);
-        let Some(call_then) = call_then else {
-            mark_continuation(state, &id, "failed", Some("The call continuation is no longer declared.".into())).await?;
-            continue;
-        };
-        let attempt = Attempt { method, url, status, error: error_kind(error.as_deref()), answer };
-        let (then_state, message) = run_then(state, &deployment, &program, &call_then, &input, &attempt).await;
-        mark_continuation(state, &id, then_state, message).await?;
-    }
-    Ok(())
-}
-
-async fn mark_continuation(state: &AppState, id: &str, then_state: &str, message: Option<String>) -> Result<()> {
-    let root = state.data_root.clone();
-    let id = id.to_owned();
-    let then_state = then_state.to_owned();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        connection(&root)?.execute(
-            "UPDATE calls SET then_state = ?1, then_message = ?2, leased_until = NULL, updated_at = ?3 WHERE id = ?4 AND then_state = 'processing'",
-            rusqlite::params![then_state, message, now(), id],
+        let db = connection(&root)?;
+        db.execute(
+            "UPDATE calls SET then_state = 'interrupted', then_message = 'The process stopped while the continuation outcome was unknown. Reset local data before retrying.', leased_until = NULL, updated_at = ?1
+             WHERE execution_mode = 'test' AND state IN ('delivered', 'failed') AND then_state = 'processing'
+               AND (leased_until IS NULL OR leased_until < ?1)",
+            [now()],
         )?;
         Ok(())
     }).await??;
@@ -2005,6 +1989,10 @@ mod tests {
         assert_eq!(submit_synthetic_response(&restarted, &app.id, &call_id, 1, SyntheticOutcome::Http { status: 503, body: b"busy".to_vec() }).await.unwrap(), SyntheticSubmission::Accepted);
         let (attempts, error, state_name): (i64, Option<String>, String) = connection(&root).unwrap().query_row("SELECT attempts, error, state FROM calls WHERE id = ?1", [&call_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
         assert_eq!((attempts, error, state_name.as_str()), (1, None, "pending"));
+        let retry_state = list_test_calls_for_app(&restarted, &app.id).await.unwrap().remove(0);
+        let wait = retry_state["nextAttemptAt"].as_i64().unwrap() - now();
+        assert!((FIRST_BACKOFF_MS - 1000..=FIRST_BACKOFF_MS).contains(&wait));
+        assert_eq!(retry_state["responseNumber"], 2);
         connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0 WHERE id = ?1", [&call_id]).unwrap();
         assert_eq!(run_once(&restarted).await.unwrap(), 1);
         assert_eq!(list_captured_requests(&restarted).await.unwrap().len(), 1);
@@ -2019,11 +2007,15 @@ mod tests {
         assert_eq!(logged, vec![(Some(200), None, true)]);
         assert!(list_captured_requests(&restarted).await.unwrap().is_empty());
         let app_db = Connection::open(crate::layout::database(&root, &app.id)).unwrap();
-        app_db.execute("DELETE FROM log", []).unwrap();
         connection(&root).unwrap().execute("UPDATE calls SET then_state = 'processing', leased_until = NULL WHERE id = ?1", [&call_id]).unwrap();
-        assert_eq!(run_once(&restarted).await.unwrap(), 0);
+        let mut after_restart = test_state(&root, "https://editor.example.org");
+        after_restart.execution_mode = crate::execution::ExecutionMode::Test;
+        after_restart.deployments.write().await.insert(app.hostname.clone(), app.clone());
+        assert_eq!(run_once(&after_restart).await.unwrap(), 0);
         let recovered: i64 = app_db.query_row("SELECT COUNT(*) FROM log", [], |row| row.get(0)).unwrap();
-        assert_eq!(recovered, 1, "a saved response resumes an interrupted continuation after restart");
+        assert_eq!(recovered, 1, "restart must not replay an ambiguous committed continuation");
+        let outcome = list_test_calls_for_app(&after_restart, &app.id).await.unwrap().remove(0);
+        assert_eq!(outcome["then"]["state"], "interrupted");
         let _ = std::fs::remove_dir_all(&root);
     }
 
