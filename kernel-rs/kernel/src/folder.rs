@@ -57,7 +57,7 @@ pub async fn open_all(state: &AppState, confirmation: Option<&str>) -> Result<Ve
 pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Result<Deployment> {
     let root = &state.data_root;
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
-    let settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
+    let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
     let sources = layout::sources(root, id);
     let stored = match tokio::fs::read(layout::record(root, id)).await {
@@ -65,7 +65,13 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let released = stored.as_ref().and_then(|record| record.released.clone()).or_else(|| settings.released.clone());
+    let released = if let Some(record) = stored.as_ref() {
+        let recovered = crate::sources::capture_released_state(root, id, &settings, record)?;
+        settings.released = Some(recovered.clone());
+        Some(recovered)
+    } else {
+        settings.released.clone()
+    };
     let dist = read_dist(&layout::dist(root, id))
         .with_context(|| format!("apps/{id}/dist/ is missing or not readable. Build it with npm run build"))?;
     let dist_digest = version_of(&dist);
@@ -190,7 +196,7 @@ pub async fn free_hostname(state: &AppState, slug: &str, id: &str) -> (String, c
 }
 
 /// Every file under `dist/`, by its path inside it.
-fn read_dist(dist: &Path) -> Result<HashMap<String, Vec<u8>>> {
+pub(crate) fn read_dist(dist: &Path) -> Result<HashMap<String, Vec<u8>>> {
     let mut files = HashMap::new();
     let mut pending = vec![dist.to_path_buf()];
     while let Some(directory) = pending.pop() {

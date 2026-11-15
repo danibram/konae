@@ -187,21 +187,9 @@ pub async fn stage_write(root: &Path, id: &str, source: &Value) -> Result<Pendin
         None => None,
     };
     if let Some(record) = installed.as_mut() {
-        if record.released.is_none() {
-            let mut manifest = settings.manifest.clone();
-            if let Some(object) = manifest.as_object_mut() { object.remove("runtime"); }
-            let snapshot = settings.released.clone().unwrap_or(crate::ReleasedSettings {
-                name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
-                signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
-                contact_email: settings.contact_email.clone(), manifest,
-                actions: record.actions.clone(), schema_sql: database_schema(root, id)?,
-                source_digest: record.source_digest.clone(), artifact_digest: None, released_at: record.released_at,
-            });
-            record.released = Some(snapshot.clone());
-            settings.released = Some(snapshot);
-        } else if settings.released.is_none() {
-            settings.released = record.released.clone();
-        }
+        let snapshot = capture_released_state(root, id, &settings, record)?;
+        record.released = Some(snapshot.clone());
+        settings.released = Some(snapshot);
     }
     let directories = source["directories"].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned()).collect::<Vec<_>>();
     let metadata = json!({"name":name,"slug":slug,"manifest":source["manifest"],"directories":directories,"updatedAt":source["updatedAt"]});
@@ -260,9 +248,62 @@ pub(crate) fn database_schema(root: &Path, id: &str) -> Result<String> {
     let path = layout::database(root, id);
     if !path.is_file() { return Ok(String::new()); }
     let connection = rusqlite::Connection::open(path)?;
-    let mut statement = connection.prepare("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type, name")?;
-    let statements = statement.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut statement = connection.prepare("SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 WHEN 'trigger' THEN 3 ELSE 4 END, name")?;
+    let statements = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?.into_iter()
+        .map(|(kind, sql)| idempotent_schema_statement(&kind, &sql)).collect::<Result<Vec<_>>>()?;
     Ok(if statements.is_empty() { String::new() } else { format!("{};\n", statements.join(";\n")) })
+}
+
+fn idempotent_schema_statement(kind: &str, sql: &str) -> Result<String> {
+    let bytes = sql.as_bytes();
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    while start < bytes.len() {
+        if !bytes[start].is_ascii_alphanumeric() && bytes[start] != b'_' { start += 1; continue; }
+        let mut end = start + 1;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') { end += 1; }
+        tokens.push((start, end, sql[start..end].to_ascii_uppercase()));
+        start = end;
+    }
+    anyhow::ensure!(tokens.first().is_some_and(|(_, _, word)| word == "CREATE"), "The installed database contains an unsupported {kind} declaration.");
+    let mut index = 1;
+    if tokens.get(index).is_some_and(|(_, _, word)| word == "TEMP" || word == "TEMPORARY") { index += 1; }
+    if kind == "table" && tokens.get(index).is_some_and(|(_, _, word)| word == "VIRTUAL") { index += 1; }
+    if kind == "index" && tokens.get(index).is_some_and(|(_, _, word)| word == "UNIQUE") { index += 1; }
+    let expected = match kind { "table" => "TABLE", "index" => "INDEX", "view" => "VIEW", "trigger" => "TRIGGER", _ => anyhow::bail!("The installed database contains an unsupported {kind} declaration.") };
+    let (_, end, actual) = tokens.get(index).context("The installed database contains an incomplete schema declaration.")?;
+    anyhow::ensure!(actual == expected, "The installed database contains an unsupported {kind} declaration.");
+    let suffix = sql.get(*end..).context("The installed database schema is not UTF-8.")?;
+    anyhow::ensure!(!suffix.trim_start().to_ascii_uppercase().starts_with("IF NOT EXISTS"), "The installed database schema unexpectedly retains IF NOT EXISTS.");
+    Ok(format!("{} IF NOT EXISTS{}", &sql[..*end], suffix))
+}
+
+/// Recovers a complete applied-state snapshot from the old Installation record and live files.
+pub(crate) fn capture_released_state(root: &Path, id: &str, settings: &crate::Settings, installed: &crate::Installed) -> Result<crate::ReleasedSettings> {
+    let mut snapshot = installed.released.clone().or_else(|| settings.released.clone()).unwrap_or_else(|| {
+        let mut manifest = settings.manifest.clone();
+        if let Some(object) = manifest.as_object_mut() { object.remove("runtime"); }
+        crate::ReleasedSettings {
+            name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
+            signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
+            contact_email: settings.contact_email.clone(), manifest, actions: installed.actions.clone(), schema_sql: String::new(),
+            source_digest: installed.source_digest.clone(), artifact_digest: None, released_at: installed.released_at,
+        }
+    });
+    if snapshot.actions.is_empty() { snapshot.actions = installed.actions.clone(); }
+    if snapshot.schema_sql.trim().is_empty() {
+        let actual = database_schema(root, id)?;
+        if !actual.trim().is_empty() { snapshot.schema_sql = actual; }
+    }
+    if snapshot.source_digest.is_none() { snapshot.source_digest = installed.source_digest.clone(); }
+    if snapshot.released_at.is_none() { snapshot.released_at = installed.released_at; }
+    if snapshot.artifact_digest.is_none() {
+        let dist = layout::dist(root, id);
+        if dist.is_dir() { snapshot.artifact_digest = Some(crate::folder::version_of(&crate::folder::read_dist(&dist)?)); }
+    }
+    snapshot.manifest = manifest_without_runtime(&snapshot.manifest);
+    Ok(snapshot)
 }
 
 /// A release's files written beside `app/`, which the release puts in its
@@ -465,22 +506,14 @@ pub async fn read_metadata(root: &Path, id: &str) -> Result<Option<Value>> {
 /// Returns settings with any legacy saved-source metadata folded in for export.
 pub async fn settings_for_export(root: &Path, id: &str) -> Result<crate::Settings> {
     let mut settings = crate::Settings::read(root, id)?;
-    if settings.released.is_none() {
-        let record_path = layout::record(root, id);
-        match tokio::fs::read(record_path).await {
-            Ok(bytes) => {
-                let installed: crate::Installed = serde_json::from_slice(&bytes).context("The installed Deployment record is malformed.")?;
-                settings.released = Some(crate::ReleasedSettings {
-                name: settings.name.clone(), slug: settings.slug.clone(), visibility: settings.visibility.clone(),
-                signup_policy: settings.signup_policy.clone(), sign_in_methods: settings.sign_in_methods.clone(),
-                contact_email: settings.contact_email.clone(), manifest: manifest_without_runtime(&settings.manifest),
-                actions: installed.actions.clone(), schema_sql: database_schema(root, id)?,
-                source_digest: installed.source_digest.clone(), artifact_digest: None, released_at: installed.released_at,
-                });
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+    let record_path = layout::record(root, id);
+    match tokio::fs::read(record_path).await {
+        Ok(bytes) => {
+            let installed: crate::Installed = serde_json::from_slice(&bytes).context("The installed Deployment record is malformed.")?;
+            settings.released = Some(capture_released_state(root, id, &settings, &installed)?);
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     let path = layout::private(root, id).join("sources.json");
     let legacy = match tokio::fs::read(path).await {
@@ -556,6 +589,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovered_database_schema_is_idempotent_and_orders_quoted_indexes_after_tables() {
+        let root = std::env::temp_dir().join(format!("konae-recovered-schema-{}", Uuid::new_v4()));
+        let id = "app_schema";
+        let database = layout::database(&root, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE \"notes log\"(id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL); CREATE INDEX \"notes by owner\" ON \"notes log\"(owner_id); INSERT INTO \"notes log\" VALUES(1,'owner');").unwrap();
+        drop(connection);
+
+        let schema = database_schema(&root, id).unwrap();
+        let table = schema.find("CREATE TABLE IF NOT EXISTS \"notes log\"").unwrap();
+        let index = schema.find("CREATE INDEX IF NOT EXISTS \"notes by owner\"").unwrap();
+        assert!(table < index, "tables must precede their indexes in a portable schema");
+        let fresh = rusqlite::Connection::open_in_memory().unwrap();
+        fresh.execute_batch(&schema).unwrap();
+        fresh.execute_batch(&schema).unwrap();
+        fresh.execute("INSERT INTO \"notes log\"(owner_id) VALUES('owner')", []).unwrap();
+        assert_eq!(fresh.query_row("SELECT owner_id FROM \"notes log\"", [], |row| row.get::<_, String>(0)).unwrap(), "owner");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn saved_sources_are_the_files_of_app_and_read_back_the_same() {
         let root = std::env::temp_dir().join(format!("konae-sources-{}", Uuid::new_v4()));
         assert!(read(&root, "app_a").await.unwrap().is_none(), "an app without saved sources has none");
@@ -613,7 +668,9 @@ mod tests {
         tokio::fs::write(app.join("schema.sql"), "CREATE TABLE draft_only(id INTEGER PRIMARY KEY);").await.unwrap();
         let database = layout::database(&root, id);
         tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
-        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE live(id INTEGER PRIMARY KEY); INSERT INTO live VALUES(1);").unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE \"live rows\"(id INTEGER PRIMARY KEY); CREATE INDEX \"live rows id\" ON \"live rows\"(id); INSERT INTO \"live rows\" VALUES(1);").unwrap();
+        tokio::fs::create_dir_all(layout::dist(&root, id)).await.unwrap();
+        tokio::fs::write(layout::dist(&root, id).join("index.html"), "applied artifact").await.unwrap();
         let installed = crate::Installed { hostname:"legacy.localhost".into(), created_at:1, released_at:Some(2), source_digest:Some("old-source".into()), actions:"applied actions".into(), artifact_version:"vold".into(), released:None };
         tokio::fs::create_dir_all(layout::private(&root, id)).await.unwrap();
         tokio::fs::write(layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
@@ -632,6 +689,10 @@ mod tests {
         assert_eq!(export_settings.visibility, "public");
         assert_eq!(export_settings.manifest["fileAccess"], "app-users");
         assert_eq!(export_settings.released.as_ref().unwrap().actions, "applied actions");
+        let recovered = export_settings.released.as_ref().unwrap();
+        assert!(recovered.schema_sql.contains("CREATE TABLE IF NOT EXISTS \"live rows\""));
+        assert!(recovered.schema_sql.contains("CREATE INDEX IF NOT EXISTS \"live rows id\""));
+        assert_eq!(recovered.artifact_digest.as_deref(), Some(crate::folder::version_of(&HashMap::from([("index.html".to_owned(), b"applied artifact".to_vec())])).as_str()));
         let mut changed = opened.clone();
         changed["files"]["index.html"] = json!("edited draft");
         write(&root, id, &changed).await.unwrap();
@@ -642,7 +703,9 @@ mod tests {
         assert_eq!(settings.visibility, "public");
         assert_eq!(settings.manifest["routing"], "spa");
         assert_eq!(settings.released.as_ref().unwrap().actions, "applied actions");
-        assert!(settings.released.as_ref().unwrap().schema_sql.contains("CREATE TABLE live"));
+        assert!(settings.released.as_ref().unwrap().schema_sql.contains("CREATE TABLE IF NOT EXISTS \"live rows\""));
+        let expected_digest = crate::folder::version_of(&HashMap::from([("index.html".to_owned(), b"applied artifact".to_vec())]));
+        assert_eq!(settings.released.as_ref().unwrap().artifact_digest.as_deref(), Some(expected_digest.as_str()));
         assert!(!settings.released.as_ref().unwrap().schema_sql.contains("draft_only"));
         let installed: crate::Installed = serde_json::from_slice(&tokio::fs::read(layout::record(&root, id)).await.unwrap()).unwrap();
         assert_eq!(installed.released.unwrap().actions, "applied actions");

@@ -173,7 +173,8 @@ describe("chunked package", () => {
       expect(portableSettings.manifest.runtime).toBeUndefined();
       expect(portableSettings.directories).toEqual(["empty/nested"]);
       expect(portableSettings.released.actions).toBe(record.actions);
-      expect(portableSettings.released.schemaSql).toContain("CREATE TABLE");
+      expect(portableSettings.released.schemaSql).toContain("CREATE TABLE IF NOT EXISTS");
+      expect(portableSettings.released.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(exported.sourcesAhead).toBe(false);
     } finally {
       for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});

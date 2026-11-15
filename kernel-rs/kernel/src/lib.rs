@@ -3461,13 +3461,25 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
         Err(_) if !layout::settings(&state.data_root, &deployment.id).exists() => Settings::of(deployment),
         Err(error) => return Err(error),
     };
-    let artifact_digest = artifact_digest.map(str::to_owned).or_else(|| settings.released.as_ref().and_then(|released| released.artifact_digest.clone()));
+    let record_path = layout::record(&state.data_root, &deployment.id);
+    let installed = match tokio::fs::read(&record_path).await {
+        Ok(bytes) => serde_json::from_slice::<Installed>(&bytes).context("The installed Deployment record is malformed.")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Installed {
+            hostname: deployment.hostname.clone(), created_at: deployment.created_at,
+            released_at: Some(deployment.released_at), source_digest: deployment.source_digest.clone(),
+            actions: deployment.actions.clone(), artifact_version: deployment.artifact_version.clone(), released: None,
+        },
+        Err(error) => return Err(error.into()),
+    };
+    let recovered = crate::sources::capture_released_state(&state.data_root, &deployment.id, &settings, &installed)?;
     settings.signup_policy = deployment.signup_policy.clone();
     settings.sign_in_methods = deployment.sign_in_methods.clone();
     settings.contact_email = deployment.contact_email.clone();
     settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
     let mut released = released_settings(deployment);
-    released.artifact_digest = artifact_digest;
+    if released.schema_sql.trim().is_empty() { released.schema_sql = recovered.schema_sql; }
+    if released.source_digest.is_none() { released.source_digest = recovered.source_digest; }
+    released.artifact_digest = artifact_digest.map(str::to_owned).or(recovered.artifact_digest);
     settings.released = Some(released.clone());
     persist_settings_and_record(state, deployment, settings, released).await
 }
@@ -5195,6 +5207,41 @@ pub mod tests {
             assert!(released_settings(&legacy).manifest.get("runtime").is_none());
             let _ = tokio::fs::remove_dir_all(root).await;
         }
+    }
+
+    #[tokio::test]
+    async fn an_operation_completes_a_legacy_applied_snapshot_from_live_files_and_database() {
+        let root = std::env::temp_dir().join(format!("konae-legacy-operation-snapshot-{}", Uuid::new_v4()));
+        let id = "app_legacy_operation";
+        let settings = Settings::new(id, "Applied", "applied", &json!({"version":1,"visibility":"public"}));
+        settings.write(&root).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::dist(&root, id)).await.unwrap();
+        tokio::fs::write(crate::layout::dist(&root, id).join("index.html"), "old applied artifact").await.unwrap();
+        let database = crate::layout::database(&root, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE \"live notes\"(id INTEGER PRIMARY KEY, title TEXT); CREATE INDEX \"live notes title\" ON \"live notes\"(title); INSERT INTO \"live notes\" VALUES(1,'kept');").unwrap();
+        let installed = Installed {
+            hostname: "applied.localhost".into(), created_at: 1, released_at: Some(2), source_digest: Some("old-source".into()),
+            actions: r#"{"version":1,"actions":{"applied.read":{"kind":"query","access":"anonymous","statement":"SELECT title FROM \"live notes\" LIMIT 5","bindings":[]}}}"#.into(),
+            artifact_version: "v-old".into(), released: None,
+        };
+        tokio::fs::create_dir_all(crate::layout::private(&root, id)).await.unwrap();
+        tokio::fs::write(crate::layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
+        let state = test_state(&root);
+        let deployment = settings.deployment(installed, "http://localhost");
+        state.deployments.write().await.insert(deployment.hostname.clone(), deployment.clone());
+
+        let mut operated = deployment;
+        operated.signup_policy = SignupPolicy::from_input(SignupMode::Closed, &[]).unwrap();
+        persist_deployment(&state, &operated).await.unwrap();
+
+        let migrated = Settings::read(&root, id).unwrap().released.unwrap();
+        assert_eq!(migrated.signup_policy.mode, SignupMode::Closed);
+        assert!(migrated.schema_sql.contains("CREATE TABLE IF NOT EXISTS \"live notes\""));
+        assert!(migrated.schema_sql.contains("CREATE INDEX IF NOT EXISTS \"live notes title\""));
+        let expected_digest = crate::folder::version_of(&HashMap::from([("index.html".to_owned(), b"old applied artifact".to_vec())]));
+        assert_eq!(migrated.artifact_digest.as_deref(), Some(expected_digest.as_str()));
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]

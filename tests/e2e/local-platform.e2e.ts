@@ -12,6 +12,19 @@ test.beforeEach(async ({ page }) => {
   expect(response.ok()).toBe(true);
 });
 
+function sourceReadRequest(body: string): { projectId?: string; requestId?: string; cancelRequestId?: string; metadataOnly?: boolean } | undefined {
+  try {
+    const request = JSON.parse(body);
+    if (request.params?.name !== "project_sources_read") return undefined;
+    return request.params.arguments;
+  } catch { return undefined; }
+}
+
+function isFullSourceRead(body: string): boolean {
+  const args = sourceReadRequest(body);
+  return Boolean(args?.projectId && args.requestId && !args.cancelRequestId && args.metadataOnly !== true);
+}
+
 test("platform pages require an owner session and return to the requested page after sign-in", async ({ page }) => {
   const email = `owner-${crypto.randomUUID()}@example.test`;
   const password = "Owner-test-password-2026";
@@ -758,10 +771,15 @@ test("Try again compiles sources after a project load fails", async ({ page }) =
   const projectPath = await createProject(page, `Retry TypeScript ${Date.now()}`, "tasks");
   await writeTypedPreview(page, "Retry succeeded");
   let failNextRead = true;
+  let failedRequestId: string | undefined;
+  const cancelledRequestIds = new Set<string>();
   await page.route("**/mcp", async (route) => {
     const body = route.request().postData() ?? "";
-    if (failNextRead && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+    const sourceRead = sourceReadRequest(body);
+    if (sourceRead?.cancelRequestId) cancelledRequestIds.add(sourceRead.cancelRequestId);
+    if (failNextRead && isFullSourceRead(body) && !cancelledRequestIds.has(sourceRead!.requestId!)) {
       failNextRead = false;
+      failedRequestId = sourceRead?.requestId;
       await route.abort();
       return;
     }
@@ -769,6 +787,7 @@ test("Try again compiles sources after a project load fails", async ({ page }) =
   });
   await page.reload();
   await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
+  expect(failedRequestId).toBeTruthy();
   await page.unroute("**/mcp");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Retry succeeded" })).toBeVisible();
@@ -780,6 +799,13 @@ test("a delayed Try again response cannot select a project after leaving it", as
   await writeTypedPreview(page, "Retry after leaving");
   await page.addInitScript(() => {
     const state = window as typeof window & { __holdNextSourceRead?: boolean; __sourceReadHeld?: Promise<void>; __releaseSourceRead?: () => void };
+    const isFullSourceRead = (body: string) => {
+      try {
+        const request = JSON.parse(body);
+        const args = request.params?.name === "project_sources_read" ? request.params.arguments : undefined;
+        return Boolean(args?.projectId && args.requestId && !args.cancelRequestId && args.metadataOnly !== true);
+      } catch { return false; }
+    };
     let signalHeld!: () => void;
     state.__sourceReadHeld = new Promise<void>((resolve) => { signalHeld = resolve; });
     let releaseHeld!: () => void;
@@ -787,7 +813,7 @@ test("a delayed Try again response cannot select a project after leaving it", as
     window.fetch = async (input, init) => {
       const body = typeof init?.body === "string" ? init.body : "";
       const response = await original(input, init);
-      if (state.__holdNextSourceRead && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+      if (state.__holdNextSourceRead && isFullSourceRead(body)) {
         state.__holdNextSourceRead = false;
         signalHeld();
         await new Promise<void>((resolve) => { releaseHeld = resolve; });
@@ -797,10 +823,15 @@ test("a delayed Try again response cannot select a project after leaving it", as
     state.__releaseSourceRead = () => releaseHeld?.();
   });
   let failNextRead = true;
+  let failedRequestId: string | undefined;
+  const cancelledRequestIds = new Set<string>();
   await page.route("**/mcp", async (route) => {
     const body = route.request().postData() ?? "";
-    if (failNextRead && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+    const sourceRead = sourceReadRequest(body);
+    if (sourceRead?.cancelRequestId) cancelledRequestIds.add(sourceRead.cancelRequestId);
+    if (failNextRead && isFullSourceRead(body) && !cancelledRequestIds.has(sourceRead!.requestId!)) {
       failNextRead = false;
+      failedRequestId = sourceRead?.requestId;
       await route.abort();
       return;
     }
@@ -808,6 +839,7 @@ test("a delayed Try again response cannot select a project after leaving it", as
   });
   await page.reload();
   await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
+  expect(failedRequestId).toBeTruthy();
   await page.unroute("**/mcp");
   await page.evaluate(() => { (window as typeof window & { __holdNextSourceRead?: boolean }).__holdNextSourceRead = true; });
   await page.getByRole("button", { name: "Try again" }).click();
