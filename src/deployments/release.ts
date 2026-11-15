@@ -19,7 +19,7 @@ export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirm
  * first release (`firstRelease`) they are the name it will take, null when the
  * slug and its coded name are both taken.
  */
-export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; expectedSourcesRevision: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
+export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; expectedSourcesRevision: number; expiresAt: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
 
 /** Asks the owner about a schema change that loses data. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
@@ -93,8 +93,8 @@ export type ReleaseContents = {
  * whatever happens, and `cancelFailed` hears when a cancel fails.
  */
 export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed?: (error: unknown) => void, onPlan?: (plan: ReleasePlan) => void, observedSourcesRevision?: number | (() => number | undefined)): Promise<{ plan: ReleasePlan; receipt: Receipt }>;
-export function publishProject(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: false): Promise<{ plan: ReleasePlan }>;
-export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: boolean): Promise<{ plan: ReleasePlan; receipt?: Receipt }>;
+export function publishProject(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: false, registerProject: false): Promise<{ plan: ReleasePlan }>;
+export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: boolean, registerProject?: boolean): Promise<{ plan: ReleasePlan; receipt?: Receipt }>;
 export async function publishProject<Receipt>(
   client: Pick<McpClient, "call" | "upload" | "cancel">,
   project: ProjectIdentity,
@@ -104,8 +104,9 @@ export async function publishProject<Receipt>(
   onPlan?: (plan: ReleasePlan) => void,
   observedSourcesRevision?: number | (() => number | undefined),
   apply = true,
+  registerProject = true,
 ): Promise<{ plan: ReleasePlan; receipt?: Receipt }> {
-  await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+  if (registerProject) await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
   const sources: CarriedFiles & { directories: string[] } = {
     files: sent.files,

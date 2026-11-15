@@ -34,6 +34,7 @@ import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 import { requireTestKernel } from "./test-kernel";
+import { rehearsePulledSnapshot } from "./rehearse";
 
 const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
@@ -168,6 +169,9 @@ pull      --dir <folder> [--url <installation URL>]
           It replaces local sources and settings only when their saved digests match; otherwise it
           stages published files and preserves local edits. dev --reset imports pulled data after a backup.
           A pending pull blocks push until that import finishes.
+rehearse  --dir <folder>
+          Runs the Kernel's data import against the exact source and data snapshot in .konae/pull,
+          in a scratch app folder. It reports the source digest and snapshot ID without touching app/ or data/.
 push      --dir <folder> [--url <installation URL>] [--yes] [--confirm-schema <confirmation>]
           Replaces published data with <folder>/data: database, accounts, files and Usage. Import a
           pending pull with dev --reset first.
@@ -625,6 +629,20 @@ function typecheckApp(root: string) {
  * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
  * policy and `warn` gets one line when konae.json names another.
  */
+async function productionRequirements(root: string, confirmation?: string | null) {
+  const requirements = confirmation ? [`Pass --confirm-schema ${confirmation} when applying this loss plan.`] : [];
+  try {
+    const actions = (JSON.parse(await readFile(path.join(appDir(root), "actions.json"), "utf8")) as { actions?: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }> }).actions ?? {};
+    const secrets = new Set<string>();
+    for (const action of Object.values(actions)) {
+      if (action.http?.signature?.secret) secrets.add(action.http.signature.secret);
+      if (action.auth?.secret) secrets.add(action.auth.secret);
+    }
+    for (const name of [...secrets].sort()) requirements.push(`Set signing secret ${name} on the production app before its signed route or call runs.`);
+  } catch { /* An invalid Capsule already fails the existing build and release checks. */ }
+  return requirements;
+}
+
 export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, confirm: ConfirmSchema = keepData, planOnly = false) {
   if (!config.url) throw Error(NO_INSTALLATION);
   const client = new McpClient(endpoint(config.url), { token });
@@ -646,6 +664,21 @@ export async function publishLocal(root: string, config: Config, token: string, 
   let first = false;
   let observedSourcesRevision: number | undefined;
   let publishedSourceDigest = "";
+  publishedSourceDigest = await sourceDigest(prepared.source);
+  if (planOnly) {
+    const listed = await client.call<{ projects: { project: { id: string } }[] }>("projects_list", {});
+    if (!listed.projects.some(({ project: remoteProject }) => remoteProject.id === project.id)) {
+      return {
+        target: { projectId: project.id, projectName: project.name, installation: config.url },
+        sourceRevision: { observed: null, planned: null },
+        sourceDigest: publishedSourceDigest,
+        artifactDigest: createHash("sha256").update(JSON.stringify(prepared.artifact)).digest("hex"),
+        plan: { mode: "local-first-release" },
+        expiresAt: null,
+        productionRequirements: ["This project is not registered on the installation. A normal publish will register it and create its first Deployment.", ...await productionRequirements(root)],
+      };
+    }
+  }
   const result = await publishProject<{ id: string; url: string }>(client, project, async () => {
     // project_inspect needs the project that project_create registers on a first publish.
     const remote = await client.call<{ deployment?: { id: string } | null; sourcesRevision: number }>("project_inspect", { projectId: project.id });
@@ -654,14 +687,13 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const scopedMarker = matchesSourceRevisionScope(marker, config.url!, project.id) ? marker : undefined;
     observedSourcesRevision = scopedMarker?.sourcesRevision ?? (!remote.deployment && remote.sourcesRevision === 0 ? 0 : undefined);
     const { artifact, source } = prepared;
-    publishedSourceDigest = await sourceDigest(source);
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
       initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
     };
-  }, confirm, (error) => console.warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
+  }, confirm, (error) => warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
     if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
-  }, () => observedSourcesRevision, !planOnly);
+  }, () => observedSourcesRevision, !planOnly, !planOnly);
   const { plan } = result;
   if (planOnly) {
     return {
@@ -670,8 +702,8 @@ export async function publishLocal(root: string, config: Config, token: string, 
       sourceDigest: publishedSourceDigest,
       artifactDigest: createHash("sha256").update(JSON.stringify(prepared.artifact)).digest("hex"),
       plan,
-      expiresAt: (plan as typeof plan & { expiresAt?: number }).expiresAt ?? null,
-      productionRequirements: plan.schema?.confirmation ? [`Pass --confirm-schema ${plan.schema.confirmation} to apply this data loss.`] : [],
+      expiresAt: new Date(plan.expiresAt).toISOString(),
+      productionRequirements: await productionRequirements(root, plan.schema?.confirmation),
     };
   }
   const receipt = result.receipt!;
@@ -1254,7 +1286,7 @@ export async function main() {
     return;
   }
   if (SERVER_COMMANDS.includes(command)) throw Error(serverCommandMessage(command));
-  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "sql", "events", "domain", "hostname", "push", "secret", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
+  if (!["login", "init", "build", "contract", "conform", "export", "publish", "dev", "pull", "rehearse", "sql", "events", "domain", "hostname", "push", "secret", "tool"].includes(command)) throw Error(`Unknown command ${command}.\n\n${HELP}`);
   const option = (name: string, fallback?: string) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0) return fallback;
@@ -1263,6 +1295,15 @@ export async function main() {
     return value;
   };
   const root = path.resolve(option("dir", process.cwd())!);
+  if (command === "rehearse") {
+    const result = await rehearsePulledSnapshot(root, async (scratch, snapshot) => {
+      const settings = await readSettings(scratch);
+      const kernel = await localKernel(scratch, settings);
+      return kernel.run(["import", snapshot]);
+    });
+    console.log(JSON.stringify({ ...result, source: "konae pull snapshot", rehearsal: "passed" }, null, 2));
+    return;
+  }
   if (command === "login") {
     const url = option("url", process.env.KONAE_URL ?? "http://localhost:4173")!;
     const scopes = loginScopes(args);
@@ -1345,8 +1386,12 @@ export async function main() {
         const value = result as Awaited<ReturnType<typeof publishLocal>>;
         console.log(`Plan for ${value.target.projectName} (${value.target.projectId}) at ${value.target.installation}`);
         console.log(`Sources ${value.sourceDigest}; artifact ${value.artifactDigest}; remote sources revision ${value.sourceRevision.planned}.`);
-        console.log(`Plan expires ${value.expiresAt === null ? "as defined by the Kernel; no expiry was returned" : new Date(value.expiresAt).toISOString()}.`);
-        if (value.plan.schema) console.log([...describeSchemaChange(value.plan.schema), ...value.productionRequirements].join("\n"));
+        console.log(value.expiresAt === null ? "This local-only baseline has no remote plan ID or expiry." : `Plan expires ${value.expiresAt}.`);
+        if (value.plan.schema) {
+          if (value.plan.schema.losses.length) console.log(describeSchemaChange(value.plan.schema).join("\n"));
+          else console.log(["The Kernel will run these schema statements:", ...value.plan.schema.statements.map((statement: string) => `  ${statement};`)].join("\n"));
+        }
+        for (const requirement of value.productionRequirements) console.log(requirement);
       }
     } else console.log((result as { url: string }).url);
     return;

@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
 import { usageRange } from "../src/lib/usage";
+import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
 import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
@@ -38,8 +39,9 @@ beforeAll(() => {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
         project_inspect: { deployment: null, sourcesRevision: 0 },
         transfer_begin: { transferId: `transfer_${uploads.length}`, size: 0, sha256: "", chunkBytes: 65_536 },
-        release_plan: { planId: "plan_1", schema: { statements: [], losses: [], confirmation: null } },
+        release_plan: { planId: "plan_1", expiresAt: Date.now() + 900_000, schema: { statements: [], losses: [], confirmation: null } },
         release_apply: { id: "dep_1", url: "http://test.localhost/" },
+        projects_list: { projects: [{ project: { id: "app_test" } }] },
       };
       return reply({ isError: false, structuredContent: { result: answers[name] ?? results[name] ?? {} } });
     },
@@ -163,10 +165,69 @@ describe("konae CLI", () => {
 
     expect(calls.map((call) => call.name)).toContain("release_plan");
     expect(calls.map((call) => call.name)).not.toContain("release_apply");
+    expect(calls.map((call) => call.name)).not.toContain("project_create");
     expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(2);
     expect(await readFile(path.join(directory, ".konae/source-revision.json"), "utf8")).toBe("marker-before");
     expect(await stat(path.join(directory, ".konae/published.json")).then(() => true, () => false)).toBe(false);
     expect(plan.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(Date.parse(plan.expiresAt)).toBeGreaterThan(Date.now());
+  });
+
+  test("publish --plan reports transfer cleanup failure and still returns the plan", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    failing.add("transfer_cancel");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    const warnings: string[] = [];
+
+    const plan = await publishLocal(directory, config, "token", (message) => warnings.push(message), undefined, true);
+
+    expect(plan.plan.planId).toBe("plan_1");
+    expect(warnings).toHaveLength(2);
+  });
+
+  test("publish --plan uses a local-only first-release plan without creating a remote project", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    answers.projects_list = { projects: [] };
+    const config = { url: origin(), project: { id: "app_new", name: "New", slug: "new", manifest: {} } };
+
+    const plan = await publishLocal(directory, config, "token", undefined, undefined, true);
+
+    expect(plan.plan.mode).toBe("local-first-release");
+    expect(calls.map((call) => call.name)).toEqual(["projects_list"]);
+    expect(plan.expiresAt).toBeNull();
+  });
+
+  test("a failed clean-baseline rehearsal uses pull's snapshot, not edited local data", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "konae-rehearsal-test-"));
+    const original = path.join(folder, "original");
+    const pull = path.join(folder, ".konae/pull");
+    const localData = path.join(folder, "data/database.sqlite");
+    try {
+      await mkdir(path.join(original, "app"), { recursive: true });
+      await mkdir(path.join(pull, "data"), { recursive: true });
+      await mkdir(path.dirname(localData), { recursive: true });
+      await writeFile(path.join(original, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", manifest: {} }));
+      await writeFile(path.join(original, "app/actions.json"), "{}");
+      const tar = Bun.spawn(["tar", "-cf", path.join(pull, "folder.tar"), "-C", original, "konae.json", "app"], { stdout: "pipe", stderr: "pipe" });
+      expect(await tar.exited).toBe(0);
+      const remoteBytes = new Uint8Array([1, 2, 3]);
+      const localBytes = new Uint8Array([9, 8, 7]);
+      await writeFile(path.join(pull, "data/database.sqlite"), remoteBytes);
+      await writeFile(localData, localBytes);
+      const sha256 = createHash("sha256").update(remoteBytes).digest("hex");
+      const manifest = { format: "konae-package", version: 1, packageId: "pkg_baseline", createdAt: 1, deploymentId: "dep_test", projectId: "app_test", visibility: "private", publishedRevision: 1, contents: [{ name: "database", size: remoteBytes.length, sha256 }], excluded: [] };
+      await writeFile(path.join(pull, "pull.json"), JSON.stringify({ manifest, from: "http://localhost", at: 1 }));
+
+      await expect(rehearsePulledSnapshot(folder, async (scratch, snapshot) => {
+        expect(scratch).not.toBe(folder);
+        expect(await readFile(path.join(scratch, "app/actions.json"), "utf8")).toBe("{}");
+        expect(await readFile(path.join(snapshot, "data/database.sqlite"))).toEqual(remoteBytes);
+        throw Error("schema validation failed");
+      })).rejects.toThrow("schema validation failed");
+      expect(await readFile(localData)).toEqual(localBytes);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 
   test.each(["release_plan", "release_apply"])("a failed %s releases its upload so later publishes can proceed", async (step) => {
@@ -437,12 +498,14 @@ describe("konae CLI", () => {
   test("a local Kernel keeps the Kernel's own per-file limit, a 1 TiB quota, and takes either from the environment", async () => {
     const saved = { quota: process.env.KONAE_FILES_QUOTA_BYTES, file: process.env.KONAE_FILE_MAX_BYTES, bin: process.env.KONAE_KERNEL_BIN };
     const fake = path.join(directory, "kernel");
-    await writeFile(fake, "");
+    await writeFile(fake, `#!${process.execPath}\nconsole.log(JSON.stringify({executionTest: 1}));\n`);
+    await chmod(fake, 0o700);
     try {
       process.env.KONAE_KERNEL_BIN = fake;
       delete process.env.KONAE_FILES_QUOTA_BYTES; delete process.env.KONAE_FILE_MAX_BYTES;
       const settings = await initLocal(path.join(directory, "app-folder"), { name: "Probe" });
       const bare = await localKernel(path.join(directory, "app-folder"), settings);
+      expect(bare.env.KONAE_EXECUTION_MODE).toBe("test");
       expect(bare.env.KONAE_FILES_QUOTA_BYTES).toBe(String(1024 ** 4));
       expect("KONAE_FILE_MAX_BYTES" in bare.env).toBe(false);
       process.env.KONAE_FILE_MAX_BYTES = "5242880"; process.env.KONAE_FILES_QUOTA_BYTES = "10485760";
