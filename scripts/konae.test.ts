@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templa
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
 import { usageRange } from "../src/lib/usage";
 import type { Sources } from "../src/lib/what-happened";
-import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, browserLogin, creatorVerificationToken, domainLocal, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pipedSecret, publishLocal, readSecret, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
@@ -94,6 +95,53 @@ test("a folder init wrote builds without npm install, with the built-in bundler"
     await rm(folder, { recursive: true, force: true });
   }
 }, 60_000);
+
+test("init keeps existing .gitignore entries and adds required entries once", async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), "konae-gitignore-"));
+  try {
+    await writeFile(path.join(folder, ".gitignore"), "private.txt\nnode_modules/\n");
+    await initLocal(folder, { template: "tasks" });
+    const lines = (await readFile(path.join(folder, ".gitignore"), "utf8")).split(/\r?\n/);
+    expect(lines.filter((line) => line === "private.txt")).toHaveLength(1);
+    expect(lines.filter((line) => line === "node_modules/")).toHaveLength(1);
+    expect(lines).toContain("data/");
+    expect(lines).toContain(".konae/");
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test("downloadKernel verifies the release checksum and repairs a changed cached binary", async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), "konae-kernel-cache-"));
+  const oldCache = process.env.KONAE_CACHE_DIR;
+  const oldFetch = globalThis.fetch;
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const os = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const name = `kernel-test-${os}-${arch}`;
+  let downloads = 0;
+  process.env.KONAE_CACHE_DIR = folder;
+  globalThis.fetch = async (input) => {
+    downloads++;
+    return String(input).endsWith("SHA256SUMS")
+      ? new Response(`${digest}  ${name}\n`)
+      : new Response(bytes);
+  };
+  try {
+    const binary = await downloadKernel("test");
+    expect(await readFile(binary)).toEqual(bytes);
+    expect(downloads).toBe(2);
+    await writeFile(binary, new Uint8Array([9]));
+    expect(await downloadKernel("test")).toBe(binary);
+    expect(await readFile(binary)).toEqual(bytes);
+    expect(downloads).toBe(4);
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldCache === undefined) delete process.env.KONAE_CACHE_DIR; else process.env.KONAE_CACHE_DIR = oldCache;
+    await rm(folder, { recursive: true, force: true });
+  }
+});
 
 describe("konae CLI", () => {
   test.each(["release_plan", "release_apply"])("a failed %s releases its upload so later publishes can proceed", async (step) => {
@@ -386,7 +434,7 @@ describe("konae CLI", () => {
     for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template", "tool", "--browser", "--no-open", "secret", "--use", "push", "hostname"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
-    expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");
+    expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: konae <command> [options]");
   });
 
   test("help calls the address of an installation its installation URL and says what to put there", () => {
@@ -511,6 +559,39 @@ describe("konae CLI", () => {
     expect(calls.find((call) => call.name === "project_create")!.arguments.manifest).toEqual({ visibility: "private" });
     expect(calls.map((call) => call.name)).not.toContain("signup_policy_read");
     expect(warnings).toEqual([]);
+  });
+
+  test("a failed first build does not create a remote project", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "const = ;");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { visibility: "private" } } };
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow();
+    expect(calls.map((call) => call.name)).not.toContain("project_create");
+  });
+
+  test("pendingPull clears only after dev imports the same package", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "konae-pull-marker-"));
+    const manifest = { format: "konae-package", version: 1, packageId: "pkg_1", createdAt: 1, deploymentId: "dep_1", projectId: "app_1", visibility: "private", publishedRevision: 1, contents: [{ name: "database", size: 1, sha256: "a".repeat(64) }], excluded: [] };
+    try {
+      await mkdir(path.join(folder, ".konae/pull"), { recursive: true });
+      await writeFile(path.join(folder, ".konae/pull/pull.json"), JSON.stringify({ manifest, from: "http://localhost", at: 1 }));
+      expect(await pendingPull(folder)).toBeTruthy();
+      await writeFile(path.join(folder, ".konae/pull-imported.json"), JSON.stringify({ packageId: "pkg_1" }));
+      expect(await pendingPull(folder)).toBeUndefined();
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  test("push refuses while the folder holds an unimported pull", async () => {
+    const manifest = { format: "konae-package", version: 1, packageId: "pkg_waiting", createdAt: 1, deploymentId: "dep_1", projectId: "app_test", visibility: "private", publishedRevision: 1, contents: [{ name: "database", size: 1, sha256: "b".repeat(64) }], excluded: [] };
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", manifest: {}, visibility: "private", signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: "0.8.0" }));
+    await mkdir(path.join(directory, ".konae/pull"), { recursive: true });
+    await writeFile(path.join(directory, ".konae/pull/pull.json"), JSON.stringify({ manifest, from: origin(), at: 1 }));
+    const run = cli("push", "--dir", directory);
+    const [exit, stderr] = await Promise.all([run.exited, new Response(run.stderr).text()]);
+    expect(exit).toBe(1);
+    expect(stderr).toContain("Run dev --reset before push");
+    expect(calls).toHaveLength(0);
   });
 
   test("a republish sends no policy and warns, without failing, when the app has another", async () => {

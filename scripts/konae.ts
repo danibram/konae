@@ -3,8 +3,9 @@ import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symli
 import { existsSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+import * as ts from "typescript";
 import { createInterface } from "node:readline/promises";
 import { McpClient } from "../src/mcp/client";
 import { packageComponentFiles, type PackageComponentName } from "../src/lib/portable-package";
@@ -13,7 +14,7 @@ import {
   type AppSettings, type FolderEntry,
 } from "../src/lib/app-folder";
 import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src/deployments/release";
-import { PROJECT_TEMPLATES_FILE, type ProjectTemplates } from "./project-templates";
+import { type ProjectTemplates } from "./project-templates";
 import type { AppEvent, ReadRecord } from "./events";
 import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
 import { pushData } from "./push";
@@ -26,12 +27,17 @@ import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
 import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
-import { skippedName } from "../src/lib/source-rules";
+import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
+import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
+import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 
-const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const candidateRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const toolRoot = existsSync(path.join(candidateRoot, "kernel-rs/Cargo.toml")) ? candidateRoot : undefined;
+type EmbeddedResources = { templates: string; runtime: string; staticArtifact: string; localBuilder: string };
+const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
 /** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
 /** What a publish sends. `contactEmail` is where notices to the owner go, from konae.json. */
@@ -109,7 +115,7 @@ export function serverCommandMessage(command: string) {
 }
 
 /** What `konae help` prints: every command with its options, in the order a project meets them. */
-export const HELP = `Usage: bun run konae -- <command> [options]
+export const HELP = `Usage: konae <command> [options]
 
 login     --dir <folder> --url <installation URL> [--browser [--no-open]] [--manage-users] [--export-data]
           [--verify-from <mailbox.jsonl>]
@@ -137,7 +143,7 @@ dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm
           A file over 2 MiB is refused as on a Kernel; KONAE_FILE_MAX_BYTES raises that limit.
           It sets and prints a local value for each signing secret actions.json names, and serves a
           page of what the app did (email, calls, scheduled runs, Signals) on the next port.
-          KONAE_KERNEL_BIN names a built kernel binary to run instead of compiling one.
+          KONAE_KERNEL_BIN names a kernel binary to run instead of downloading one.
           --reset imports the data pull exported into data/, after a backup, or empties data/ when there is none.
           A schema change that loses data is refused; --confirm-schema applies the plan it names.
           Writes actions.d.ts, which types miniapp.actions.call.
@@ -463,19 +469,7 @@ export function configOf(settings: AppSettings, url?: string): Config {
 /** A file as text when it is UTF-8, else as bytes, which the artifact carries as base64. */
 async function readCapsuleFile(root: string, relative: string): Promise<string | Uint8Array> {
   const bytes = new Uint8Array(await readFile(path.join(appDir(root), relative)));
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return bytes; }
-}
-
-async function bundleModule(root: string, entry: string, development = false) {
-  // absWorkingDir names each bundled module by its Capsule path, which the build then drops.
-  // The same settings as the build.mjs init writes, so a folder with or without package.json builds the same bytes.
-  const result = await build({
-    entryPoints: [path.join(appDir(root), entry)], absWorkingDir: path.resolve(appDir(root)), bundle: true, write: false, platform: "browser", format: "esm", target: "es2022", outdir: "out", jsx: "automatic",
-    minify: !development, define: { "process.env.NODE_ENV": JSON.stringify(development ? "development" : "production") },
-  });
-  const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
-  if (script === undefined) throw Error("The local builder produced no JavaScript.");
-  return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
+  try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return bytes; }
 }
 
 /** True when the app folder's package.json names a build script that writes dist/ and its packages are installed. */
@@ -506,7 +500,7 @@ async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Rec
     }
     const bytes = new Uint8Array(await readFile(path.join(dist, relative)));
     try {
-      files[relative] = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      files[relative] = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     } catch {
       files[relative] = Buffer.from(bytes).toString("base64");
       encodings[relative] = "base64";
@@ -539,12 +533,14 @@ async function quietly(command: string[], cwd: string) {
 export async function buildLocal(root: string, options: { development?: boolean } = {}) {
   const source = await sources(root);
   const files = textFiles(source);
+  await refreshActionTypes(root);
+  const paths = await capsulePaths(root);
+  if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
     const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
     if (neverRuns) throw Error(neverRuns);
     // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
-    await refreshActionTypes(root);
     if (!(await quietly(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], root))) throw Error("npm run build failed.");
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
@@ -552,22 +548,39 @@ export async function buildLocal(root: string, options: { development?: boolean 
     return { artifact, source, files };
   }
   const settings = await readSettings(root).catch(() => undefined);
-  const sdk = await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8");
+  const sdk = embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8");
   const entry = appEntry(Object.keys(files)) ?? "app.js";
   const artifact = await assembleStaticArtifact({
-    paths: await capsulePaths(root),
+    paths,
     read: (relative) => readCapsuleFile(root, relative),
     compile: async () => {
-      const { script, styles } = await bundleModule(root, entry, options.development);
-      return { script, styles: [files["styles.css"] ?? "", styles].join("\n") };
+      const { script, styles } = await bundleModule(appDir(root), entry, options.development);
+      return { script, styles: [files["styles.css"] ?? "", styles].filter(Boolean).join("\n") };
     },
-    bundle: (relative) => bundleModule(root, relative, options.development),
+    bundle: (relative) => bundleModule(appDir(root), relative, options.development),
     runtime: sdk,
     routing: settings?.manifest?.routing as "pages" | "spa" | undefined,
     warn: (message) => console.warn(`Warning: ${message}`),
   });
   await writeDist(root, artifact);
   return { artifact, source, files };
+}
+
+/** Checks app TypeScript with the same tsconfig used by the folder build script. */
+function typecheckApp(root: string) {
+  if (!existsSync(path.join(root, "tsconfig.json"))) return;
+  const configFile = ts.readConfigFile(path.join(root, "tsconfig.json"), ts.sys.readFile);
+  if (configFile.error) throw Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
+  const config = ts.parseJsonConfigFileContent(configFile.config, ts.sys, root);
+  const diagnostics = [...config.errors, ...ts.getPreEmitDiagnostics(ts.createProgram(config.fileNames, config.options))];
+  if (diagnostics.length) {
+    const formatted = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+      getCurrentDirectory: ts.sys.getCurrentDirectory,
+      getCanonicalFileName: (file) => file,
+      getNewLine: () => ts.sys.newLine,
+    });
+    throw Error(`The type check failed, so dist/ is unchanged. Fix the errors above. A call to miniapp.actions.call must match an action in actions.d.ts, which konae dev and konae contract write from app/actions.json.\n${formatted}`);
+  }
 }
 
 /**
@@ -582,6 +595,15 @@ export async function publishLocal(root: string, config: Config, token: string, 
   // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
   const { signupPolicy: _, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
+  const prepared = await buildLocal(root);
+  const sourcePayload = prepared.source.encodings && Object.keys(prepared.source.encodings).length
+    ? { files: prepared.source.files, encodings: prepared.source.encodings }
+    : { files: prepared.source.files };
+  checkSourceFiles(sourcePayload);
+  checkArtifact(prepared.artifact);
+  const identity = { id: project.id, name: project.name, slug: project.slug, manifest: project.manifest };
+  const initialSignupPolicy = wanted ? { mode: wanted.mode, allowlist: wanted.allowlist } : undefined;
+  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}) })));
   let first = false;
   let observedSourcesRevision: number | undefined;
   let publishedSourceDigest = "";
@@ -592,7 +614,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const marker = await json<{ sourcesRevision: number; installation?: string; projectId?: string }>(path.join(root, ".konae/source-revision.json")).catch(() => undefined);
     const scopedMarker = matchesSourceRevisionScope(marker, config.url!, project.id) ? marker : undefined;
     observedSourcesRevision = scopedMarker?.sourcesRevision ?? (!remote.deployment && remote.sourcesRevision === 0 ? 0 : undefined);
-    const { artifact, source } = await buildLocal(root);
+    const { artifact, source } = prepared;
     publishedSourceDigest = await sourceDigest(source);
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
@@ -733,13 +755,15 @@ async function folderFiles(root: string, settings: AppSettings) {
   const read = (file: string) => readFile(path.join(appDir(root), file), "utf8").catch(() => "");
   return generatedFiles({
     settings, actionsSource: await read("actions.json"), schemaSource: await read("schema.sql"),
-    runtime: await readFile(path.join(toolRoot, "src/mcp/runtime.js"), "utf8"),
-    staticArtifact: await readFile(path.join(toolRoot, "src/lib/static-artifact.js"), "utf8"),
+    runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
+    staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
+    localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),
   });
 }
 
 async function writeEntries(root: string, entries: FolderEntry[]) {
   for (const entry of entries) {
+    if (entry.path === ".gitignore" && existsSync(path.join(root, entry.path))) continue;
     const target = path.resolve(root, entry.path);
     if (!target.startsWith(path.resolve(root) + path.sep)) throw Error(`Invalid folder path ${entry.path}.`);
     await mkdir(path.dirname(target), { recursive: true });
@@ -842,7 +866,8 @@ function slugOf(name: string) {
  */
 export async function initLocal(root: string, options: { name?: string; template?: string } = {}) {
   // The file project_create answers from, so a folder starts the same through the CLI and through MCP.
-  const all = await json<ProjectTemplates>(path.join(toolRoot, PROJECT_TEMPLATES_FILE));
+  const templates = embeddedResources?.templates ?? await readFile(path.join(toolRoot!, "kernel-rs/konae/src/project-templates.json"), "utf8");
+  const all = JSON.parse(templates) as ProjectTemplates;
   const born = all.templates[options.template ?? all.default];
   if (!born) throw Error(`Unknown template ${options.template}. Choose one of: ${INIT_TEMPLATES.join(", ")}.`);
   await assertEmptyFolder(root);
@@ -882,12 +907,13 @@ const LOCAL_FILES_QUOTA = String(1024 ** 4);
  * run instead of compiling one.
  */
 export async function localKernel(root: string, settings: AppSettings, options: { port?: string; confirmSchema?: string; build?: boolean } = {}): Promise<LocalKernel> {
-  const binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : path.join(toolRoot, "kernel-rs/target/debug/kernel");
-  if (!process.env.KONAE_KERNEL_BIN && options.build !== false) {
+  let binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : toolRoot ? path.join(toolRoot, "kernel-rs/target/debug/kernel") : "";
+  if (!process.env.KONAE_KERNEL_BIN && toolRoot && options.build !== false && !existsSync(binary)) {
     console.log("Building the Kernel with cargo. The first build takes about a minute.");
     const compilation = Bun.spawn(["cargo", "build", "--manifest-path", path.join(toolRoot, "kernel-rs/Cargo.toml"), "-p", "kernel"], { stdout: "inherit", stderr: "inherit" });
     if (await compilation.exited !== 0) throw Error("Could not build the Kernel. Install Rust, or set KONAE_KERNEL_BIN to a kernel binary built from this checkout.");
   }
+  if (!process.env.KONAE_KERNEL_BIN && !existsSync(binary)) binary = await downloadKernel(KERNEL_VERSION);
   if (!existsSync(binary)) throw Error(`No kernel binary at ${binary}. Run dev once, or set KONAE_KERNEL_BIN.`);
   const data = path.join(root, ".konae/kernel");
   const link = path.join(data, "apps", settings.id);
@@ -915,6 +941,47 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     return output;
   };
   return { binary, env, data, run };
+}
+
+const KERNEL_RELEASE = "https://github.com/danibram/konae/releases/download";
+
+/** Downloads this CLI release's Kernel and checks its published SHA-256. */
+export async function downloadKernel(version: string): Promise<string> {
+  const os = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : undefined;
+  const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : undefined;
+  if (!os || !arch) throw Error(`No Kernel binary is published for ${process.platform}/${process.arch}. Set KONAE_KERNEL_BIN to a compatible kernel.`);
+  const name = `kernel-${version}-${os}-${arch}`;
+  const cache = process.env.KONAE_CACHE_DIR ?? path.join(process.env.XDG_CACHE_HOME ?? path.join(process.env.HOME ?? tmpdir(), ".cache"), "konae");
+  const directory = path.join(cache, "kernels", version);
+  const binary = path.join(directory, name);
+  const sumsFile = path.join(directory, "SHA256SUMS");
+  const valid = async () => {
+    try {
+      const expected = (await readFile(sumsFile, "utf8")).split("\n").map((line) => line.trim().split(/\s+/)).find(([, file]) => file === name)?.[0];
+      if (!expected) return false;
+      return createHash("sha256").update(await readFile(binary)).digest("hex") === expected;
+    } catch { return false; }
+  };
+  if (await valid()) return binary;
+  await mkdir(directory, { recursive: true });
+  const url = `${KERNEL_RELEASE}/v${version}`;
+  const [sumsResponse, binaryResponse] = await Promise.all([fetch(`${url}/SHA256SUMS`), fetch(`${url}/${name}`)]);
+  if (!sumsResponse.ok) throw Error(`Could not download ${name} checksums from ${url} (HTTP ${sumsResponse.status}). Set KONAE_KERNEL_BIN to a kernel binary from Konae ${version}.`);
+  if (!binaryResponse.ok) throw Error(`Could not download ${name} from ${url} (HTTP ${binaryResponse.status}). Set KONAE_KERNEL_BIN to a kernel binary from Konae ${version}.`);
+  const sums = await sumsResponse.text();
+  const expected = sums.split("\n").map((line) => line.trim().split(/\s+/)).find(([, file]) => file === name)?.[0];
+  if (!expected || !/^[a-f0-9]{64}$/i.test(expected)) throw Error(`SHA256SUMS from ${url} has no valid entry for ${name}.`);
+  const bytes = new Uint8Array(await binaryResponse.arrayBuffer());
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected.toLowerCase()) throw Error(`${name} failed SHA-256 verification. Expected ${expected}, got ${actual}.`);
+  const temporary = `${binary}.download-${crypto.randomUUID()}`;
+  await writeFile(temporary, bytes, { flag: "wx" });
+  await writeFile(sumsFile, sums);
+  await chmod(temporary, 0o755);
+  await writeFile(binary, await readFile(temporary));
+  await chmod(binary, 0o755);
+  await rm(temporary, { force: true });
+  return binary;
 }
 
 /**
@@ -962,6 +1029,14 @@ export async function resetData(root: string, kernel: Pick<LocalKernel, "run">, 
 
 /** Which export of the published app's data `dev --reset` last put in data/. */
 const IMPORTED_MARKER = ".konae/pull-imported.json";
+
+/** Returns the current pull until dev imports the same package into data/. */
+export async function pendingPull(root: string): Promise<Pulled | undefined> {
+  const pulled = await readPulled(root);
+  if (!pulled) return undefined;
+  const imported = await json<{ packageId?: string }>(path.join(root, IMPORTED_MARKER)).catch(() => undefined);
+  return imported?.packageId === pulled.manifest.packageId ? undefined : pulled;
+}
 
 /** init and export write a whole app folder, so the target must hold nothing but dotfiles (.git, .konae, .gitignore). */
 async function assertEmptyFolder(root: string) {
@@ -1014,7 +1089,7 @@ export function toolArguments(text?: string, piped?: { key: string; value: strin
   return arguments_;
 }
 
-async function main() {
+export async function main() {
   const argv = process.argv.slice(2);
   if (argv[0] === "--") argv.shift();
   const [command, ...args] = argv;
@@ -1054,7 +1129,7 @@ async function main() {
   }
   if (command === "init") {
     const settings = await initLocal(root, { name: option("name"), template: option("template") });
-    console.log(`Created ${settings.name} in ${root}. Run it with: bun run konae -- dev --dir ${root}`);
+    console.log(`Created ${settings.name} in ${root}. Run it with: konae dev --dir ${root}`);
     return;
   }
   if (command === "build") { await buildLocal(root); console.log(`Built ${path.join(root, DIST_FOLDER)}`); return; }
@@ -1126,7 +1201,7 @@ async function main() {
     const use = option("use");
     if (use && !(SECRET_USES as readonly string[]).includes(use)) throw Error(`--use takes ${SECRET_USES.join(", ")}.`);
     const value = process.stdin.isTTY ? await readSecret(`Value for ${name} (not shown): `, process.stdin, process.stderr) : pipedSecret(await Bun.stdin.text());
-    if (!value) throw Error(`No value for ${name}, so nothing was set. Type it at the prompt, or pipe it in: <command that prints it> | bun run konae -- secret set ${name}`);
+    if (!value) throw Error(`No value for ${name}, so nothing was set. Type it at the prompt, or pipe it in: <command that prints it> | konae secret set ${name}`);
     console.log(await setSecret(await client(), projectId, name, value, use));
     return;
   }
@@ -1188,11 +1263,12 @@ async function main() {
     const url = await installation();
     const pulled = await pullLocal(root, new McpClient(endpoint(url), { token: await credentials(root) }), url, config.project.id);
     console.log(`Exported app/, dist/ and data ${describePulled(pulled)} to ${path.join(root, PULL_DIRECTORY)}. It holds the app's accounts and rows, so keep .konae out of Git.`);
-    if (!pulled.sourcesInstalled) console.log(`Local app/ has edits or no recorded base, so pull kept it. The published sources are staged at ${path.join(root, PULL_DIRECTORY, "app")}. Copy those files into app/ when you are ready, then run pull again to record the new source revision.`);
-    console.log(`Import it into the local app with: bun run konae -- dev --dir ${root} --reset`);
+    if (!pulled.sourcesInstalled) console.log(`Local app/ or konae.json has edits or no recorded base, so pull kept both. Their saved copies are staged in ${path.join(root, PULL_DIRECTORY)}. Copy app/ and konae.json from there into the folder when you are ready, then run pull again to record the new source revision.`);
+    console.log(`Import it into the local app with: konae dev --dir ${root} --reset`);
     return;
   }
   if (command === "push") {
+    if (await pendingPull(root)) throw Error(`Exported data waits in ${path.join(root, PULL_DIRECTORY)}. Run dev --reset before push so the folder's data includes that import.`);
     const settings = await readSettings(root);
     const pushed = await pushData(root, new McpClient(endpoint(await installation()), { token: await credentials(root) }), { id: settings.id, name: settings.name, visibility: settings.visibility },
       { yes: args.includes("--yes"), confirmSchema: option("confirm-schema") });
@@ -1206,7 +1282,7 @@ async function main() {
     const kernel = await localKernel(root, settings, { port, confirmSchema: option("confirm-schema") });
     const pulled = await readPulled(root);
     let reset = args.includes("--reset");
-    if (!reset && pulled && (await json<{ packageId?: string }>(path.join(root, IMPORTED_MARKER)).catch(() => undefined))?.packageId !== pulled.manifest.packageId) {
+    if (!reset && await pendingPull(root)) {
       console.log(`Exported data waits in ${path.join(root, PULL_DIRECTORY)}. Run dev with --reset to replace data/ with it.`);
     }
     const devSession = path.join(root, DEV_SESSION);
@@ -1269,8 +1345,8 @@ async function main() {
         console.log(`  env $(cat ${envFile}) ${kernel.binary} invite <email> --app ${settings.id}`);
       }
       console.log(feed
-        ? `Email, calls, scheduled runs and Signals of this app: ${feed.url} in a browser, or bun run konae -- events --dir ${root} --json`
-        : `See the email, calls, scheduled runs and Signals of this app with: bun run konae -- events --dir ${root} --follow`);
+        ? `Email, calls, scheduled runs and Signals of this app: ${feed.url} in a browser, or konae events --dir ${root} --json`
+        : `See the email, calls, scheduled runs and Signals of this app with: konae events --dir ${root} --follow`);
       let working = false; let queued = false;
       const restart = async () => {
         if (working) { queued = true; return; } working = true;

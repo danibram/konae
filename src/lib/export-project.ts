@@ -1,5 +1,6 @@
 import { hostedRuntime, type BuildArtifact } from "../runtime/artifact";
 import staticArtifactSource from "./static-artifact.js?raw";
+import localBuilderSource from "./local-builder.js?raw";
 import { platformMcp, decodeBase64, type Transfer } from "../mcp/client";
 import { createTar, readTar } from "./tar";
 import type { MiniAppProject } from "./types";
@@ -58,7 +59,7 @@ export async function createProjectExport(
     const entry = entries.find((item) => item.path === `${SOURCES_FOLDER}/${file}`);
     return entry === undefined ? "" : typeof entry.contents === "string" ? entry.contents : new TextDecoder().decode(entry.contents);
   };
-  entries.push(...generatedFiles({ settings, actionsSource: text("actions.json"), schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource }));
+  entries.push(...generatedFiles({ settings, actionsSource: text("actions.json"), schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource }));
   const folder = safeFilename(project.slug);
   const archive = createTar(entries.map((entry) => ({ path: `${folder}/${entry.path}`, contents: entry.contents })));
   const bytes = new ArrayBuffer(archive.byteLength);

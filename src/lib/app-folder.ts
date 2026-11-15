@@ -69,10 +69,10 @@ export function secretNames(actionsSource: string): string[] {
 /**
  * The files the folder carries beside `app/`, `dist/` and `data/`. `runtime`
  * is the SDK (src/mcp/runtime.js) and `staticArtifact` the build rules
- * (src/lib/static-artifact.js), so `npm run build` makes the same `dist/` the
- * editor and `konae build` make.
+ * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
+ * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   return [
@@ -86,6 +86,7 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: "tsconfig.json", contents: tsconfig },
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
+    { path: "scripts/local-builder.mjs", contents: input.localBuilder },
     { path: "scripts/runtime.js", contents: input.runtime },
   ];
 }
@@ -229,8 +230,8 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
+import { bundleModule } from './local-builder.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
@@ -244,16 +245,16 @@ const artifact = await assembleStaticArtifact({
   paths,
   read: async (file) => {
     const bytes = await readFile(path.join(app, file));
-    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return new Uint8Array(bytes); }
+    try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return new Uint8Array(bytes); }
   },
   compile: async () => {
     const entry = appEntry(paths);
     if (entry === null) throw new Error('Expected ' + appEntries.map((file) => 'app/' + file).join(', ') + '.');
-    const { script, styles } = await bundle(entry);
+    const { script, styles } = await bundleModule(app, entry, development);
     const sourceStyles = paths.includes('styles.css') ? await readFile(path.join(app, 'styles.css'), 'utf8') : '';
     return { script, styles: [sourceStyles, styles].filter(Boolean).join('\\n') };
   },
-  bundle,
+  bundle: (relative) => bundleModule(app, relative, development),
   runtime,
   routing: settings.manifest?.routing,
   warn: (message) => console.warn('Warning: ' + message),
@@ -265,16 +266,6 @@ for (const [file, contents] of Object.entries(artifact.files)) {
   await writeFile(target, artifact.encodings?.[file] === 'base64' ? Buffer.from(contents, 'base64') : contents);
 }
 console.log('Built dist/');
-
-async function bundle(entry) {
-  const result = await build({
-    entryPoints: [path.join(app, entry)], absWorkingDir: app, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', outdir: 'out', jsx: 'automatic',
-    minify: !development, define: { 'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production') },
-  });
-  const script = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
-  if (script === undefined) throw new Error('The app build did not produce JavaScript.');
-  return { script, styles: result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '' };
-}
 
 // tsconfig.json includes app/src/ and actions.d.ts, which types miniapp.actions.call for each action.
 function typecheck() {

@@ -54,6 +54,7 @@ async function exportFolder(kernel: Kernel, deploymentId: string): Promise<Folde
       settings, actionsSource: text("app/actions.json"), schemaSource: text("app/schema.sql"),
       runtime: await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8"),
       staticArtifact: await readFile(path.join(repo, "src/lib/static-artifact.js"), "utf8"),
+      localBuilder: await readFile(path.join(repo, "src/lib/local-builder.js"), "utf8"),
     }));
     return entries;
   } finally {

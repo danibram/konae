@@ -350,7 +350,7 @@ function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose
 function FolderStart() {
   const [copied, setCopied] = useState<"" | "yes" | "no">("");
   // The installation's own address, as the Owner account page prints it for `konae login`.
-  const commands = ["konae init --dir .", `konae login --dir . --url ${window.location.origin}`, "konae publish --dir ."].join("\n");
+  const commands = ["konae init --dir .", `konae login --dir . --url ${window.location.origin} --browser`, "konae publish --dir ."].join("\n");
   const copy = () => {
     void navigator.clipboard?.writeText(commands).then(() => setCopied("yes"), () => setCopied("no"));
     window.setTimeout(() => setCopied(""), 2500);
@@ -358,7 +358,7 @@ function FolderStart() {
   return <details className="ui-disclosure new-project-folder">
     <summary>Work from a folder instead</summary>
     <div className="new-project-folder-body">
-    <p>In an empty folder on your computer, run these with the konae command. Login reads your owner email and password from KONAE_EMAIL and KONAE_PASSWORD. After the publish, the app shows on Projects as edited in a folder.</p>
+    <p>Download the konae command from a GitHub release. In an empty folder on your computer, run these commands. Login opens the installation in your browser so no password goes in the terminal. After publish, the app shows on Projects.</p>
     <pre><code>{commands}</code></pre>
     <Button size="sm" onClick={copy}>{copied === "yes" ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}{copied === "yes" ? "Copied" : "Copy commands"}</Button>
     </div>

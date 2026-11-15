@@ -58,6 +58,11 @@ describe("which Capsule files become pages", () => {
 });
 
 describe("the artifact", () => {
+  test("a document keeps its UTF-8 byte order mark in dist", async () => {
+    const artifact = await assemble({ "index.html": `\uFEFF${page("Home")}` });
+    expect(artifact.files["index.html"].charCodeAt(0)).toBe(0xfeff);
+  });
+
   test("holds every page with the SDK, the files the pages load, and public/ as is", async () => {
     const logo = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
     const artifact = await assemble({
