@@ -1,6 +1,6 @@
 # Releasing
 
-A release is a git tag `vX.Y.Z` whose version matches `package.json` and the Cargo workspace, with a matching section in `CHANGELOG.md`. Pushing that tag builds the `kernel` binaries and the install images, and opens a GitHub Release.
+A release is a git tag `vX.Y.Z` whose version matches `package.json` and the Cargo workspace, with a matching section in `CHANGELOG.md`. Pushing that tag builds the `kernel` and compiled `konae` CLI binaries and the install images, and opens a GitHub Release.
 
 ## What a release publishes
 
@@ -11,7 +11,7 @@ A release is a git tag `vX.Y.Z` whose version matches `package.json` and the Car
 
 Each push also tags `X.Y` and `latest`. Both images are multi-arch: one tag holds a `linux/amd64` and a `linux/arm64` image, and Docker pulls the one that matches the machine. The editor image in `Dockerfile` stays local to Compose and is not published.
 
-A published GitHub Release carries the `kernel` binaries for four configured platforms and a checksum file. Verify that the tag has been published and that each named asset exists before sharing a download link. A configured workflow is not evidence of a published release.
+A published GitHub Release carries the `kernel` binary and compiled `konae` CLI for each of four configured platforms, plus a checksum file. The workflow configures eight binaries and writes all eight checksums. Verify that the tag has been published and that each named asset exists before sharing a download link. A configured workflow is not evidence of a published release.
 
 | File | Platform |
 | --- | --- |
@@ -19,15 +19,19 @@ A published GitHub Release carries the `kernel` binaries for four configured pla
 | `kernel-X.Y.Z-darwin-x64` | macOS on Intel |
 | `kernel-X.Y.Z-linux-x64` | Linux on x86-64 |
 | `kernel-X.Y.Z-linux-arm64` | Linux on arm64 |
-| `SHA256SUMS` | The SHA-256 of the four binaries, one `<hash>  <file>` line each |
+| `konae-X.Y.Z-darwin-arm64` | Compiled Konae CLI on macOS Apple Silicon |
+| `konae-X.Y.Z-darwin-x64` | Compiled Konae CLI on macOS Intel |
+| `konae-X.Y.Z-linux-x64` | Compiled Konae CLI on Linux x86-64 |
+| `konae-X.Y.Z-linux-arm64` | Compiled Konae CLI on Linux arm64 |
+| `SHA256SUMS` | The SHA-256 of all eight binaries, one `<hash>  <file>` line each |
 
 The release workflow configures Linux binaries in `rust:1.91-bookworm` and macOS binaries on `macos-15` runners. Do not infer minimum operating-system support from those build settings; inspect and test each published artifact before stating its requirements. To check a download, run `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or `shasum -a 256 -c --ignore-missing SHA256SUMS` on macOS, in the folder that holds the file. The binaries are not signed or notarized, so macOS may quarantine a file saved from a browser. `xattr -d com.apple.quarantine <file>` clears that, and `curl` and `gh release download` never set it.
 
-The repository includes a script to build the compiled `konae` CLI. The published v0.8.0 release currently has the four Kernel binaries and `SHA256SUMS`, but no CLI assets. Build the CLI with `bun run scripts/build-konae-binary.ts` and copy its output to PATH. It downloads the Kernel binary matching its version and verifies it against `SHA256SUMS`; `KONAE_KERNEL_BIN` selects a local Kernel instead. Only macOS arm64 was verified for this CLI, and its binary requires macOS 13.0. Do not infer that configured assets or the release workflow were tested. [The CLI](./cli.md) covers installation and `dev`.
+The published v0.8.0 release currently has the four Kernel binaries and `SHA256SUMS`, but no CLI assets. Build the CLI with `bun run scripts/build-konae-binary.ts` and copy its output to PATH. It downloads the Kernel binary matching its version and verifies it against `SHA256SUMS`; `KONAE_KERNEL_BIN` selects a local Kernel instead. Only macOS arm64 was verified for this CLI, and its binary requires macOS 13.0. The other configured CLI platforms and release workflow were not tested. [The CLI](./cli.md) covers installation and `dev`.
 
 ### How the workflow builds it
 
-The workflow has five jobs. `prepare` reads the version and runs the checks below, so a mismatch fails before any build. `binaries` builds the four binaries, each on a runner of its own platform. `images` builds each image once per architecture and pushes it by digest, and `merge` joins the two digests under `X.Y.Z`, `X.Y` and `latest`. `release` runs last, after every binary and both merged images exist, and attaches the binaries and `SHA256SUMS` to the Release.
+The workflow has five jobs. `prepare` reads the version and runs the checks below, so a mismatch fails before any build. `binaries` builds both binaries for each configured platform. `images` builds each image once per architecture and pushes it by digest, and `merge` joins the two digests under `X.Y.Z`, `X.Y` and `latest`. `release` runs last, after every binary and both merged images exist, and attaches the eight binaries and `SHA256SUMS` to the Release.
 
 The `linux/arm64` images build on `ubuntu-24.04-arm`, a native runner, not under QEMU. The Rust stage compiles `rusqlite`'s bundled SQLite and `ring` from C, and the first release took longer under emulation than a deploy could wait. The Dockerfiles name no architecture, and their base images (`oven/bun`, `rust`, `debian:bookworm-slim`) are multi-arch. The macOS binaries build on `macos-15` and `macos-15-intel`.
 
@@ -67,7 +71,7 @@ After the first release, set each package's visibility to Public under the repos
    git push origin main "vX.Y.Z"
    ```
 
-6. The [Release](../.github/workflows/release.yml) workflow checks that the tag matches both version fields and that `CHANGELOG.md` has a `## [X.Y.Z]` section, builds the four binaries and both images, pushes the images to GHCR, and creates the GitHub Release from that section with the binaries and `SHA256SUMS` attached.
+6. The [Release](../.github/workflows/release.yml) workflow checks that the tag matches both version fields and that `CHANGELOG.md` has a `## [X.Y.Z]` section, builds the eight configured binaries and both images, pushes the images to GHCR, and creates the GitHub Release from that section with the binaries and `SHA256SUMS` attached.
 
 ## Release from your machine
 

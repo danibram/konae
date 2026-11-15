@@ -196,8 +196,8 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Run it
 
-1. To write \`dist/\`, install the packages listed by the app with \`npm install\`, then run \`npm run build\`. The standalone \`konae\` CLI includes the shared local builder and uses it when \`node_modules\` is absent. An app that imports an npm package needs its installed package before either build. An exported folder already carries its built \`dist/\`.
-2. Run \`konae dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes. The first run downloads the matching Kernel binary unless \`KONAE_KERNEL_BIN\` names one.
+1. To write \`dist/\`, if \`package.json\` lists an npm package, run \`npm install\` once, then \`npm run build\`. The shared local builder builds a template without an install. \`dev\` writes it without \`npm install\` when no imported package needs one. If \`package.json\` has a build script but \`node_modules/\` is absent, it uses the built-in builder. Once that directory exists, the builder runs \`npm run build\`. An exported folder already carries its built \`dist/\`.
+2. Run \`konae dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes. From a repository checkout, it uses that checkout's Kernel and builds it with Cargo if absent. The compiled CLI downloads the matching Kernel binary and verifies its checksum unless \`KONAE_KERNEL_BIN\` names a local one.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
 4. To publish on a Konae installation: \`konae login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`konae publish --dir <this folder>\`. \`konae push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so after a backup. A pending pull blocks push until you import the pulled data with \`dev --reset\`.
 

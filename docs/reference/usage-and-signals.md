@@ -12,13 +12,52 @@ signals_read   { "projectId", "name"?: "order.placed", "cursor"? }
 usage_overview { "from", "to", "cursor"? }
 ```
 
-All three need `read` and the project grant. Dates are UTC `YYYY-MM-DD`, both included, at most 400 days apart. `usage_summary` returns daily totals, signed-in account activity, storage and the newest 500 [scheduled runs](#scheduled-work) in the range:
+All three need `read`. `usage_summary` and `signals_read` also need the named project's grant. `usage_overview` lists only projects allowed by the credential. Dates are UTC `YYYY-MM-DD`, both included, at most 400 days apart. `usage_summary` returns project identifiers and URL at the top level. Daily totals, totals by kind and name, and the newest 500 [scheduled runs](#scheduled-work) are under `usage`; metrics, action declarations, accounts, storage, retained calls and mail, and coverage have their own top-level fields:
 
 ```json
-{ "from": "2026-11-01", "to": "2026-11-06",
-  "days": [{ "day": "2026-11-06", "kind": "action", "name": "notes.add", "count": 12 }],
-  "totals": [{ "kind": "action", "name": "notes.add", "count": 12 }],
-  "scheduled": [{ "action": "holds.release", "at": 1762423200000, "outcome": "ok", "changes": 2 }] }
+{
+  "deploymentId": "dep_…",
+  "projectId": "app_notes",
+  "projectName": "Notes",
+  "url": "https://notes.example.test",
+  "usage": {
+    "from": "2026-11-01",
+    "to": "2026-11-06",
+    "days": [{ "day": "2026-11-06", "kind": "action", "name": "notes.add", "count": 12 }],
+    "totals": [{ "kind": "action", "name": "notes.add", "count": 12 }],
+    "scheduled": [{ "action": "holds.release", "at": 1762423200000, "outcome": "ok", "changes": 2 }]
+  },
+  "metrics": [],
+  "actions": [],
+  "accounts": { "active": 0, "opens": 0, "actions": 0, "days": [], "top": [], "limit": 20, "startedAt": null },
+  "storage": {
+    "total": 0,
+    "files": 0,
+    "parts": [
+      { "part": "database", "bytes": 0, "limit": 268435456, "exported": true },
+      { "part": "files", "bytes": 0, "limit": 20971520, "exported": true },
+      { "part": "accounts", "bytes": 0, "limit": 67108864, "exported": true },
+      { "part": "usage", "bytes": 0, "limit": 134217728, "exported": true },
+      { "part": "published", "bytes": 0, "limit": null, "exported": true },
+      { "part": "sources", "bytes": 0, "limit": null, "exported": true },
+      { "part": "backups", "bytes": 0, "limit": null, "exported": false }
+    ]
+  },
+  "calls": { "states": [], "retainedOnly": true },
+  "mail": { "states": [], "retainedOnly": true },
+  "coverage": {
+    "startedAt": null,
+    "earliestMetricDay": null,
+    "prunedThrough": null,
+    "retentionDays": 400,
+    "approximate": true,
+    "previewIncluded": false,
+    "queueFlushed": true,
+    "installationDroppedSinceRestart": 0,
+    "installationWriteErrorsSinceRestart": 0
+  },
+  "updatedAt": 1762430000000
+}
 ```
 
 | Kind | Name | Counted when |

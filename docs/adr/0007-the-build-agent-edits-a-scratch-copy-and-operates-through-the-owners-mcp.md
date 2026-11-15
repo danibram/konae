@@ -13,9 +13,9 @@ The agent runs pi's `Agent` from `@earendil-works/pi-agent-core` with `@earendil
 ### It edits a draft, and Apply needs the Gate
 
 - The agent edits a copy of the app's files with `read`, `edit` and `write`. It has no shell.
-- A proposal appears in Preview before Apply. The editor gives it candidate rows, files and actor; Discard drops them, and Apply waits for a successful build and a ready preview host.
+- A proposal appears in Preview before Apply. Its candidate rows, files and actor stay private to that preview until Apply accepts it. Discard drops the candidate without saving it. Apply waits for a successful build and a ready preview host, merges the proposal into the editable project and updates the applied preview.
 - The Validation Gate reports refusal details and remedies. Its summary names only checks it ran, including when `PREVIEW_BEHIND` skips preview-row checks.
-- Autosave writes edited files through `project_sources_save` without running the Gate. Apply changes the applied preview state; it does not save files. A save after release planning makes apply refuse as stale.
+- Hand edits autosave through `project_sources_save` without running the Gate. Apply also updates the editable project, so the normal autosave then saves the accepted proposal without another Gate run. Discard does not save candidate files. If a source save lands after release planning, `release_apply` refuses the stale plan.
 - The whole app is seeded into the first message and the system prompt stays stable for prompt caching, so a typical edit takes one model turn, or two with a validation round.
 
 ### It reaches Konae through the owner's own MCP session

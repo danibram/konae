@@ -4,11 +4,28 @@ A project holds an app's sources, and a release publishes them as the Deployment
 
 ## Projects
 
-`project_create { name, projectId?, slug?, manifest?, template?, sourcesTransferId? }` needs `write`. Owner tools use `projectId` for the app identifier. It registers a project and returns a template's files, the ones `konae init` writes, because both read `kernel-rs/konae/src/project-templates.json`. The template is `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. Without a `manifest` the project takes the template's visibility. `project_inspect` returns the project, its Deployment and `sourcesRevision`, the number of times the editor saved its sources.
+`project_create { name, projectId?, slug?, manifest?, template?, sourcesTransferId? }` needs `write`. Owner tools use `projectId` for the app identifier. It registers a project and returns a template's files, the ones `konae init` writes, because both read `kernel-rs/konae/src/project-templates.json`. The template is `tasks`, `notes` (the default), `members`, `form`, `webhook`, `digest` or `gallery`. Without a `manifest` the project takes the template's visibility. `project_inspect` returns the project, its Deployment and `sourcesRevision`, which advances when Konae accepts source changes through project creation, source saves, releases, imports or a source backup restore.
 
-The editor uploads a new app's sources without a `projectId`, then calls `project_create` with `sourcesTransferId`. Konae checks the files and saves the project and its sources in one transaction, answering `sourcesRevision: 1`. A failed upload leaves no project. Repeating the same files returns the saved revision, and other files cannot replace a save through `project_create`. `project_inspect` returns the project, its Deployment and `sourcesRevision`, the number of times the editor saved its sources.
+The editor uploads a new app's sources without a `projectId`, then calls `project_create` with `sourcesTransferId`. Konae checks the files and saves the project and its sources in one transaction, answering `sourcesRevision: 1`. A failed upload leaves no project. Repeating the same files returns the saved revision, and other files cannot replace a save through `project_create`.
 
-`project_sources_save { projectId, transferId, expectedRevision }` saves the sources the editor opens when the revision still matches. The transfer holds `{ files, encodings }`. UTF-8 files are strings; binary files are base64 and listed in `encodings`. The editor saves all files of `app/`, including binary assets, under the shared path, file-count and decoded-size checks. It may send a full source document or a delta against the saved revision. In one measured case, opening a project transferred a 705,659-byte document, while changing one CSS file sent a 544-byte delta. Project cards read metadata without downloading sources; opening a project loads that project's files. The editor cancels known transfers after success, errors, replacement or navigation. Full document departure sends a keepalive cancellation keyed by request ID. If the browser stops before sending it and the transfer ID was never received, the owner transfer remains until its one-hour expiry.
+`project_sources_save { projectId, transferId, expectedRevision }` saves when `expectedRevision` matches the current `sourcesRevision`. Its upload can be a full source document with `id`, `name`, `slug`, `files`, `directories`, `manifest` and `updatedAt`; `encodings` is optional. UTF-8 file contents are strings. Binary contents are base64 strings named by `encodings: { "path": "base64" }`. The owner MCP requires a completed upload bound to the same project. The editor applies shared path, count and decoded-size checks before upload. It sends a full document when needed or a delta against the saved revision:
+
+```json
+{
+  "format": "delta",
+  "metadata": {
+    "name": "Notes",
+    "slug": "notes",
+    "directories": [],
+    "manifest": { "version": 1, "visibility": "private" },
+    "updatedAt": 1762430000001
+  },
+  "files": { "styles.css": "body { color: #222; }" },
+  "removedPaths": []
+}
+```
+
+For binary changes, add an `encodings` object for those changed paths. A delta replaces the named files, removes `removedPaths`, and replaces metadata with the fields under `metadata`. The save answers `{ "revision": 2 }`. In one measured case, opening a project transferred a 705,659-byte document, while changing one CSS file sent a 544-byte delta. Project cards read metadata without downloading sources; opening a project loads that project's files. The editor cancels known transfers after success, errors, replacement or navigation. Full document departure sends a keepalive cancellation keyed by request ID. If the browser stops before sending it and the transfer ID was never received, the owner transfer remains until its one-hour expiry.
 
 ```json
 { "id": "app_notes", "name": "Notes", "slug": "notes", "updatedAt": 1762430000000,

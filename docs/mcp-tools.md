@@ -4,7 +4,7 @@ An agent operates Konae through the owner's MCP on `/mcp`. The editor calls the 
 
 ## Connect
 
-Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256. Loopback clients receive a 24-hour token and may request `export_data`; other clients receive a one-hour token. Tokens have no refresh token. A client that supports headers can send a delegated token from `konae login`, from the owner sign-in page at `/_konae/owner/login`, which issues a token of 1, 7 or 30 days, or from `token_create`.
+Configure the endpoint `<editor origin>/mcp` in an MCP client. The editor origin is `http://localhost:4173` under `bun run dev:local`, `http://app.localhost:8080` under Compose, and `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. A client with OAuth discovers the server and opens a consent screen in the browser. The flow uses PKCE S256. Loopback clients receive a 24-hour token and may request `export_data`; other clients receive a one-hour token. Tokens have no refresh token. A client that supports headers can send a delegated token from `konae login` or `token_create`. The owner sign-in page at `/_konae/owner/login` establishes a browser session; the owner can create a delegated token from that session for 1, 7 or 30 days, capped at one hour under Clerk.
 
 ```text
 Authorization: Bearer YOUR_TOKEN
@@ -53,7 +53,9 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | `export_data` | `project_export` and reading its downloads |
 | The owner's browser session | `tokens_list`, `token_create`, `token_revoke` and `app_user_enter` |
 
-The transfer tools follow what they move. `transfer_begin`, `transfer_write` and `transfer_complete` need `write` or `publish`, `transfer_read` and `transfer_status` need `read`, or `export_data` for an export's downloads, and `transfer_cancel` takes any permission.
+`transfer_begin`, `transfer_write` and `transfer_complete` need `write` or `publish`; `transfer_read` and `transfer_status` need `read`, or `export_data` for an export's downloads. `transfer_cancel` accepts a credential with `read`, `write`, `publish` or `export_data`. A live transfer with a project ID also needs that project's grant. A scoped credential can act only on the existing project IDs it names and cannot create a project. An active upload without a project ID cannot be canceled with a scoped credential because Konae cannot check its grant. Canceling a missing or already-consumed ID is safe with any one of the four scopes.
+
+After a successful `release_apply`, Konae cancels the release JSON upload, any separate source upload and the package component uploads named by the release. The plan stores those IDs so a retry can finish cleanup after a fault. Replaying `release_apply` returns its saved receipt and runs cleanup again. A failed apply or a plan awaiting schema confirmation leaves its uploads available; `release_plan` alone does not consume them.
 
 A delegated token cannot create tokens or add permissions to itself. Run `konae login` again with the flag.
 

@@ -35,11 +35,11 @@ _Avoid_: owner, editor user
 ### The app and its files
 
 **Project**:
-An app as Konae's project list knows it: its ID, its name, its owner, its saved settings and the sources in `app/`. The same folder sources open in the editor, whether created there or with `konae init`. Project cards load metadata without asset payloads; opening a project loads its files. The installation's sources take precedence over any older browser backup.
+An app as Konae's project list knows it: its ID, its name, its owner, its saved settings and the sources in `app/`. The same folder sources open in the editor, whether created there or with `konae init`. `sourcesRevision` advances when Konae accepts source changes through project creation, saves, releases, imports or a source backup restore. Project cards load metadata without asset payloads; opening a project loads its files. The installation's sources take precedence over any older browser backup.
 _Avoid_: workspace, repo, app (when the editable source is meant)
 
 **App Folder**:
-The app's files and state. An app folder made by `konae init` includes `konae.json`, `app/`, `dist/`, `data/`, generated developer files and build scripts. The Kernel can open a portable folder with `konae.json`, `app/`, `dist/` and `data/`; it keeps installation state in `.konae/`. An export omits `.konae/`. `kernel-rs/kernel/src/layout.rs` names the Kernel paths (ADR-0001).
+The app's files and state. `konae init` writes `konae.json`, `app/`, generated developer files and build scripts. A build creates `dist/`; local development and the Kernel create or use `data/`. The Kernel opens a portable folder with `konae.json`, `app/`, `dist/` and `data/`; it keeps installation state in `.konae/`. An export omits `.konae/`. `kernel-rs/kernel/src/layout.rs` names the Kernel paths (ADR-0001).
 _Avoid_: kit, package, workspace, repo
 
 **Capsule**:
@@ -51,7 +51,7 @@ A named operation in `actions.json` and the only way a page reaches the database
 _Avoid_: raw SQL endpoint, database API
 
 **Validation Gate**:
-The editor checks `schema.sql`, `actions.json` and file access declarations against preview state. A proposal appears in Preview before Apply and uses candidate rows, files and actor. Apply waits for a successful build and ready preview. Autosave records edits, including hand edits; it does not run the Gate. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004).
+The editor checks `schema.sql`, `actions.json` and file access declarations against preview state. A proposal stays in a candidate preview with candidate rows, files and actor until Apply accepts it. Apply waits for a successful build and a ready preview, merges the proposal into the editable project and updates the preview. The normal autosave then saves the accepted files through `project_sources_save` without another Gate run. Hand edits autosave the same way. Discard drops candidate state without saving it. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004). A source save after release planning makes `release_apply` refuse the stale plan.
 _Avoid_: linter, preview
 
 **Refusal**:
@@ -219,7 +219,7 @@ Konae's MCP on `/mcp`, which the editor, the build agent and an outside agent al
 _Avoid_: Admin Interface, admin API
 
 **Scratch Copy**:
-The candidate files the build agent edits in the browser. Autosave records the saved draft without running the Gate. A proposal previews candidate rows, files and actor before Apply changes the applied preview. Discard drops candidate state. Apply waits for the build and preview host to be ready (ADR-0007).
+The candidate files the build agent edits in the browser. A proposal previews candidate rows, files and actor before Apply. Discard drops the candidate without saving it. Apply accepts the proposal into the editable project after the build and preview host are ready. The normal autosave saves it without running the Gate again. Hand edits also autosave without the Gate (ADR-0007).
 _Avoid_: Agent Workspace, sandbox
 
 **Project List**:

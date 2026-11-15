@@ -2,7 +2,9 @@
 
 This page follows an outside agent as it operates Konae through the owner's MCP: get an Agent Credential, create a project, run it on this machine, give it a second page, a signed webhook, an API key, a guarded mutation, a Signal and a private file, invite an app user, check it against its Action Contract, read its Usage and Signals, then export and import it on another installation. Publishing uses `konae publish`, the CLI release path.
 
-The command and answer blocks below are the checked-in recorder output. The recorder test must pass before those blocks can be updated. The owner MCP handles operations. `konae publish` uses the same release checks as the editor.
+The command and answer blocks come from `tests/mcp-walkthrough.integration.test.ts`, which records two local Konae installations and a local `dev` app. Set `KONAE_WALKTHROUGH_WRITE=1` to regenerate the blocks; a normal test run compares them with this page. Angle-bracket values mark changing data. Do not edit the recorded blocks by hand.
+
+The walkthrough uses ports 4173 and 4174 for the installations and 8796 for local `dev`; the events page uses the next port. App addresses use `<slug>.localhost` on the installation or local `dev` port. The owner MCP is at `<installation URL>/mcp`. An app's runtime MCP is at `/_konae/mcp` on its app host. The owner MCP handles operations. `konae publish` uses the same release checks as the editor.
 
 A tool call is shown as the `params` of a JSON-RPC `tools/call` request to `<Kernel URL>/mcp` with `Authorization: Bearer <token>`, followed by its answer. The answer is the tool's `structuredContent` as `{ "result": ... }`, a tool error as `{ "refused": "<text>" }`, or a JSON-RPC error as `{ "error": "<message>"}`. Some long answers show only the fields the step needs. [The reference](reference/README.md) explains every tool, and [the miniapp SDK](sdk.md) every call an app makes.
 
@@ -87,12 +89,26 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 ```json
 {
   "result": {
+    "anonymousRuntimeTools": [
+      "auth_session",
+      "actions_invoke",
+      "files_list",
+      "files_read",
+      "transfer_read",
+      "transfer_status",
+      "transfer_cancel",
+      "auth_signup",
+      "auth_verify",
+      "auth_recover",
+      "auth_reset"
+    ],
     "chunkBytes": 4194304,
+    "credentialScope": "A project-scoped credential can act only on the existing project IDs it names, within its permissions. It cannot create projects.",
     "files": {
       "maxFileBytes": 2097152,
       "quotaBytes": 20971520
     },
-    "firstRun": "platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run konae -- publish, then project_inspect and one actions_invoke.",
+    "firstRun": "Run konae init and konae dev, then konae login --browser and konae publish. Read the published configuration with project_inspect, open the Deployment URL, sign in if the app is private, and call a real Server Action through its runtime MCP endpoint with the appropriate app session.",
     "guideTopics": [
       "rules",
       "pieces",
@@ -112,24 +128,31 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "runtimeEndpoint": "/_konae/mcp",
     "runtimeTools": [
       "auth_session",
+      "auth_logout",
       "actions_invoke",
       "files_list",
       "files_read",
       "files_upload",
       "files_update",
-      "files_delete"
+      "files_delete",
+      "transfer_read",
+      "transfer_status",
+      "transfer_cancel",
+      "transfer_begin",
+      "transfer_write",
+      "transfer_complete",
+      "auth_signup",
+      "auth_verify",
+      "auth_recover",
+      "auth_reset"
     ],
     "workflow": [
-      "platform_guide topic rules",
-      "platform_guide topic pieces",
-      "a credential: platform_guide topic credentials",
-      "project_create",
-      "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-      "build locally, or write the release JSON of the publishing topic",
-      "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
-      "release_plan once",
-      "release_apply",
-      "project_inspect"
+      "konae init and konae dev",
+      "konae login --browser",
+      "konae publish",
+      "project_inspect",
+      "open the Deployment URL and sign in if the app is private",
+      "call a real Server Action through the runtime MCP endpoint with the appropriate app session"
     ],
     "yardstick": "A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged."
   }
@@ -163,10 +186,11 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
       "none": "platform_describe, platform_guide, session_inspect and mail_status",
       "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter",
       "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
-      "read": "projects_list, project_inspect, project_sources_read, signup_policy_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_read, signals_read, usage_summary, usage_overview, calls_read, notices_read and database_execute reads",
+      "read": "projects_list, project_inspect (including deployment.signupPolicy), project_sources_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_summary, signals_read, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
-    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds. An expired token answers 401 with the time it expired. One from OAuth says to run konae login --browser for the CLI or reconnect the MCP client. Any other says how long tokens from konae login last on this installation and to run konae login again.",
+    "projectScope": "A project-scoped credential can act only on the existing project IDs it names, within the permissions it holds. It cannot create a project. Create projects from the owner's browser session or publish a folder with konae.",
+    "refusals": "A tool this credential may not call answers 'Unknown tool or insufficient permission.' and names the permission it needs. A delegated token cannot create tokens or add permissions to itself, so run login again with the flag. session_inspect lists scopes and can for what the current credential holds. An expired token answers 401 with its expiry time and offers the recovery steps for that credential; use konae login for a new CLI credential, reconnect the MCP client, or sign in as the owner.",
     "secrets": "bun run konae -- secret set <name> --dir <folder> [--use route|call|google] reads the value from stdin, so it stays out of the agent's context and argv. The owner pipes it in or types it at the hidden prompt. It reads the name back with secrets_list. secret list prints names and uses, never values. Prefer it to secret_set with the value as an argument."
   }
 }
@@ -211,7 +235,7 @@ Token goes to: agent.example
 Allow only if you recognise this address.
 It may: Read: See your projects, their files and their data
 Edit: Change project files and data
-Publish: Publish and roll back your apps
+Publish: Publish your apps
 Manage users: Decide who may sign in to your apps
 For: One hour. After that it must ask again. You can revoke it sooner on your owner page.
 On: All of your projects on localhost:4173
@@ -607,9 +631,9 @@ This first release names the app http://orders.localhost:4173, and every later r
 
 ```json
 {
-  "name": "signup_policy_read",
+  "name": "project_inspect",
   "arguments": {
-    "deploymentId": "<project id>"
+    "projectId": "<project id>"
   }
 }
 ```
@@ -618,9 +642,7 @@ This first release names the app http://orders.localhost:4173, and every later r
 {
   "result": {
     "allowlist": [],
-    "deploymentId": "<project id>",
-    "mode": "invitation",
-    "visibility": "private"
+    "mode": "invitation"
   }
 }
 ```
@@ -652,7 +674,7 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
 {
   "name": "app_invitations_create",
   "arguments": {
-    "deploymentId": "<project id>",
+    "projectId": "<project id>",
     "emails": [
       "member@walkthrough.test"
     ],
@@ -691,7 +713,7 @@ Check that the installation sends email, then invite. Call `app_invitations_crea
 {
   "name": "app_invitations_create",
   "arguments": {
-    "deploymentId": "<project id>",
+    "projectId": "<project id>",
     "emails": [
       "member@walkthrough.test"
     ],
@@ -1014,7 +1036,7 @@ content-type: application/json
 {
   "name": "api_keys_create",
   "arguments": {
-    "deploymentId": "<project id>",
+    "projectId": "<project id>",
     "name": "Accounting export",
     "actions": [
       "orders.feed"
@@ -1115,14 +1137,14 @@ PASS routes: refuses a POST to a path no action binds. Answered 405 "No route ac
 
 ## 12. Read Usage and Signals
 
-`usage_read` counts what the Kernel allowed, by day, and each guard refusal under `refused`:
+`usage_summary` reports what the Kernel allowed by day and each guard refusal under `refused`:
 
 <!-- walkthrough:usage -->
 ```json
 {
-  "name": "usage_read",
+  "name": "usage_summary",
   "arguments": {
-    "deploymentId": "<project id>",
+    "projectId": "<project id>",
     "from": "<today>",
     "to": "<today>"
   }
@@ -1193,7 +1215,7 @@ PASS routes: refuses a POST to a path no action binds. Answered 405 "No route ac
 {
   "name": "signals_read",
   "arguments": {
-    "deploymentId": "<project id>"
+    "projectId": "<project id>"
   }
 }
 ```
@@ -1240,7 +1262,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
 {
   "name": "project_export",
   "arguments": {
-    "deploymentId": "<project id>"
+    "projectId": "<project id>"
   }
 }
 ```
@@ -1259,7 +1281,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
 {
   "name": "project_export",
   "arguments": {
-    "deploymentId": "<project id>"
+    "projectId": "<project id>"
   }
 }
 ```
@@ -1301,7 +1323,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "chunkBytes": 4194304,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
-      "size": 26112,
+      "size": 29184,
       "transferId": "<folder download>"
     },
     "manifest": {
@@ -1348,7 +1370,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         "allowlist": [],
         "mode": "invitation"
       },
-      "sourcesRevision": null,
+      "sourcesRevision": 1,
       "version": 1,
       "visibility": "private"
     },
@@ -1548,7 +1570,8 @@ Built /tmp/orders/dist
 {
   "name": "release_plan",
   "arguments": {
-    "transferId": "<release upload>"
+    "transferId": "<release upload>",
+    "observedSourcesRevision": 0
   }
 }
 ```
@@ -1558,6 +1581,7 @@ Built /tmp/orders/dist
   "result": {
     "artifactSha256": "<sha256>",
     "expectedRevision": 0,
+    "expectedSourcesRevision": 0,
     "expiresAt": <time ms>,
     "firstRelease": true,
     "hostname": "orders.localhost",
@@ -1644,7 +1668,7 @@ content-type: application/json
 {
   "name": "api_keys_list",
   "arguments": {
-    "deploymentId": "<project id>"
+    "projectId": "<project id>"
   }
 }
 ```

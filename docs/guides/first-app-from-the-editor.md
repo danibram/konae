@@ -51,7 +51,7 @@ The editor preview is not a Deployment. It applies no Content Security Policy, s
 - calls to other services, from `kind: call`
 - the Usage store
 - Google sign-in
-- Programmatic asset fetches and runtime-created asset URLs
+- Programmatic fetches of local saved assets and runtime-created URLs that point to local saved assets. Other-origin fetches can run in preview because it has no Content Security Policy.
 - the installation's file limit, which the preview fixes at 2 MiB, where `konae dev` and a Deployment refuse at `KONAE_FILE_MAX_BYTES`, 2 MiB unless raised
 
 The Gate checks the schema, `actions.json` and that a page runs the app's entrypoint. A page that names a missing file fails at build or release, not at the Gate, so check every path you write.

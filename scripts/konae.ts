@@ -121,29 +121,35 @@ login     --dir <folder> --url <installation URL> [--browser [--no-open]] [--man
           [--verify-from <mailbox.jsonl>]
           --browser prints an address and opens it, unless --no-open. Open it in a browser on this
           machine, sign in as the owner and allow access within 5 minutes. No password reaches the
-          terminal, and the token is the same 24-hour one (1 hour on an installation that signs owners in with Clerk).
+          terminal. It saves the OAuth token returned by the installation, usually valid for 24 hours
+          and capped at one hour when the installation uses Clerk.
           Without --browser, reads KONAE_EMAIL and KONAE_PASSWORD, and asks for either one that is unset
           when there is a terminal. KONAE_INVITATION_CODE creates the account with an operator's
           invitation code, and KONAE_SETUP_KEY creates the first owner.
           Saves a 24-hour token with read, write and publish in <folder>/.konae/credentials.json.
+          KONAE_URL sets the default installation URL for login; otherwise it uses http://localhost:4173.
           Each flag adds that permission: inviting app users and exporting live data.
           On a Kernel that verifies email, creating the account sends a link; --verify-from reads it from
           a development mailbox on this machine and sets KONAE_PASSWORD, for loopback Kernels only.
 init      --dir <empty folder> [--name <name>] [--template <id>]
           Writes konae.json, app/, compose.yaml, .env.example, .gitignore, AGENTS.md, action-contract.md,
           actions.d.ts, package.json, tsconfig.json and scripts/build.mjs, scripts/static-artifact.mjs,
-          scripts/local-builder.mjs and scripts/runtime.js. npm run build writes dist/. It needs no
+          scripts/local-builder.mjs and scripts/runtime.js. Build writes dist/. It needs no
           credential and no Kernel, and the first publish registers the project.
           Templates: ${INIT_TEMPLATES.join(", ")}.
 dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
-          Builds dist/ with the shared local builder and runs the matching kernel binary on the folder, with data/ as its data, and starts it again when a file in app/ changes. It downloads that Kernel version and verifies its checksum unless KONAE_KERNEL_BIN names a local binary. The Kernel checks the folder as a release. Its email,
+          Builds dist/ with the shared local builder and runs the matching kernel binary on the folder,
+          with data/ as its data. From a checkout it uses that Kernel and builds it with Cargo if absent.
+          The compiled CLI downloads its matching Kernel and verifies SHA256SUMS, unless
+          KONAE_KERNEL_BIN names a local binary. The Kernel checks the folder as a release. Its email,
           notices and invitations included, goes to <folder>/.konae/kernel/mailbox.jsonl.
           An app whose Signup Policy is not open and that holds no account gets one invited at
           test@example.com, and dev prints the link that opens it.
           A file over 2 MiB is refused as on a Kernel; KONAE_FILE_MAX_BYTES raises that limit.
+          The shared local builder runs npm run build when package.json has a build script and
+          node_modules exists; otherwise it uses its built-in builder. Install imported packages first.
           It sets and prints a local value for each signing secret actions.json names, and serves a
           page of what the app did (email, calls, scheduled runs, Signals) on the next port.
-          KONAE_KERNEL_BIN names a kernel binary to run instead of downloading the matching release binary.
           --reset imports the data pull exported into data/, after a backup, or empties data/ when there is none.
           A schema change that loses data is refused; --confirm-schema applies the plan it names.
           Writes actions.d.ts, which types miniapp.actions.call.
@@ -161,11 +167,14 @@ pull      --dir <folder> [--url <installation URL>]
           stages published files and preserves local edits. dev --reset imports pulled data after a backup.
           A pending pull blocks push until that import finishes.
 push      --dir <folder> [--url <installation URL>] [--yes] [--confirm-schema <confirmation>]
-          Replaces the published app's data with <folder>/data: database, accounts, files and Usage. A pending pull must be imported with dev --reset first.
+          Replaces published data with <folder>/data: database, accounts, files and Usage. Import a
+          pending pull with dev --reset first.
           Rows are never merged. Without --yes it prints rows here against published rows and sends
           nothing. With it, the app goes into maintenance, the import backs up the published data
           first and prints the backup's id, and maintenance ends, on failure too.
-build     --dir <folder>                 Builds app/ into dist/ with the shared builder. Packages declared in package.json must be installed in node_modules.
+build     --dir <folder>                 Builds app/ into dist/ with the shared builder.
+          It runs npm run build with a package.json build script and node_modules; otherwise it uses
+          the built-in builder. Install imported npm packages first.
 contract  --dir <folder> [--out <folder>]   Writes action-contract.json, its schema, action-contract.md and
           actions.d.ts, which types miniapp.actions.call.
 publish   --dir <folder> [--url <installation URL>] [--confirm-schema <confirmation>]

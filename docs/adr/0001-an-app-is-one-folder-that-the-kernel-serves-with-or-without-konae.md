@@ -33,7 +33,7 @@ my-app/
   scripts/local-builder.mjs, scripts/runtime.js
 ```
 
-`konae init` writes it, `konae dev` serves it on the `kernel` binary, an export downloads it, and the Kernel keeps each app in it under `apps/<id>/`. Inside the Kernel the folder also holds `.konae/`, which keeps what the installation knows about the app, such as its record, backups, maintenance state, custom domain and path address. An export never hands `.konae/` over.
+This tree shows the portable folder after a build and a Kernel start have created `dist/` and `data/`. `konae init` writes `konae.json`, `app/`, the developer files and build scripts. `konae build` creates `dist/`; `konae dev` and the Kernel create or use `data/`. An export downloads the app folder, and the Kernel keeps each app under `apps/<id>/`. Inside Konae the folder also holds `.konae/`, which keeps what the installation knows about the app, such as its record, backups, maintenance state, custom domain and path address. An export never hands `.konae/` over.
 
 Secrets live in `data/secrets.sqlite`, because each secret has a use (`route`, `call` or `google`) and that needs a table, and because a Kernel without Konae must find the app's secrets in the app's own data. An export leaves the file out, and the `secret` command or `secret_set` sets them again on the destination.
 

@@ -1,7 +1,6 @@
-// `konae pull` exports the published app's data into .konae/pull, an app
-// folder that holds only data/, and `konae dev --reset` imports it with the
-// kernel binary's import command. Nothing here writes to the app it came
-// from; push.ts sends data/ back.
+// `konae pull` stages the published sources, artifact, settings and data in
+// .konae/pull. A clean source tree receives app/ and konae.json; `dev --reset`
+// imports the staged data, and push.ts sends local data/ back to the Deployment.
 import { mkdir, mkdtemp, readFile, readdir, rename as fsRename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";

@@ -28,6 +28,6 @@ test("the folder's AGENTS.md says when dist/ needs npm install and when it does 
   const build = JSON.parse(files.find((file) => file.path === "package.json")?.contents as string).scripts.build;
   expect(build).toBe("node scripts/build.mjs");
   expect(guide).toContain("run `npm install` once, then `npm run build`");
-  expect(guide).toContain("`dev` write it without `npm install`");
-  expect(guide).toContain("until `node_modules` exists, then run `npm run build`");
+  expect(guide).toContain("`dev` writes it without `npm install`");
+  expect(guide).toContain("Once that directory exists, the builder runs `npm run build`");
 });
