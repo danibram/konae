@@ -144,7 +144,7 @@ dev       --dir <folder> [--port 8796] [--events-port 8797] [--reset] [--confirm
           with data/ as its data. From a checkout it uses that Kernel and builds it with Cargo if absent.
           The compiled CLI downloads its matching Kernel and verifies SHA256SUMS, unless
           KONAE_KERNEL_BIN names a local binary. The Kernel checks the folder as a release. Its email,
-          notices and invitations included, goes to <folder>/.konae/kernel/mailbox.jsonl.
+          notices and invitations included, goes to <folder>/.konae/kernel/mail-testbox.jsonl.
           An app whose Signup Policy is not open and that holds no account gets one invited at
           test@example.com, and dev prints the link that opens it.
           A file over 2 MiB is refused as on a Kernel; KONAE_FILE_MAX_BYTES raises that limit.
@@ -975,7 +975,7 @@ export async function initLocal(root: string, options: { name?: string; template
 }
 
 /** The Kernel `dev` runs on the folder, and the commands `sql`, `events` and `dev` give it. */
-export type LocalKernel = { binary: string; env: Record<string, string | undefined>; data: string; run(args: string[], input?: string): Promise<string> };
+export type LocalKernel = { binary: string; env: Record<string, string | undefined>; data: string; mailbox: string; run(args: string[], input?: string): Promise<string> };
 
 /**
  * 1 TiB, the quota a local Kernel holds unless KONAE_FILES_QUOTA_BYTES names another.
@@ -1027,7 +1027,7 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     if (code !== 0) throw Error(error.trim().replace(/^Error: /, "") || `kernel ${args[0]} stopped with ${code}.`);
     return output;
   };
-  return { binary, env, data, run };
+  return { binary, env, data, mailbox: path.join(data, "mail-testbox.jsonl"), run };
 }
 
 const KERNEL_RELEASE = "https://github.com/danibram/konae/releases/download";
@@ -1455,7 +1455,7 @@ export async function main() {
       // Only the local Kernel has a mailbox this machine can read.
       // dev's events page stamps each mail when it is written, so its answer is preferred to a read from here.
       const served = feed ? await fetch(`${feed}/events.json?days=${days}`).then((response) => response.ok ? response.json() as Promise<AppEvent[]> : undefined).catch(() => undefined) : undefined;
-      const events = served ?? await readEvents(record, deploymentId, { days, seen, mailbox: local ? path.join(local.data, "mailbox.jsonl") : undefined });
+      const events = served ?? await readEvents(record, deploymentId, { days, seen, mailbox: local?.mailbox });
       for (const event of events) {
         // A notice or a call changes state, so the same event prints again when its outcome does.
         const key = `${event.id}:${event.outcome}`;
@@ -1542,7 +1542,7 @@ export async function main() {
       // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
       const { serveEvents } = await import("./events");
       const eventsPort = Number(option("events-port", String(Number(port) + 1)));
-      try { feed = serveEvents(kernelRecord(kernel), settings.id, path.join(kernel.data, "mailbox.jsonl"), eventsPort); }
+      try { feed = serveEvents(kernelRecord(kernel), settings.id, kernel.mailbox, eventsPort); }
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
       const policy = settings.signupPolicy.mode;
@@ -1550,7 +1550,7 @@ export async function main() {
         // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
         const envFile = path.join(root, ".konae/kernel.env");
         await writeFile(envFile, Object.entries(kernel.env).filter(([name]) => name.startsWith("KONAE_")).map(([name, value]) => `${name}=${value}\n`).join(""), { mode: 0o600 });
-        const mailbox = path.join(kernel.data, "mailbox.jsonl");
+        const mailbox = kernel.mailbox;
         const test = await inviteTestAccount(kernel, mailbox).catch((error) => ({ failed: error instanceof Error ? error.message : String(error) }));
         if (test.line) console.log(test.line);
         if (test.failed) console.warn(`Could not invite the test account. ${test.failed}`);
