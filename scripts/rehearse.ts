@@ -13,7 +13,7 @@ export type RehearsalEvidence = { snapshotId: string; candidateSourceDigest: str
 
 /** Starts and stops the Kernel once so operator commands can address the scratch Deployment. */
 export async function bootLocalKernel(kernel: { binary: string; env: Record<string, string | undefined> }) {
-  const server = Bun.spawn([kernel.binary], { env: kernel.env, stdout: "pipe", stderr: "pipe" });
+  const server = Bun.spawn([kernel.binary], { env: { ...kernel.env, KONAE_KERNEL_PORT: "0" }, stdout: "pipe", stderr: "pipe" });
   let output = "";
   const collect = async (stream: ReadableStream<Uint8Array>) => {
     const decoder = new TextDecoder();
@@ -40,7 +40,7 @@ export async function importWithLocalKernel(kernel: { binary: string; env: Recor
   return kernel.run(["import", snapshot]);
 }
 
-/** Builds a scratch app from the exact folder and data exported by the latest pull, then runs its Kernel import. */
+/** Copies current app sources and build into scratch, then imports the immutable pulled data. */
 export async function rehearsePulledSnapshot(root: string, settings: AppSettings, importSnapshot: (appFolder: string, snapshotFolder: string) => Promise<unknown>): Promise<RehearsalEvidence> {
   const pull = path.join(root, PULL_DIRECTORY);
   const pulled = await readPulled(root);

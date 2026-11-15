@@ -118,7 +118,7 @@ async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Resu
         }
         Some("calls") => {
             ensure!(words.rest().is_empty(), "{}", usage());
-            Ok(json!({"calls": crate::calls::list_captured_requests_for_app(state, id).await?}))
+            Ok(json!({"calls": crate::calls::list_test_calls_for_app(state, id).await?}))
         }
         Some("reply") => {
             let call = words.required("the captured call's ID")?;
