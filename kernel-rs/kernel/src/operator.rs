@@ -17,7 +17,7 @@ use crate::{
     Settings, SignupMode, Startup,
 };
 
-const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter"];
+const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test"];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -33,6 +33,9 @@ pub fn usage() -> &'static str {
   kernel secret set <name> [--use route|call|google]   reads the value from standard input
   kernel sql <statement>
   kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>
+  kernel capabilities
+  kernel test status [--app <id>]
+  kernel test schedule <action> [--app <id>]
   kernel maintenance on|off
   kernel enter <email>   prints a one-time link that signs this browser in as the account, for 2 minutes
   kernel import <folder> [--confirm-schema <confirmation>]   replaces the app's data with the data/ of an exported folder, after a backup"
@@ -74,6 +77,11 @@ pub fn mail_key(data_root: &std::path::Path) -> Result<String> {
 /// it names none of these.
 pub async fn command(installation: &Installation) -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|name| name == "capabilities") {
+        ensure!(args.len() == 1, "kernel capabilities takes no arguments.");
+        println!("{}", serde_json::to_string_pretty(&crate::execution::capabilities())?);
+        return Ok(true);
+    }
     if matches!(args.first().map(String::as_str), Some("help" | "--help")) {
         println!("{}", usage());
         return Ok(true);
@@ -86,9 +94,26 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let startup = Startup::from_env()?;
     let state = crate::state_from_env(&startup, installation.clone(), &mail_key(&startup.data_root)?, Vec::new(), None).await?.0;
     let id = app_id(&state, app).await?;
-    let answer = run(&state, &id, name, &mut words).await?;
+    let answer = if name == "test" { test_command(&state, &id, &mut words).await? } else { run(&state, &id, name, &mut words).await? };
     println!("{}", serde_json::to_string_pretty(&answer)?);
     Ok(true)
+}
+
+async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {
+    ensure!(state.execution_mode.is_test(), "Kernel test controls require KONAE_EXECUTION_MODE=test.");
+    let deployment = served(state, id).await?;
+    match words.next().as_deref() {
+        Some("status") => {
+            ensure!(words.rest().is_empty(), "{}", usage());
+            Ok(json!({"mode": "test", "pausedSchedules": crate::schedule::paused_schedules(&deployment)}))
+        }
+        Some("schedule") => {
+            let action = words.required("the scheduled action's name")?;
+            ensure!(words.rest().is_empty(), "{}", usage());
+            crate::schedule::run_manually(state, &deployment, &action).await
+        }
+        _ => bail!("{}", usage()),
+    }
 }
 
 async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> Result<Value> {

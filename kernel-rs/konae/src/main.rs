@@ -213,7 +213,7 @@ mod startup_tests {
     async fn konae_names_a_taken_port_in_its_bind_error() {
         let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = held.local_addr().unwrap().port();
-        let startup = kernel::Startup { port, bind: "127.0.0.1".into(), hosts: kernel::hosts::resolve(|_| None).unwrap(), data_root: std::path::PathBuf::new() };
+        let startup = kernel::Startup { port, bind: "127.0.0.1".into(), hosts: kernel::hosts::resolve(|_| None).unwrap(), data_root: std::path::PathBuf::new(), execution_mode: kernel::execution::ExecutionMode::Live };
         let message = kernel::bind(&startup).await.unwrap_err().to_string();
         assert!(message.contains(&format!("Port {port} on 127.0.0.1 is already in use")), "{message}");
         assert!(message.contains("KONAE_KERNEL_PORT"), "{message}");

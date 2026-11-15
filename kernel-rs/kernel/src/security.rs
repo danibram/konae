@@ -205,10 +205,13 @@ pub async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
 }
 
 /// Adds the isolation headers to every response.
-pub async fn headers(State(state): State<AppState>, request: Request, next: Next) -> Response {
+pub async fn headers(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let deployment = deployment_for_request(&state, request.headers(), request.uri().path()).await;
     let app = deployment.is_some();
-    let connects = deployment.map(|deployment| super::calls::connects(&deployment.manifest)).unwrap_or_default();
+    if state.execution_mode.is_test() && app {
+        request.headers_mut().remove(header::IF_NONE_MATCH);
+    }
+    let connects = if state.execution_mode.is_test() { Vec::new() } else { deployment.map(|deployment| super::calls::connects(&deployment.manifest)).unwrap_or_default() };
     let hsts = hsts(&state, request.headers());
     let response = next.run(request).await;
     let (mut parts, body) = response.into_parts();
@@ -274,6 +277,30 @@ mod tests {
         let same = client.get(format!("http://{address}/same")).header("host", &host).send().await.unwrap();
         assert_eq!(same.status(), StatusCode::NOT_MODIFIED);
         assert!(same.headers().get(header::CONTENT_SECURITY_POLICY).is_none());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn test_mode_removes_manifest_connects_from_the_browser_policy() {
+        let root = std::env::temp_dir().join(format!("konae-security-test-csp-{}", uuid::Uuid::new_v4()));
+        let (mut state, visitor) = crate::tests::login_test_state(&root, "public").await;
+        state.execution_mode = crate::execution::ExecutionMode::Test;
+        for deployment in state.deployments.write().await.values_mut() {
+            deployment.manifest["connects"] = json!(["https://outside.example"]);
+        }
+        let app = axum::Router::new().route("/probe", axum::routing::get(|headers: HeaderMap| async move {
+            if headers.contains_key(header::IF_NONE_MATCH) { StatusCode::NOT_MODIFIED.into_response() }
+            else { ([(header::CONTENT_TYPE, "text/html")], "<script>window.testMode=1</script>").into_response() }
+        }))
+            .layer(axum::middleware::from_fn_with_state(state.clone(), headers)).with_state(state);
+        use tower::ServiceExt;
+        let request = Request::builder().uri("/probe").header(header::HOST, visitor[header::HOST].clone())
+            .header(header::IF_NONE_MATCH, "\"cached\"").body(Body::empty()).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let policy = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(policy.contains("connect-src 'self';"), "{policy}");
+        assert!(!policy.contains("outside.example"), "{policy}");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

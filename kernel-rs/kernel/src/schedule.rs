@@ -190,6 +190,7 @@ pub fn check_subscribe(name: &str, action: &ActionDefinition) -> Result<(), Refu
 
 /// Starts the timer. It runs for as long as the Kernel does.
 pub fn spawn(state: AppState, clock: Clock) {
+    if state.execution_mode.is_test() { return; }
     if let Some(seconds) = clock.test_seconds {
         println!("Scheduled work runs every {seconds} seconds ({TEST_CLOCK}).");
     }
@@ -202,6 +203,58 @@ pub fn spawn(state: AppState, clock: Clock) {
             tick(&state, clock, &running).await;
         }
     });
+}
+
+/// The schedule declarations held by a Deployment, with their test-mode state.
+pub fn paused_schedules(deployment: &super::Deployment) -> Vec<Value> {
+    let Ok(program) = serde_json::from_str::<ActionProgram>(&deployment.actions) else { return Vec::new() };
+    let mut schedules = program.actions.into_iter().filter_map(|(name, action)| {
+        declaration(&name, &action).ok().flatten().map(|schedule| json!({"action": name, "schedule": schedule.key(), "paused": true}))
+    }).collect::<Vec<_>>();
+    schedules.sort_by(|left, right| left["action"].as_str().cmp(&right["action"].as_str()));
+    schedules
+}
+
+/// Runs one declared schedule on demand from an operator command.
+pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name: &str) -> anyhow::Result<Value> {
+    anyhow::ensure!(state.execution_mode.is_test(), "Manual schedule runs are available only in local test mode.");
+    let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
+    let action = program.actions.get(name).ok_or_else(|| anyhow::anyhow!("Action {name} does not exist."))?;
+    let schedule = declaration(name, action)?.ok_or_else(|| anyhow::anyhow!("Action {name} does not declare a schedule."))?;
+    let folder = crate::layout::data(&state.data_root, &deployment.id);
+    anyhow::ensure!(folder.is_dir(), "App data for {} does not exist.", deployment.id);
+    let _lock = super::action_lock(state, &deployment.id, &action.kind).await;
+    anyhow::ensure!(super::maintenance::pause(&state.data_root, &deployment.id).is_none(), "App {} is in maintenance.", deployment.id);
+    let at = super::now_ms();
+    let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
+    let key_value = format!("{} (manual test)", schedule.key());
+    let slot = at as i64;
+    match outcome {
+        Ok(ran) => {
+            let changes = ran.answer["changes"].as_u64().unwrap_or(0);
+            let action_name = name.to_owned();
+            let key = key_value.clone();
+            blocking(&folder, move |folder| usage::record_run(folder, &usage::Run {
+                action: &action_name, schedule: &key, slot, at, changes: Some(changes), error: None,
+            })).await?;
+            if changes > 0 {
+                usage::signal(&state.data_root, &deployment.id, name, action, &json!({}), None);
+                super::notify::record(state, deployment, name, action, &json!({}),
+                    super::notify::Caller { account: None, actor_id: None }, ran.changed(at)).await;
+            }
+            Ok(json!({"ran": true, "action": name, "schedule": schedule.key(), "changes": changes, "at": at}))
+        }
+        Err(error) => {
+            let action_name = name.to_owned();
+            let error_text = error.to_string();
+            let stored_error = error_text.clone();
+            let key = key_value;
+            blocking(&folder, move |folder| usage::record_run(folder, &usage::Run {
+                action: &action_name, schedule: &key, slot, at, changes: None, error: Some(stored_error),
+            })).await?;
+            anyhow::bail!("Scheduled action {name} failed: {error_text}")
+        }
+    }
 }
 
 /// Starts a run for each Deployment with scheduled work that is not in
@@ -535,6 +588,26 @@ mod tests {
         assert_eq!(signals["signals"][0]["properties"], json!({"actor": null}));
         let failed = &usage["scheduled"].as_array().unwrap().iter().find(|run| run["outcome"] == "failed").unwrap()["error"];
         assert!(failed.as_str().unwrap().contains("no such table: holds"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn test_mode_lists_paused_schedules_and_runs_one_through_the_kernel_action_path() {
+        let mut rig = Rig::new("manual-test").await;
+        rig.state.execution_mode = crate::execution::ExecutionMode::Test;
+        let actions = release(json!({"every": "15m"}));
+        let mut deployment = rig.state.deployments.read().await.values().next().unwrap().clone();
+        deployment.actions = json!({"version": 1, "actions": actions}).to_string();
+        rig.state.deployments.write().await.insert(deployment.hostname.clone(), deployment.clone());
+        rig.sql("INSERT INTO holds(until) VALUES (0)");
+        assert_eq!(paused_schedules(&deployment), vec![json!({"action": "holds.release", "schedule": "every 15m", "paused": true})]);
+        let answer = run_manually(&rig.state, &deployment, "holds.release").await.unwrap();
+        assert_eq!(answer["changes"], 1);
+        assert_eq!(rig.released(), 1);
+        let second = run_manually(&rig.state, &deployment, "holds.release").await.unwrap();
+        assert_eq!(second["changes"], 0);
+        assert_eq!(rig.runs().len(), 2);
+        let live = AppState { execution_mode: crate::execution::ExecutionMode::Live, ..rig.state.clone() };
+        assert_eq!(run_manually(&live, &deployment, "holds.release").await.unwrap_err().to_string(), "Manual schedule runs are available only in local test mode.");
     }
 
     #[tokio::test]

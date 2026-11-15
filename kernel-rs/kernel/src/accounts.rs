@@ -41,9 +41,9 @@ impl AccountSettings {
     /// Reads `KONAE_ACCOUNT_VERIFICATION` and the mail transport
     /// (`mail::MailQueue::from_env`). Every transport, including
     /// `development`, sends through the queue.
-    pub fn from_env(data_root: &Path, mail_key: &str, public_origin: &str, installation: &crate::installation::Installation) -> Result<Self> {
+    pub fn from_env(data_root: &Path, mail_key: &str, public_origin: &str, installation: &crate::installation::Installation, mode: crate::execution::ExecutionMode) -> Result<Self> {
         let verification = Verification::from_env().map_err(anyhow::Error::msg)?;
-        let queue = mail::MailQueue::from_env(data_root, mail_key, installation)?;
+        let queue = mail::MailQueue::from_env(data_root, mail_key, installation, mode.is_test())?;
         let google = Arc::new(google::Google::from_env(public_origin)?);
         Ok(Self { verification, mail: None, queue, google })
     }
@@ -137,10 +137,13 @@ pub const SIGNUP_HINT: &str = "Email or password is incorrect. If you signed up 
 /// [`SIGNUP_HINT`] on an installation whose development transport sends no
 /// email: the link went to the server's mailbox file, so "we emailed" would be false.
 pub const SIGNUP_HINT_LOCAL: &str = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.";
+pub const SIGNUP_HINT_TEST_LOCAL: &str = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. Local test email goes to mail-testbox.jsonl in this app's data directory.";
 
 /// The signup hint this installation can truthfully give.
 pub fn signup_hint(state: &AppState) -> &'static str {
-    if state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some()) { SIGNUP_HINT_LOCAL } else { SIGNUP_HINT }
+    if state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some()) {
+        if state.execution_mode.is_test() { SIGNUP_HINT_TEST_LOCAL } else { SIGNUP_HINT_LOCAL }
+    } else { SIGNUP_HINT }
 }
 
 /// Why a pending account may not sign in yet, said to a caller who proved
@@ -150,12 +153,14 @@ pub fn signup_hint(state: &AppState) -> &'static str {
 /// invitation waiting for this email is named, because that link, not a
 /// confirmation, activates the account.
 pub fn pending_message(state: &AppState, invited: bool) -> String {
-    let local = state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some());
+    let mailbox = state.accounts.queue.as_ref().and_then(|queue| queue.local_mailbox());
+    let mailbox_name = mailbox.as_deref().and_then(Path::file_name).and_then(|name| name.to_str()).unwrap_or(mail::MAILBOX_FILE);
+    let local = mailbox.is_some();
     match (invited, local) {
         (false, false) => AuthError::AccountPending.to_string(),
         (true, false) => "An invitation to this app is waiting for this email. Open the link in the invitation email to choose your password, or ask the app's owner to resend it.".into(),
-        (true, true) => "An invitation to this app is waiting for this email. This installation sends no email, so the invitation link is in the mailbox.jsonl file on its server. Ask the app's owner for the link; resending the invitation hands it to them.".into(),
-        (false, true) => "Confirm your email before signing in. This installation sends no email, so confirmation links go to the mailbox.jsonl file on its server, not to you. Ask for a new link, then ask the installation's operator to read it from that file.".into(),
+        (true, true) => format!("An invitation to this app is waiting for this email. This installation sends no email, so the invitation link is in the {mailbox_name} file on its server. Ask the app's owner for the link; resending the invitation hands it to them."),
+        (false, true) => format!("Confirm your email before signing in. This installation sends no email, so confirmation links go to the {mailbox_name} file on its server, not to you. Ask for a new link, then ask the installation's operator to read it from that file."),
     }
 }
 

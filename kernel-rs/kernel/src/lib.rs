@@ -31,6 +31,7 @@ pub mod auth;
 pub mod calls;
 pub mod copies;
 pub mod domain;
+pub mod execution;
 pub mod enter;
 pub mod file_store;
 pub mod files;
@@ -72,6 +73,7 @@ use limits::{Guards, trusted_proxies};
 
 #[derive(Clone)]
 pub struct AppState {
+    pub execution_mode: execution::ExecutionMode,
     pub deployments: Arc<RwLock<HashMap<String, Deployment>>>,
     pub db_locks: LockMap,
     pub s3: Option<S3Client>,
@@ -102,6 +104,7 @@ impl AppState {
     /// `localhost` names. A test changes the fields it needs with `..`.
     pub fn for_test(root: &Path) -> Self {
         Self {
+            execution_mode: execution::ExecutionMode::Live,
             deployments: Arc::new(RwLock::new(HashMap::new())),
             db_locks: LockMap::default(),
             s3: None,
@@ -620,15 +623,19 @@ pub struct Startup {
     pub bind: String,
     pub hosts: hosts::Hosts,
     pub data_root: PathBuf,
+    pub execution_mode: execution::ExecutionMode,
 }
 
 impl Startup {
     pub fn from_env() -> Result<Self> {
+        let bind = env("KONAE_BIND", "127.0.0.1");
+        let execution_mode = execution::ExecutionMode::parse(std::env::var("KONAE_EXECUTION_MODE").ok().as_deref(), &bind)?;
         Ok(Self {
             port: env("KONAE_KERNEL_PORT", "8787").parse::<u16>()?,
-            bind: env("KONAE_BIND", "127.0.0.1"),
+            bind,
             hosts: hosts::from_env()?,
             data_root: PathBuf::from(env("KONAE_DATA_DIR", "/data")),
+            execution_mode,
         })
     }
 }
@@ -696,15 +703,25 @@ pub async fn state_from_env(
     let data_root = startup.data_root.clone();
     let public_origin = startup.hosts.public_origin.clone();
     tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
-    let account_settings = accounts::AccountSettings::from_env(&data_root, mail_key, &public_origin, &installation)?;
-    let (s3, data_bucket) = match copy_bucket_from_env()? {
-        Some((client, bucket)) => (Some(client), bucket),
-        None => (None, String::new()),
+    let account_settings = accounts::AccountSettings::from_env(&data_root, mail_key, &public_origin, &installation, startup.execution_mode)?;
+    let (s3, data_bucket, copy_config) = if startup.execution_mode.is_test() {
+        (None, String::new(), None)
+    } else {
+        let (s3, data_bucket) = match copy_bucket_from_env()? {
+            Some((client, bucket)) => (Some(client), bucket),
+            None => (None, String::new()),
+        };
+        let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
+        (s3, data_bucket, copy_config)
     };
-    let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
-    let files = file_store::Files::from_env(&data_root).await?;
+    let files = if startup.execution_mode.is_test() {
+        file_store::Files::new(Arc::new(file_store::LocalFolder::new(&data_root)), file_store::FileLimits::from_env()?)
+    } else {
+        file_store::Files::from_env(&data_root).await?
+    };
     let state = AppState {
+        execution_mode: startup.execution_mode,
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
         s3,
@@ -748,7 +765,7 @@ mod bind_tests {
     async fn a_taken_port_is_refused_with_its_number_and_how_to_pick_another() {
         let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = held.local_addr().unwrap().port();
-        let startup = Startup { port, bind: "127.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new() };
+        let startup = Startup { port, bind: "127.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new(), execution_mode: execution::ExecutionMode::Live };
         let message = bind(&startup).await.unwrap_err().to_string();
         assert!(message.contains(&format!("Port {port} on 127.0.0.1 is already in use")), "{message}");
         assert!(message.contains("KONAE_KERNEL_PORT") && message.contains("--port"), "{message}");
@@ -756,7 +773,7 @@ mod bind_tests {
 
     #[tokio::test]
     async fn another_bind_failure_keeps_the_system_text_and_the_address() {
-        let startup = Startup { port: 0, bind: "256.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new() };
+        let startup = Startup { port: 0, bind: "256.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new(), execution_mode: execution::ExecutionMode::Live };
         let message = bind(&startup).await.unwrap_err().to_string();
         assert!(message.starts_with("Could not listen on 256.0.0.1:0: "), "{message}");
     }
