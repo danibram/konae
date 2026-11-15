@@ -292,6 +292,7 @@ describe("authenticated MCP", () => {
       await sources.save(project);
       const onDisk = path.join(root, "apps", project.id, "app/public/logo.png");
       expect(new Uint8Array(await readFile(onDisk))).toEqual(png);
+      const pngHash = await checksum(png);
       for (let index = 0; index < 2; index++) {
         const other = createWorkspaceProject(`Binary project ${index}`, []);
         const document = { ...other, files: { ...other.files, "public/large.png": encodeBase64(png) }, encodings: { "public/large.png": "base64" as const }, directories: ["public"] };
@@ -309,12 +310,14 @@ describe("authenticated MCP", () => {
       expect(sourceReadBlocks).toBeGreaterThan(0);
       expect(sourceDownloadBytes).toHaveLength(1);
       expect(new Uint8Array(await readFile(onDisk))).toEqual(png);
+      expect(await checksum(await readFile(onDisk))).toBe(pngHash);
 
       const { ["public/logo.png"]: _oldLogo, ...withoutOldLogo } = edited.files;
       const renamed = { ...edited, files: { ...withoutOldLogo, "public/renamed.png": edited.files["public/logo.png"] }, encodings: { "public/renamed.png": "base64" as const }, updatedAt: edited.updatedAt + 1 };
       await sources.save(renamed);
       expect(await Bun.file(onDisk).exists()).toBe(false);
       expect(new Uint8Array(await readFile(path.join(root, "apps", project.id, "app/public/renamed.png")))).toEqual(png);
+      expect(await checksum(await readFile(path.join(root, "apps", project.id, "app/public/renamed.png")))).toBe(pngHash);
       const reloadedSources = new ProjectSources("test-owner", `http://127.0.0.1:${proxy.port}/mcp`);
       await reloadedSources.load();
       expect(await reloadedSources.loadProject(project.id)).toEqual(renamed);
