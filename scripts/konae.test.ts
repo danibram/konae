@@ -722,6 +722,7 @@ describe("konae CLI", () => {
     const marker = path.join(folder, ".konae/kernel/stub-started");
     await writeFile(binary, `#!/usr/bin/env node
 const fs = require("node:fs");
+if (process.argv.includes("capabilities")) { console.log(JSON.stringify({executionTest:1})); process.exit(0); }
 if (process.argv.includes("secret")) { process.stdout.write('{"secrets":[]}'); process.exit(0); }
 if (process.argv.includes("test")) { process.stdout.write('{"callsRetired":0,"mailRetired":0}'); process.exit(0); }
 fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-started", "x");
