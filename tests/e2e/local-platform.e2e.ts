@@ -556,6 +556,7 @@ test("manual action edits leave the running preview unchanged until Run", async 
   expect(original).toContain('"tasks.list"');
   await actions.fill(original.replace('"tasks.list": {', '"tasks.pending": {'));
   await showSection(page, "Preview");
+  await expect(preview.getByText("Before edit", { exact: true })).toBeVisible();
   await preview.locator("#task-input").fill("Still using the checked preview");
   await preview.getByRole("button", { name: "Add task" }).click();
   await expect(preview.getByText("Still using the checked preview", { exact: true })).toBeVisible();
@@ -769,17 +770,15 @@ test("switching between cached TypeScript projects compiles each selected source
 
 test("Try again compiles sources after a project load fails", async ({ page }) => {
   const projectPath = await createProject(page, `Retry TypeScript ${Date.now()}`, "tasks");
+  const projectId = projectPath.slice("/app/".length);
   await writeTypedPreview(page, "Retry succeeded");
-  let failNextRead = true;
-  let failedRequestId: string | undefined;
-  const cancelledRequestIds = new Set<string>();
+  let refuseReadsUntilError = true;
+  const refusedRequestIds: string[] = [];
   await page.route("**/mcp", async (route) => {
     const body = route.request().postData() ?? "";
     const sourceRead = sourceReadRequest(body);
-    if (sourceRead?.cancelRequestId) cancelledRequestIds.add(sourceRead.cancelRequestId);
-    if (failNextRead && isFullSourceRead(body) && !cancelledRequestIds.has(sourceRead!.requestId!)) {
-      failNextRead = false;
-      failedRequestId = sourceRead?.requestId;
+    if (refuseReadsUntilError && isFullSourceRead(body) && sourceRead?.projectId === projectId) {
+      refusedRequestIds.push(sourceRead.requestId!);
       await route.abort();
       return;
     }
@@ -787,7 +786,8 @@ test("Try again compiles sources after a project load fails", async ({ page }) =
   });
   await page.reload();
   await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
-  expect(failedRequestId).toBeTruthy();
+  refuseReadsUntilError = false;
+  expect(refusedRequestIds.length).toBeGreaterThan(0);
   await page.unroute("**/mcp");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Retry succeeded" })).toBeVisible();
@@ -796,6 +796,7 @@ test("Try again compiles sources after a project load fails", async ({ page }) =
 
 test("a delayed Try again response cannot select a project after leaving it", async ({ page }) => {
   const projectPath = await createProject(page, `Abandoned retry ${Date.now()}`, "tasks");
+  const projectId = projectPath.slice("/app/".length);
   await writeTypedPreview(page, "Retry after leaving");
   await page.addInitScript(() => {
     const state = window as typeof window & { __holdNextSourceRead?: boolean; __sourceReadHeld?: Promise<void>; __releaseSourceRead?: () => void };
@@ -822,16 +823,13 @@ test("a delayed Try again response cannot select a project after leaving it", as
     };
     state.__releaseSourceRead = () => releaseHeld?.();
   });
-  let failNextRead = true;
-  let failedRequestId: string | undefined;
-  const cancelledRequestIds = new Set<string>();
+  let refuseReadsUntilError = true;
+  const refusedRequestIds: string[] = [];
   await page.route("**/mcp", async (route) => {
     const body = route.request().postData() ?? "";
     const sourceRead = sourceReadRequest(body);
-    if (sourceRead?.cancelRequestId) cancelledRequestIds.add(sourceRead.cancelRequestId);
-    if (failNextRead && isFullSourceRead(body) && !cancelledRequestIds.has(sourceRead!.requestId!)) {
-      failNextRead = false;
-      failedRequestId = sourceRead?.requestId;
+    if (refuseReadsUntilError && isFullSourceRead(body) && sourceRead?.projectId === projectId) {
+      refusedRequestIds.push(sourceRead.requestId!);
       await route.abort();
       return;
     }
@@ -839,7 +837,8 @@ test("a delayed Try again response cannot select a project after leaving it", as
   });
   await page.reload();
   await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
-  expect(failedRequestId).toBeTruthy();
+  refuseReadsUntilError = false;
+  expect(refusedRequestIds.length).toBeGreaterThan(0);
   await page.unroute("**/mcp");
   await page.evaluate(() => { (window as typeof window & { __holdNextSourceRead?: boolean }).__holdNextSourceRead = true; });
   await page.getByRole("button", { name: "Try again" }).click();
