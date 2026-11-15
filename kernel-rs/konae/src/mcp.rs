@@ -209,6 +209,16 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_detail {
         db.execute("ALTER TABLE audit ADD COLUMN detail TEXT", [])?;
     }
+    // A plan names the upload of its sources when they travel apart from the payload.
+    let has_sources: bool = db
+        .prepare("PRAGMA table_info(plans)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "sources");
+    if !has_sources {
+        db.execute("ALTER TABLE plans ADD COLUMN sources TEXT", [])?;
+    }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
     install_imports(&db)?;
@@ -431,28 +441,15 @@ async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
     }
 }
 
-/// The most files the editor's saved sources hold.
-const MAX_SOURCE_FILES: usize = 1_000;
-
 fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
-    // A name starting with a dot is a temporary file to the Kernel, which a copy leaves behind.
-    let path = |value: &str| value.len() <= 240 && value.trim() == value
-        && safe_relative_path(value) && !value.chars().any(|c| c.is_control())
-        && !value.split('/').any(|part| part.starts_with('.'));
     anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
         && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
         && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
-    let files = source["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project files. Send files as an object of each path inside app/ and its contents."))?;
-    anyhow::ensure!(files.len() <= MAX_SOURCE_FILES, "The sources hold {} files. A project holds at most {MAX_SOURCE_FILES}.", files.len());
-    for name in files.keys() {
-        anyhow::ensure!(path(name), "app/{} is not a path the sources can hold. A path is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot.", name.escape_debug());
-    }
-    for (name, bytes) in super::sources::decode_document(source)? {
-        anyhow::ensure!(bytes.len() <= MAX_TRANSFER, "app/{name} is {} bytes. A saved file holds at most {} MiB.", bytes.len(), MAX_TRANSFER / (1024 * 1024));
-    }
+    anyhow::ensure!(source["files"].is_object(), "Invalid project files. Send files as an object of each path inside app/ and its contents.");
+    super::sources::check_files(&super::sources::decode_document(source)?)?;
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
-    anyhow::ensure!(directories.len() <= 1_000 && directories.iter().all(|entry| entry.as_str().is_some_and(path)), "Invalid project directories.");
+    anyhow::ensure!(directories.len() <= super::sources::MAX_FILES && directories.iter().all(|entry| entry.as_str().is_some_and(super::sources::holds)), "Invalid project directories.");
     let manifest = &source["manifest"];
     artifact::check_file_access(manifest).map_err(anyhow::Error::msg)?;
     let actions = manifest["runtime"]["database"]["actions"].as_array();
@@ -474,6 +471,55 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
         }) && names.insert(name), "Invalid project action name.");
     }
     Ok(())
+}
+
+/// Refuses an upload that names a component of an export. Such an upload may
+/// reach that component's quota, which saved sources and a release never take.
+fn ensure_no_component(upload: &Value) -> Result<()> {
+    match upload["component"].as_str() {
+        Some(component) => anyhow::bail!("This upload names the {component} component of an export. Upload sources and releases without a component."),
+        None => Ok(()),
+    }
+}
+
+/// The JSON of a release payload, refused before it is read when the upload
+/// names a component or holds more than a release does.
+async fn release_bytes(state: &Konae, upload: &Value, transfer_id: &str) -> Result<Vec<u8>> {
+    ensure_no_component(upload)?;
+    let size = upload["size"].as_u64().unwrap_or(0) as usize;
+    anyhow::ensure!(size <= super::size::RELEASE_BYTES, "{}", super::size::release_refused(size));
+    Ok(tokio::fs::read(transfer_path(state, transfer_id)?).await?)
+}
+
+/// The files of `app/` that travel in an upload of their own beside a release.
+#[derive(serde::Deserialize)]
+struct ReleaseSources {
+    files: HashMap<String, String>,
+    #[serde(default)]
+    encodings: HashMap<String, String>,
+}
+
+/// The release `release_plan` checks and `release_apply` installs. The
+/// payload in `transfer_id` names the project, the build and what a first
+/// release imports. The files of `app/` travel in `sources_id`, an upload of
+/// their own, so each upload stays under its own limit. A payload that holds
+/// `project.files` itself, as `project_import` takes, needs no second upload.
+async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>) -> Result<DeployInput> {
+    let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
+    anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload", "Upload is not complete.");
+    let mut input: DeployInput = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
+    anyhow::ensure!(upload["projectId"] == input.project.id, "Artifact belongs to another project.");
+    if let Some(sources_id) = sources_id {
+        anyhow::ensure!(input.project.files.is_empty() && input.project.encodings.is_empty(), "Send the files of app/ in sourcesTransferId or in project.files, not in both.");
+        let upload = transfer(state, principal, &json!({"transferId": sources_id}))?;
+        anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == input.project.id, "Completed upload of the sources for this project required.");
+        ensure_no_component(&upload)?;
+        let bytes = tokio::fs::read(transfer_path(state, sources_id)?).await?;
+        let sources: ReleaseSources = serde_json::from_slice(&bytes).map_err(|error_value| anyhow::anyhow!("The sources upload must be the JSON {{ files, encodings }}: {error_value}"))?;
+        input.project.files = sources.files;
+        input.project.encodings = sources.encodings;
+    }
+    Ok(input)
 }
 
 pub(super) async fn owned_deployment(
@@ -625,8 +671,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
             tool(
                 "release_plan",
-                "Validate a completed artifact transfer, pin the current project revision and answer the schema change the release makes: its statements, what they lose, and the confirmation release_apply needs when they lose data.",
-                json!({"transferId":text}),
+                "Validate a release, pin the current project revision and answer the schema change the release makes: its statements, what they lose, and the confirmation release_apply needs when they lose data. transferId is the completed upload of the release JSON. sourcesTransferId is the completed upload of the files of app/ as { files, encodings }, which leaves project.files out of the release JSON so each upload stays under its own limit.",
+                json!({"transferId":text,"sourcesTransferId":text}),
                 &["transferId"],
                 false,
             ),
@@ -642,7 +688,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tools.extend(path_tools());
         tools.push(tool(
             "project_import",
-            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, an upload of the release JSON of the publishing topic built from the folder's app/ and dist/. replace data or both takes package { manifest, components: { <name>: <transferId> } }, uploaded as the portability topic says. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
+            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, an upload of the release JSON of the publishing topic built from the folder's dist/, with the files of app/ inside project as files and encodings. replace data or both takes package { manifest, components: { <name>: <transferId> } }, uploaded as the portability topic says. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
             json!({"deploymentId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
             &["deploymentId", "replace"],
             false,
@@ -1217,6 +1263,7 @@ async fn admin_call(
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
                     && (upload["projectId"].is_null() || upload["projectId"] == id), "Completed upload for this project required.");
+                ensure_no_component(&upload)?;
                 let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
                 let source: Value = serde_json::from_slice(&bytes)?;
                 validate_sources(&source, &id)?;
@@ -1320,6 +1367,7 @@ async fn admin_call(
             let transfer_id = a["transferId"].as_str().unwrap();
             let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == id, "Completed upload for this project required.");
+            ensure_no_component(&upload)?;
             let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
             let source: Value = serde_json::from_slice(&bytes)?;
             validate_sources(&source, id)?;
@@ -1536,24 +1584,11 @@ async fn admin_call(
             .await
         }
         "release_plan" => {
-            let transfer = transfer(state, principal, &json!({"transferId":a["transferId"]}))?;
-            anyhow::ensure!(
-                transfer["complete"] == true && transfer["direction"] == "upload",
-                "Upload is not complete."
-            );
-            let bytes =
-                tokio::fs::read(transfer_path(state, a["transferId"].as_str().unwrap())?).await?;
-            anyhow::ensure!(
-                bytes.len() <= 26_000_000,
-                "Deployment payload exceeds 26 MB."
-            );
-            let payload: Value = serde_json::from_slice(&bytes)?;
-            let input: DeployInput = serde_json::from_value(payload.clone())?;
+            let transfer_id = a["transferId"].as_str().unwrap();
+            let sources_id = a["sourcesTransferId"].as_str();
+            let input = release_input(state, principal, transfer_id, sources_id).await?;
+            let artifact_sha256 = transfer(state, principal, &json!({"transferId": transfer_id}))?["sha256"].clone();
             let (_, revision) = owned_project(state, owner, &input.project.id, "publish")?;
-            anyhow::ensure!(
-                transfer["projectId"] == input.project.id,
-                "Artifact belongs to another project."
-            );
             if let Some(package) = input.initial_package.as_ref() {
                 // The same export again answers with the first import.
                 if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
@@ -1572,17 +1607,17 @@ async fn admin_call(
             let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
-            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
+            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id])?;
             if let Some(package) = input.initial_package.as_ref() {
                 remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }
             Ok(
-                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
+                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
             )
         }
         "release_apply" => {
             let id = a["planId"].as_str().unwrap();
-            let row: (String,u64,String,u64,Option<String>)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+            let row: (String,u64,String,u64,Option<String>,Option<String>)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
             let _guard = database_lock(state, &format!("project:{}", row.0)).await;
             let (mut metadata, revision) = owned_project(state, owner, &row.0, "publish")?;
             let receipt: Option<String> =
@@ -1596,23 +1631,17 @@ async fn admin_call(
                 revision == row.1,
                 "Project revision changed. Create a new release plan."
             );
-            transfer(state, principal, &json!({"transferId":row.2}))?;
-            let bytes = tokio::fs::read(transfer_path(state, &row.2)?).await?;
-            let mut payload: Value = serde_json::from_slice(&bytes)?;
+            let mut input = release_input(state, principal, &row.2, row.5.as_deref()).await?;
+            anyhow::ensure!(input.project.id == row.0, "Artifact belongs to another project.");
             // Notify to the owner sends to konae.json's address, else the app's, else the owner's.
-            payload["contactEmail"] = contact_email(state, owner, &row.0, &payload).await?;
+            input.contact_email = contact_email(state, owner, &row.0, input.contact_email.as_deref()).await?;
             // A schema change that loses data applies only with the
             // confirmation release_plan gave for it.
-            payload["schemaConfirmation"] = a.get("confirmSchema").cloned().unwrap_or(Value::Null);
-            for key in ["name", "slug", "manifest"] {
-                if let Some(value) = payload["project"].get(key) {
-                    metadata[key] = value.clone();
-                }
-            }
-            let receipt = response_value(
-                deploy(state, payload.to_string().as_bytes()).await,
-            )
-            .await?;
+            input.schema_confirmation = a["confirmSchema"].as_str().map(str::to_owned);
+            metadata["name"] = json!(input.project.name);
+            metadata["slug"] = json!(input.project.slug);
+            metadata["manifest"] = input.project.manifest.clone();
+            let receipt = response_value(deploy_input(state, input).await).await?;
             let mut db = store(state)?;
             let tx = db.transaction()?;
             tx.execute("UPDATE projects SET revision=revision+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3",params![row.0,owner.id,revision,metadata.to_string()])?;
@@ -1682,9 +1711,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         Some(transfer_id) => {
             let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == project.as_str(), "Completed upload for this project required.");
-            let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-            anyhow::ensure!(bytes.len() <= 26_000_000, "Deployment payload exceeds 26 MB.");
-            let payload: Value = serde_json::from_slice(&bytes)?;
+            let payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
             let input: DeployInput = serde_json::from_value(payload.clone())?;
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
             anyhow::ensure!(
@@ -1718,7 +1745,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     };
     let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
     if let Some((mut payload, input, _)) = release {
-        payload["contactEmail"] = contact_email(state, owner, &project, &payload).await?;
+        payload["contactEmail"] = contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?.map_or(Value::Null, Value::String);
         payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
         for key in ["name", "slug", "manifest"] {
             if let Some(value) = payload["project"].get(key) {
@@ -1757,13 +1784,13 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
 /// The contact email a release of `project` carries: the one the payload
 /// names from its folder's konae.json, else the one the published app has,
 /// which the owner may have set in App settings, else the owner's.
-async fn contact_email(state: &Konae, owner: &Owner, project: &str, payload: &Value) -> Result<Value> {
-    if let Some(given) = payload["contactEmail"].as_str() {
+async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
+    if let Some(given) = given {
         let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
-        return Ok(Value::String(email));
+        return Ok(Some(email));
     }
     let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
-    Ok(kept.or_else(|| owner_email(state, &owner.id)).map_or(Value::Null, Value::String))
+    Ok(kept.or_else(|| owner_email(state, &owner.id)))
 }
 
 /// The email of the owner's active account, when Konae keeps one. An owner
@@ -2521,10 +2548,14 @@ mod tests {
         assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
         let big = |s: &mut Value| {
-            s["files"]["public/big.bin"] = json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0xffu8; MAX_TRANSFER + 1]));
+            s["files"]["public/big.bin"] = json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0xffu8; super::super::sources::MAX_BYTES + 1]));
             s["encodings"] = json!({"public/big.bin": "base64"});
         };
-        assert_eq!(refusal(&big), "app/public/big.bin is 33554433 bytes. A saved file holds at most 32 MiB.", "a file that is not text counts its decoded bytes");
+        assert_eq!(refusal(&big), "app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are public/big.bin (20.1 MiB) and index.html (13 bytes).", "a file that is not text counts its decoded bytes");
+        let mut source = base.clone();
+        big(&mut source);
+        assert_eq!(super::super::refusal::of(&validate_sources(&source, "app_a").unwrap_err()).map(|refused| refused.code), Some("sources.size"));
+        assert!(refusal(&|s| s["files"]["public/.DS_Store"] = json!("x")).starts_with("The sources cannot hold the path \"public/.DS_Store\"."));
         let with_png = |s: &mut Value| { s["files"]["public/logo.png"] = json!("iVBORw0KGgo="); s["encodings"] = json!({"public/logo.png": "base64"}); };
         let mut binary = base.clone();
         with_png(&mut binary);
