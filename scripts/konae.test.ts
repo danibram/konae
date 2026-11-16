@@ -655,6 +655,26 @@ describe("konae CLI", () => {
     ]);
   });
 
+  test("hostname changes on an unpublished project reach the Kernel refusal", async () => {
+    const names: string[] = [];
+    const client = { async call<T>(name: string): Promise<T> {
+      names.push(name);
+      if (name === "project_inspect") return { deployment: null } as T;
+      throw Error("This project has no Deployment.");
+    } };
+    await expect(hostnameLocal(client, "app_test", "notes")).rejects.toThrow("This project has no Deployment.");
+    expect(names).toEqual(["project_inspect", "hostname_set"]);
+  });
+
+  test("a post-publish contact email read failure does not undo the release", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    answers.project_inspect = { deployment: { id: "dep_1" }, sourcesRevision: 1 };
+    failing.add("contact_email_read");
+    const config = { url: origin(), contactEmail: "owner@example.test", project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    await expect(publishLocal(directory, config, "token")).resolves.toMatchObject({ id: "dep_1", first: false });
+    expect(calls.map((call) => call.name)).toContain("contact_email_read");
+  });
+
   test("a trailing --dir with no value is an error, not the current directory", async () => {
     const run = cli("build", "--dir");
     expect(await run.exited).toBe(1);
