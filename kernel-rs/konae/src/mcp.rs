@@ -1732,7 +1732,7 @@ async fn admin_call(
 
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
-            super::refusal::check_setting_expected(a.get("expected"), json!(current.contact_email))?;
+            super::refusal::check_setting_expected_read(a.get("expected"), json!(current.contact_email), owner.scopes.iter().any(|scope| scope == "read"))?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
@@ -2549,6 +2549,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setting_changed_redacts_current_value_without_read_permission() {
+        let root = std::env::temp_dir().join(format!("konae-setting-redaction-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let body = json!({"project":{"id":"app_redact","name":"Redact","slug":"redact","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Redact</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_redact','o','{}')", []).unwrap();
+        let publish = Owner { id:"o".into(), display:None, scopes:vec!["publish".into()], projects:vec![], session:false };
+        let publish_and_read = Owner { scopes:vec!["publish".into(),"read".into()], ..publish.clone() };
+        for (owner, contains_value) in [(&publish, false), (&publish_and_read, true)] {
+            let error = admin_call(&state, owner, "owner:o", "contact_email_set", json!({"projectId":"app_redact","email":"new@example.test","expected":"stale@example.test"})).await.unwrap_err();
+            let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, "setting.changed");
+            assert_eq!(refusal.message.contains("current value is null"), contains_value);
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn module_tools_read_back_changes_and_refuse_stale_or_unauthorized_writes() {
         let root = std::env::temp_dir().join(format!("konae-module-tools-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
@@ -2582,6 +2601,34 @@ mod tests {
         assert_eq!(refusal.code, "module.changed");
         let denied = admin_call(&state, &reader, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false})).await.unwrap_err().to_string();
         assert_eq!(denied, "Permission denied for publish.");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn first_release_persists_inferred_files_state_for_missing_and_partial_initial_modules() {
+        let root = std::env::temp_dir().join(format!("konae-first-files-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        for (id, initial_modules) in [("app_first_files_none", None), ("app_first_files_partial", Some(json!({"seo":{"on":false}})))] {
+            admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+            let mut payload = json!({
+                "project":{"id":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<script>miniapp.files.upload()</script>"}}
+            });
+            if let Some(modules) = initial_modules { payload["initialModules"] = modules; }
+            let response = deploy(&state, payload.to_string().as_bytes()).await;
+            assert_eq!(response.status(), StatusCode::OK, "{}", String::from_utf8_lossy(&axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap()));
+            let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+            assert_eq!(deployment.modules["files"]["on"], true, "{id}");
+            let settings = crate::Settings::read(&state.data_root, id).unwrap();
+            assert_eq!(settings.modules["files"]["on"], true, "{id}");
+            let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["files"]["on"], true, "{id}");
+            let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+            let expected = read["modules"]["seo"]["state"].clone();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"seo","on":true,"expected":expected})).await.unwrap();
+        }
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
