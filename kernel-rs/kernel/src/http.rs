@@ -864,6 +864,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
         Ok(bindings) => bindings,
         Err(_) => return Some(page_not_found(state, deployment).await),
     };
+    let _database = crate::action_lock(state, &deployment.id, &definition.kind).await;
     let permit = match state.guards.statement_permit(&deployment.id).await {
         Ok(permit) => permit,
         Err(wait) => return Some(rate_limited(wait)),
