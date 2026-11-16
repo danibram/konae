@@ -1957,15 +1957,15 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 "encodings": input.artifact.encodings,
             });
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
-            anyhow::ensure!(
-                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
-                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
-            );
             let against = match &package {
                 Some(package) => super::package::component_paths(state, &project, package)?.into_iter().find(|(name, _)| name == "database").map(|(_, path)| path),
                 None => None,
             };
             let change = validate_release(state, &input, against.as_deref()).await?;
+            anyhow::ensure!(
+                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
+                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
+            );
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
                 return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
             }
