@@ -105,6 +105,13 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       if (typeof transforms === "string") {
         const refused = schemaTransformsRefusal(transforms);
         if (refused) return failure({ stage: "schema", message: refused.message, code: refused.code, hint: refused.hint }, checked);
+        const definition = JSON.parse(transforms) as { transitions: unknown[] };
+        if (definition.transitions.length > 0) {
+          warnings.push({
+            stage: "schema",
+            message: "The Validation Gate does not inspect applied history, verify the database schema fingerprint, measure affected row counts, or enforce runtime constraints. Run konae rehearse or konae dev, or test a Deployment.",
+          });
+        }
       }
       // Read before running: sql.js lacks some refused functions, and "no such
       // function" would hide the reason the Kernel gives.

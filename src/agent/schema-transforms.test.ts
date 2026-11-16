@@ -18,10 +18,18 @@ test("a missing transform file remains optional and a valid definition passes th
   const validator = createCapsuleValidator(() => initSqlJs());
   const withoutTransforms = await validator.validate(starterProject.files);
   expect(withoutTransforms.ok).toBe(true);
+  expect(withoutTransforms.warnings).toBeUndefined();
   expect(schemaTransformsRefusal(validEmpty)).toBeNull();
   expect(schemaTransformsRefusal(validTransition)).toBeNull();
   const withTransforms = await validator.validate({ ...starterProject.files, "schema-transforms.json": validTransition });
   expect(withTransforms.ok).toBe(true);
+  expect(withTransforms.warnings).toContainEqual(expect.objectContaining({
+    stage: "schema",
+    message: expect.stringContaining("applied history, verify the database schema fingerprint, measure affected row counts, or enforce runtime constraints"),
+  }));
+  const emptyTransforms = await validator.validate({ ...starterProject.files, "schema-transforms.json": validEmpty });
+  expect(emptyTransforms.ok).toBe(true);
+  expect(emptyTransforms.warnings).toBeUndefined();
 });
 
 test("the Gate matches every shared static schema-transform case and skips runtime evidence", async () => {
@@ -37,4 +45,12 @@ test("the Gate matches every shared static schema-transform case and skips runti
     else expect(validation, item.case).toMatchObject({ ok: false, errors: [{ stage: "schema", message: item.error, code: item.code }] });
   }
   expect(schemaTransformCases.cases.some((item) => item.scope === "runtime")).toBe(true);
+});
+
+test("the Gate refuses a transformation document above the Kernel byte limit before parsing", () => {
+  const oversized = " ".repeat(20 * 1024 * 1024 + 1);
+  expect(schemaTransformsRefusal(oversized)).toMatchObject({
+    code: "schema-transform.document-invalid",
+    message: "schema-transforms.json must be at most 20971520 bytes.",
+  });
 });

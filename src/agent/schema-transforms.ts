@@ -5,6 +5,7 @@ export const SCHEMA_TRANSFORMS_FILE = "schema-transforms.json";
 const MAX_TRANSITIONS = 256;
 const MAX_STATEMENTS = 100;
 const MAX_STATEMENT_BYTES = 20_000;
+const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const MAX_ROWS = 100_000;
 const RESERVED = new Set([
   "sqlite_master", "sqlite_schema", "sqlite_temp_master", "sqlite_temp_schema",
@@ -23,10 +24,13 @@ type Transition = {
 
 /** Checks document shape, order, bounds and the SQL allowlist without simulating data or history. */
 export function schemaTransformsRefusal(source: string): RefusalError | null {
+  if (new TextEncoder().encode(source).length > MAX_DOCUMENT_BYTES) {
+    return refusal("schema-transform.document-invalid", `schema-transforms.json must be at most ${MAX_DOCUMENT_BYTES} bytes.`);
+  }
   let document: unknown;
   try { document = JSON.parse(source); }
   catch { return refusal("schema-transform.document-invalid", "schema-transforms.json must be valid JSON."); }
-  if (!isRecord(document) || !exactKeys(document, ["version", "transitions"]) || !Number.isInteger(document.version) || !Array.isArray(document.transitions)) return invalidDocument();
+  if (!isRecord(document) || !exactKeys(document, ["version", "transitions"]) || !Number.isInteger(document.version) || (document.version as number) < 0 || (document.version as number) > 0xffff_ffff || !Array.isArray(document.transitions)) return invalidDocument();
   if (document.version !== 1) return refusal("schema-transform.document-invalid", "schema-transforms.json version must be 1.");
   if (document.transitions.length > MAX_TRANSITIONS) {
     return refusal("schema-transform.document-invalid", `schema-transforms.json may contain at most ${MAX_TRANSITIONS} transitions.`);
@@ -35,14 +39,15 @@ export function schemaTransformsRefusal(source: string): RefusalError | null {
   const ids = new Set<string>();
   for (const value of document.transitions) {
     if (!isRecord(value) || !exactKeys(value, ["id", "before", "after", "maxRows", "statements"], ["predecessor"])) return invalidDocument();
-    if (typeof value.id !== "string" || !(value.predecessor === undefined || value.predecessor === null || typeof value.predecessor === "string") || typeof value.before !== "string" || typeof value.after !== "string" || !Number.isSafeInteger(value.maxRows) || !Array.isArray(value.statements) || value.statements.some((statement) => typeof statement !== "string")) return invalidDocument();
+    if (typeof value.id !== "string" || !(value.predecessor === undefined || value.predecessor === null || typeof value.predecessor === "string") || typeof value.before !== "string" || typeof value.after !== "string" || !Number.isInteger(value.maxRows) || (value.maxRows as number) < 0 || !Array.isArray(value.statements) || value.statements.some((statement) => typeof statement !== "string")) return invalidDocument();
     const transition = value as unknown as Transition;
-    if (typeof transition.id !== "string" || !/^[a-z0-9._-]{1,100}$/.test(transition.id)) {
+    if (typeof transition.id !== "string" || transition.id.length < 1 || transition.id.length > 100 || [...transition.id].some((character) => !/[a-z0-9._-]/.test(character))) {
       return refusal("schema-transform.document-invalid", "A transition ID must use lowercase letters, digits, dots, underscores or hyphens, up to 100 bytes.");
     }
     if (ids.has(transition.id)) return refusal("schema-transform.document-invalid", `Transition ${transition.id} appears more than once.`);
     ids.add(transition.id);
-    if (transition.predecessor !== (previous?.id ?? null)) {
+    const expectedPredecessor = previous?.id;
+    if (expectedPredecessor === undefined ? transition.predecessor != null : transition.predecessor !== expectedPredecessor) {
       return refusal("schema-transform.document-invalid", `Transition ${transition.id} must name its immediately preceding transition as predecessor.`);
     }
     if (previous && previous.after !== transition.before) {
@@ -76,7 +81,7 @@ function validateStatement(statement: string): string | null {
   }
   const scripts = sqlStatementTokens(statement);
   if (scripts.length !== 1) return "Write one supported SQL statement without a second statement.";
-  const words = tokens.filter((token) => token.kind !== "string").map(tokenValue);
+  const words = canonicalStatementTokens(statement, tokens);
   if (words.at(-1) === ";") words.pop();
   if (words.length === 0) return "Write one supported SQL statement without a second statement.";
   if (hasSequence(words, ["on", "conflict", "rollback"])) {
@@ -151,8 +156,34 @@ function validateUpdate(words: string[]): { tableAt: number | null; error?: stri
   return { tableAt: at };
 }
 
-function tokenValue(token: SqlToken): string {
-  return token.kind === "string" ? "" : token.text.toLowerCase();
+function canonicalStatementTokens(statement: string, tokens: SqlToken[]): string[] {
+  const words: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token.kind === "string") {
+      const raw = statement.slice(token.start + 1, token.end - 1).replaceAll("''", "'");
+      words.push(`'${raw}'`);
+    } else if (token.kind === "word") {
+      let value = token.text.toLowerCase();
+      let end = token.end;
+      while (true) {
+        const separator = tokens[index + 1];
+        if (separator?.kind !== "symbol" || separator.text !== "." || separator.start !== end) break;
+        value += ".";
+        end = separator.end;
+        index += 1;
+        const next = tokens[index + 1];
+        if (next?.kind !== "word" || next.start !== end) break;
+        value += next.text.toLowerCase();
+        end = next.end;
+        index += 1;
+      }
+      words.push(value);
+    } else {
+      words.push(token.text.toLowerCase());
+    }
+  }
+  return words;
 }
 
 function optionalIfNotExists(words: string[], at: number): number {
@@ -165,7 +196,7 @@ function hasSequence(words: string[], sequence: string[]): boolean {
 
 function isQualified(name: string): boolean { return name.includes("."); }
 function isForbiddenObject(name: string): boolean { return RESERVED.has(name.toLowerCase().split(".").at(-1) ?? name.toLowerCase()); }
-function validFingerprint(value: unknown): value is string { return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value); }
+function validFingerprint(value: unknown): value is string { return typeof value === "string" && value.length === 71 && /^sha256:[0-9a-f]{64}$/.test(value); }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function exactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []): boolean {
   const keys = Object.keys(value);

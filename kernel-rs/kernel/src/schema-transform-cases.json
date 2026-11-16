@@ -65,6 +65,62 @@
       "code": null
     },
     {
+      "case": "first transition may omit predecessor",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":10,\"statements\":[\"CREATE TABLE tasks(id INTEGER)\"]}]}",
+      "error": null,
+      "code": null
+    },
+    {
+      "case": "negative maxRows is a document type error",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":-1,\"statements\":[\"CREATE TABLE tasks(id INTEGER)\"]}]}",
+      "error": "schema-transforms.json must be valid JSON.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "negative version is a document type error",
+      "scope": "static",
+      "source": "{\"version\":-1,\"transitions\":[]}",
+      "error": "schema-transforms.json must be valid JSON.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "version above u32 is a document type error",
+      "scope": "static",
+      "source": "{\"version\":4294967296,\"transitions\":[]}",
+      "error": "schema-transforms.json must be valid JSON.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "transition ID with trailing newline is refused",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\\n\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":10,\"statements\":[\"CREATE TABLE tasks(id INTEGER)\"]}]}",
+      "error": "A transition ID must use lowercase letters, digits, dots, underscores or hyphens, up to 100 bytes.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "fingerprint with trailing newline is refused",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\\n\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":10,\"statements\":[\"CREATE TABLE tasks(id INTEGER)\"]}]}",
+      "error": "Transition t1 must use lowercase sha256 fingerprints.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "ADD COLUMN without type keeps its string literal token",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":10,\"statements\":[\"ALTER TABLE tasks ADD COLUMN label DEFAULT 'sqlite_schema; it''s fine'\"]}]}",
+      "error": null,
+      "code": null
+    },
+    {
+      "case": "quoted string tokens count in column rename",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":10,\"statements\":[\"ALTER TABLE tasks RENAME COLUMN 'old' TO 'new'\"]}]}",
+      "error": null,
+      "code": null
+    },
+    {
       "case": "history entry changed",
       "scope": "runtime",
       "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"$databaseFingerprint\",\"after\":\"$databaseFingerprint\",\"maxRows\":10,\"statements\":[\"UPDATE tasks SET label=lower(label)\"]}]}",
