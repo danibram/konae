@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   return { setScenario(value: typeof scenario) { scenario = value; } };
 }
 
-async function installModuleSetFixture(page: Page) {
+async function installModuleSetFixture(page: Page, input: object = { module: "seo", on: true, options: { canonical: "path" }, expected: { on: false, canonical: null, image: null } }) {
   let step = 0;
   await page.route("https://api.anthropic.com/**", async (route) => {
     if (route.request().method() === "OPTIONS") {
@@ -231,7 +231,7 @@ async function installModuleSetFixture(page: Page) {
       return;
     }
     const response = step++ === 0
-      ? providerReply({ name: "module_set", input: { module: "seo", on: true, options: { canonical: "path" }, expected: { on: false, canonical: null, image: null } } })
+      ? providerReply({ name: "module_set", input })
       : providerReply(undefined, "I read the module state after the change.");
     await route.fulfill({
       status: 200,
@@ -734,6 +734,18 @@ test("the build agent confirms module changes and reads them back", async ({ pag
   await expect(page.getByText("I read the module state after the change.", { exact: true }).last()).toBeVisible({ timeout: 30_000 });
   const current = await client.call<{ modules: { seo: { state: { on: boolean } } } }>("modules_read", { projectId: secondPath.split("/").at(-1) });
   expect(current.modules.seo.state.on).toBe(false);
+
+  const authPath = await createProject(page, "Agent auth settings");
+  await publish(page);
+  await installModuleSetFixture(page, { module: "auth", on: true, options: { signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } } });
+  await connectProposalFixture(page);
+  await askFixture(page, "Set signup to the example.test allowlist.");
+  const authConfirm = page.getByRole("dialog", { name: "Allow the agent to do this?" });
+  await expect(authConfirm.getByText("The agent will turn on App accounts (auth) and set Who can create an account to Allowlist (@example.test).", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await authConfirm.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(page.getByText("I read the module state after the change.", { exact: true }).last()).toBeVisible({ timeout: 30_000 });
+  const authReadback = await client.call<{ modules: { auth: { state: { on: boolean; signupPolicy: { mode: string; allowlist: string[] } } } } }>("modules_read", { projectId: authPath.split("/").at(-1) });
+  expect(authReadback.modules.auth.state).toMatchObject({ on: true, signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } });
 });
 
 test("files module cannot be turned off while the app has an uploaded file", async ({ page, context }) => {

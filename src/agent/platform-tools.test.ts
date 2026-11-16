@@ -123,6 +123,13 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(decline.calls).toEqual([]);
   });
 
+  test("auth policy changes ask the owner and name the policy in the confirmation", async () => {
+    const { value, confirmations } = binding();
+    const tools = await toolsFor(value);
+    await run(tools.module_set, { module: "auth", on: true, options: { signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } } });
+    expect(confirmations[0]?.summary).toBe("The agent will turn on App accounts (auth) and set Who can create an account to Allowlist (@example.test).");
+  });
+
   test("a stale module write reads current state before the agent reports the refusal", async () => {
     const { value, calls } = binding({ call: async (name, args) => {
       calls.push({ name, args });

@@ -133,7 +133,7 @@ export const sdkContract = {
       switch: true, options: [
         { key: "signupPolicy", type: "signup-policy", values: ["open", "allowlist", "invitation", "closed"], valueLabels: { open: "Open", allowlist: "Allowlist", invitation: "Invitation only", closed: "Closed" }, default: null, label: "Who can create an account", help: "Choose who may create an app account. Allowlist entries stay as separate email addresses or domains." },
         { key: "signInMethods", type: "sign-in-methods", values: ["password", "google"], valueLabels: { password: "Email and password", google: "Continue with Google" }, default: ["password"], label: "Sign-in methods", help: "Password stays on. Google needs this app's Google client set as signing secrets." },
-      ], permission: "manage_users", agentRule: "never", requires: [], uses: ["private deployment", "app accounts or invitations", "authenticated actions", "actor bindings"],
+      ], permission: "manage_users", agentRule: "after-owner-confirms", requires: [], uses: ["private deployment", "app accounts or invitations", "authenticated actions", "actor bindings"],
       declarations: [],
       notes: [
         "Visibility decides who may open the app shell. It never grants data access on its own.",

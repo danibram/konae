@@ -85,7 +85,15 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
       const change = typeof args.on === "boolean" ? `turn ${args.on ? "on" : "off"}` : "update";
       const options = args.options && typeof args.options === "object" ? Object.entries(args.options as Record<string, unknown>).map(([key, value]) => {
         const option = module?.options.find((item) => item.key === key) as SdkModuleOption | undefined;
-        return `${option?.label ?? key} to ${option?.valueLabels?.[String(value)] ?? String(value)}`;
+        let label = option?.valueLabels?.[String(value)] ?? String(value);
+        if (option?.type === "signup-policy" && value && typeof value === "object") {
+          const policy = value as { mode?: unknown; allowlist?: unknown };
+          label = option.valueLabels?.[String(policy.mode)] ?? String(policy.mode);
+          if (policy.mode === "allowlist" && Array.isArray(policy.allowlist) && policy.allowlist.length) label += ` (${policy.allowlist.join(", ")})`;
+        } else if (option?.type === "sign-in-methods" && Array.isArray(value)) {
+          label = value.map((method) => option.valueLabels?.[String(method)] ?? String(method)).join(" and ");
+        }
+        return `${option?.label ?? key} to ${label}`;
       }) : [];
       return `The agent will ${change} ${module?.title ?? name} (${name})${options.length ? ` and set ${options.join(", ")}` : ""}.`;
     }

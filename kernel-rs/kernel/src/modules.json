@@ -42,7 +42,7 @@
         }
       ],
       "permission": "manage_users",
-      "agentRule": "never",
+      "agentRule": "after-owner-confirms",
       "requires": [],
       "uses": [
         "private deployment",
