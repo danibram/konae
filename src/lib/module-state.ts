@@ -37,6 +37,9 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
   if (input.rule === "requires" && input.requiredState?.on !== true) {
     return { code: "module.requires", message: `Module ${input.module} requires ${input.required}, which is off. Turn ${input.required} on first.` };
   }
+  if (input.rule === "private-auth" && input.requiredState?.on !== true) {
+    return { code: "module.requires", message: "A private app requires auth, which is off. Turn auth on first." };
+  }
   if (input.rule === "in-use" && input.used === true) {
     return { code: "module.in-use", message: `Module ${input.module} is in use by the published app. Remove its use before turning it off.` };
   }

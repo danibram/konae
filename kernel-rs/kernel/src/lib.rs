@@ -1076,6 +1076,14 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         if (input.visibility != "public" || has_initial_signup_policy || package_policy.is_some())
             && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth")) { auth["on"] = Value::Bool(true); }
     }
+    if input.visibility != "public" {
+        if let Err(refused) = modules::check_private_auth(modules::is_on(&module_states, "auth")) {
+            return refusal_error(&refused);
+        }
+    }
+    if let Err(refused) = modules::check_requirements(&module_states) {
+        return refusal_error(&refused);
+    }
     let deployment = Deployment {
         id: id.clone(),
         project_id: input.project.id,

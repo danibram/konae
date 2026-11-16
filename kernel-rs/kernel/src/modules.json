@@ -94,7 +94,9 @@
       ],
       "permission": "publish",
       "agentRule": "never",
-      "requires": [],
+      "requires": [
+        "auth"
+      ],
       "uses": [
         "miniapp.files"
       ]

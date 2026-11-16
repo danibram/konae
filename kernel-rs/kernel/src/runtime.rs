@@ -674,8 +674,9 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         candidate_modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
     }
     if input.visibility != "public" && !super::modules::is_on(&candidate_modules, "auth") {
-        return Err(anyhow::Error::new(super::modules::check_requires("private Deployment", "auth", false).unwrap_err()));
+        return Err(anyhow::Error::new(super::modules::check_private_auth(false).unwrap_err()));
     }
+    super::modules::check_requirements(&candidate_modules).map_err(anyhow::Error::new)?;
     if uses_auth && !super::modules::is_on(&candidate_modules, "auth") {
         return Err(anyhow::Error::new(super::refusal::refuse("module.off", "Module auth is off. Turn it on with module_set.")));
     }

@@ -243,11 +243,21 @@ mod auth_module_tests {
     async fn legacy_auth_folders_keep_accounts_and_policy_and_decide_private_and_static_apps() {
         let root = std::env::temp_dir().join(format!("konae-auth-module-fixtures-{}", Uuid::new_v4()));
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-auth-0.9.0");
-        for (fixture, id, expected) in [("accounts", "legacy_accounts", true), ("private", "legacy_private", true), ("public", "legacy_public_static", false)] {
+        for (fixture, id, expected_auth, expected_files) in [("accounts", "legacy_accounts", true, false), ("private", "legacy_private", true, false), ("public", "legacy_public_static", false, false), ("files", "legacy_file_user", true, true)] {
             let target = layout::folder(&root, id);
-            copy_tree(&fixtures.join(fixture), &target);
+            copy_tree(&fixtures.join(if fixture == "files" { "public" } else { fixture }), &target);
+            if fixture == "files" {
+                let settings_path = layout::settings(&root, id);
+                let mut settings: Value = serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+                settings["id"] = json!(id);
+                std::fs::write(settings_path, serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+            }
             std::fs::create_dir_all(layout::dist(&root, id)).unwrap();
             std::fs::write(layout::dist(&root, id).join("index.html"), "<!doctype html><main>Legacy app</main>").unwrap();
+            if fixture == "files" {
+                std::fs::create_dir_all(layout::files(&root, id)).unwrap();
+                std::fs::write(layout::files(&root, id).join("index.json"), "[{\"id\":\"legacy-file\"}]").unwrap();
+            }
             if fixture == "accounts" {
                 let identity = layout::data(&root, id).join("identity.sqlite");
                 std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
@@ -255,10 +265,11 @@ mod auth_module_tests {
                 connection.execute("CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL)", []).unwrap();
                 connection.execute("INSERT INTO app_users VALUES ('user-1', 'person@example.test')", []).unwrap();
             }
-            assert_eq!(decide_files_module(&root, id).await.unwrap(), Some(false));
+            assert_eq!(decide_files_module(&root, id).await.unwrap(), Some(expected_files));
             assert_eq!(decide_auth_module(&root, id).await.unwrap(), None);
             let settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
-            assert_eq!(settings["modules"]["auth"]["on"], expected);
+            assert_eq!(settings["modules"]["auth"]["on"], expected_auth);
+            assert_eq!(settings["modules"]["files"]["on"], expected_files);
             if fixture == "accounts" {
                 assert_eq!(settings["signupPolicy"]["mode"], "allowlist");
                 assert_eq!(settings["signupPolicy"]["allowlist"][0], "person@example.test");

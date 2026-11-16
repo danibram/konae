@@ -33,7 +33,7 @@ pub fn auth_enabled_defaults() -> BTreeMap<String, Value> {
 }
 
 pub fn sources_use_auth<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
-    files.into_iter().any(|bytes| contains(bytes, b"miniapp.auth") || contains(bytes, b"authenticated") || contains(bytes, b"\"source\":\"actor\"") || contains(bytes, b"\"source\": \"actor\""))
+    files.into_iter().any(|bytes| contains(bytes, b"miniapp.auth") || contains(bytes, b"miniapp.files") || contains(bytes, b"/_konae/files/") || contains(bytes, b"authenticated") || contains(bytes, b"\"source\":\"actor\"") || contains(bytes, b"\"source\": \"actor\""))
 }
 
 pub fn artifact_uses_auth<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
@@ -45,6 +45,9 @@ pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files
     complete(&mut modules);
     if initial.is_none_or(|state| !state.contains_key("files")) && uses_files {
         modules.get_mut("files").expect("files is switchable")["on"] = json!(true);
+    }
+    if initial.is_none_or(|state| !state.contains_key("auth")) && uses_files {
+        modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
     }
     modules
 }
@@ -130,6 +133,23 @@ pub fn check_known(module: &str, known: bool) -> std::result::Result<(), crate::
 pub fn check_requires(module: &str, required: &str, on: bool) -> std::result::Result<(), crate::refusal::Refusal> {
     if !on {
         return Err(crate::refusal::refuse("module.requires", format!("Module {module} requires {required}, which is off. Turn {required} on first.")));
+    }
+    Ok(())
+}
+
+pub fn check_requirements(modules: &BTreeMap<String, Value>) -> std::result::Result<(), crate::refusal::Refusal> {
+    for (module, description) in registry()["modules"].as_object().into_iter().flatten() {
+        if !is_on(modules, module) { continue; }
+        for required in description["requires"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            check_requires(module, required, is_on(modules, required))?;
+        }
+    }
+    Ok(())
+}
+
+pub fn check_private_auth(on: bool) -> std::result::Result<(), crate::refusal::Refusal> {
+    if !on {
+        return Err(crate::refusal::refuse("module.requires", "A private app requires auth, which is off. Turn auth on first."));
     }
     Ok(())
 }
@@ -271,6 +291,12 @@ pub async fn set(
                 }
             }
         } else {
+            for (dependent, description) in registry()["modules"].as_object().into_iter().flatten() {
+                let depends_on_module = description["requires"].as_array().into_iter().flatten().any(|required| required == module);
+                if depends_on_module && is_on(&settings.modules, dependent) {
+                    check_requires(dependent, module, false)?;
+                }
+            }
             require_not_in_use(module, published_app_uses_module(root, id, module, &current))?;
         }
         current["on"] = json!(on);
@@ -331,6 +357,7 @@ pub fn uses_auth(root: &std::path::Path, id: &str) -> bool {
             }
         } else { return true; }
     }
+    if uses_files(root, id, &json!({})) { return true; }
     let sources = crate::layout::sources(root, id);
     let dist = crate::layout::dist(root, id);
     walk(&sources, &|bytes| sources_use_auth([bytes])) || walk(&dist, &|bytes| artifact_uses_auth([bytes]))
@@ -345,13 +372,14 @@ mod tests {
         let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).unwrap();
         assert!(cases.len() >= 6);
         for case in cases {
-            let module = case["module"].as_str().unwrap();
+            let module = case["module"].as_str().unwrap_or("private app");
             let outcome = match case["rule"].as_str().unwrap() {
                 "expected" => check_expected(module, &case["state"], Some(&case["expected"])),
                 "switch" => check_switch(module, case["switch"] == true),
                 "known" => check_known(module, case["known"] == true),
                 "on" => require_on(&BTreeMap::from([(module.to_owned(), case["state"].clone())]), module),
                 "requires" => check_requires(module, case["required"].as_str().unwrap(), case["requiredState"]["on"] == true),
+                "private-auth" => check_private_auth(case["requiredState"]["on"] == true),
                 "in-use" => require_not_in_use(module, case["used"] == true),
                 "option-unknown" | "option-invalid" => check_option(module, &json!({"options":case["options"]}), case["option"].as_str().unwrap(), &case["value"]),
                 _ => panic!("unknown module case {}", case["case"]),
@@ -392,8 +420,10 @@ mod tests {
     fn a_first_release_turns_on_files_when_its_artifact_uses_the_sdk() {
         let inferred = initial_for_release(None, true);
         assert_eq!(inferred["files"]["on"], true);
+        assert_eq!(inferred["auth"]["on"], true);
         let seo_only = BTreeMap::from([("seo".to_owned(), json!({"on":false}))]);
         assert_eq!(initial_for_release(Some(&seo_only), true)["files"]["on"], true);
+        assert_eq!(initial_for_release(Some(&seo_only), true)["auth"]["on"], true);
         let explicit = BTreeMap::from([("files".to_owned(), json!({"on":false,"fileAccess":null}))]);
         assert_eq!(initial_for_release(Some(&explicit), true)["files"]["on"], false);
         assert_eq!(initial_for_release(None, false)["files"]["on"], false);
@@ -495,6 +525,25 @@ mod tests {
         let refusal = value.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.option-invalid");
         assert!(refusal.message.contains("domain, hostname, path"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn module_set_keeps_files_and_auth_on_together() {
+        let root = std::env::temp_dir().join(format!("konae-files-require-auth-{}", uuid::Uuid::new_v4()));
+        Settings::new("app", "App", "app", &json!({"visibility":"public"})).write(&root).await.unwrap();
+        let files = set(&root, "app", "files", Some(true), None, None).await.unwrap_err();
+        let files = files.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(files.code, "module.requires");
+        assert_eq!(files.message, "Module files requires auth, which is off. Turn auth on first.");
+
+        let mut settings = Settings::read(&root, "app").unwrap();
+        settings.modules.get_mut("files").unwrap()["on"] = json!(true);
+        settings.write(&root).await.unwrap();
+        let auth = set(&root, "app", "auth", Some(false), None, None).await.unwrap_err();
+        let auth = auth.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(auth.code, "module.requires");
+        assert_eq!(auth.message, "Module files requires auth, which is off. Turn auth on first.");
         let _ = std::fs::remove_dir_all(root);
     }
 

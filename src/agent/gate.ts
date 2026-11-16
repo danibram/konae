@@ -68,8 +68,12 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     const authState = facts.modules?.auth;
     if (facts.visibility === "private" && authState && authState.on !== true) {
-      const required = checkModuleChange({ rule: "requires", module: "private Deployment", required: "auth", requiredState: authState });
+      const required = checkModuleChange({ rule: "private-auth", requiredState: authState });
       if (required) return failure({ stage: "actions", message: required.message, code: required.code as "module.requires", hint: hintOf(required.code as "module.requires") }, ["sources"]);
+    }
+    if (filesState?.on === true && authState && authState.on !== true) {
+      const required = checkModuleChange({ rule: "requires", module: "files", required: "auth", requiredState: authState });
+      if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
     }
     const authOff = authState ? checkModuleChange({ rule: "on", module: "auth", state: authState }) : null;
     if (sourcesUseAuth(Object.values(files)) && authOff) {

@@ -5,5 +5,6 @@
   {"case":"authenticated action","sources":["{\"actions\":[{\"name\":\"read\",\"access\":\"authenticated\"}] }"],"artifact":[],"usesAuth":true},
   {"case":"actor binding","sources":["{\"actor\":{\"source\":\"actor\",\"field\":\"id\"}}"],"artifact":[],"usesAuth":true},
   {"case":"public static page","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesAuth":false},
-  {"case":"auth SDK call","sources":["await miniapp.auth.session()"],"artifact":["await miniapp.auth.session()"],"usesAuth":true}
+  {"case":"auth SDK call","sources":["await miniapp.auth.session()"],"artifact":["await miniapp.auth.session()"],"usesAuth":true},
+  {"case":"file upload uses auth","sources":["await miniapp.files.upload(file)"],"artifact":["await miniapp.files.upload(file)"],"usesFiles":true,"usesAuth":true}
 ]
