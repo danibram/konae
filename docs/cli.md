@@ -56,15 +56,72 @@ Writes an app folder into an empty folder, without a credential or a Kernel: `ko
 bun run konae -- dev --dir ./my-app [--port 8796] [--events-port 8797] [--reset] [--confirm-schema <confirmation>]
 ```
 
-Builds `dist/` with the shared local builder and runs the matching `kernel` binary on the folder. If the folder has a `package.json` build script and `node_modules/`, the local builder runs `npm run build`; otherwise it uses its built-in builder. An app that imports npm packages needs the exact versions from `package.json` installed with `npm install` first. From a checkout, `dev` uses that checkout's Kernel binary and builds it with Cargo if absent. The compiled CLI downloads the Kernel release for its version and verifies it against `SHA256SUMS`. Set `KONAE_KERNEL_BIN` to use a local binary. The Kernel reads `konae.json`, `app/`, `dist/` and `data/` where they are, with no owner and no link to production. It checks the folder as a release and brings `data/database.sqlite` to what `app/schema.sql` states. A change that loses data is refused with the plan's confirmation; run `dev` again with `--confirm-schema` and that confirmation to apply it. When a file in `app/` changes, `dev` builds again and restarts the Kernel. The app keeps the Signup Policy in `konae.json`. When it is not Open and the app holds no account yet, `dev` invites `test@example.com`, waits up to 15 seconds for the invitation to reach the mailbox and prints `Test account: open <link> and choose a password.` When the app holds an account, as after `--reset` with pulled data or on a second run, it invites no one. For another address it prints the `kernel` binary's `invite` command. Its email, notices and invitations included, goes to `.konae/kernel/mailbox.jsonl`. Files are limited as on a Kernel, 2 MiB each, and `KONAE_FILE_MAX_BYTES` raises that. The quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another, so `--reset` can import the files of a published app. `--reset` imports pulled data after backing up local `data/`, or empties `data/` when there is no pull. On every start and change it writes `actions.d.ts` beside `konae.json`, which types `miniapp.actions.call`.
+Builds `dist/` with the shared local builder and runs the matching `kernel` binary on the folder. If the folder has a `package.json` build script and `node_modules/`, the local builder runs `npm run build`; otherwise it uses its built-in builder. An app that imports npm packages needs the exact versions from `package.json` installed with `npm install` first. From a checkout, `dev` uses that checkout's Kernel binary and builds it with Cargo if absent. The compiled CLI downloads the Kernel release for its version and verifies it against `SHA256SUMS`. Set `KONAE_KERNEL_BIN` to use a local binary. The Kernel reads `konae.json`, `app/`, `dist/` and `data/` where they are, with no owner and no link to production. It checks the folder as a release and brings `data/database.sqlite` to what `app/schema.sql` states. A change that loses data is refused with the plan's confirmation; run `dev` again with `--confirm-schema` and that confirmation to apply it. When a file in `app/` changes, `dev` builds again and restarts the Kernel. The app keeps the Signup Policy in `konae.json`. When it is not Open and the app holds no account yet, `dev` invites `test@example.com`, waits up to 15 seconds for the invitation to reach the mailbox and prints `Test account: open <link> and choose a password.` When the app holds an account, as after `--reset` with pulled data or on a second run, it invites no one. For another address it prints the `kernel` binary's `invite` command. Its email, notices and invitations included, go to `.konae/kernel/mail-testbox.jsonl`. Files are limited as on a Kernel, 2 MiB each, and `KONAE_FILE_MAX_BYTES` raises that. The quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another, so `--reset` can import the files of a published app. `--reset` imports pulled data after backing up local `data/`, or empties `data/` when there is no pull. On every start and change it writes `actions.d.ts` beside `konae.json`, which types `miniapp.actions.call`.
+
+Every `dev` run uses local test mode. The Kernel binds to loopback, uses the folder's `data/` and local file store, captures call actions without resolving or contacting their targets, and pauses schedule timers. Google sign-in is refused. The browser's `connect-src` allows only the app's own origin, even when `konae.json` declares `manifest.connects`. Test mode does not sandbox npm build scripts or other commands you run from the shell.
+
+`dev --reset` acquires the folder's lifecycle lock and checks that no local Kernel is still serving the app. Before it imports pulled data, or empties local data when no pull exists, it backs up `data/` and the local call and mail queues under `.konae/backups/local-reset-<executionId>`. The command retires pending calls and email jobs after the data change. Its result names the backup, reset and snapshot IDs, and the retired call and email counts. If reset fails, it restores the data and queues from the backup. Stop the running `dev` process before another reset.
 
 ## pull
 
 ```sh
-konae pull --dir ./my-app [--url <installation URL>]
+konae pull --dir ./my-app [--data-only] [--url <installation URL>]
 ```
 
 Pull exports sources, `dist/`, `konae.json` settings and published data into `.konae/pull/`. It needs `export_data`. A clean pull installs `app/` and `konae.json`, while keeping `dist/` staged. If local sources or settings differ from their last recorded values, pull stages the incoming app, artifact and settings and preserves local edits. Preserve local `app/` and `konae.json` in a backup, copy the staged app and settings into place unchanged, then pull again to record the observed revision. Reapply or merge the saved local edits after that, before publishing. The revision is scoped to this installation and project. A pending source revision blocks `publish`; pending pulled data separately blocks `push` until `dev --reset` imports it after a backup. The source folder can be ahead of the applied rules in `konae.json.released`. Pull does not change the published app. [Export and import](./reference/export-and-import.md#export-and-import-an-app) gives a concrete staged-file recovery path and explains the separate data import.
+
+`pull --data-only` refreshes the data snapshot while preserving local `app/`, `konae.json` and the recorded source baseline. The downloaded snapshot stays under `.konae/pull/`; `dev --reset` imports it into `data/` after a backup. `rehearse` checks the snapshot without changing local `data/`.
+
+## test
+
+```sh
+bun run konae -- test --dir ./my-app status
+bun run konae -- test --dir ./my-app calls
+bun run konae -- test --dir ./my-app schedule <action>
+bun run konae -- test --dir ./my-app reply <call-id> --stdin
+bun run konae -- test --dir ./my-app scenario tests/payments.json
+```
+
+These commands require a local `dev` Kernel with test controls. `status` reports the mode and paused schedules. `calls` lists calls awaiting a reply, calls waiting for retry backoff with `nextAttemptAt`, and continuations whose outcome was interrupted. `schedule` runs one declared schedule mutation through the Kernel's normal action path.
+
+`reply` reads JSON from stdin or `--file`. A response names the `responseNumber` shown by `calls` and supplies either an HTTP `status` with a JSON `body`, or a transport `error`:
+
+```json
+{"responseNumber":1,"status":200,"body":{"id":"receipt-42"}}
+```
+
+HTTP 408, 425, 429 and 5xx responses, plus retryable transport errors, use the Kernel's retry schedule. A call gets at most five attempts. Retry waits are 30, 60, 120 and 240 seconds. Reply again only after `calls` shows the next `responseNumber` as awaiting. A duplicate, stale response number, or call ID from another app leaves the outbox unchanged.
+
+A version 1 scenario file matches each response to exactly one awaiting call by action name and a subset of its call record. Each step supplies one response:
+
+```json
+{
+  "version": 1,
+  "responses": [
+    {
+      "action": "orders.send",
+      "match": {"input": {"orderId": "order-42"}},
+      "response": {"responseNumber": 1, "status": 200, "body": {"id": "receipt-42"}}
+    }
+  ]
+}
+```
+
+Store scenario files under the app folder's `tests/`. A scenario refuses to guess when a step matches zero or multiple calls, or names a stale response number. For retry sequences, inspect `nextAttemptAt` and submit each response number after the call becomes awaiting again.
+
+The page `dev` prints on its next port shows local email, calls, schedule runs, routes and Signals. Its schedule and reply controls use a random token in the URL fragment, check the loopback host and request origin, and require the token in a request header. `konae events --dir ./my-app` reads the same local records. Neither command targets production.
+
+An interrupted continuation has `then.state: "interrupted"` because the Kernel cannot know whether its mutation committed before a process stopped. The Kernel does not replay it. Reset local data and retest the workflow before relying on the result.
+
+## rehearse
+
+```sh
+bun run konae -- rehearse --dir ./my-app [--confirm-schema <confirmation>]
+```
+
+Rehearse builds a fresh `dist/` from the current `app/`, then asks a scratch Kernel to import the immutable data snapshot under `.konae/pull/`. It checks the import against the candidate sources and settings, reports candidate and baseline source digests, and deletes the scratch folder. It does not read hand-fixed local `data/` or change the published app. A schema refusal may name a confirmation for this snapshot. Pass that value with `--confirm-schema`; the later production plan can name a different confirmation because it reads the current published rows.
+
+`konae schema fingerprint --dir ./my-app` prints `sha256:<64 lowercase hex characters>` for `app/schema.sql`. Add `--data` to read `data/database.sqlite` read-only, or `--json` to return `{ "fingerprint": "sha256:<64 lowercase hex characters>", "source": "schema" | "data" }`. It does not start the app or create `.konae/`. The Kernel command accepts a direct path: `kernel schema fingerprint --schema <path>` or `kernel schema fingerprint --database <path>`.
 
 ## push
 
@@ -129,6 +186,8 @@ bun run konae -- publish --dir ./my-app [--url <installation URL>] [--confirm-sc
 Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with [`secret set`](#secret) first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`, and prints the generated address the release fixes, from `release_plan`, before it applies.
 
 The Kernel changes the published database to what `schema.sql` states. A new table, column or index applies. When the change drops a table or a column, or changes a column's type, `publish` prints what it loses, the statements and the plan's confirmation, then asks. Without a terminal it publishes nothing; run it again with `--confirm-schema` and that confirmation. A confirmation fits only the plan it was printed for. `.konae/release-plan.json` keeps the last plan.
+
+`publish` sends the current `app/` sources and built `dist/`. It applies the schema change to the rows currently on the Deployment. It never uploads local `data/`. Use `konae push --yes` only when the owner explicitly wants to replace published data with the folder's data after a backup.
 
 ## conform
 

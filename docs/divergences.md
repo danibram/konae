@@ -23,7 +23,7 @@ Saved public assets work in the preview, including images in `public/`, linked s
 
 ## Email on konae dev
 
-`konae dev` sends no email. Account email and notices land in `.konae/kernel/mailbox.jsonl` of the folder, and `konae events` lists them.
+`konae dev` sends no email. Account email and notices land in `.konae/kernel/mail-testbox.jsonl` of the folder, and `konae events` lists them. Its test mode captures outbound calls, pauses schedule timers, refuses Google sign-in, and blocks browser connections to other origins. It is not an OS sandbox for npm scripts or other shell commands.
 
 ## File size
 

@@ -196,6 +196,10 @@ _Avoid_: migration, sync, restore (that installs a copy)
 The state of a Deployment that takes no writes: its host shows a maintenance page, owner tools that would change it are refused except `maintenance_set` and `project_import`, and its email, calls and schedule wait. It lives in `.konae/maintenance.json`. An owner moves an app with no lost write by maintenance, export and import (ADR-0008).
 _Avoid_: downtime, read-only mode (reads stop too), migration
 
+**Test Mode**:
+An app author's local run, with its own accounts, rows and files. Outbound calls are captured, schedule timers pause, Google sign-in is refused, and browser connections to other origins are blocked. Shell commands still run as the current OS user. A rehearsal checks current sources against pulled data, while publishing plans against current Deployment rows and never uploads local rows.
+_Avoid_: sandbox, staging Deployment
+
 ## Words for running an installation
 
 **Installation**:

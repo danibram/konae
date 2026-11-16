@@ -20,7 +20,7 @@ Build the compiled CLI with `bun run scripts/build-konae-binary.ts`, then copy `
     bun run konae -- dev --dir /tmp/my-app
     ```
 
-3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, invitations and notices included, goes to `.konae/kernel/mailbox.jsonl`, and `bun run konae -- events --dir /tmp/my-app` lists it.
+3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, invitations and notices included, goes to `.konae/kernel/mail-testbox.jsonl`, and `bun run konae -- events --dir /tmp/my-app` lists it.
 4. Optional. Write the Action Contract and, against a test Deployment, check every action's answers.
 
     ```sh

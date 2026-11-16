@@ -78,7 +78,7 @@ The URL is https, or http to an app of this installation. It never names a priva
 
 ## Check it worked
 
-- Read the outbox with `calls_read` and the project's `projectId`. It lists calls newest first with their status (`pending`, `delivered` or `failed`), attempts, URL, error kind and what the `then` mutation did. On `konae dev`, `bun run konae -- events --dir <folder>` lists the same calls.
+- Read the outbox with `calls_read` and the project's `projectId`. It lists calls newest first with their status (`pending`, `delivered` or `failed`), attempts, URL, error kind and what the `then` mutation did. In local test mode, `konae dev` captures each call for a synthetic reply; `bun run konae -- events --dir <folder>` lists the captured calls.
 - Query the table the `then` mutation wrote. In the starter app, that is `status.escalations`.
 - After `secret_set`, read the names back with `secrets_list`. After `release_apply`, read the Deployment back with `project_inspect`.
 

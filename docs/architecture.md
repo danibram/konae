@@ -162,6 +162,8 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 └── mcp.sqlite              Konae: the project list, agent credentials, OAuth and the audit log
 ```
 
+`konae dev` keeps test mail separately at `<app folder>/.konae/kernel/mail-testbox.jsonl`. The `mailbox.jsonl` above remains the live Kernel's development transport file.
+
 | Store | Owner | Leaves with an export | Leaves with a copy |
 | --- | --- | --- | --- |
 | `apps/<id>/data/database.sqlite`, `identity.sqlite`, `usage.sqlite`, `files/` | The app | Yes | Yes |

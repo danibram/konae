@@ -46,7 +46,7 @@ Apps created with `konae init` open in the editor with the same sources as folde
 ## Where the email lands while you try it
 
 - On `bun run dev:local`, every account and invitation email lands in `data/kernel-local/mailbox.jsonl` and goes to no provider.
-- On `bun run konae -- dev --dir <folder>`, it lands in `<folder>/.konae/kernel/mailbox.jsonl`. When the policy is not Open and the app holds no account yet, `dev` invites `test@example.com` and prints `Test account: open <link> and choose a password.` To invite another address, run the `kernel invite <email> --app <id>` command that `dev` prints. `bun run konae -- events --dir <folder>` lists each email with its link.
+- On `bun run konae -- dev --dir <folder>`, it lands in `<folder>/.konae/kernel/mail-testbox.jsonl`. When the policy is not Open and the app holds no account yet, `dev` invites `test@example.com` and prints `Test account: open <link> and choose a password.` To invite another address, run the `kernel invite <email> --app <id>` command that `dev` prints. `bun run konae -- events --dir <folder>` lists each email with its link.
 
 The editor preview sends no email, so try invitations on one of these or on a Deployment.
 

@@ -19,7 +19,8 @@
       "guides/add-a-second-owner.md",
       "guides/give-the-app-an-address.md",
       "guides/take-the-app-elsewhere.md",
-      "guides/bring-existing-data.md"
+      "guides/bring-existing-data.md",
+      "guides/rehearse-locally.md"
     ] },
     { "section": "Reference", "pages": [
       "cli.md",
