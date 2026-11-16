@@ -3,10 +3,14 @@ import type { DatabaseAdminHost, DatabaseBackup, DatabasePage, DatabaseRunResult
 import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
-import { platformMcp, type Transfer } from "../mcp/client";
+import { McpError, platformMcp, type Transfer } from "../mcp/client";
 import { publishProject, type ConfirmSchema } from "./release";
 
 export type DeploymentReceipt = DeploymentRecord;
+
+export function isSettingChanged(error: unknown): boolean {
+  return error instanceof McpError && error.refusal?.code === "setting.changed";
+}
 
 /**
  * Publishes the project. `confirmSchema` is asked when the schema change loses

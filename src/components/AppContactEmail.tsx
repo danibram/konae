@@ -1,6 +1,6 @@
 import { Mail } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { readContactEmail, setContactEmail, type ContactEmailState } from "../deployments/client";
+import { isSettingChanged, readContactEmail, setContactEmail, type ContactEmailState } from "../deployments/client";
 import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Field, Input, LoadingBlock } from "./ui";
@@ -55,6 +55,12 @@ export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: s
       setNotice(readBack.contactEmail ? "Saved." : "Contact email removed.");
     } catch (cause) {
       if (!alive.current) return;
+      if (isSettingChanged(cause)) {
+        try {
+          const readBack = await readContactEmail(deploymentId);
+          if (alive.current) { setState(readBack); setEmail(readBack.contactEmail ?? ""); }
+        } catch { /* Keep the refusal visible if the read-back fails. */ }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) onSignedOut();
     } finally { if (alive.current) setBusy(false); }

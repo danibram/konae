@@ -5,6 +5,7 @@ import { hostnameLabel, setHostname } from "../deployments/hostnames";
 import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, setPath, type PathChange, type PathView } from "../deployments/paths";
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
+import { isSettingChanged } from "../deployments/client";
 import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
@@ -97,6 +98,12 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       setConfirmation(null);
     } catch (cause) {
       if (!alive.current) return;
+      if (isSettingChanged(cause)) {
+        try {
+          const current = await readDomain(deploymentId);
+          if (alive.current) { setView(current); setHostname(current.hostname ?? ""); setConfirmation(null); }
+        } catch { /* Keep the refusal visible if the read-back fails. */ }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }
     } finally { if (alive.current) setBusy(false); }
@@ -228,6 +235,12 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
     } catch (cause) {
       if (!alive.current) return;
       setConfirming(false);
+      if (isSettingChanged(cause)) {
+        try {
+          const readBack = await readDomain(deploymentId);
+          if (alive.current) onMoved(readBack.generatedUrl);
+        } catch { /* Keep the refusal visible if the read-back fails. */ }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) onSignedOut();
     } finally { if (alive.current) setBusy(false); }
@@ -313,6 +326,12 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
       if (isSharedOriginRefusal(cause)) {
         setConfirmation({ kind: "accept", change: next, message: cause instanceof Error ? cause.message : String(cause) });
       } else {
+        if (isSettingChanged(cause)) {
+          try {
+            const readBack = await readPath(deploymentId);
+            if (alive.current) { setView(readBack); setName(readBack.name ?? ""); setConfirmation(null); }
+          } catch { /* Keep the refusal visible if the read-back fails. */ }
+        }
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }
