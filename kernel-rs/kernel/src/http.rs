@@ -764,7 +764,7 @@ impl RouteTable {
         })
     }
 
-    fn has_pages(&self) -> bool {
+    pub(crate) fn has_pages(&self) -> bool {
         !self.pages.is_empty()
     }
 
@@ -801,7 +801,7 @@ fn cache_table(deployment: &Deployment) -> Arc<RouteTable> {
     table
 }
 
-fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
+pub(crate) fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
     {
         let cache = route_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cached) = cache.get(&deployment.id).filter(|cached| cached.revision.as_deref() == Some(deployment.artifact_version.as_str())) {

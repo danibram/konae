@@ -1293,6 +1293,10 @@ fn remove_database_files(path: &Path) {
 
 
 fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result<()> {
+    swap_database_with(live, staged, replaced, || {})
+}
+
+fn swap_database_with(live: &Path, staged: &Path, replaced: &Path, between_renames: impl FnOnce()) -> std::io::Result<()> {
     std::fs::rename(live, replaced)?;
     for suffix in ["-wal", "-shm"] {
         let from = database_sidecar(live, suffix);
@@ -1303,6 +1307,7 @@ fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result
             }
         }
     }
+    between_renames();
     if let Err(error_value) = std::fs::rename(staged, live) {
         let _ = restore_database(live, replaced);
         return Err(error_value);
@@ -5299,6 +5304,62 @@ pub mod tests {
         state.deployments.write().await.get_mut(&host).unwrap().manifest["routing"] = json!("spa");
         let fallback = serve_key(state.clone(), HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]), "deep/page".into()).await;
         assert_eq!(fallback.headers()["x-robots-tag"], "noindex");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn page_queries_wait_through_database_swap_and_keep_the_new_wal() {
+        let root = std::env::temp_dir().join(format!("konae-page-swap-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html":"<title>Home</title>","post.html":"<html><head><title>Template</title></head><body></body></html>"})).await;
+        let (host, deployment) = {
+            let mut deployments = state.deployments.write().await;
+            let (host, deployment) = deployments.iter_mut().next().unwrap();
+            deployment.actions = r#"{"version":1,"actions":{"posts.head":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html"}}}}"#.into();
+            deployment.artifact_version = format!("{}-page-swap", deployment.artifact_version);
+            (host.clone(), deployment.clone())
+        };
+        let routes = http::route_table(&deployment);
+        assert!(routes.has_pages());
+        let live = crate::layout::database(&root, &deployment.id);
+        let staged = crate::layout::private(&root, &deployment.id).join("page-swap-staged.sqlite");
+        let replaced = crate::layout::private(&root, &deployment.id).join("page-swap-replaced.sqlite");
+        for path in [&live, &staged] {
+            let connection = Connection::open(path).unwrap();
+            connection.execute_batch("CREATE TABLE posts(slug TEXT PRIMARY KEY, title TEXT NOT NULL);").unwrap();
+            connection.execute("INSERT INTO posts VALUES('hello', ?1)", [if path == &live { "Old" } else { "New" }]).unwrap();
+        }
+        let lock = database_lock(&state, &deployment.id).await;
+        let (at_gap_tx, at_gap_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let swap = tokio::task::spawn_blocking(move || swap_database_with(&live, &staged, &replaced, || {
+            at_gap_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+        }));
+        tokio::task::spawn_blocking(move || at_gap_rx.recv().unwrap()).await.unwrap();
+        let headers = HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]);
+        let request = tokio::spawn(serve_key_with_routes(state.clone(), headers, "posts/hello".into(), Some(routes)));
+        let blocked = tokio::time::timeout(std::time::Duration::from_millis(20), async { while !request.is_finished() { tokio::task::yield_now().await; } }).await.is_err();
+        continue_tx.send(()).unwrap();
+        swap.await.unwrap().unwrap();
+        assert!(blocked, "the page request completed inside the database swap");
+        let writer = Connection::open(&crate::layout::database(&root, &deployment.id)).unwrap();
+        writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        writer.execute("INSERT INTO posts VALUES('later', 'WAL row')", []).unwrap();
+        assert!(crate::layout::database(&root, &deployment.id).with_extension("sqlite-wal").exists() || {
+            let mut sidecar = crate::layout::database(&root, &deployment.id).as_os_str().to_owned();
+            sidecar.push("-wal");
+            std::path::PathBuf::from(sidecar).exists()
+        });
+        drop(lock);
+        let response = request.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(body.contains("New"), "{body}");
+        let reopened = Connection::open(crate::layout::database(&root, &deployment.id)).unwrap();
+        assert_eq!(reopened.query_row("SELECT title FROM posts WHERE slug='later'", [], |row| row.get::<_, String>(0)).unwrap(), "WAL row");
+        drop(writer);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
