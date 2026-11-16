@@ -56,6 +56,10 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   expect(html).toContain("property=\"og:title\" content=\"Owner title\"");
   expect(html).toContain("property=\"og:description\"");
   expect(html).toContain(`property="og:image" content="${deployment.url}/card.png"`);
+  const asset = await appFetch(kernel, deployment.hostname, "/card.png");
+  const assetTag = asset.headers.get("etag")!;
+  const unchangedAsset = await appFetch(kernel, deployment.hostname, "/card.png", { headers: { "if-none-match": assetTag } });
+  expect(unchangedAsset.status).toBe(304);
   const escaped = await appFetch(kernel, deployment.hostname, "/escaped");
   expect(await escaped.text()).toContain("property=\"og:title\" content=\"A &quot;small&quot; &lt;app&gt; &amp; more\"");
   const untitled = await appFetch(kernel, deployment.hostname, "/untitled");

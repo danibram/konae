@@ -2176,7 +2176,14 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
         .get("sec-fetch-dest")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.eq_ignore_ascii_case("document"));
-    if !seo_on && !navigation && etag_matches(&headers, &cache.version_tag()) {
+    let routing = artifact::routing(&deployment.manifest);
+    let html_candidate = artifact::candidates(&path, routing).iter().any(|candidate| {
+        candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")
+    });
+    let spa_fallback = routing == artifact::Routing::Spa
+        && (!safe_relative_path(&path) || tokio::fs::metadata(crate::layout::dist(&state.data_root, &deployment.id).join(&path)).await.is_err());
+    let may_be_page = html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml";
+    if !navigation && etag_matches(&headers, &cache.version_tag()) && (!seo_on || !may_be_page) {
         return cache.not_modified(cache.version_tag());
     }
     if seo_on && path == "robots.txt" {
@@ -2185,7 +2192,6 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
     if seo_on && path == "sitemap.xml" {
         return seo::sitemap_response(&state.data_root, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).unwrap();
     }
-    let routing = artifact::routing(&deployment.manifest);
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
