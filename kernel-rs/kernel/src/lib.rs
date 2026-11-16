@@ -1107,7 +1107,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     // change together. A step that fails puts back the ones before it.
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
-    let swapped = if change.statements.is_empty() {
+    let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
+    let swapped = if change.statements.is_empty() && !has_transformation_changes {
         remove_database_files(&staged_database);
         false
     } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
@@ -5428,6 +5429,78 @@ pub mod tests {
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": page}},
             "schemaConfirmation": confirmation
         })
+    }
+
+    #[tokio::test]
+    async fn release_swaps_fresh_baseline_and_existing_data_transformations() {
+        let root = std::env::temp_dir().join(format!("konae-release-transform-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let id = "app_transform_release";
+        let schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);";
+        let actions = json!({
+            "notes.list": {"kind":"query", "access":"anonymous", "statement":"SELECT body FROM notes ORDER BY id LIMIT 10", "bindings": []}
+        });
+        let v1 = json!({
+            "id": "baseline", "predecessor": null,
+            "before": format!("sha256:{}", "0".repeat(64)),
+            "after": schema_transform::fingerprint_schema(schema).unwrap(),
+            "maxRows": 10, "statements": ["CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL)"]
+        });
+        let document = json!({"version": 1, "transitions": [v1.clone()]}).to_string();
+        let mut first = release_body(id, schema, actions.clone(), "<p>first</p>", None);
+        first["project"]["files"]["schema-transforms.json"] = json!(document);
+        let response = deploy(&state, first.to_string().as_bytes()).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+
+        async fn read_notes(state: &AppState) -> (StatusCode, String) {
+            let deployment = state.deployments.read().await.values().next().unwrap().clone();
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, deployment.hostname.parse().unwrap());
+            let response = invoke_action(State(state.clone()), AxumPath("notes.list".into()), headers, Json(json!({}))).await;
+            let status = response.status();
+            let body = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+            (status, body)
+        }
+
+        assert_eq!(read_notes(&state).await.0, StatusCode::OK, "fresh baseline schema must reach the live database");
+        let database = database_path(&state, id);
+        Connection::open(&database).unwrap().execute("INSERT INTO notes(body) VALUES('before')", []).unwrap();
+        let fingerprint = schema_transform::fingerprint(&Connection::open(&database).unwrap()).unwrap();
+        let v2 = json!({
+            "id": "rewrite", "predecessor": "baseline",
+            "before": fingerprint, "after": schema_transform::fingerprint_schema(schema).unwrap(),
+            "maxRows": 1, "statements": ["UPDATE notes SET body='after' WHERE id=1"]
+        });
+        let update_document = json!({"version": 1, "transitions": [v1, v2]}).to_string();
+        let mut second = release_body(id, schema, actions, "<p>second</p>", None);
+        second["project"]["files"]["schema-transforms.json"] = json!(update_document);
+        let input: DeployInput = serde_json::from_value(second.clone()).unwrap();
+        let confirmation = runtime::validate_release(&state, &input, None).await.unwrap().confirmation().unwrap();
+        second["schemaConfirmation"] = json!(confirmation);
+        let response = deploy(&state, second.to_string().as_bytes()).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+        let (status, body) = read_notes(&state).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("after"), "the release must swap the staged transformed data: {body}");
+
+        let restarted = test_state(&root);
+        let deployment = folder::open(&restarted, id, None).await.unwrap();
+        let (status, body) = read_notes(&restarted).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("after"), "the transformed rows must survive a restart: {body}");
+        let db = Connection::open(database_path(&restarted, id)).unwrap();
+        let history = schema_transform::load_history(&db).unwrap();
+        assert_eq!(history.entries.len(), 2);
+        assert!(history.entries[0].baseline_skipped);
+        assert_eq!(history.entries[1].id, "rewrite");
+        assert_eq!(history.entries[1].affected_rows, 1);
+        assert_eq!(deployment.id, id);
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
