@@ -436,7 +436,7 @@ fn is_forbidden_object(name: &str) -> bool {
 /// and comments, normalizes identifiers and keywords, and preserves literal
 /// string case. It does not claim equivalence beyond those token rules.
 pub fn fingerprint(connection: &Connection) -> Result<String, Refusal> {
-    let mut statement = connection.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'")
+    let mut statement = connection.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'")
         .map_err(|error| invalid(format!("Cannot read SQLite schema: {error}")))?;
     let mut objects = statement
         .query_map([], |row| {
@@ -528,6 +528,23 @@ pub fn is_internal_table(name: &str) -> bool {
 
 fn is_internal_name(name: &str) -> bool {
     is_internal_table(name)
+}
+
+fn refuse_stored_trigger_or_view(connection: &Connection) -> Result<(), Refusal> {
+    let stored = connection
+        .query_row(
+            "SELECT upper(type), name FROM sqlite_schema WHERE lower(type) IN ('trigger', 'view') ORDER BY lower(type), name LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| invalid(format!("Cannot inspect stored schema objects: {error}")))?;
+    if let Some((kind, name)) = stored {
+        return Err(refused(format!(
+            "The app database contains CREATE {kind} {name}; schema transformations require tables and indexes only."
+        )));
+    }
+    Ok(())
 }
 
 /// Reads the app database's portable transition journal. No tables means an
@@ -642,6 +659,7 @@ pub fn check_document_presence(
 /// Builds a static, read-only plan against the current DB fingerprint and
 /// journal. It does not execute SQL or change either metadata table.
 pub fn plan(connection: &Connection, definition: &Definition) -> Result<Plan, Refusal> {
+    refuse_stored_trigger_or_view(connection)?;
     validate_definition(definition)?;
     let history = load_history(connection)?;
     let current_fingerprint = fingerprint(connection)?;
@@ -844,6 +862,7 @@ pub fn apply_in_transaction(
     plan: &Plan,
     final_schema: &str,
 ) -> Result<Applied, Refusal> {
+    refuse_stored_trigger_or_view(transaction)?;
     validate_definition(&plan.definition)?;
     let plan_digests = plan
         .definition
@@ -1788,10 +1807,45 @@ mod tests {
     }
 
     #[test]
-    fn row_cap_counts_trigger_and_foreign_key_cascade_writes() {
-        let schema = "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); CREATE TABLE audit(value INTEGER);";
+    fn stored_triggers_and_views_are_fingerprinted_and_refused() {
+        let final_schema = "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY);";
+        let clean = db("CREATE TABLE tasks(id INTEGER PRIMARY KEY);");
+        let clean_fingerprint = fingerprint(&clean).unwrap();
+        let definition = Definition {
+            version: 1,
+            transitions: vec![],
+        };
+        let planned = plan(&clean, &definition).unwrap();
+
+        for (kind, object_sql) in [
+            (
+                "TRIGGER",
+                "CREATE TRIGGER task_trigger AFTER INSERT ON tasks BEGIN SELECT 1; END;",
+            ),
+            ("VIEW", "CREATE VIEW task_view AS SELECT id FROM tasks;"),
+        ] {
+            let connection = db("CREATE TABLE tasks(id INTEGER PRIMARY KEY);");
+            connection.execute_batch(object_sql).unwrap();
+            assert_ne!(fingerprint(&connection).unwrap(), clean_fingerprint);
+            let error = plan(&connection, &definition).unwrap_err();
+            assert_eq!(error.code, STATEMENT_REFUSED);
+            assert!(error.message.contains(&format!("CREATE {kind}")));
+
+            let connection = db("CREATE TABLE tasks(id INTEGER PRIMARY KEY);");
+            connection.execute_batch(object_sql).unwrap();
+            let tx = connection.unchecked_transaction().unwrap();
+            let error = apply_in_transaction(&tx, &planned, final_schema).unwrap_err();
+            assert_eq!(error.code, STATEMENT_REFUSED);
+            assert!(error.message.contains(&format!("CREATE {kind}")));
+            tx.rollback().unwrap();
+        }
+    }
+
+    #[test]
+    fn row_cap_counts_foreign_key_cascade_writes() {
+        let schema = "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE);";
         let connection = db(
-            "PRAGMA foreign_keys=ON; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); CREATE TABLE audit(value INTEGER); INSERT INTO parent VALUES(1); INSERT INTO child VALUES(1,1); CREATE TRIGGER audit_parent AFTER UPDATE ON parent BEGIN INSERT INTO audit VALUES(new.id); END;",
+            "PRAGMA foreign_keys=ON; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); INSERT INTO parent VALUES(1); INSERT INTO child VALUES(1,1);",
         );
         let definition = Definition {
             version: 1,
@@ -1800,13 +1854,13 @@ mod tests {
                 predecessor: None,
                 before: fp(schema),
                 after: fp(schema),
-                max_rows: 2,
+                max_rows: 1,
                 statements: vec!["UPDATE parent SET id=2 WHERE id=1".into()],
             }],
         };
         let planned = plan(&connection, &definition).unwrap();
         let tx = connection.unchecked_transaction().unwrap();
-        let final_schema = "CREATE TABLE IF NOT EXISTS parent(id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); CREATE TABLE IF NOT EXISTS audit(value INTEGER);";
+        let final_schema = "CREATE TABLE IF NOT EXISTS parent(id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE);";
         let result = apply_in_transaction(&tx, &planned, final_schema);
         assert_eq!(result.unwrap_err().code, ROW_LIMIT);
         tx.rollback().unwrap();
@@ -1816,9 +1870,6 @@ mod tests {
         let child_parent_id: i64 = connection
             .query_row("SELECT parent_id FROM child", [], |row| row.get(0))
             .unwrap();
-        let audit_count: i64 = connection
-            .query_row("SELECT count(*) FROM audit", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!((parent_id, child_parent_id, audit_count), (1, 1, 0));
+        assert_eq!((parent_id, child_parent_id), (1, 1));
     }
 }
