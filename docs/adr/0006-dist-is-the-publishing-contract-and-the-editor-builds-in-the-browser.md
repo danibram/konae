@@ -8,7 +8,7 @@ An app may be built in the editor's tab, by `konae build` on a laptop, or by any
 
 ### Any builder may write `dist/`, and the Kernel checks it
 
-The publishing contract is the static files in `dist/` with a manifest of their paths, hashes, sizes, content types, `encodings` and `routing`. It is not a compiler or a project layout. The Kernel does not build. It treats what it receives as untrusted input. It decodes the files `encodings` names, refuses a `routing` other than `"pages"` or `"spa"` with the builders' words, and serves the result under the Content Security Policy of ADR-0002. `/_konae/*` and `/runtime.js` belong to the Kernel on every app. Owner authentication says who may publish. It never says the bytes are well formed.
+The publishing contract is the static files in `dist/` with a manifest of their paths, hashes, sizes, content types, `encodings` and `routing`. It is not a compiler or a project layout. The Kernel does not build. It treats what it receives as untrusted input. It decodes the files `encodings` names, refuses a `routing` other than `"pages"` or `"spa"` with the builders' words, and serves the result under the Content Security Policy of ADR-0002. `/_konae/*` belongs to the Kernel on every app. Each whole-document artifact carries its SDK loader and `runtime.js` file; the Kernel has no `/runtime.js` route. Owner authentication says who may publish. It never says the bytes are well formed.
 
 ### The static publishing rules
 
@@ -18,7 +18,7 @@ The publishing contract is the static files in `dist/` with a manifest of their 
 - A whole-document page keeps its head and loads the SDK from `/runtime.js` through a loader that knows the page's base path. A fragment page runs in the app's document, and its `<title>` and icon links move into that document's head.
 - `routing` is `"pages"` by default, where an unknown path answers 404 with `404.html`. `"spa"` answers `index.html` for every unknown path.
 - `encodings` names the files that travel as base64, so images and fonts publish.
-- esbuild's comments that name a module's path are dropped, so one `app/` gives byte-identical files from any folder and any builder.
+- Each builder uses the same static artifact rules, but the built files are not guaranteed to be byte-identical. The editor resolves packages through esm.sh, while local builders use the package contents installed in `node_modules`.
 
 ### The editor builds in the browser
 
@@ -35,10 +35,11 @@ The editor bundles `app/` with `esbuild-wasm` in its own worker (`src/runtime/br
 - **Serve unbundled sources.** An app could then use no TypeScript, no imports between files and no packages.
 - **Run the builder in the editor's own context.** The editor holds provider keys, and a build is the moment an app's dependencies get near them.
 - **A registry of allowed packages with a generated lock.** The build already runs on the owner's machine, so Konae has no reason to choose which libraries an app may use.
-- **Carry binary `public/` files through the editor's saved sources.** It would change the saved format and the Kernel's checks on it for one small file. An icon is SVG, as a file or a `data:` URL.
+- **Carry binary `public/` files through the editor's saved sources.** This decision is superseded by the 2026-11-15 source contract. The editor and Kernel now store the same text and binary files under `app/`, and enforce shared path, count and decoded-size limits.
 
 ## Consequences
 
 - Build time and memory are the owner's tab, which bounds how large an app built in the editor can be. A larger app builds on its owner's machine and publishes its `dist/`.
 - The editor's build and `konae build` use the same package versions but not byte-identical bundles, because esm.sh compiles a package for `es2022` and npm ships what the author published. esm.sh sees the list of packages an app names.
-- A page that names a root-relative URL leaves the app's prefix on a path address. The Gate and the release warn about it (ADR-0014).
+- A page that names a root-relative URL leaves the app's prefix on a path address. The TypeScript build reports the warning; the Kernel does not run that warning check (ADR-0014).
+- Package resolution differs: the editor fetches exact package versions from esm.sh, while local builders read `node_modules`; their bundles can differ.

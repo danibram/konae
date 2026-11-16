@@ -255,21 +255,19 @@ pub async fn export(
         let (source, target) = (folder.clone(), scratch.clone());
         let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
         let app_folder = crate::layout::folder(&state.data_root, &deployment.id);
+        let export_settings = crate::sources::settings_for_export(&state.data_root, &deployment.id).await?;
+        let export_settings = serde_json::to_vec_pretty(&export_settings)?;
         let app_sources = crate::layout::sources(&state.data_root, &deployment.id);
         let saved_actions = tokio::fs::read_to_string(app_sources.join("actions.json")).await.ok();
         let mut sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
         if let Some(released) = deployment.source_digest.as_deref() {
             // Saved editor files can include paths that a folder publish skips.
-            let saved = match crate::sources::read(&state.data_root, &deployment.id).await? {
-                Some(source) => crate::sources::digest(source["files"].as_object().context("Saved sources have no files.")?.iter()
-                    .map(|(path, text)| (path.as_str(), text.as_str().unwrap_or_default().as_bytes()))),
-                None => crate::sources::digest_folder(&app_sources).await?,
-            };
+            let saved = crate::sources::digest_folder(&app_sources).await?;
             sources_ahead |= saved != released;
         }
         let components = tokio::task::spawn_blocking(move || {
             let components = capture(&source, &target, &blobs)?;
-            write_folder_tar(&app_folder, &target.join("folder.tar"))?;
+            write_folder_tar(&app_folder, &target.join("folder.tar"), &export_settings)?;
             Ok::<_, anyhow::Error>(components)
         })
         .await?;
@@ -458,7 +456,7 @@ pub fn folder_files_tar(directory: &Path, target: &Path) -> Result<()> {
 
 /// Writes the part of the app folder that is not data: `konae.json`,
 /// `app/` and `dist/`, as a ustar archive whose names are folder paths.
-fn write_folder_tar(folder: &Path, target: &Path) -> Result<()> {
+fn write_folder_tar(folder: &Path, target: &Path, settings: &[u8]) -> Result<()> {
     let mut output = std::io::BufWriter::new(std::fs::File::create(target)?);
     let mut entries = vec![crate::layout::SETTINGS_FILE.to_owned()];
     for top in ["app", "dist"] {
@@ -479,8 +477,13 @@ fn write_folder_tar(folder: &Path, target: &Path) -> Result<()> {
     }
     entries.sort();
     for relative in entries {
-        let mut input = std::fs::File::open(folder.join(&relative)).with_context(|| format!("{relative} is not readable."))?;
-        let size = input.metadata()?.len();
+        let (mut input, size): (Box<dyn Read>, u64) = if relative == crate::layout::SETTINGS_FILE {
+            (Box::new(std::io::Cursor::new(settings.to_vec())), settings.len() as u64)
+        } else {
+            let file = std::fs::File::open(folder.join(&relative)).with_context(|| format!("{relative} is not readable."))?;
+            let size = file.metadata()?.len();
+            (Box::new(file), size)
+        };
         output.write_all(&path_header(&relative, size)?)?;
         let copied = std::io::copy(&mut input, &mut output)?;
         ensure!(copied == size, "{relative} changed during the export.");

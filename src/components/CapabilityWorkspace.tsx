@@ -141,7 +141,7 @@ function AuthPanel(props: Props) {
 
 function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibility = "private", onSetVisibility, fileAccess, onSetFileAccess, deployment, accessUndeployed }: Props) {
   const [actor, setActor] = useState(host.getPreviewActor());
-  const refusal = actionsSource ? deployReadiness({ files: { "actions.json": actionsSource }, manifest: { runtime: { database: { actions: [] } } } }).refusal : null;
+  const refusal = actionsSource ? deployReadiness({ files: { "actions.json": actionsSource } }).refusal : null;
   const previewName = actor === "alice" ? "a signed-in person" : actor === "bob" ? "another signed-in person" : "someone who has not signed in";
   const actions = rules(actionsSource);
   return (

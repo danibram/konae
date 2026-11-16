@@ -195,7 +195,7 @@ export function whatHappened({ summary, calls, notices, signals }: Sources, now 
   for (const call of calls) {
     entries.push({ id: `call:${call.callId}`, kind: "call", at: call.createdAt, title: `Call from ${call.action}`, detail: [call.method, call.url].filter(Boolean).join(" ") || undefined, outcome: callOutcome(call) });
   }
-  // usage_summary carries usage_read's answer, scheduled runs included.
+  // usage_summary includes daily counts and retained scheduled runs.
   const scheduled = (summary.usage as { scheduled?: ScheduledRun[] }).scheduled ?? [];
   for (const [index, run] of scheduled.entries()) {
     entries.push({ id: `scheduled:${run.at}:${run.action}:${index}`, kind: "scheduled", at: run.at, title: `Scheduled run of ${run.action}`, outcome: scheduledOutcome(run) });
@@ -241,10 +241,10 @@ export type Read = { sources: Sources; days: number };
 /** The newest page of each source for the last `days` days. */
 export async function readWhatHappened(deploymentId: string, days: number, signal?: AbortSignal): Promise<Read> {
   const [summary, calls, notices, signals] = await Promise.all([
-    platformMcp.call<UsageSummary>("usage_summary", { deploymentId, ...usageRange(days) }, signal),
-    platformMcp.call<{ calls: Call[] }>("calls_read", { deploymentId }, signal),
-    platformMcp.call<{ notices: Notice[] }>("notices_read", { deploymentId }, signal),
-    platformMcp.call<{ signals: Signal[] }>("signals_read", { deploymentId }, signal),
+    platformMcp.call<UsageSummary>("usage_summary", { projectId: deploymentId, ...usageRange(days) }, signal),
+    platformMcp.call<{ calls: Call[] }>("calls_read", { projectId: deploymentId }, signal),
+    platformMcp.call<{ notices: Notice[] }>("notices_read", { projectId: deploymentId }, signal),
+    platformMcp.call<{ signals: Signal[] }>("signals_read", { projectId: deploymentId }, signal),
   ]);
   const from = Date.parse(`${usageRange(days).from}T00:00:00Z`);
   return {

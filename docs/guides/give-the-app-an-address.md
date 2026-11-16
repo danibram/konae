@@ -26,7 +26,7 @@ The name belongs to the installation, and the app folder does not carry it. An e
 
 ## Move the generated hostname
 
-Call `hostname_set` with the `deploymentId` and the new `name`, one label such as `notes`, or from the app folder with `bun run konae -- hostname --dir ./my-app --set notes`, which takes the Deployment's ID from `konae.json`. Without `--set` the command prints the current address. The app answers on `notes.<suffix>` at once, and its old name redirects there, so links already sent keep working. App users sign in again on the new name. If the app offers Google sign-in, register the `googleCallback` from the answer in its Google client first. A service that calls the app's HTTP routes may not follow the redirect, so give it the new address. A name another app holds, or held before, is refused. For a hostname outside the installation's suffix, add a custom domain instead.
+Call `hostname_set` with the `projectId` and the new `name`, one label such as `notes`, or from the app folder with `bun run konae -- hostname --dir ./my-app --set notes`, which takes the project ID from `konae.json`. Without `--set` the command prints the current address. The app answers on `notes.<suffix>` at once, and its old name redirects there, so links already sent keep working. App users sign in again on the new name. If the app offers Google sign-in, register the `googleCallback` from the answer in its Google client first. A service that calls the app's HTTP routes may not follow the redirect, so give it the new address. A name another app holds, or held before, is refused. For a hostname outside the installation's suffix, add a custom domain instead.
 
 ## Add a custom domain
 
@@ -46,7 +46,7 @@ On the custom domain the app has its own origin. A session made there stays ther
 
 A path address is a short link on the installation's domain, for when DNS is not yours. It needs `KONAE_DOMAIN`. To try it locally, use the Compose stack, which sets `KONAE_DOMAIN=localhost`, so paths answer at `http://localhost:8080/p/<name>`.
 
-1. Call `path_set` with `enabled: true` and, if you want one, a `name` of 3 to 40 letters, digits and hyphens, for example `bun run konae -- tool path_set '{"deploymentId":"<id>","enabled":true,"name":"notes"}' --dir ./my-app`. The app then answers at `<domain>/p/<id>` and at `<domain>/p/<name>`.
+1. Call `path_set` with `enabled: true` and, if you want one, a `name` of 3 to 40 letters, digits and hyphens, for example `bun run konae -- tool path_set '{"projectId":"<id>","enabled":true,"name":"notes"}' --dir ./my-app`. The app then answers at `<domain>/p/<id>` and at `<domain>/p/<name>`.
 2. Read it back with `path_read`, which lists the addresses.
 
 The app whose path holds the name `konae-home` also answers `<domain>/`. Every path and the installation's home share one origin. Any other app on that domain, including other owners' apps, can use the sessions of this app's users. An app with accounts therefore needs `acceptSharedOrigin: true` before its path turns on, and without it the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, when it declares `fileAccess: "app-users"`, or when one of its actions has an access other than `anonymous`. For an app with private data, prefer its own hostname.

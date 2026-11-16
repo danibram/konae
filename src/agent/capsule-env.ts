@@ -1,6 +1,7 @@
 import { ExecutionError, FileError, err, ok } from "@earendil-works/pi-agent-core";
 import type { FileInfo, FileKind, ShellExecOptions } from "@earendil-works/pi-agent-core";
 import type { ProjectFile } from "../lib/types";
+import { SCHEMA_TRANSFORMS_FILE } from "./schema-transforms";
 import { cloneStarter } from "../lib/starter";
 import { applyTemplate, templateChoices, type TemplateId } from "../lib/templates";
 import { directoriesForFiles, existingDirectory, existingFile, fileAncestor, normalizeProjectPath, reservedPathConflict } from "../lib/project-files";
@@ -173,7 +174,7 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
       if (blocking) {
         return err<T, FileError>(new FileError("not_directory", `${capsulePathFor(blocking)} is a file, so it cannot contain ${path}.`, path));
       }
-      const reserved = capsuleFileNames.includes(file) ? null : reservedPathConflict(file);
+      const reserved = capsuleFileNames.includes(file) || file === SCHEMA_TRANSFORMS_FILE ? null : reservedPathConflict(file);
       if (reserved) {
         return err<T, FileError>(new FileError("permission_denied", `${path} is reserved: ${capsulePathFor(reserved)} is a protected project file. Choose another name.`, path));
       }

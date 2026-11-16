@@ -79,7 +79,7 @@ fn remember_import(state: &Konae, package_id: &str, project: &str, plan: &str) -
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 20] = [
+const OPEN_TOOLS: [&str; 19] = [
     "platform_guide",
     "platform_describe",
     "mail_status",
@@ -94,15 +94,14 @@ const OPEN_TOOLS: [&str; 20] = [
     "token_revoke",
     "secrets_list",
     "api_keys_list",
-    "usage_read",
+    "usage_summary",
     "signals_read",
-    "signup_policy_read",
     "sign_in_methods_read",
     "project_export",
     "release_plan",
 ];
 /// What `initialize` tells an owner's agent on `/mcp`.
-const OWNER_INSTRUCTIONS: &str = "Use project-scoped credentials. Source and builds stay on your computer. Call platform_describe, then platform_guide topics rules and pieces before building. After every write, use the read-back that rules names.";
+const OWNER_INSTRUCTIONS: &str = "A delegated credential can access only projects that already exist; it cannot create a project. Source and builds stay on your computer. Run konae init and konae dev, then konae login --browser and konae publish. After a write, read its effect through the door named by platform_guide rules.";
 /// Tools a paused app takes because they are what maintenance is for:
 /// taking it out, and replacing what it holds.
 const PAUSED_TOOLS: [&str; 2] = ["maintenance_set", "project_import"];
@@ -123,9 +122,7 @@ async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     if PAUSED_TOOLS.contains(&name) {
         return Ok(());
     }
-    let deployment = if let Some(id) = a["deploymentId"].as_str() {
-        Some(id.to_owned())
-    } else {
+    let deployment = {
         let project = match (a["projectId"].as_str(), a["planId"].as_str()) {
             (Some(project), _) => Some(project.to_owned()),
             (None, Some(plan)) if name == "release_apply" => {
@@ -182,13 +179,18 @@ pub(super) fn store(state: &Konae) -> Result<Connection> {
     store_at(&state.data_root)
 }
 
+fn source_revision_refusal(observed: u64) -> anyhow::Error {
+    super::refusal::refuse("sources.revision-conflict", format!("Sources changed since revision {observed}. Run konae pull --dir <folder>, then publish again.")).into()
+}
+
 fn store_at(root: &Path) -> Result<Connection> {
     let db = Connection::open(root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, sources INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS credentials(hash TEXT PRIMARY KEY, owner TEXT NOT NULL, scopes TEXT NOT NULL, projects TEXT NOT NULL, expires INTEGER NOT NULL, audience TEXT);
-        CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT);
+        CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL, revision INTEGER NOT NULL, transfer TEXT NOT NULL, expires INTEGER NOT NULL, receipt TEXT, source_revision INTEGER NOT NULL DEFAULT 0, cleanup_uploads TEXT NOT NULL DEFAULT '[]');
+        CREATE TABLE IF NOT EXISTS source_read_requests(owner TEXT NOT NULL, request_id TEXT NOT NULL, project TEXT NOT NULL, transfer TEXT, cancelled INTEGER NOT NULL DEFAULT 0, expires INTEGER NOT NULL, PRIMARY KEY(owner, request_id));
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, actor TEXT NOT NULL, tool TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor, id);")?;
     let has_audience: bool = db
@@ -209,6 +211,20 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_detail {
         db.execute("ALTER TABLE audit ADD COLUMN detail TEXT", [])?;
     }
+    // A plan names the upload of its sources when they travel apart from the payload.
+    let has_sources: bool = db
+        .prepare("PRAGMA table_info(plans)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "sources");
+    if !has_sources {
+        db.execute("ALTER TABLE plans ADD COLUMN sources TEXT", [])?;
+    }
+    let has_source_revision = db.prepare("PRAGMA table_info(plans)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?.iter().any(|name| name == "source_revision");
+    if !has_source_revision { db.execute("ALTER TABLE plans ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0", [])?; }
+    let has_cleanup_uploads = db.prepare("PRAGMA table_info(plans)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?.iter().any(|name| name == "cleanup_uploads");
+    if !has_cleanup_uploads { db.execute("ALTER TABLE plans ADD COLUMN cleanup_uploads TEXT NOT NULL DEFAULT '[]'", [])?; }
     db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit(at)", [])?;
     super::oauth::install(&db)?;
     install_imports(&db)?;
@@ -330,8 +346,7 @@ fn owner_unauthorized(state: &Konae, headers: &HeaderMap) -> Response {
     let message = if client.is_some() {
         format!("This Konae sign-in expired at {when}. Run konae login --browser for the CLI, or reconnect your MCP client; either opens {login}.")
     } else {
-        let lasts = if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "1 hour" } else { "24 hours" };
-        format!("This Konae token expired at {when}. Tokens from konae login last {lasts} on this installation. Run konae login for a new one, or sign in as the owner at {login}.")
+        format!("This Konae token expired at {when}. Run konae login for a new CLI credential, reconnect the MCP client, or sign in as the owner at {login}.")
     };
     let mut response = error(StatusCode::UNAUTHORIZED, &message);
     if let Some(value) = refused.headers().get(header::WWW_AUTHENTICATE) {
@@ -433,38 +448,176 @@ async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
 
 fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let string = |value: &Value, max: usize| value.as_str().is_some_and(|s| s.len() <= max);
-    // A name starting with a dot is a temporary file to the Kernel, which a copy leaves behind.
-    let path = |value: &str| value.len() <= 240 && value.trim() == value
-        && safe_relative_path(value) && !value.chars().any(|c| c.is_control())
-        && !value.split('/').any(|part| part.starts_with('.'));
     anyhow::ensure!(source["id"] == id && string(&source["name"], 80)
         && source["name"].as_str().is_some_and(|s| !s.trim().is_empty())
         && string(&source["slug"], 100) && source["updatedAt"].as_u64().is_some(), "Invalid project metadata. Send {{ id, name, slug, files, directories, manifest, updatedAt }} with the project's own id, a name of 1 to 80 characters, a slug of up to 100 and updatedAt in milliseconds.");
-    let files = source["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project files."))?;
-    anyhow::ensure!(files.len() <= 1_000 && files.iter().all(|(name, body)| path(name) && string(body, MAX_TRANSFER)), "Invalid project files.");
+    anyhow::ensure!(source["files"].is_object(), "Invalid project files. Send files as an object of each path inside app/ and its contents.");
+    super::sources::check_files(&super::sources::decode_document(source)?)?;
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
-    anyhow::ensure!(directories.len() <= 1_000 && directories.iter().all(|entry| entry.as_str().is_some_and(path)), "Invalid project directories.");
+    anyhow::ensure!(directories.len() <= super::sources::MAX_FILES && directories.iter().all(|entry| entry.as_str().is_some_and(super::sources::holds)), "Invalid project directories.");
     let manifest = &source["manifest"];
     artifact::check_file_access(manifest).map_err(anyhow::Error::msg)?;
-    let actions = manifest["runtime"]["database"]["actions"].as_array();
-    anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or(""))
-        && manifest["runtime"]["database"]["mode"] == "declared-actions"
-        && ["optional", "required"].contains(&manifest["runtime"]["auth"]["mode"].as_str().unwrap_or(""))
-        && manifest["runtime"]["files"]["access"] == "deployment"
-        && actions.is_some_and(|list| list.len() <= kernel::action_shape::MAX_ACTIONS && list.iter().all(|action|
-            string(&action["name"], 120) && ["query", "mutation", "signal", "call"].contains(&action["kind"].as_str().unwrap_or(""))
-            && ["anonymous", "authenticated", "granted"].contains(&action["access"].as_str().unwrap_or("")))), "Invalid project manifest. Send {{ version: 1, visibility, runtime: {{ database: {{ mode: \"declared-actions\", actions: [{{ name, kind, access }}] }}, auth: {{ mode: \"optional\" or \"required\" }}, files: {{ access: \"deployment\" }} }} }} with up to {} actions.", kernel::action_shape::MAX_ACTIONS);
-    let mut names = std::collections::HashSet::new();
-    for action in actions.unwrap() {
-        let name = action["name"].as_str().unwrap();
-        let parts: Vec<_> = name.split('.').collect();
-        anyhow::ensure!(parts.len() >= 2 && parts.iter().all(|part| {
-            let mut chars = part.bytes();
-            chars.next().is_some_and(|c| c.is_ascii_lowercase())
-                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        }) && names.insert(name), "Invalid project action name.");
+    anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or("")), "Invalid project manifest. Send version 1 and visibility \"public\" or \"private\".");
+    Ok(())
+}
+
+/// Applies a changed-file upload to the complete saved document. The caller
+/// holds the project lock and has checked the expected source revision.
+fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value> {
+    anyhow::ensure!(delta["format"] == "delta", "Invalid source update format.");
+    let mut merged = current.clone();
+    let mut files = merged["files"].as_object().cloned().ok_or_else(|| anyhow::anyhow!("Saved project files are unavailable."))?;
+    let mut encodings = merged["encodings"].as_object().cloned().unwrap_or_default();
+    let changed = delta["files"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid changed project files."))?;
+    let changed_encodings = delta["encodings"].as_object();
+    if let Some(encodings) = changed_encodings {
+        anyhow::ensure!(encodings.iter().all(|(path, encoding)| changed.contains_key(path) && encoding == "base64"), "Invalid changed project file encoding.");
+    }
+    for (path, contents) in changed {
+        anyhow::ensure!(contents.is_string(), "Invalid changed project file.");
+        files.insert(path.clone(), contents.clone());
+        if changed_encodings.is_some_and(|items| items.get(path).is_some()) {
+            encodings.insert(path.clone(), json!("base64"));
+        } else {
+            encodings.remove(path);
+        }
+    }
+    let removals = delta["removedPaths"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid removed project paths."))?;
+    for path in removals {
+        let path = path.as_str().ok_or_else(|| anyhow::anyhow!("Invalid removed project path."))?;
+        files.remove(path);
+        encodings.remove(path);
+    }
+    merged["files"] = Value::Object(files);
+    if encodings.is_empty() { merged.as_object_mut().unwrap().remove("encodings"); }
+    else { merged["encodings"] = Value::Object(encodings); }
+    let metadata = delta["metadata"].as_object().ok_or_else(|| anyhow::anyhow!("Invalid project metadata update."))?;
+    for key in ["name", "slug", "directories", "manifest", "updatedAt"] {
+        let value = metadata.get(key).ok_or_else(|| anyhow::anyhow!("Source metadata is missing {key}."))?;
+        merged[key] = value.clone();
+    }
+    merged["id"] = json!(id);
+    Ok(merged)
+}
+
+/// Refuses an upload that names a component of an export. Such an upload may
+/// reach that component's quota, which saved sources and a release never take.
+fn ensure_no_component(upload: &Value) -> Result<()> {
+    match upload["component"].as_str() {
+        Some(component) => anyhow::bail!("This upload names the {component} component of an export. Upload sources and releases without a component."),
+        None => Ok(()),
+    }
+}
+
+/// The JSON of a release payload, refused before it is read when the upload
+/// names a component or holds more than a release does.
+async fn release_bytes(state: &Konae, upload: &Value, transfer_id: &str) -> Result<Vec<u8>> {
+    ensure_no_component(upload)?;
+    let size = upload["size"].as_u64().unwrap_or(0) as usize;
+    anyhow::ensure!(size <= super::size::RELEASE_BYTES, "{}", super::size::release_refused(size));
+    Ok(tokio::fs::read(transfer_path(state, transfer_id)?).await?)
+}
+
+/// Lists release uploads in cleanup order. The release JSON stays last so a
+/// retry can recover the component upload IDs if cleanup stops midway.
+async fn release_upload_ids(
+    state: &Konae,
+    principal: &str,
+    release_id: &str,
+    sources_id: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    if let Ok(upload) = transfer(state, principal, &json!({"transferId": release_id})) {
+        let payload: Value = serde_json::from_slice(&release_bytes(state, &upload, release_id).await?)?;
+        if let Some(components) = payload["initialPackage"]["components"].as_object() {
+            ids.extend(components.values().filter_map(Value::as_str).map(str::to_owned));
+        }
+    }
+    if let Some(sources) = sources_id {
+        ids.push(sources.to_owned());
+    }
+    ids.push(release_id.to_owned());
+    Ok(ids)
+}
+
+async fn cleanup_release_uploads(state: &Konae, owner: &Owner, principal: &str, plan_id: &str) -> Result<()> {
+    let (release_id, sources_id, recorded_ids): (String, Option<String>, String) = {
+        let db = store(state)?;
+        db.query_row("SELECT transfer,sources,cleanup_uploads FROM plans WHERE id=?1 AND owner=?2", params![plan_id, owner.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+    };
+    // New plans keep every consumed ID durably. Older plans can still recover
+    // from their release JSON while that upload remains available.
+    let mut ids: Vec<String> = serde_json::from_str(&recorded_ids)?;
+    if ids.is_empty() {
+        ids = release_upload_ids(state, principal, &release_id, sources_id.as_deref()).await?;
+    }
+    for transfer_id in ids {
+        let still_available = super::transfers::completed_upload(&state.kernel, principal, &transfer_id)?;
+        if still_available {
+            transfer_call(state, principal, "transfer_cancel", &json!({"transferId":transfer_id}), false).await?;
+        }
     }
     Ok(())
+}
+
+fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, transfer_id: &str) -> Result<(Option<String>, bool)> {
+    if let Some(upload) = super::transfers::owned_transfer(&state.kernel, principal, &json!({"transferId":transfer_id}))? {
+        return Ok((upload["projectId"].as_str().map(str::to_owned), true));
+    }
+    let db = store(state)?;
+    let mut query = db.prepare("SELECT project,transfer,sources,cleanup_uploads FROM plans WHERE owner=?1")?;
+    let plans = query.query_map([&owner.id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (project, release_id, sources_id, cleanup_json) in plans {
+        let cleanup_ids: Vec<String> = serde_json::from_str(&cleanup_json)?;
+        if release_id == transfer_id || sources_id.as_deref() == Some(transfer_id) || cleanup_ids.iter().any(|id| id == transfer_id) {
+            return Ok((Some(project), false));
+        }
+    }
+    Ok((None, false))
+}
+
+/// The files of `app/` that travel in an upload of their own beside a release.
+#[derive(serde::Deserialize)]
+struct ReleaseSources {
+    files: HashMap<String, String>,
+    #[serde(default)]
+    encodings: HashMap<String, String>,
+    #[serde(default)]
+    directories: Vec<String>,
+}
+
+/// The release `release_plan` checks and `release_apply` installs. The
+/// payload in `transfer_id` names the project, the build and what a first
+/// release imports. The files of `app/` travel in `sources_id`, an upload of
+/// their own, so each upload stays under its own limit. A payload that holds
+/// `project.files` itself, as `project_import` takes, needs no second upload.
+async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>, artifact_id: Option<&str>) -> Result<DeployInput> {
+    let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
+    anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload", "Upload is not complete.");
+    let mut payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
+    if let Some(artifact_id) = artifact_id {
+        anyhow::ensure!(payload.get("artifact").is_none(), "Send artifact in the release JSON or artifactTransferId, not both.");
+        let project_id = payload["project"]["id"].as_str().ok_or_else(|| anyhow::anyhow!("Release has no project ID."))?;
+        let artifact_upload = transfer(state, principal, &json!({"transferId": artifact_id}))?;
+        anyhow::ensure!(artifact_upload["complete"] == true && artifact_upload["direction"] == "upload" && artifact_upload["projectId"] == project_id, "Completed artifact upload for this project required.");
+        ensure_no_component(&artifact_upload)?;
+        payload["artifact"] = serde_json::from_slice(&tokio::fs::read(transfer_path(state, artifact_id)?).await?)?;
+    }
+    let mut input: DeployInput = serde_json::from_value(payload)?;
+    anyhow::ensure!(upload["projectId"] == input.project.id, "Artifact belongs to another project.");
+    if let Some(sources_id) = sources_id {
+        anyhow::ensure!(input.project.files.is_empty() && input.project.encodings.is_empty(), "Send the files of app/ in sourcesTransferId or in project.files, not in both.");
+        let upload = transfer(state, principal, &json!({"transferId": sources_id}))?;
+        anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == input.project.id, "Completed upload of the sources for this project required.");
+        ensure_no_component(&upload)?;
+        let bytes = tokio::fs::read(transfer_path(state, sources_id)?).await?;
+        let sources: ReleaseSources = serde_json::from_slice(&bytes).map_err(|error_value| anyhow::anyhow!("The sources upload must be the JSON {{ files, encodings }}: {error_value}"))?;
+        input.project.files = sources.files;
+        input.project.encodings = sources.encodings;
+        input.project.directories = sources.directories;
+    }
+    Ok(input)
 }
 
 pub(super) async fn owned_deployment(
@@ -530,37 +683,37 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             &["projectId"],
             true,
         ),
-        tool("project_sources_read", "Download the project sources the editor or project_sources_save saved last.", json!({"projectId":text}), &["projectId"], true),
+        tool("project_sources_read", "Download the saved project sources, or cancel a pending source read with cancelRequestId. metadataOnly returns id, name, slug and manifest without creating a source transfer. Pass requestId to make an in-progress download cancelable on page departure.", json!({"projectId":text,"metadataOnly":{"type":"boolean"},"requestId":text,"cancelRequestId":text}), &["projectId"], true),
         tool(
             "database_execute",
             "Administer a deployment database. Mutations require write permission.",
-            json!({"deploymentId":text,"operation":{"type":"string","enum":["inspect","browse","sql","update-cell","insert-row","delete-row","list-backups","create-backup","restore-backup"]},"input":{"type":"object"}}),
-            &["deploymentId", "operation"],
+            json!({"projectId":text,"operation":{"type":"string","enum":["inspect","browse","sql","update-cell","insert-row","delete-row","list-backups","create-backup","restore-backup"]},"input":{"type":"object"}}),
+            &["projectId", "operation"],
             false,
         ),
     ];
     if owner.scopes.iter().any(|s| s == "write") {
         tools.extend([
             tool("project_create", "Register a project and return a template's files, the ones konae init writes: template is tasks, notes (the default), members, form, webhook, digest or gallery, and without a manifest the project takes the template's visibility. Write the files into the folder and keep id, slug and manifest in konae.json. To save the editor's files with it, upload the project JSON without a projectId and pass sourcesTransferId to create the project and its files atomically. Repeating the same initial files is safe; existing saved files cannot be replaced here.", json!({"projectId":text,"name":text,"slug":text,"manifest":{"type":"object"},"sourcesTransferId":text,"template":{"type":"string","enum":["tasks","notes","members","form","webhook","digest","gallery"]}}), &["name"], false),
-            tool("project_sources_save", "Save the project sources the editor opens if the expected source revision still matches. Upload the project JSON first: { id, name, slug, files: { path: text }, directories, manifest, updatedAt }, the format the editor saves and docs/reference/projects-and-releases.md describes.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
+        tool("project_sources_save", "Save project sources if expectedRevision still matches. Upload the full document for compatibility, or { format: \"delta\", metadata: { name, slug, directories, manifest, updatedAt }, files: { changedPath: contents }, encodings, removedPaths } to send changed files only. Base64 files use encodings: { path: \"base64\" }.", json!({"projectId":text,"transferId":text,"expectedRevision":{"type":"integer","minimum":0}}), &["projectId","transferId","expectedRevision"], false),
             tool("project_delete", "Delete a project for good: its registry entry, saved editor files and secrets, and, when it is published, its Deployment with the database, app accounts, uploaded files, backups and custom domain. The address stops answering at once. name must equal the project's name. Read back with projects_list.", json!({"projectId":text,"name":text}), &["projectId","name"], false),
         ]);
     }
     tools.extend([
         tool("secrets_list", "List a project's signing secrets: each one's name, use and svixKey, which says whether its value decodes as a svix whsec_ key. Values are never returned.", json!({"projectId":text}), &["projectId"], true),
-        tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"deploymentId":text}), &["deploymentId"], true),
+        tool("api_keys_list", "List a deployment's API keys without their secrets.", json!({"projectId":text}), &["projectId"], true),
         domain_read_tool(),
         path_read_tool(),
-        tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"deploymentId":text}), &["deploymentId"], true),
-        tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"deploymentId":text}), &["deploymentId"], true),
+        tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"projectId":text}), &["projectId"], true),
+        tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
     ]);
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
             tool(
                 "project_export",
                 "Export the app as its folder: konae.json, app/ and dist/ in the folder download, and a consistent copy of data/ (database, accounts without sessions or links, files, Usage) as one download per component that the manifest lists. Never secrets, owners or the installation's records. Requires export_data.",
-                json!({"deploymentId":text}),
-                &["deploymentId"],
+                json!({"projectId":text}),
+                &["projectId"],
                 true,
             ),
         ]);
@@ -569,32 +722,25 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools.extend(calls_tools());
     tools.extend(mail_tools());
     tools.push(tool(
-        "signup_policy_read",
-        "Read who may create an account on a deployment.",
-        json!({"deploymentId":text}),
-        &["deploymentId"],
-        true,
-    ));
-    tools.push(tool(
         "sign_in_methods_read",
         "Read how people sign in to a deployment: password, and google when the owner turned it on. googleClient says whether the app's google_client_id and google_client_secret are set, without their values, and redirectUris lists the callbacks to register in the app's Google OAuth client.",
-        json!({"deploymentId":text}),
-        &["deploymentId"],
+        json!({"projectId":text}),
+        &["projectId"],
         true,
     ));
     if owner.scopes.iter().any(|s| s == "manage_users") {
         tools.push(tool(
             "sign_in_methods_set",
             "Choose how people sign in to a deployment: [\"password\"] or [\"password\",\"google\"]. Password cannot be turned off. Google needs the app's own Google client: set google_client_id and google_client_secret with secret_set use google first. Read back with sign_in_methods_read.",
-            json!({"deploymentId":text,"methods":{"type":"array","items":{"type":"string","enum":["password","google"]},"minItems":1,"maxItems":2}}),
-            &["deploymentId", "methods"],
+            json!({"projectId":text,"methods":{"type":"array","items":{"type":"string","enum":["password","google"]},"minItems":1,"maxItems":2}}),
+            &["projectId", "methods"],
             false,
         ));
         tools.push(tool(
             "signup_policy_set",
             "Choose who may create an account on a deployment: open, invitation (only people invited with app_invitations_create), closed, or allowlist (exact emails or @domain entries). Omitting allowlist keeps the current entries.",
-            json!({"deploymentId":text,"mode":{"type":"string","enum":["open","invitation","closed","allowlist"]},"allowlist":{"type":"array","items":{"type":"string","minLength":1,"maxLength":254}}}),
-            &["deploymentId", "mode"],
+            json!({"projectId":text,"mode":{"type":"string","enum":["open","invitation","closed","allowlist"]},"allowlist":{"type":"array","items":{"type":"string","minLength":1,"maxLength":254}}}),
+            &["projectId", "mode"],
             false,
         ));
         tools.extend(invitations_tools());
@@ -602,8 +748,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
             tools.push(tool(
                 "app_user_enter",
                 "Enter a deployment as one of its active app accounts. Returns a link on the app's own address that works once, for two minutes, and signs the browser that opens it in as that account. The owner's audit log records who entered as whom, and Usage and Signals do not count what that session does. Needs manage_users and the owner's own browser session; a delegated token cannot call it.",
-                json!({"deploymentId":text,"userId":text}),
-                &["deploymentId", "userId"],
+                json!({"projectId":text,"userId":text}),
+                &["projectId", "userId"],
                 false,
             ));
         }
@@ -612,12 +758,12 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tools.extend([
             tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends, or, with use google, the app's Google OAuth client as google_client_id and google_client_secret. The value is never returned. Read back with secrets_list, and the Google client with sign_in_methods_read.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call","google"]}}), &["projectId","name","value"], false),
             tool("secret_delete", "Delete a signing secret no published action uses. A Google client secret is refused while Google sign-in is on.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
-            tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"deploymentId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["deploymentId","name"], false),
-            tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"deploymentId":text,"keyId":text}), &["deploymentId","keyId"], false),
+            tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["projectId","name"], false),
+            tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"projectId":text,"keyId":text}), &["projectId","keyId"], false),
             tool(
                 "release_plan",
-                "Validate a completed artifact transfer, pin the current project revision and answer the schema change the release makes: its statements, what they lose, and the confirmation release_apply needs when they lose data.",
-                json!({"transferId":text}),
+                "Validate a release against the source revision this caller read. Existing apps need observedSourcesRevision from project_inspect or project_sources_read. If sources changed, run konae pull --dir <folder> and publish again. transferId is the release JSON; sourcesTransferId is app/ as { files, encodings }.",
+                json!({"transferId":text,"sourcesTransferId":text,"observedSourcesRevision":{"type":"integer","minimum":0}}),
                 &["transferId"],
                 false,
             ),
@@ -633,23 +779,23 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tools.extend(path_tools());
         tools.push(tool(
             "project_import",
-            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, an upload of the release JSON of the publishing topic built from the folder's app/ and dist/. replace data or both takes package { manifest, components: { <name>: <transferId> } }, uploaded as the portability topic says. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
-            json!({"deploymentId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
-            &["deploymentId", "replace"],
+            "Replace an existing deployment's sources, data or both with those of an exported app folder. It backs up what it replaces first; database_execute list-backups shows the backup and restore-backup brings it back. Rows are never merged. replace sources or both takes transferId, the release JSON, and may take sourcesTransferId for app/ and artifactTransferId for { version, entrypoint, files, encodings }. The app keeps its Signup Policy, sign-in methods, address, secrets, sessions and API keys. When the schema change loses data, the answer is { imported: false, schema } and nothing changed; call again with schema.confirmation as confirmSchema after the owner agrees. Works in maintenance. Requires publish. Read back with project_inspect and database_execute list-backups.",
+            json!({"projectId":text,"replace":{"type":"string","enum":["sources","data","both"]},"transferId":text,"sourcesTransferId":text,"artifactTransferId":text,"package":{"type":"object"},"confirmSchema":{"type":"string","minLength":64,"maxLength":64}}),
+            &["projectId", "replace"],
             false,
         ));
         tools.push(tool(
             "contact_email_set",
             "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it, unless the folder's konae.json names contactEmail, which konae publish sends. Requires publish. Read back with contact_email_read.",
-            json!({"deploymentId":text,"email":{"type":["string","null"],"maxLength":254}}),
-            &["deploymentId", "email"],
+            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254}}),
+            &["projectId", "email"],
             false,
         ));
         tools.push(tool(
             "maintenance_set",
             "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
-            json!({"deploymentId":text,"on":{"type":"boolean"}}),
-            &["deploymentId", "on"],
+            json!({"projectId":text,"on":{"type":"boolean"}}),
+            &["projectId", "on"],
             false,
         ));
     }
@@ -671,8 +817,8 @@ fn calls_tools() -> Vec<Value> {
     vec![tool(
         "calls_read",
         "Read a deployment's outbox: the calls its call actions queued, newest first, 50 at a time, with state (pending, delivered or failed), attempts, method, URL, HTTP status, error kind, the first 1 KiB of the answer and what the then mutation did. Pass nextCursor back as cursor for the next page.",
-        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
-        &["deploymentId"],
+        json!({"projectId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+        &["projectId"],
         true,
     )]
 }
@@ -682,8 +828,8 @@ fn domain_read_tool() -> Value {
     tool(
         "domain_read",
         "Read a deployment's custom domain: the hostname, whether it serves yet, and the TXT record that proves control of it.",
-        json!({"deploymentId":{"type":"string","minLength":1}}),
-        &["deploymentId"],
+        json!({"projectId":{"type":"string","minLength":1}}),
+        &["projectId"],
         true,
     )
 }
@@ -694,22 +840,22 @@ fn domain_tools() -> Vec<Value> {
         tool(
             "domain_set",
             "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
-            &["deploymentId", "hostname"],
+            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
+            &["projectId", "hostname"],
             false,
         ),
         tool(
             "domain_clear",
             "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1}}),
-            &["deploymentId"],
+            json!({"projectId":{"type":"string","minLength":1}}),
+            &["projectId"],
             false,
         ),
         tool(
             "hostname_set",
             "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260}}),
-            &["deploymentId", "name"],
+            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260}}),
+            &["projectId", "name"],
             false,
         ),
     ]
@@ -726,50 +872,50 @@ fn invitations_tools() -> Vec<Value> {
         tool(
             "app_users_list",
             "List a deployment's app accounts with their state and whether they verified their email, ordered by email. Pass nextCursor back as cursor for the next page.",
-            json!({"deploymentId": text, "limit": page, "cursor": text, "state": {"type": "string", "enum": ["pending", "active", "suspended"]}}),
-            &["deploymentId"],
+            json!({"projectId": text, "limit": page, "cursor": text, "state": {"type": "string", "enum": ["pending", "active", "suspended"]}}),
+            &["projectId"],
             true,
         ),
         tool(
             "app_user_suspend",
             "Suspend an app account. Its sessions and open links end at once; its ID, password and rows stay.",
-            json!({"deploymentId": text, "userId": text}),
-            &["deploymentId", "userId"],
+            json!({"projectId": text, "userId": text}),
+            &["projectId", "userId"],
             false,
         ),
         tool(
             "app_user_resume",
             "Lift a suspension. The account is active again if it ever verified its email, otherwise pending until it does.",
-            json!({"deploymentId": text, "userId": text}),
-            &["deploymentId", "userId"],
+            json!({"projectId": text, "userId": text}),
+            &["projectId", "userId"],
             false,
         ),
         tool(
             "app_invitations_create",
             "Invite people to a deployment by email. Each recipient gets an email with a link valid for seven days, so call this only when the owner asked for those invitations. Up to 50 recipients, each with its own result. Retrying with the same idempotencyKey returns the first answer and sends nothing.",
-            json!({"deploymentId": text, "emails": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 254}, "minItems": 1}, "idempotencyKey": key}),
-            &["deploymentId", "emails", "idempotencyKey"],
+            json!({"projectId": text, "emails": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 254}, "minItems": 1}, "idempotencyKey": key}),
+            &["projectId", "emails", "idempotencyKey"],
             false,
         ),
         tool(
             "app_invitations_list",
             "List a deployment's invitations, newest first, with status (pending, expired, needs-resend, already-member, accepted, revoked), expiry and whether the mail transport took the message. Pass nextCursor back as cursor for the next page.",
-            json!({"deploymentId": text, "limit": page, "cursor": text}),
-            &["deploymentId"],
+            json!({"projectId": text, "limit": page, "cursor": text}),
+            &["projectId"],
             true,
         ),
         tool(
             "app_invitation_resend",
             "Email a pending, expired or imported invitation again with a new seven-day link. The earlier link stops working. Retrying with the same idempotencyKey sends nothing more.",
-            json!({"deploymentId": text, "invitationId": text, "idempotencyKey": key}),
-            &["deploymentId", "invitationId", "idempotencyKey"],
+            json!({"projectId": text, "invitationId": text, "idempotencyKey": key}),
+            &["projectId", "invitationId", "idempotencyKey"],
             false,
         ),
         tool(
             "app_invitation_revoke",
             "Revoke a pending invitation so its link stops working.",
-            json!({"deploymentId": text, "invitationId": text}),
-            &["deploymentId", "invitationId"],
+            json!({"projectId": text, "invitationId": text}),
+            &["projectId", "invitationId"],
             false,
         ),
     ]
@@ -784,9 +930,9 @@ fn mail_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     vec![tool(
         "notices_read",
-        "Read the email notices a deployment's mutations queued, newest first, 50 at a time: the action, state (pending, accepted, delivered or failed), attempts, failure kind and times. Names no recipient. Notices the Kernel did not queue are counted under notify by usage_read. Pass nextCursor back as cursor for the next page.",
-        json!({"deploymentId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
-        &["deploymentId"],
+        "Read the email notices a deployment's mutations queued, newest first, 50 at a time: the action, state (pending, accepted, delivered or failed), attempts, failure kind and times. Names no recipient. Notices the Kernel did not queue are counted under notify by usage_summary. Pass nextCursor back as cursor for the next page.",
+        json!({"projectId": text, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+        &["projectId"],
         true,
     )]
 }
@@ -796,8 +942,8 @@ fn path_read_tool() -> Value {
     tool(
         "path_read",
         "Read a deployment's path address: whether it is on, its name, whether the owner accepted the shared origin, and the addresses it answers on.",
-        json!({"deploymentId":{"type":"string","minLength":1}}),
-        &["deploymentId"],
+        json!({"projectId":{"type":"string","minLength":1}}),
+        &["projectId"],
         true,
     )
 }
@@ -809,19 +955,19 @@ fn path_tools() -> Vec<Value> {
             "path_set",
             "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Read back with path_read. Requires publish.",
             json!({
-                "deploymentId":{"type":"string","minLength":1},
+                "projectId":{"type":"string","minLength":1},
                 "enabled":{"type":"boolean"},
                 "name":{"type":["string","null"],"minLength":1,"maxLength":260},
                 "acceptSharedOrigin":{"type":"boolean"}
             }),
-            &["deploymentId", "enabled"],
+            &["projectId", "enabled"],
             false,
         ),
         tool(
             "path_clear",
             "Turn off a deployment's path address and forget its name. The generated hostname and any custom domain keep answering. Requires publish.",
-            json!({"deploymentId":{"type":"string","minLength":1}}),
-            &["deploymentId"],
+            json!({"projectId":{"type":"string","minLength":1}}),
+            &["projectId"],
             false,
         ),
     ]
@@ -832,20 +978,13 @@ fn usage_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     let date = json!({"type": "string", "minLength": 10, "maxLength": 10});
     vec![
-        tool("usage_summary", "Read a deployment usage monitor with daily execution outcomes, Signal totals, activity per signed-in app account, storage by part, published configuration and coverage. Owner read permission required.", json!({"deploymentId": text, "from": date, "to": date}), &["deploymentId", "from", "to"], true),
+        tool("usage_summary", "Read daily runtime totals, guard refusals, signed-in account activity, retained scheduled runs, Signals, storage, published settings and coverage for this project. It includes the newest 500 scheduled runs in the inclusive date range. Dates use YYYY-MM-DD, both are required, the range can span at most 400 days, and the answer contains all range results without a cursor. Owner read permission required.", json!({"projectId": text, "from": date, "to": date}), &["projectId", "from", "to"], true),
         tool("usage_overview", "Read usage for this account projects only, including external and unpublished apps, 50 per page. Pass nextCursor back as cursor.", json!({"from": date, "to": date, "cursor": {"type": "string", "maxLength": 100}}), &["from", "to"], true),
-        tool(
-            "usage_read",
-            "Read a deployment's Usage: daily totals of the runtime operations the Kernel allowed (session, action, route, upload, file_read, signup, login, call), of guard refusals (refused, by action) and of scheduled runs (scheduled, by action) between two UTC dates written YYYY-MM-DD, both included, at most 400 days apart, and the newest 500 scheduled runs in that range with their outcome and changes.",
-            json!({"deploymentId": text, "from": date, "to": date}),
-            &["deploymentId", "from", "to"],
-            true,
-        ),
         tool(
             "signals_read",
             "Read a deployment's Signals, newest first, 100 at a time, optionally of one name. Pass nextCursor back as cursor for the next page.",
-            json!({"deploymentId": text, "name": {"type": "string", "minLength": 1, "maxLength": 64}, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
-            &["deploymentId"],
+            json!({"projectId": text, "name": {"type": "string", "minLength": 1, "maxLength": 64}, "cursor": {"type": "string", "minLength": 1, "maxLength": 20}}),
+            &["projectId"],
             true,
         ),
     ]
@@ -923,7 +1062,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 let deployments = state.deployments.read().await;
                 deployments
                     .values()
-                    .find(|d| Some(d.id.as_str()) == arguments["deploymentId"].as_str())
+                    .find(|d| Some(d.id.as_str()) == arguments["projectId"].as_str())
                     .map(|d| d.signup_policy.mode)
             } else {
                 None
@@ -936,13 +1075,15 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 .flatten();
             let export_transfer = package_transfer.clone().filter(|t| t["exportData"] == true);
             let component_upload = name == "transfer_write" && package_transfer.is_some_and(|t| t["component"].is_string());
-            let result = if name.starts_with("transfer_") {
-                let project = if name == "transfer_begin" {
-                    arguments["projectId"].as_str().map(str::to_owned)
+            let mut result = if name.starts_with("transfer_") {
+                let (project, live_transfer) = if name == "transfer_begin" {
+                    (arguments["projectId"].as_str().map(str::to_owned), false)
+                } else if name == "transfer_cancel" {
+                    transfer_project_for_owner(&state, &owner, &principal, arguments["transferId"].as_str().unwrap_or_default()).unwrap_or((None, false))
                 } else {
-                    transfer(&state, &principal, &arguments)
+                    (transfer(&state, &principal, &arguments)
                         .ok()
-                        .and_then(|t| t["projectId"].as_str().map(str::to_owned))
+                        .and_then(|t| t["projectId"].as_str().map(str::to_owned)), false)
                 };
                 let scope = if export_transfer.is_some() && name != "transfer_cancel" {
                     "export_data"
@@ -967,7 +1108,15 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                         .unwrap_or(accepted[0])
                 };
                 let permission = if name == "transfer_cancel" {
-                    authorize(held(&["read", "publish", "write", "export_data"]))
+                    match project.as_deref() {
+                        Some(id) => owner.require(held(&["read", "publish", "write", "export_data"]), Some(id)),
+                        None if live_transfer => owner.require(held(&["read", "publish", "write", "export_data"]), None),
+                        // An unknown or already-consumed ID has no resource to
+                        // access. Require one cancellation-capable scope, while
+                        // using a retained plan mapping above when one exists.
+                        None if ["read", "publish", "write", "export_data"].iter().any(|scope| owner.scopes.iter().any(|held| held == scope)) => Ok(()),
+                        None => Err(anyhow::anyhow!("Permission denied for read.")),
+                    }
                 } else if scope == "publish" {
                     authorize(held(&["publish", "write"]))
                 } else {
@@ -983,12 +1132,26 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     Err(e) => Err(e),
                 }
             };
+            if name == "release_apply" && result.is_ok() {
+                if let Some(plan_id) = arguments["planId"].as_str() {
+                    if let Err(error_value) = cleanup_release_uploads(&state, &owner, &principal, plan_id).await {
+                        result = Err(error_value);
+                    }
+                }
+            }
+            if name == "transfer_cancel" && result.is_ok() {
+                if let Some(transfer_id) = arguments["transferId"].as_str() {
+                    if let Ok(db) = store(&state) {
+                        let _ = db.execute("DELETE FROM source_read_requests WHERE transfer=?1", [transfer_id]);
+                    }
+                }
+            }
             match export_transfer.as_ref().filter(|_| name == "transfer_read") {
                 // One row per component download, written at its first
                 // block or on a refusal, so a 256 MiB database read in
                 // 64 blocks does not push the rest out of the log.
                 Some(t) if arguments["offset"] == 0 || result.is_err() => {
-                    let target = json!({"deploymentId":t["deploymentId"],"component":t["component"]});
+                    let target = json!({"projectId":t["projectId"],"component":t["component"]});
                     audit(&state, &principal, "package_download", &target, None, &result);
                 }
                 Some(_) => {}
@@ -1033,14 +1196,14 @@ fn audit(
         }
         // Who entered as whom: the principal is the actor, the detail names the account.
         "app_user_enter" => (
-            arguments["deploymentId"].as_str().map(str::to_owned),
+            arguments["projectId"].as_str().map(str::to_owned),
             Some(match result {
                 Ok(entered) => format!("as {} ({})", entered["email"].as_str().unwrap_or_default(), entered["userId"].as_str().unwrap_or_default()),
                 Err(_) => format!("as {} (refused)", arguments["userId"].as_str().unwrap_or_default()),
             }),
         ),
         "project_import" => (
-            arguments["deploymentId"].as_str().map(str::to_owned),
+            arguments["projectId"].as_str().map(str::to_owned),
             Some(match result {
                 Ok(done) if done["imported"] == true => format!("{} after backup {}", done["replace"].as_str().unwrap_or_default(), done["backup"]["id"].as_str().unwrap_or_default()),
                 Ok(_) => format!("{} waits for a schema confirmation", arguments["replace"].as_str().unwrap_or_default()),
@@ -1048,7 +1211,7 @@ fn audit(
             }),
         ),
         "package_download" => (
-            arguments["deploymentId"].as_str().map(str::to_owned),
+            arguments["projectId"].as_str().map(str::to_owned),
             arguments["component"].as_str().map(str::to_owned),
         ),
         "signup_policy_set" => {
@@ -1058,15 +1221,12 @@ fn audit(
                 Err(_) => format!("{} (refused)", mode(&arguments["mode"])),
             };
             (
-                arguments["deploymentId"].as_str().map(str::to_owned),
+                arguments["projectId"].as_str().map(str::to_owned),
                 Some(format!("{before} to {after}")),
             )
         }
         _ => (
-            arguments["projectId"]
-                .as_str()
-                .or(arguments["deploymentId"].as_str())
-                .map(str::to_owned),
+            arguments["projectId"].as_str().map(str::to_owned),
             None,
         ),
     };
@@ -1140,21 +1300,19 @@ async fn admin_call(
                 "maxTransferBytes":MAX_TRANSFER,
                 "files":{"quotaBytes":state.files.limits.quota_bytes,"maxFileBytes":state.files.limits.max_file_bytes},
                 "yardstick":"A person who does not write code, and a person who does, make the same small app and take it to another machine with its accounts, its data and its rules unchanged.",
-                "firstRun":"platform_guide topic rules, then pieces, then credentials. Publish with the publishing topic or bun run konae -- publish, then project_inspect and one actions_invoke.",
+                "firstRun":"Run konae init and konae dev, then konae login --browser and konae publish. Read the published configuration with project_inspect, open the Deployment URL, sign in if the app is private, and call a real Server Action through its runtime MCP endpoint with the appropriate app session.",
                 "workflow":[
-                    "platform_guide topic rules",
-                    "platform_guide topic pieces",
-                    "a credential: platform_guide topic credentials",
-                    "project_create",
-                    "secret_set for each secret a route signs with, and google_client_id and google_client_secret when the app offers Google sign-in",
-                    "build locally, or write the release JSON of the publishing topic",
-                    "transfer_begin, one transfer_write per block of chunkBytes at the nextOffset each answers, transfer_complete",
-                    "release_plan once",
-                    "release_apply",
-                    "project_inspect"
+                    "konae init and konae dev",
+                    "konae login --browser",
+                    "konae publish",
+                    "project_inspect",
+                    "open the Deployment URL and sign in if the app is private",
+                    "call a real Server Action through the runtime MCP endpoint with the appropriate app session"
                 ],
+                "credentialScope":"A project-scoped credential can act only on the existing project IDs it names, within its permissions. It cannot create projects.",
                 "guideTopics":super::guide::TOPICS,
-                "runtimeTools":["auth_session","actions_invoke","files_list","files_read","files_upload","files_update","files_delete"],
+                "runtimeTools":runtime_tools().iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>(),
+                "anonymousRuntimeTools":anonymous_runtime_tools().iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>(),
                 "localDevelopment":"Use bun run konae -- init, dev, build, contract, login, publish, pull, sql, events, tool, conform or export; the development topic of platform_guide lists them. Development uses an isolated local Kernel. All platform operations use authenticated MCP. On a public app, actions declared anonymous run without a session, and visitors can list and read files uploaded as public. Uploads and private files require sign-in. Private apps require sign-in for everything."
             }),
         ),
@@ -1208,12 +1366,13 @@ async fn admin_call(
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
                     && (upload["projectId"].is_null() || upload["projectId"] == id), "Completed upload for this project required.");
+                ensure_no_component(&upload)?;
                 let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-                let source: Value = serde_json::from_slice(&bytes)?;
+                let source = super::sources::normalize_document(&serde_json::from_slice::<Value>(&bytes)?)?;
                 validate_sources(&source, &id)?;
                 anyhow::ensure!(source["name"] == a["name"]
                     && a.get("slug").is_none_or(|slug| *slug == source["slug"])
-                    && a.get("manifest").is_none_or(|manifest| *manifest == source["manifest"]), "Initial files must match the project metadata.");
+                    && a.get("manifest").is_none_or(|manifest| super::sources::manifest_without_runtime(manifest) == source["manifest"]), "Initial files must match the project metadata.");
                 Some(source)
             } else { None };
             let _guard = database_lock(state, &format!("project:{id}")).await;
@@ -1255,7 +1414,7 @@ async fn admin_call(
                 "An app folder with this ID already exists on this installation. Choose another project ID."
             );
             let template = project_template(a["template"].as_str())?;
-            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").cloned().unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
+            let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").map(super::sources::manifest_without_runtime).unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
             // The app's folder exists from the start: konae.json, and app/ once sources are saved.
             // A step that fails takes the folder away again, so a retry with the same ID works.
             let created = async {
@@ -1298,12 +1457,76 @@ async fn admin_call(
         "project_sources_read" => {
             let id = a["projectId"].as_str().unwrap();
             owned_project(state, owner, id, "read")?;
+            let request_id = a["requestId"].as_str();
+            let cancel_request_id = a["cancelRequestId"].as_str();
+            anyhow::ensure!(request_id.is_none() || cancel_request_id.is_none(), "Choose requestId or cancelRequestId.");
+            for request_id in request_id.into_iter().chain(cancel_request_id) {
+                anyhow::ensure!(
+                    !request_id.is_empty() && request_id.len() <= 64 && request_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+                    "Invalid source read request ID."
+                );
+            }
+            let owner_principal = format!("owner:{}", owner.id);
+            if let Some(request_id) = cancel_request_id {
+                let _guard = database_lock(state, &format!("project:{id}")).await;
+                let db = store(state)?;
+                db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
+                let existing: Option<(String, Option<String>)> = db
+                    .query_row(
+                        "SELECT project,transfer FROM source_read_requests WHERE owner=?1 AND request_id=?2",
+                        params![owner.id, request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((project, transfer_id)) = existing {
+                    anyhow::ensure!(project == id, "Source read request ID belongs to another project.");
+                    if let Some(transfer_id) = transfer_id {
+                        let _ = transfer_call(state, &owner_principal, "transfer_cancel", &json!({"transferId":transfer_id}), false).await;
+                    }
+                }
+                db.execute(
+                    "INSERT INTO source_read_requests(owner,request_id,project,transfer,cancelled,expires) VALUES(?1,?2,?3,NULL,1,?4) ON CONFLICT(owner,request_id) DO UPDATE SET cancelled=1,expires=excluded.expires",
+                    params![owner.id, request_id, id, now_ms().saturating_add(300_000)],
+                )?;
+                return Ok(json!({"cancelled":true}));
+            }
             // A save swaps app/ under this lock, so a read never sees half of one.
             let _guard = database_lock(state, &format!("project:{id}")).await;
+            let db = store(state)?;
+            db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
             let revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
+            if a["metadataOnly"] == true {
+                return match super::sources::read_metadata(&state.data_root, id).await? {
+                    Some(project) => Ok(json!({"revision":revision,"project":project,"transfer":null})),
+                    None => Ok(json!({"revision":0,"transfer":null})),
+                };
+            }
+            if let Some(request_id) = request_id {
+                let existing: Option<(String, bool)> = db
+                    .query_row(
+                        "SELECT project,cancelled FROM source_read_requests WHERE owner=?1 AND request_id=?2",
+                        params![owner.id, request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((project, cancelled)) = existing {
+                    anyhow::ensure!(project == id, "Source read request ID belongs to another project.");
+                    if cancelled { return Ok(json!({"revision":revision,"transfer":null,"cancelled":true})); }
+                    anyhow::bail!("Source read request ID is already active.");
+                }
+            }
             match super::sources::read(&state.data_root, id).await? {
-                Some(source) if revision > 0 => Ok(json!({"revision":revision,"transfer":download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?})),
-                _ => Ok(json!({"revision":0,"transfer":null})),
+                Some(source) => {
+                    let transfer = download(state, principal, &serde_json::to_vec(&source)?, Some(id)).await?;
+                    if let Some(request_id) = request_id {
+                        db.execute(
+                            "INSERT INTO source_read_requests(owner,request_id,project,transfer,cancelled,expires) VALUES(?1,?2,?3,?4,0,?5)",
+                            params![owner.id, request_id, id, transfer["transferId"].as_str(), now_ms().saturating_add(300_000)],
+                        )?;
+                    }
+                    Ok(json!({"revision":revision,"project":{"id":source["id"],"name":source["name"],"slug":source["slug"],"manifest":source["manifest"]},"transfer":transfer}))
+                }
+                None => Ok(json!({"revision":0,"transfer":null})),
             }
         }
         "project_sources_save" => {
@@ -1311,17 +1534,32 @@ async fn admin_call(
             let transfer_id = a["transferId"].as_str().unwrap();
             let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == id, "Completed upload for this project required.");
+            ensure_no_component(&upload)?;
             let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-            let source: Value = serde_json::from_slice(&bytes)?;
-            validate_sources(&source, id)?;
+            let update: Value = serde_json::from_slice(&bytes)?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             owned_project(state, owner, id, "write")?;
-            let db = store(state)?;
-            let current: u64 = db.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
+            let current: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [id], |r| r.get(0))?;
             anyhow::ensure!(current == a["expectedRevision"].as_u64().unwrap(), "Source revision conflict. Reload the saved project before writing.");
+            let previous = super::sources::read(&state.data_root, id).await?;
+            let source = if update["format"] == "delta" {
+                let saved = previous.clone().ok_or_else(|| anyhow::anyhow!("Saved project sources are unavailable."))?;
+                merge_source_delta(&saved, &update, id)?
+            } else {
+                update
+            };
+            anyhow::ensure!(current == 0 || previous.is_some(), "Saved project sources are unavailable.");
+            validate_sources(&source, id)?;
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
-            super::sources::write(&state.data_root, id, &source).await?;
-            db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision])?;
+            let pending = super::sources::stage_write(&state.data_root, id, &source).await?;
+            let update_result = store(state).and_then(|db| db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]).map_err(Into::into));
+            if let Err(error) = update_result {
+                if let Err(restore) = pending.rollback().await {
+                    anyhow::bail!("Saving sources failed: {error}. Restoring the saved sources failed: {restore:#}");
+                }
+                return Err(error.into());
+            }
+            pending.commit().await;
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
@@ -1383,16 +1621,16 @@ async fn admin_call(
             super::http::secrets_call(&super::http::secrets_store(&state.data_root, id)?, id, deployment.as_ref(), name, &a)
         }
         "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
-            let id = a["deploymentId"].as_str().unwrap();
+            let id = a["projectId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
             super::http::api_keys_call(state, &deployment, name, &a).await
         }
         "notices_read" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
             super::mail::notices_tool(state, &deployment, &a).await
         }
         "calls_read" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
             super::calls::admin_call(state, &deployment, &a).await
         }
         "usage_overview" => {
@@ -1433,17 +1671,17 @@ async fn admin_call(
                 Ok(json!({"apps": apps, "nextCursor": next, "from": from, "to": to}))
             }).await?
         }
-        "usage_read" | "signals_read" | "usage_summary" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "read").await?;
+        "signals_read" | "usage_summary" => {
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
             super::usage::admin_call(&state.data_root, &deployment, name, &a).await
         }
         "sign_in_methods_read" => {
-            let id = a["deploymentId"].as_str().unwrap();
+            let id = a["projectId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, "read").await?;
             Ok(sign_in_methods_value(state, &deployment))
         }
         "sign_in_methods_set" => {
-            let id = a["deploymentId"].as_str().unwrap();
+            let id = a["projectId"].as_str().unwrap();
             let found = owned_deployment(state, owner, id, "manage_users").await?;
             // Releases and secret_delete hold the same lock, so neither a
             // publish nor a deleted Google secret can pass this check.
@@ -1459,15 +1697,15 @@ async fn admin_call(
             Ok(value)
         }
         "maintenance_read" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "read").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::maintenance::read(&state.data_root, &deployment.id))
         }
         "contact_email_read" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "read").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::notify::contact_view(&deployment))
         }
         "contact_email_set" => {
-            let id = a["deploymentId"].as_str().unwrap_or_default();
+            let id = a["projectId"].as_str().unwrap_or_default();
             let deployment = owned_deployment(state, owner, id, "publish").await?;
             // Releases hold the same lock, so a publish cannot put back the email it read before.
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
@@ -1475,23 +1713,18 @@ async fn admin_call(
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "publish").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
             super::maintenance::set(&state.data_root, &deployment.id, on)
         }
-        "signup_policy_read" => {
-            let id = a["deploymentId"].as_str().unwrap();
-            let deployment = owned_deployment(state, owner, id, "read").await?;
-            Ok(signup_policy_value(&deployment))
-        }
         "signup_policy_set" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "manage_users").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "manage_users").await?;
             let mode: SignupMode = serde_json::from_value(a["mode"].clone())?;
             let entries: Option<Vec<String>> = a.get("allowlist").map(|list| serde_json::from_value(list.clone())).transpose()?;
             set_signup_policy(state, &deployment.id, mode, entries).await
         }
         "database_execute" => {
-            let id = a["deploymentId"].as_str().unwrap();
+            let id = a["projectId"].as_str().unwrap();
             let op = a["operation"].as_str().unwrap();
             let scope = if ["inspect", "browse", "list-backups"].contains(&op) {
                 "read"
@@ -1515,7 +1748,7 @@ async fn admin_call(
             Ok(answer)
         }
         "project_export" => {
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap(), "export_data").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "export_data").await?;
             super::package::export(state, deployment, principal, |deployment| {
                 let (_, published) = owned_project(state, owner, &deployment.project_id, "export_data")?;
                 let sources: Option<u64> = store(state)?
@@ -1527,24 +1760,18 @@ async fn admin_call(
             .await
         }
         "release_plan" => {
-            let transfer = transfer(state, principal, &json!({"transferId":a["transferId"]}))?;
-            anyhow::ensure!(
-                transfer["complete"] == true && transfer["direction"] == "upload",
-                "Upload is not complete."
-            );
-            let bytes =
-                tokio::fs::read(transfer_path(state, a["transferId"].as_str().unwrap())?).await?;
-            anyhow::ensure!(
-                bytes.len() <= 26_000_000,
-                "Deployment payload exceeds 26 MB."
-            );
-            let payload: Value = serde_json::from_slice(&bytes)?;
-            let input: DeployInput = serde_json::from_value(payload.clone())?;
+            let transfer_id = a["transferId"].as_str().unwrap();
+            let sources_id = a["sourcesTransferId"].as_str();
+            let input = release_input(state, principal, transfer_id, sources_id, None).await?;
+            let artifact_sha256 = transfer(state, principal, &json!({"transferId": transfer_id}))?["sha256"].clone();
+            let _guard = database_lock(state, &format!("project:{}", input.project.id)).await;
             let (_, revision) = owned_project(state, owner, &input.project.id, "publish")?;
-            anyhow::ensure!(
-                transfer["projectId"] == input.project.id,
-                "Artifact belongs to another project."
-            );
+            let source_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [&input.project.id], |r| r.get(0))?;
+            let has_deployment = find_project_deployment(&*state.deployments.read().await, &input.project.id).is_some();
+            let observed = a["observedSourcesRevision"].as_u64();
+            if (has_deployment || source_revision > 0) && observed != Some(source_revision) {
+                return Err(source_revision_refusal(observed.unwrap_or(0)));
+            }
             if let Some(package) = input.initial_package.as_ref() {
                 // The same export again answers with the first import.
                 if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
@@ -1563,17 +1790,20 @@ async fn admin_call(
             let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
-            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires) VALUES(?1,?2,?3,?4,?5,?6)",params![id,owner.id,input.project.id,revision,a["transferId"].as_str().unwrap(),expires])?;
+            // Persist every upload that a successful apply consumes. Cleanup
+            // must survive client finally cancellation of the release JSON.
+            let cleanup_uploads = release_upload_ids(state, principal, transfer_id, sources_id).await?;
+            store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision,cleanup_uploads) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision,serde_json::to_string(&cleanup_uploads)?])?;
             if let Some(package) = input.initial_package.as_ref() {
                 remember_import(state, &package.manifest.package_id, &input.project.id, &id)?;
             }
             Ok(
-                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"artifactSha256":transfer["sha256"],"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
+                json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"expectedSourcesRevision":source_revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
             )
         }
         "release_apply" => {
             let id = a["planId"].as_str().unwrap();
-            let row: (String,u64,String,u64,Option<String>)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+            let row: (String,u64,String,u64,Option<String>,Option<String>,u64)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources,source_revision FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))?;
             let _guard = database_lock(state, &format!("project:{}", row.0)).await;
             let (mut metadata, revision) = owned_project(state, owner, &row.0, "publish")?;
             let receipt: Option<String> =
@@ -1587,48 +1817,47 @@ async fn admin_call(
                 revision == row.1,
                 "Project revision changed. Create a new release plan."
             );
-            transfer(state, principal, &json!({"transferId":row.2}))?;
-            let bytes = tokio::fs::read(transfer_path(state, &row.2)?).await?;
-            let mut payload: Value = serde_json::from_slice(&bytes)?;
+            let source_revision: u64 = store(state)?.query_row("SELECT sources FROM projects WHERE id=?1", [&row.0], |r| r.get(0))?;
+            if source_revision != row.6 {
+                return Err(source_revision_refusal(row.6));
+            }
+            let mut input = release_input(state, principal, &row.2, row.5.as_deref(), None).await?;
+            anyhow::ensure!(input.project.id == row.0, "Artifact belongs to another project.");
             // Notify to the owner sends to konae.json's address, else the app's, else the owner's.
-            payload["contactEmail"] = contact_email(state, owner, &row.0, &payload).await?;
+            input.contact_email = contact_email(state, owner, &row.0, input.contact_email.as_deref()).await?;
             // A schema change that loses data applies only with the
             // confirmation release_plan gave for it.
-            payload["schemaConfirmation"] = a.get("confirmSchema").cloned().unwrap_or(Value::Null);
-            for key in ["name", "slug", "manifest"] {
-                if let Some(value) = payload["project"].get(key) {
-                    metadata[key] = value.clone();
-                }
-            }
-            let receipt = response_value(
-                deploy(state, payload.to_string().as_bytes()).await,
-            )
-            .await?;
+            input.schema_confirmation = a["confirmSchema"].as_str().map(str::to_owned);
+            metadata["name"] = json!(input.project.name);
+            metadata["slug"] = json!(input.project.slug);
+            metadata["manifest"] = input.project.manifest.clone();
+            let receipt = response_value(deploy_input(state, input).await).await?;
             let mut db = store(state)?;
             let tx = db.transaction()?;
-            tx.execute("UPDATE projects SET revision=revision+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3",params![row.0,owner.id,revision,metadata.to_string()])?;
+            tx.execute("UPDATE projects SET revision=revision+1,sources=sources+1,body=?4 WHERE id=?1 AND owner=?2 AND revision=?3 AND sources=?5",params![row.0,owner.id,revision,metadata.to_string(),source_revision])?;
             tx.execute(
                 "UPDATE plans SET receipt=?1 WHERE id=?2",
                 params![receipt.to_string(), id],
             )?;
             tx.commit()?;
+            drop(db);
             Ok(receipt)
         }
         "project_import" => project_import(state, owner, principal, &a).await,
         "app_user_enter" => {
             anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "manage_users").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
             super::enter::issue(state, &deployment, a["userId"].as_str().unwrap_or_default(), principal).await
         }
         name if name.starts_with("app_") => {
             // Every app user and invitation tool needs manage_users and the project grant.
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "manage_users").await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
             let inviter = super::invitations::Inviter { id: owner.id.clone(), email: inviter_email(state, &owner.id) };
             super::invitations::run(state, &deployment, &inviter, name, &a).await
         }
         name if name.starts_with("domain_") || name.starts_with("path_") || name.starts_with("hostname_") => {
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
-            let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), scope).await?;
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), scope).await?;
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
             } else if name.starts_with("hostname_") {
@@ -1651,7 +1880,7 @@ const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
 /// plan with `imported: false` and changes nothing.
 async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
     use super::import::{Outcome, Target};
-    let deployment = owned_deployment(state, owner, a["deploymentId"].as_str().unwrap_or_default(), "publish").await?;
+    let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
     let replace = a["replace"].as_str().unwrap_or_default();
     let (data, sources) = match replace {
         "sources" => (false, true),
@@ -1661,6 +1890,8 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     };
     anyhow::ensure!(data == a.get("package").is_some(), "Pass package exactly when replace is data or both.");
     anyhow::ensure!(sources == a.get("transferId").is_some(), "Pass transferId exactly when replace is sources or both.");
+    anyhow::ensure!(!a.get("sourcesTransferId").is_some() || sources, "Pass sourcesTransferId only when replace is sources or both.");
+    anyhow::ensure!(!a.get("artifactTransferId").is_some() || sources, "Pass artifactTransferId only when replace is sources or both.");
     let package: Option<super::package::InitialPackage> = a.get("package").map(|value| serde_json::from_value(value.clone())).transpose()?;
     let confirmation = a["confirmSchema"].as_str();
     let project = deployment.project_id.clone();
@@ -1673,10 +1904,16 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         Some(transfer_id) => {
             let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
             anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload" && upload["projectId"] == project.as_str(), "Completed upload for this project required.");
-            let bytes = tokio::fs::read(transfer_path(state, transfer_id)?).await?;
-            anyhow::ensure!(bytes.len() <= 26_000_000, "Deployment payload exceeds 26 MB.");
-            let payload: Value = serde_json::from_slice(&bytes)?;
-            let input: DeployInput = serde_json::from_value(payload.clone())?;
+            let mut payload: Value = serde_json::from_slice(&release_bytes(state, &upload, transfer_id).await?)?;
+            let input = release_input(state, principal, transfer_id, a["sourcesTransferId"].as_str(), a["artifactTransferId"].as_str()).await?;
+            payload["project"]["files"] = json!(&input.project.files);
+            payload["project"]["encodings"] = json!(&input.project.encodings);
+            payload["artifact"] = json!({
+                "version": input.artifact.version,
+                "entrypoint": input.artifact.entrypoint,
+                "files": input.artifact.files,
+                "encodings": input.artifact.encodings,
+            });
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
             anyhow::ensure!(
                 input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none(),
@@ -1690,14 +1927,19 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
                 return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
             }
-            Some((payload, input, change))
+            Some((payload, change))
         }
+        None => None,
+    };
+    // Resolve and validate release settings before an import can replace live data.
+    let resolved_contact_email = match &release {
+        Some((payload, _)) => Some(contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?),
         None => None,
     };
     let (backup, change) = match &package {
         Some(package) => {
             let target = match &release {
-                Some((_, input, _)) => Target::release(input)?,
+                Some((payload, _)) => Target::release(&serde_json::from_value::<DeployInput>(payload.clone())?)?,
                 None => Target::live(state, &deployment)?,
             };
             match super::import::import_data(state, &deployment, package, &target, confirmation, sources).await? {
@@ -1705,24 +1947,21 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 Outcome::Imported { backup, change } => (backup, change),
             }
         }
-        None => (super::import::backup_sources(state, &deployment).await?, release.as_ref().map(|(_, _, change)| change.clone()).unwrap_or_default()),
+        None => (super::import::backup_sources(state, &deployment).await?, release.as_ref().map(|(_, change)| change.clone()).unwrap_or_default()),
     };
     let mut answer = json!({"imported": true, "replace": replace, "backup": backup, "schema": change.to_json()});
-    if let Some((mut payload, input, _)) = release {
-        payload["contactEmail"] = contact_email(state, owner, &project, &payload).await?;
+    if let Some((mut payload, _)) = release {
+        payload["contactEmail"] = resolved_contact_email.flatten().map_or(Value::Null, Value::String);
         payload["schemaConfirmation"] = confirmation.map_or(Value::Null, |value| Value::String(value.to_owned()));
         for key in ["name", "slug", "manifest"] {
             if let Some(value) = payload["project"].get(key) {
                 metadata[key] = value.clone();
             }
         }
-        let receipt = response_value(deploy(state, payload.to_string().as_bytes()).await).await?;
-        // The editor opens the imported sources, not the ones it saved before.
-        let saved = json!({
-            "id": project, "name": input.project.name, "slug": input.project.slug, "files": input.project.files,
-            "directories": [], "manifest": input.project.manifest, "updatedAt": now_ms(),
-        });
-        super::sources::write(&state.data_root, &project, &saved).await?;
+        let receipt = match response_value(deploy(state, payload.to_string().as_bytes()).await).await {
+            Ok(receipt) => receipt,
+            Err(error) => return restore_import_after_release_failure(state, &deployment, package.is_some(), &backup, error).await,
+        };
         store(state)?.execute(
             "UPDATE projects SET revision=revision+1, sources=sources+1, body=?3 WHERE id=?1 AND revision=?2",
             params![project, revision, metadata.to_string()],
@@ -1730,6 +1969,19 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         answer["deployment"] = receipt;
     }
     Ok(answer)
+}
+
+/// Restores the data and source backup when the release after an import fails.
+async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Value> {
+    if has_package {
+        let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
+        let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
+        let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
+        let _data = database_lock(state, &deployment.id).await;
+        super::import::restore_held(&state.kernel, deployment, &record).await
+            .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
+    }
+    Err(error)
 }
 
 /// The email of the owner account that invites, for the message. Owners
@@ -1745,13 +1997,13 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
 /// The contact email a release of `project` carries: the one the payload
 /// names from its folder's konae.json, else the one the published app has,
 /// which the owner may have set in App settings, else the owner's.
-async fn contact_email(state: &Konae, owner: &Owner, project: &str, payload: &Value) -> Result<Value> {
-    if let Some(given) = payload["contactEmail"].as_str() {
+async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
+    if let Some(given) = given {
         let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
-        return Ok(Value::String(email));
+        return Ok(Some(email));
     }
     let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
-    Ok(kept.or_else(|| owner_email(state, &owner.id)).map_or(Value::Null, Value::String))
+    Ok(kept.or_else(|| owner_email(state, &owner.id)))
 }
 
 /// The email of the owner's active account, when Konae keeps one. An owner
@@ -1826,7 +2078,7 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
             // key, the page fills it in, as `bun run dev:local` expects. Nowhere else.
             let local = url::Url::parse(&state.public_origin).ok().and_then(|u| u.host_str().map(crate::is_local_host)).unwrap_or(false);
             let default_key = local && state.setup_key == crate::DEFAULT_SETUP_KEY;
-            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
+            Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"emailVerificationRequired":state.accounts.verification == auth::Verification::Required,"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
         }
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }
@@ -2069,6 +2321,82 @@ async fn owner_page(State(state): State<Konae>, headers: HeaderMap) -> Response 
 mod tests {
     use super::*;
 
+    #[test]
+    fn source_revision_conflicts_match_the_shared_case() {
+        let fixture: Value = serde_json::from_str(include_str!("../../kernel/src/source-revision-cases.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let refusal = source_revision_refusal(case["observed"].as_u64().unwrap());
+            let refusal = refusal.downcast_ref::<super::super::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, case["code"].as_str().unwrap());
+            assert_eq!(refusal.message, case["error"].as_str().unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_sources_from_an_older_project_revision_remain_readable() {
+        let root = std::env::temp_dir().join(format!("konae-old-sources-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        store(&state).unwrap().execute(
+            "INSERT INTO projects(id,owner,body,revision,sources) VALUES('app_legacy','o','{}',0,0)", [],
+        ).unwrap();
+        let source = json!({
+            "id":"app_legacy", "name":"Legacy", "slug":"legacy", "files":{"index.html":"<main>old source</main>"},
+            "directories":[], "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}}, "updatedAt":1
+        });
+        crate::Settings::new("app_legacy", "Legacy", "legacy", &source["manifest"]).write(&state.data_root).await.unwrap();
+        super::super::sources::write(&state.data_root, "app_legacy", &source).await.unwrap();
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into()], projects:vec![], session:false };
+        let answer = admin_call(&state, &owner, "owner:o", "project_sources_read", json!({"projectId":"app_legacy"})).await.unwrap();
+        assert_eq!(answer["revision"], 0);
+        assert!(answer["transfer"].is_object(), "a saved v0.8 source document remains available for the editor to migrate");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_import_release_restores_the_old_sources_and_rows() {
+        let root = std::env::temp_dir().join(format!("konae-import-release-failure-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let id = "app_import_failure";
+        let deployment: Deployment = serde_json::from_value(json!({
+            "id":id,"projectId":id,"projectName":"Import failure","slug":"import-failure","url":"http://import-failure.localhost",
+            "createdAt":1,"releasedAt":1,"manifest":{"version":1,"visibility":"private"},"hostname":"import-failure.localhost",
+            "actions":"{}","artifactVersion":"v1","signupPolicy":{"mode":"invitation","allowlist":[]},"signInMethods":["password"]
+        })).unwrap();
+        let old_source = json!({
+            "id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"old source"},"directories":[],
+            "manifest":{"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"required"},"files":{"access":"deployment"}}},"updatedAt":1
+        });
+        crate::Settings::new(id, "Import failure", "import-failure", &old_source["manifest"]).write(&state.data_root).await.unwrap();
+        super::super::sources::write(&state.data_root, id, &old_source).await.unwrap();
+        let database = kernel::database_path(&state.kernel, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE notes(body TEXT); INSERT INTO notes VALUES('old row');").unwrap();
+
+        let backup_id = "injected-release-failure";
+        let key = "backup-data-and-sources";
+        let backup_root = crate::layout::backups(&state.data_root, id);
+        let backup_folder = backup_root.join(key);
+        tokio::fs::create_dir_all(&backup_folder).await.unwrap();
+        tokio::fs::copy(&database, backup_folder.join("database.sqlite")).await.unwrap();
+        tokio::fs::write(backup_folder.join("sources.json"), serde_json::to_vec(&old_source).unwrap()).await.unwrap();
+        let record = super::DatabaseBackup { id: backup_id.into(), label: "Before import".into(), created_at: 1, size_bytes: 0, key: key.into(), holds: vec!["data".into(), "sources".into()] };
+        tokio::fs::write(backup_root.join(format!("{backup_id}.json")), serde_json::to_vec(&record).unwrap()).await.unwrap();
+
+        rusqlite::Connection::open(&database).unwrap().execute_batch("DELETE FROM notes; INSERT INTO notes VALUES('imported row');").unwrap();
+        let imported_source = json!({"id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"imported source"},"directories":[],"manifest":old_source["manifest"],"updatedAt":2});
+        super::super::sources::write(&state.data_root, id, &imported_source).await.unwrap();
+        let backup = record.view();
+        let error = restore_import_after_release_failure(&state, &deployment, true, &backup, anyhow::anyhow!("Injected release failure")).await.unwrap_err();
+        assert!(error.to_string().contains("Injected release failure"));
+        let row: String = rusqlite::Connection::open(&database).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(row, "old row");
+        let restored = super::super::sources::read(&state.data_root, id).await.unwrap().unwrap();
+        assert_eq!(restored["files"]["index.html"], "old source");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
     /// The path host serves apps and the home, so the owner's MCP and owner
     /// sign-in refuse it.
     #[tokio::test]
@@ -2138,7 +2466,8 @@ mod tests {
         assert_eq!(read(call("lb_elsewhere").await.unwrap()).await, (challenge.clone(), unknown.clone()));
         let (cli_challenge, cli) = read(call("lb_cli").await.unwrap()).await;
         assert_eq!(cli_challenge, challenge);
-        assert_eq!(cli, "This Konae token expired at 2023-11-14 22:13 UTC. Tokens from konae login last 24 hours on this installation. Run konae login for a new one, or sign in as the owner at https://app.konae.es/_konae/owner/login.");
+        assert_eq!(cli, "This Konae token expired at 2023-11-14 22:13 UTC. Run konae login for a new CLI credential, reconnect the MCP client, or sign in as the owner at https://app.konae.es/_konae/owner/login.");
+        assert!(!cli.contains("last 24 hours"));
         let (oauth_challenge, oauth) = read(call("lb_oauth").await.unwrap()).await;
         assert_eq!(oauth_challenge, challenge);
         assert_eq!(oauth, "This Konae sign-in expired at 2023-11-14 22:13 UTC. Run konae login --browser for the CLI, or reconnect your MCP client; either opens https://app.konae.es/_konae/owner/login.");
@@ -2162,15 +2491,15 @@ mod tests {
         let id = state.deployments.read().await.values().next().unwrap().id.clone();
         let reader = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
         for name in ["domain_read", "path_read"] {
-            admin_call(&state, &reader, "owner:o", name, json!({"deploymentId": id})).await.unwrap();
+            admin_call(&state, &reader, "owner:o", name, json!({"projectId": id})).await.unwrap();
         }
-        for (name, arguments) in [("domain_set", json!({"deploymentId": id, "hostname": "scope.example.org"})), ("path_set", json!({"deploymentId": id, "enabled": true})), ("hostname_set", json!({"deploymentId": id, "name": "scope-two"}))] {
+        for (name, arguments) in [("domain_set", json!({"projectId": id, "hostname": "scope.example.org"})), ("path_set", json!({"projectId": id, "enabled": true})), ("hostname_set", json!({"projectId": id, "name": "scope-two"}))] {
             let refused = admin_call(&state, &reader, "owner:o", name, arguments).await.unwrap_err().to_string();
             assert_eq!(refused, "Permission denied for publish.", "{name}");
         }
         // A publisher moves the generated hostname, and project_inspect reads the new url back.
         let publisher = Owner { id: "o".into(), display: None, scopes: vec!["read".into(), "publish".into()], projects: vec![], session: false };
-        let moved = admin_call(&state, &publisher, "owner:o", "hostname_set", json!({"deploymentId": id, "name": "scope-two"})).await.unwrap();
+        let moved = admin_call(&state, &publisher, "owner:o", "hostname_set", json!({"projectId": id, "name": "scope-two"})).await.unwrap();
         assert_eq!(moved["changed"], true);
         let inspected = admin_call(&state, &publisher, "owner:o", "project_inspect", json!({"projectId": "app_scope"})).await.unwrap();
         assert_eq!(inspected["deployment"]["hostname"], moved["hostname"]);
@@ -2249,6 +2578,7 @@ mod tests {
             db.execute("UPDATE projects SET sources=1 WHERE id=?1", [draft]).unwrap();
         }
         let saved = json!({"id": draft, "name": "Draft", "slug": "draft", "files": {"index.html": "<main></main>"}, "directories": [], "manifest": {}, "updatedAt": 1});
+        crate::Settings::new(draft, "Draft", "draft", &saved["manifest"]).write(&state.data_root).await.unwrap();
         crate::sources::write(&state.data_root, draft, &saved).await.unwrap();
         let call = |name: &'static str, a: Value| { let (state, owner) = (state.clone(), owner.clone()); async move { admin_call(&state, &owner, "owner:o", name, a).await } };
 
@@ -2393,7 +2723,12 @@ mod tests {
         }
         let reader = Owner { id: "o".into(), display: None, scopes: vec!["read".into()], projects: vec![], session: false };
         let names = |owner: &Owner| admin_tools(owner).iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
-        assert!(names(&reader).contains(&"signup_policy_read".to_owned()));
+        assert!(!names(&reader).contains(&"signup_policy_read".to_owned()));
+        assert!(names(&reader).contains(&"usage_summary".to_owned()));
+        assert!(!names(&reader).contains(&"usage_read".to_owned()));
+        for definition in admin_tools(&reader) {
+            assert!(definition["inputSchema"]["properties"].get("deploymentId").is_none(), "owner tool {} uses deploymentId", definition["name"]);
+        }
         assert!(!names(&reader).contains(&"signup_policy_set".to_owned()));
         assert!(names(&reader).contains(&"sign_in_methods_read".to_owned()));
         assert!(!names(&reader).contains(&"sign_in_methods_set".to_owned()));
@@ -2506,8 +2841,108 @@ mod tests {
         let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
         assert_eq!(refusal(&|s| s["manifest"]["fileAccess"] = json!("public")), artifact::FILE_ACCESS_MESSAGE);
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
-        assert!(refusal(&|s| s["manifest"] = json!({"version":1,"visibility":"private"})).starts_with("Invalid project manifest. Send { version: 1, visibility, runtime: { database: { mode: \"declared-actions\""));
+        assert!(refusal(&|s| s["manifest"] = json!({"version":1})).starts_with("Invalid project manifest. Send version 1 and visibility"));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
+        let big = |s: &mut Value| {
+            s["files"]["public/big.bin"] = json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0xffu8; super::super::sources::MAX_BYTES + 1]));
+            s["encodings"] = json!({"public/big.bin": "base64"});
+        };
+        assert_eq!(refusal(&big), "app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are public/big.bin (20.1 MiB) and index.html (13 bytes).", "a file that is not text counts its decoded bytes");
+        let mut source = base.clone();
+        big(&mut source);
+        assert_eq!(super::super::refusal::of(&validate_sources(&source, "app_a").unwrap_err()).map(|refused| refused.code), Some("sources.size"));
+        assert!(refusal(&|s| s["files"]["public/.DS_Store"] = json!("x")).starts_with("The sources cannot hold the path \"public/.DS_Store\"."));
+        let with_png = |s: &mut Value| { s["files"]["public/logo.png"] = json!("iVBORw0KGgo="); s["encodings"] = json!({"public/logo.png": "base64"}); };
+        let mut binary = base.clone();
+        with_png(&mut binary);
+        assert!(validate_sources(&binary, "app_a").is_ok());
+        assert_eq!(refusal(&|s| { with_png(s); s["encodings"] = json!({"public/logo.png": 1}); }), "The sources' encodings must map each path to \"base64\".");
+    }
+
+    #[tokio::test]
+    async fn a_failed_source_revision_write_restores_sources_and_keeps_revision() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+
+        let root = std::env::temp_dir().join(format!("konae-refused-save-revision-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let id = "app_save_revision";
+        store(&state).unwrap().execute(
+            "INSERT INTO projects(id,owner,body,revision,sources) VALUES(?1,'o',?2,1,4)",
+            params![id, json!({"id":id,"name":"Saved"}).to_string()],
+        ).unwrap();
+        store(&state).unwrap().execute_batch("CREATE TRIGGER fail_source_revision BEFORE UPDATE OF sources ON projects BEGIN SELECT RAISE(ABORT, 'injected source revision failure'); END;").unwrap();
+        let applied_actions = r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}"#;
+        let draft_actions = r#"{"version":1,"actions":{"draft.list":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}"#;
+        let saved = json!({"id":id,"name":"Saved","slug":"saved","files":{"index.html":"before","actions.json":draft_actions,"schema.sql":"CREATE TABLE draft_only(id INTEGER PRIMARY KEY);"},"directories":["explicit"],"manifest":{"version":1,"visibility":"private"},"updatedAt":1});
+        crate::Settings::new(id, "Saved", "saved", &saved["manifest"]).write(&state.data_root).await.unwrap();
+        crate::sources::write(&state.data_root, id, &saved).await.unwrap();
+        let database = kernel::database_path(&state.kernel, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT); INSERT INTO notes(body) VALUES('applied row');").unwrap();
+        let mut deployment = crate::Settings::read(&state.data_root, id).unwrap().deployment(crate::Installed {
+            hostname:"saved.localhost".into(), created_at:1, released_at:Some(2), source_digest:Some("prior".into()),
+            actions:applied_actions.into(), artifact_version:"vprior".into(), released:None,
+        }, "http://localhost");
+        deployment.released_schema = "CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT);".into();
+        let installed = crate::Installed { hostname:deployment.hostname.clone(), created_at:deployment.created_at, released_at:Some(deployment.released_at), source_digest:deployment.source_digest.clone(), actions:deployment.actions.clone(), artifact_version:deployment.artifact_version.clone(), released:None };
+        tokio::fs::write(crate::layout::record(&state.data_root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
+        let legacy_metadata = json!({"name":"Legacy saved draft","slug":"legacy-saved","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"directories":["legacy-empty"],"updatedAt":9});
+        let legacy_path = crate::layout::private(&state.data_root, id).join("sources.json");
+        tokio::fs::write(&legacy_path, serde_json::to_vec(&legacy_metadata).unwrap()).await.unwrap();
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into()], projects:vec![], session:false };
+        let app_path = crate::layout::sources(&state.data_root, id).join("index.html");
+        let settings_path = crate::layout::settings(&state.data_root, id);
+        let record_path = crate::layout::record(&state.data_root, id);
+        let before_record = tokio::fs::read(&record_path).await.unwrap();
+        let before_legacy = tokio::fs::read(&legacy_path).await.unwrap();
+        let before_app = tokio::fs::read(&app_path).await.unwrap();
+        let before_settings = tokio::fs::read(&settings_path).await.unwrap();
+        let mut next = crate::sources::read(&state.data_root, id).await.unwrap().unwrap();
+        next["name"] = json!("Refused name");
+        next["files"]["index.html"] = json!("must roll back");
+        next["updatedAt"] = json!(2);
+        let bytes = serde_json::to_vec(&next).unwrap();
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
+        let principal = "owner:o";
+        let transfer = transfer_call(&state.kernel, principal, "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+        let transfer_id = transfer["transferId"].as_str().unwrap();
+        transfer_call(&state.kernel, principal, "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+        transfer_call(&state.kernel, principal, "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+        let error = admin_call(&state, &owner, principal, "project_sources_save", json!({"projectId":id,"transferId":transfer_id,"expectedRevision":4})).await.unwrap_err();
+        assert!(error.to_string().contains("injected source revision failure"), "{error:#}");
+        let revision: u64 = store(&state).unwrap().query_row("SELECT sources FROM projects WHERE id=?1", [id], |row| row.get(0)).unwrap();
+        assert_eq!(revision, 4);
+        assert_eq!(tokio::fs::read(app_path).await.unwrap(), before_app);
+        assert_eq!(tokio::fs::read(settings_path).await.unwrap(), before_settings);
+        assert_eq!(tokio::fs::read(record_path).await.unwrap(), before_record);
+        assert_eq!(tokio::fs::read(legacy_path).await.unwrap(), before_legacy);
+        let source = crate::sources::read(&state.data_root, id).await.unwrap().unwrap();
+        assert_eq!(source["name"], "Legacy saved draft");
+        assert_eq!(source["manifest"]["fileAccess"], "app-users");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn source_deltas_merge_changed_files_and_recheck_the_whole_document() {
+        let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
+        let current = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"old","public/logo.png":"iVBORw0KGgo="},"encodings":{"public/logo.png":"base64"},"directories":["public"],"manifest":manifest,"updatedAt":1});
+        let delta = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":["public"],"manifest":manifest,"updatedAt":2},"files":{"index.html":"new"},"removedPaths":[]});
+        let merged = merge_source_delta(&current, &delta, "app_a").unwrap();
+        assert_eq!(merged["files"]["index.html"], "new");
+        assert_eq!(merged["files"]["public/logo.png"], "iVBORw0KGgo=");
+        assert_eq!(merged["encodings"]["public/logo.png"], "base64");
+        assert!(validate_sources(&merged, "app_a").is_ok());
+
+        let remove = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":[],"manifest":manifest,"updatedAt":3},"files":{},"removedPaths":["public/logo.png"]});
+        let merged = merge_source_delta(&merged, &remove, "app_a").unwrap();
+        assert!(merged["files"].get("public/logo.png").is_none());
+        assert!(merged.get("encodings").is_none());
+        assert!(validate_sources(&merged, "app_a").is_ok());
+
+        let invalid = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":[],"manifest":manifest,"updatedAt":4},"files":{"public/.secret":"x"},"removedPaths":[]});
+        assert!(validate_sources(&merge_source_delta(&merged, &invalid, "app_a").unwrap(), "app_a").is_err());
     }
 
     /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every

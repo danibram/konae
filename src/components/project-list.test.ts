@@ -5,17 +5,18 @@ import { groupProjects, listOrder, nameFromDescription, uniqueName, type Project
 const deployment = (url: string, createdAt: number) => ({ id: `dep_${url}`, projectId: "p", projectName: "p", url, createdAt, manifest: {} }) as unknown as DeploymentReceipt;
 
 const entries: ProjectEntry[] = [
-  { id: "a", name: "Reading club", purpose: "Books we read", editedAt: 300, deployment: deployment("http://reading.localhost", 200), inFolder: false },
-  { id: "b", name: "Photo wall", purpose: "A public gallery", editedAt: 500, inFolder: false },
-  { id: "c", name: "Team journal", purpose: "", deployment: deployment("http://team.localhost", 400), inFolder: true },
-  { id: "d", name: "Old folder app", purpose: "", inFolder: true },
+  { id: "a", name: "Reading club", purpose: "Books we read", editedAt: 300, deployment: deployment("http://reading.localhost", 200) },
+  { id: "b", name: "Photo wall", purpose: "A public gallery", editedAt: 500 },
+  { id: "c", name: "Team journal", purpose: "", deployment: deployment("http://team.localhost", 400) },
+  { id: "d", name: "Old app", purpose: "", sourceError: true },
 ];
 
 describe("groupProjects", () => {
-  test("an app published from a folder counts as published, beside the ones the editor holds", () => {
+  test("a damaged app remains on the project list while usable apps group by release", () => {
     const { published, drafts } = groupProjects(entries, "", "edited");
     expect(published.map((entry) => entry.id)).toEqual(["c", "a"]);
     expect(drafts.map((entry) => entry.id)).toEqual(["b", "d"]);
+    expect(drafts.find((entry) => entry.id === "d")?.sourceError).toBe(true);
   });
   test("search matches name, purpose and address, every word", () => {
     expect(groupProjects(entries, "gallery", "edited").drafts.map((entry) => entry.id)).toEqual(["b"]);
@@ -23,7 +24,7 @@ describe("groupProjects", () => {
     expect(groupProjects(entries, "photo club", "edited").drafts).toEqual([]);
   });
   test("sort by name ignores case", () => {
-    expect(groupProjects(entries, "", "name").drafts.map((entry) => entry.name)).toEqual(["Old folder app", "Photo wall"]);
+    expect(groupProjects(entries, "", "name").drafts.map((entry) => entry.name)).toEqual(["Old app", "Photo wall"]);
   });
 });
 

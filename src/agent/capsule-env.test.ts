@@ -231,6 +231,14 @@ describe("capsule mutations", () => {
     expect(capsule.changedFiles()).toEqual(["schema.sql", "app.js"]);
   });
 
+  test("the optional schema transform definition can be created and edited in the scratch copy", async () => {
+    const capsule = workspace();
+    const source = "{\"version\":1,\"transitions\":[]}";
+    getOrThrow(await capsule.env.writeFile("/workspace/schema-transforms.json", source));
+    expect(capsule.files["schema-transforms.json"]).toBe(source);
+    expect(capsule.changedFiles()).toContain("schema-transforms.json");
+  });
+
   test("the pi built-in file tools run against this env unchanged", async () => {
     const capsule = workspace();
     const context = { env: capsule.env };

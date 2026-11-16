@@ -99,12 +99,24 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 | Entering as a user | One use within two minutes |
 | Emails per `app_invitations_create` | 1 to 50 |
 | API keys per Deployment | 50 live keys |
-| `konae login` token, or one from the owner sign-in page | 24 hours |
+| `konae login` token | 24 hours, or one hour on an installation using Clerk |
+| Owner sign-in page token | 1, 7 or 30 days; Clerk caps it at 1 hour. It grants `read`, or `read`, `write` and `publish` |
 | `token_create` | Up to 30 days, or one hour under Clerk |
 | OAuth token | 24 hours for a client that redirects to `127.0.0.1` or `localhost`, one hour otherwise or under Clerk, no refresh token |
 | Owner invitation code | 14 days by default, `1h` to `90d` |
 
-## Transfers and publishing
+## Sources, transfers and publishing
+
+| Source limit | Value |
+| --- | --- |
+| Files in `app/` | At most 1000 |
+| Decoded source bytes | 20 MiB total across all files |
+| Source path | At most 240 bytes |
+| Serialized sources upload | 32 MiB |
+| Source transfer blocks | At most `chunkBytes`, 4 MiB on the owner MCP |
+| Release JSON | 26 MB |
+
+The source byte limit counts decoded bytes. JSON escaping can make the upload larger, so the 32 MiB serialized transfer cap is a separate check. The artifact has its own 1000-file and 16 MiB decoded limit. Sources and release artifacts travel in separate uploads.
 
 | Limit | Value |
 | --- | --- |
@@ -114,7 +126,7 @@ An IPv6 client counts as its /64, and as its /48 for OAuth registration.
 | App user transfers | Expire after 10 minutes, two at a time per app user, 32 per Deployment |
 | Visitor transfers | Two at a time per client address, 16 per public Deployment |
 | Owner transfer size | Up to 32 MiB, or an export component's limit |
-| Publishing payload | 26 MB, with its artifact at most 1000 files and 16 MiB after base64 is decoded |
+| Artifact | At most 1000 files and 16 MiB after base64 is decoded |
 | Export components | Database 256 MiB, accounts 64 MiB, Usage 128 MiB, files within the destination's quota |
 
 ## Usage store

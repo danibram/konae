@@ -410,7 +410,7 @@ pub fn client_set(state: &AppState, deployment: &Deployment) -> ClientSet {
 /// Whether this Deployment's sign-in page offers Google: the owner turned it
 /// on and set the app's client on this installation.
 pub fn offered(state: &AppState, deployment: &Deployment) -> bool {
-    deployment.sign_in_methods.contains(&SignInMethod::Google) && client(state, deployment).is_some()
+    !state.execution_mode.is_test() && deployment.sign_in_methods.contains(&SignInMethod::Google) && client(state, deployment).is_some()
 }
 
 /// Whether the sign-in page this request opens offers Google: `offered`, and
@@ -523,6 +523,7 @@ pub fn routes() -> Router<AppState> {
 
 /// Starts a sign-in. A navigation, so it answers with a redirect to Google.
 async fn start_get(State(state): State<AppState>, request: Request) -> Response {
+    if state.execution_mode.is_test() { return error(StatusCode::FORBIDDEN, "Google sign-in is unavailable in local test mode."); }
     let headers = request.headers().clone();
     let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|info| info.0);
     let Some(deployment) = deployment_for(&state, &headers).await else {
@@ -548,6 +549,7 @@ struct InvitationStart {
 /// token from its fragment, so it never sits in a URL, and navigates to the
 /// location this returns.
 async fn start_post(State(state): State<AppState>, request: Request) -> Response {
+    if state.execution_mode.is_test() { return error(StatusCode::FORBIDDEN, "Google sign-in is unavailable in local test mode."); }
     let headers = request.headers().clone();
     if !same_origin(&headers) {
         return error(StatusCode::FORBIDDEN, "Cross-origin auth request rejected.");
@@ -688,6 +690,7 @@ fn take_flow(db: &Connection, flow_state: &str, deployment_id: &str, origin: &st
 /// navigation, so it does not ask for same-origin headers; the single-use
 /// state and this browser's flow cookie are its proof.
 async fn callback(State(state): State<AppState>, headers: HeaderMap, Query(query): Query<CallbackQuery>) -> Response {
+    if state.execution_mode.is_test() { return error(StatusCode::FORBIDDEN, "Google sign-in is unavailable in local test mode."); }
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
@@ -973,6 +976,7 @@ mod tests {
                 signup_policy: SignupPolicy::from_input(mode, &["@practice.example".into()]).unwrap(),
                 sign_in_methods: vec![SignInMethod::Password, SignInMethod::Google],
                 contact_email: None,
+                released_schema: String::new(),
             };
             std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(hostname.to_owned(), item);
@@ -1454,6 +1458,21 @@ mod tests {
         assert!(!offered(&fixture.state, &app));
         assert_eq!(client_set(&fixture.state, &app), ClientSet { id: true, secret: false });
         assert!(text(start(fixture.state.clone()).await).await.contains(&escape(NOT_ON)));
+    }
+
+    #[tokio::test]
+    async fn test_mode_refuses_google_start_and_callback_without_contacting_google() {
+        let mut fixture = fixture(SignupMode::Open).await;
+        fixture.state.execution_mode = crate::execution::ExecutionMode::Test;
+        let app = fixture.deployment(APP).await;
+        assert!(!offered(&fixture.state, &app));
+        let request = Request::builder().uri(START_PATH).header(header::HOST, APP).body(Body::empty()).unwrap();
+        assert_eq!(start_get(State(fixture.state.clone()), request).await.status(), StatusCode::FORBIDDEN);
+        let response = super::callback(State(fixture.state.clone()), headers(APP, None), Query(CallbackQuery {
+            code: Some("code".into()), state: Some("state".into()), error: None,
+        })).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(fixture.fake.key_fetches.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -1,4 +1,5 @@
-import { directoriesForFiles, existingDirectory, existingFile, fileAncestor, invalidPathMessage, normalizeProjectPath, protectedProjectPaths, requireUnreservedPath, type ProjectTree } from "../lib/project-files";
+import { keptEncodings } from "../lib/source-files";
+import { directoriesForFiles, existingDirectory, existingFile, fileAncestor, invalidPathMessage, normalizeProjectPath, protectedProjectPaths, requireHeldPath, requireUnreservedPath, type ProjectTree } from "../lib/project-files";
 
 export type TreeNode =
   | { kind: "directory"; path: string; name: string; children: TreeNode[] }
@@ -69,6 +70,7 @@ export function renamePath(tree: ProjectTree, fromInput: string, toInput: string
   const reservedSource = [...protectedProjectPaths].find((reserved) => from === reserved || from.startsWith(`${reserved}/`));
   if (reservedSource) throw new Error(`${reservedSource} is a reserved project file and cannot be renamed or moved.`);
   requireUnreservedPath(to);
+  requireHeldPath(to);
 
   const isFile = typeof tree.files[from] === "string";
   const isDirectory = tree.directories.includes(from) || Object.keys(tree.files).some((name) => name.startsWith(`${from}/`));
@@ -116,5 +118,5 @@ export function renamePath(tree: ProjectTree, fromInput: string, toInput: string
     ...directoriesForFiles(files),
     ...(isDirectory ? [to, ...ancestorsOf(to)] : ancestorsOf(to)),
   ]);
-  return { files, directories: [...directories].sort() };
+  return { files, directories: [...directories].sort(), encodings: keptEncodings(tree.encodings, files, { rename: moved }) };
 }

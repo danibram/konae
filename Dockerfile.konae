@@ -1,6 +1,6 @@
 # The editor: `bun run build` writes it into dist/, and Konae serves that
 # folder on the editor host (KONAE_EDITOR_DIR below).
-FROM oven/bun:1.3.11 AS editor
+FROM --platform=$BUILDPLATFORM oven/bun:1.3.11 AS editor
 
 WORKDIR /app
 COPY package.json bun.lock ./

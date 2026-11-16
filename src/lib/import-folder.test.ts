@@ -3,6 +3,7 @@ import { dataEntries, type AppSettings } from "./app-folder";
 import { dataManifest, readAppFolder, sourcesPayload } from "./import-folder";
 import { checkPackageManifest } from "./portable-package";
 import { createTar, readTar } from "./tar";
+import { encodeBase64 } from "../mcp/client";
 
 const settings: AppSettings = {
   id: "notes-1", name: "Notes", slug: "notes", visibility: "private",
@@ -18,6 +19,11 @@ function exported() {
     { path: "konae.json", contents: JSON.stringify(settings) },
     { path: "app/actions.json", contents: "{\"version\":1,\"actions\":{}}" },
     { path: "app/schema.sql", contents: "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);" },
+    { path: "app/public/logo.png", contents: new Uint8Array([0x89, 0x50, 0xff, 0x00]) },
+    // macOS writes .DS_Store beside a file, and node_modules may sit in app/. The sources leave both out.
+    { path: "app/public/.DS_Store", contents: new Uint8Array([0, 0, 0, 1, 0xff]) },
+    { path: "app/.git/config", contents: "[core]" },
+    { path: "app/node_modules/x/index.js", contents: "export {}" },
     { path: "dist/index.html", contents: "<!doctype html><main>Notes</main>" },
     { path: "dist/logo.png", contents: new Uint8Array([0x89, 0x50, 0xff, 0x00]) },
     ...dataEntries("database", bytes("database bytes")),
@@ -32,7 +38,9 @@ describe("reading an exported app folder", () => {
     const { archive, files } = exported();
     const folder = readAppFolder(archive);
     expect(folder.settings.id).toBe("notes-1");
-    expect(Object.keys(folder.sources).sort()).toEqual(["actions.json", "schema.sql"]);
+    expect(Object.keys(folder.sources.files).sort()).toEqual(["actions.json", "public/logo.png", "schema.sql"]);
+    expect(folder.sources.encodings).toEqual({ "public/logo.png": "base64" });
+    expect(folder.sources.files["public/logo.png"]).toBe(encodeBase64(new Uint8Array([0x89, 0x50, 0xff, 0x00])));
     expect(new TextDecoder().decode(folder.data.database)).toBe("database bytes");
     // The files component comes back in index order, byte for byte.
     expect(readTar(folder.data.files!).map((entry) => entry.path)).toEqual(["index.json", "b-file.blob", "a-file.blob"]);
@@ -46,6 +54,7 @@ describe("reading an exported app folder", () => {
     expect(release.project).toMatchObject({ id: "target", manifest: { version: 1, routing: "pages", visibility: "public" } });
     expect(release.artifact.files["index.html"]).toBe("<!doctype html><main>Notes</main>");
     expect(release.artifact.encodings).toEqual({ "logo.png": "base64" });
+    expect(release.project.encodings).toEqual({ "public/logo.png": "base64" });
     const manifest = checkPackageManifest(await dataManifest(folder, "target"));
     expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files"]);
     expect(manifest.projectId).toBe("target");

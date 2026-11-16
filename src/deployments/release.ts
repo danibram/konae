@@ -1,14 +1,29 @@
-import type { McpClient } from "../mcp/client";
+import type { McpClient, Transfer } from "../mcp/client";
+import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
+import { checkSourceFiles } from "../lib/source-rules";
+import { refusal } from "../kernel/refusal";
 
 /** What a schema change loses, as the Kernel words it. */
 export type SchemaLoss = { table: string; column: string | null; sentence: string };
 
+/** One planned transition and the rows it changed in a throwaway database. */
+export type SchemaTransformation = {
+  id: string;
+  definitionSha256: string;
+  before: string;
+  after: string;
+  statements: string[];
+  maxRows: number;
+  affectedRows: number;
+  baselineSkipped: boolean;
+};
+
 /**
  * The change `release_plan` derives from the app's live database to the one
  * schema.sql states (kernel-rs/kernel/src/schema_change.rs). `confirmation` is set
- * only when the change loses data, and release_apply then needs it back.
+ * when losses or data transformations require approval; release_apply needs it back.
  */
-export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null };
+export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null; transformations?: SchemaTransformation[] };
 
 /**
  * `schema` is absent when release_plan replays an import it already applied.
@@ -16,55 +31,86 @@ export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirm
  * first release (`firstRelease`) they are the name it will take, null when the
  * slug and its coded name are both taken.
  */
-export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
+export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; expectedSourcesRevision: number; expiresAt: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
 
-/** Asks the owner about a schema change that loses data. False stops the release. */
+/** Asks the owner to approve the planned database changes. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
 
-/** The release stopped because the owner kept the data a schema change would lose. */
+/** The release stopped because the owner declined the database changes. */
 export class SchemaChangeDeclined extends Error {
   constructor(readonly change: SchemaChange) {
-    super(`Nothing was published. ${change.losses.map((loss) => loss.sentence).join(" ")} Keep the table or column in schema.sql, or confirm the change.`);
+    const effects = [
+      ...change.losses.map((loss) => loss.sentence),
+      ...(change.transformations ?? []).filter((item) => !item.baselineSkipped).map((item) => `Transition ${item.id} would change ${item.affectedRows} rows, with a limit of ${item.maxRows}.`),
+    ];
+    super(`Nothing was published. ${effects.join(" ")} Confirm the plan to apply it.`);
     this.name = "SchemaChangeDeclined";
   }
 }
 
 /**
- * Releases with release_plan, then release_apply. The editor, `konae publish` and
- * `konae dev` all release through here, so each one shows the same plan and
- * asks before the same losses.
+ * What release_plan takes. `transferId` is the upload of the release JSON and
+ * `sourcesTransferId` the upload of the files of app/, which travel apart so
+ * each upload stays under its own limit.
  */
-export async function release<Receipt>(client: Pick<McpClient, "call">, transferId: string, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
-  const plan = await client.call<ReleasePlan>("release_plan", { transferId });
-  onPlan?.(plan);
+export type ReleaseUploads = { transferId: string; sourcesTransferId?: string; observedSourcesRevision?: number };
+
+/** The shared refusal for a publish whose caller did not read the current sources. */
+export function sourceRevisionConflict(observed: number) {
+  return refusal("sources.revision-conflict", `Sources changed since revision ${observed}. Run konae pull --dir <folder>, then publish again.`);
+}
+
+/**
+ * Releases with release_plan, then release_apply. The editor and `konae publish`
+ * both release through here, so each one shows the same plan and asks before
+ * the same losses.
+ */
+export async function release<Receipt>(client: Pick<McpClient, "call">, uploads: ReleaseUploads, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
+  const plan = await planRelease(client, uploads, onPlan);
   const confirmation = plan.schema?.confirmation;
   if (plan.schema && confirmation && !await confirm(plan.schema)) throw new SchemaChangeDeclined(plan.schema);
   const receipt = await client.call<Receipt>("release_apply", { planId: plan.planId, ...(confirmation ? { confirmSchema: confirmation } : {}) });
   return { plan, receipt };
 }
 
+/** Asks the Kernel to plan a release without applying it. */
+export async function planRelease(client: Pick<McpClient, "call">, uploads: ReleaseUploads, onPlan?: (plan: ReleasePlan) => void): Promise<ReleasePlan> {
+  const plan = await client.call<ReleasePlan>("release_plan", uploads);
+  onPlan?.(plan);
+  return plan;
+}
+
 /** The project record project_create registers. */
 export type ProjectIdentity = { id: string; name: string; slug: string; manifest: Record<string, unknown> };
 
+/** A document that names its base64 files in `encodings`: the files of app/, or a Build Artifact. */
+type CarriedFiles = { files: Record<string, string>; encodings?: Record<string, string> };
+
 /**
- * What a release uploads. `initialSignupPolicy` goes only with a first
- * release. `contactEmail` is where notices to the owner go.
+ * What a release uploads. `project` holds the files of app/ beside its
+ * identity. `initialSignupPolicy` goes only with a first release.
+ * `contactEmail` is where notices to the owner go.
  */
 export type ReleaseContents = {
-  project: object;
+  project: ProjectIdentity & CarriedFiles & { directories?: string[] };
   visibility: unknown;
-  artifact: object;
+  artifact: CarriedFiles;
   initialSignupPolicy?: { mode: string; allowlist: string[] };
   contactEmail?: string;
 };
 
 /**
- * Publishes a project: project_create, the upload of what the release
- * carries, then release(). The editor and `konae publish` both publish
- * through here. `contents` runs after project_create, so it can read the
- * project that call registered. The upload is cancelled whatever happens,
- * and `cancelFailed` hears when that cancel fails.
+ * Publishes a project: project_create, the upload of the files of app/ and
+ * the upload of the release JSON, then release(). The editor and `konae
+ * publish` both publish through here. The sources, the artifact and the
+ * release JSON meet the Kernel's limits before a byte travels, and a refusal
+ * names the size and the limit. `contents` runs after project_create, so it
+ * can read the project that call registered. Both uploads are cancelled
+ * whatever happens, and `cancelFailed` hears when a cancel fails.
  */
+export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed?: (error: unknown) => void, onPlan?: (plan: ReleasePlan) => void, observedSourcesRevision?: number | (() => number | undefined)): Promise<{ plan: ReleasePlan; receipt: Receipt }>;
+export function publishProject(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: false, registerProject: false): Promise<{ plan: ReleasePlan }>;
+export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: boolean, registerProject?: boolean): Promise<{ plan: ReleasePlan; receipt?: Receipt }>;
 export async function publishProject<Receipt>(
   client: Pick<McpClient, "call" | "upload" | "cancel">,
   project: ProjectIdentity,
@@ -72,24 +118,53 @@ export async function publishProject<Receipt>(
   confirm: ConfirmSchema,
   cancelFailed: (error: unknown) => void = () => {},
   onPlan?: (plan: ReleasePlan) => void,
-): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
-  await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+  observedSourcesRevision?: number | (() => number | undefined),
+  apply = true,
+  registerProject = true,
+): Promise<{ plan: ReleasePlan; receipt?: Receipt }> {
+  if (registerProject) await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
-  const payload = { project: sent, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(contactEmail ? { contactEmail } : {}) };
-  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), project.id);
+  const sources: CarriedFiles & { directories: string[] } = {
+    files: sent.files,
+    ...(sent.encodings && Object.keys(sent.encodings).length ? { encodings: sent.encodings } : {}),
+    directories: sent.directories ?? [],
+  };
+  checkSourceFiles(sources);
+  checkArtifact(artifact);
+  const identity = { id: sent.id, name: sent.name, slug: sent.slug, manifest: sent.manifest };
+  const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(contactEmail ? { contactEmail } : {}) }));
+  checkRelease(payload);
+  const sourceBytes = new TextEncoder().encode(JSON.stringify(sources));
+  checkSourceUpload(sourceBytes.length);
+  const transfers: Transfer[] = [];
   try {
-    return await release<Receipt>(client, transfer.transferId, confirm, onPlan);
+    const sourcesTransfer = await client.upload(sourceBytes, project.id);
+    transfers.push(sourcesTransfer);
+    const releaseTransfer = await client.upload(payload, project.id);
+    transfers.push(releaseTransfer);
+    const observed = typeof observedSourcesRevision === "function" ? observedSourcesRevision() : observedSourcesRevision;
+    const uploads = { transferId: releaseTransfer.transferId, sourcesTransferId: sourcesTransfer.transferId, observedSourcesRevision: observed };
+    if (!apply) return { plan: await planRelease(client, uploads, onPlan) };
+    return await release<Receipt>(client, uploads, confirm, onPlan);
   } finally {
-    await client.cancel(transfer.transferId).catch(cancelFailed);
+    for (const transfer of transfers) await client.cancel(transfer.transferId).catch(cancelFailed);
   }
 }
 
 /** The plan in lines for a terminal, with what it loses and then the statements. */
 export function describeSchemaChange(change: SchemaChange): string[] {
-  return [
-    "This release changes the database and loses data:",
-    ...change.losses.map((loss) => `  ${loss.sentence}`),
-    "The Kernel runs, in one transaction:",
-    ...change.statements.map((statement) => `  ${statement};`),
-  ];
+  const lines: string[] = [];
+  if (change.losses.length) lines.push("This release changes the database and loses data:", ...change.losses.map((loss) => `  ${loss.sentence}`));
+  if (change.transformations?.length) {
+    lines.push("The Kernel applies these data transformations:");
+    for (const transition of change.transformations) {
+      const baseline = transition.baselineSkipped ? " SQL is skipped for the fresh database." : "";
+      lines.push(`  ${transition.id} changes ${transition.affectedRows} ${transition.affectedRows === 1 ? "row" : "rows"} (limit ${transition.maxRows}).${baseline}`);
+      lines.push(...transition.statements.map((statement) => `    ${statement};`));
+    }
+  }
+  if (change.statements.length) {
+    lines.push("The Kernel runs these schema statements in one transaction:", ...change.statements.map((statement) => `  ${statement};`));
+  }
+  return lines;
 }

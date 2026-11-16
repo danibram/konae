@@ -30,7 +30,7 @@ async function publish(id: string) {
   return (await release(kernel.owner, payload(id), id)).receipt;
 }
 
-const sql = (deploymentId: string, statement: string) => kernel.owner.call<{ rows: Record<string, unknown>[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: statement } });
+const sql = (projectId: string, statement: string) => kernel.owner.call<{ rows: Record<string, unknown>[] }>("database_execute", { projectId: projectId, operation: "sql", input: { sql: statement } });
 const tableSql = async (deploymentId: string) => String((await sql(deploymentId, "SELECT sql FROM sqlite_master WHERE name = 'habits' LIMIT 1")).rows[0].sql);
 
 beforeAll(async () => {
@@ -46,7 +46,7 @@ describe("CHECK constraints from schema.sql", () => {
   test("travel in an export to another app", async () => {
     const app = await publish("checks_package");
     await sql(app.id, "INSERT INTO habits(name) VALUES('read')");
-    const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer> }>("project_export", { deploymentId: app.id });
+    const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer> }>("project_export", { projectId: app.id });
     const directory = await mkdtemp(path.join(root, "package-"));
     const files: Record<string, string> = {};
     for (const content of exported.manifest.contents) {

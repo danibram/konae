@@ -31,6 +31,7 @@ pub mod auth;
 pub mod calls;
 pub mod copies;
 pub mod domain;
+pub mod execution;
 pub mod enter;
 pub mod file_store;
 pub mod files;
@@ -59,7 +60,9 @@ pub mod refusal;
 pub mod runtime;
 pub mod schedule;
 pub mod schema_change;
+pub mod schema_transform;
 pub mod security;
+pub mod size;
 pub mod sources;
 pub mod sql_rules;
 pub mod transfers;
@@ -71,6 +74,7 @@ use limits::{Guards, trusted_proxies};
 
 #[derive(Clone)]
 pub struct AppState {
+    pub execution_mode: execution::ExecutionMode,
     pub deployments: Arc<RwLock<HashMap<String, Deployment>>>,
     pub db_locks: LockMap,
     pub s3: Option<S3Client>,
@@ -101,6 +105,7 @@ impl AppState {
     /// `localhost` names. A test changes the fields it needs with `..`.
     pub fn for_test(root: &Path) -> Self {
         Self {
+            execution_mode: execution::ExecutionMode::Live,
             deployments: Arc::new(RwLock::new(HashMap::new())),
             db_locks: LockMap::default(),
             s3: None,
@@ -152,6 +157,8 @@ pub struct Deployment {
     /// it with the owner's email; the Kernel keeps no record of owners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
+    #[serde(skip, default)]
+    pub released_schema: String,
 }
 
 /// `konae.json`: the app's settings, the part of an app an export hands over
@@ -171,6 +178,12 @@ pub struct Settings {
     pub kernel: String,
     /// The Capsule manifest without its visibility: routing, connects and the declared actions.
     pub manifest: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directories: Vec<String>,
+    #[serde(default)]
+    pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<ReleasedSettings>,
 }
 
 /// `.konae/deployment.json`: what this installation adds to the settings to
@@ -190,6 +203,49 @@ pub struct Installed {
     /// The `actions.json` of the release `dist/` holds.
     pub actions: String,
     pub artifact_version: String,
+    /// Access settings of the artifact currently served. Editable konae.json
+    /// may describe a draft that has not been released yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<ReleasedSettings>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleasedSettings {
+    pub name: String,
+    pub slug: String,
+    pub visibility: String,
+    pub signup_policy: SignupPolicy,
+    pub sign_in_methods: Vec<SignInMethod>,
+    pub contact_email: Option<String>,
+    pub manifest: Value,
+    #[serde(default)]
+    pub actions: String,
+    #[serde(default)]
+    pub schema_sql: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_transforms: Option<String>,
+    #[serde(default)]
+    pub source_digest: Option<String>,
+    #[serde(default)]
+    pub artifact_digest: Option<String>,
+    #[serde(default)]
+    pub released_at: Option<u64>,
+}
+
+fn released_settings(deployment: &Deployment) -> ReleasedSettings {
+    let mut manifest = deployment.manifest.clone();
+    if let Some(object) = manifest.as_object_mut() { object.remove("visibility"); object.remove("runtime"); }
+    ReleasedSettings {
+        name: deployment.project_name.clone(), slug: deployment.slug.clone(),
+        visibility: deployment.manifest["visibility"].as_str().unwrap_or("private").into(),
+        signup_policy: deployment.signup_policy.clone(), sign_in_methods: deployment.sign_in_methods.clone(),
+        contact_email: deployment.contact_email.clone(), manifest,
+        actions: deployment.actions.clone(), schema_sql: deployment.released_schema.clone(),
+        schema_transforms: None,
+        source_digest: deployment.source_digest.clone(), released_at: Some(deployment.released_at),
+        artifact_digest: None,
+    }
 }
 
 pub const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -200,6 +256,7 @@ impl Settings {
         let mut manifest = manifest.clone();
         if let Some(object) = manifest.as_object_mut() {
             object.remove("visibility");
+            object.remove("runtime");
         }
         Self {
             id: id.into(),
@@ -211,16 +268,21 @@ impl Settings {
             contact_email: None,
             kernel: KERNEL_VERSION.into(),
             manifest,
+            directories: Vec::new(),
+            updated_at: 0,
+            released: None,
         }
     }
 
     pub fn of(deployment: &Deployment) -> Self {
-        Self {
+        let mut settings = Self {
             signup_policy: deployment.signup_policy.clone(),
             sign_in_methods: deployment.sign_in_methods.clone(),
             contact_email: deployment.contact_email.clone(),
             ..Self::new(&deployment.id, &deployment.project_name, &deployment.slug, &deployment.manifest)
-        }
+        };
+        settings.released = Some(released_settings(deployment));
+        settings
     }
 
     pub fn read(root: &Path, id: &str) -> Result<Self> {
@@ -235,26 +297,34 @@ impl Settings {
     }
 
     pub fn deployment(self, installed: Installed, public_origin: &str) -> Deployment {
-        let mut manifest = self.manifest;
+        let released = installed.released.clone().or_else(|| self.released.clone());
+        let mut manifest = released.as_ref().map(|r| r.manifest.clone()).unwrap_or(self.manifest);
+        let name = released.as_ref().map(|r| r.name.clone()).unwrap_or(self.name);
+        let slug = released.as_ref().map(|r| r.slug.clone()).unwrap_or(self.slug);
+        let visibility = released.as_ref().map(|r| r.visibility.clone()).unwrap_or(self.visibility);
+        let signup_policy = released.as_ref().map(|r| r.signup_policy.clone()).unwrap_or(self.signup_policy);
+        let sign_in_methods = released.as_ref().map(|r| r.sign_in_methods.clone()).unwrap_or(self.sign_in_methods);
+        let contact_email = released.as_ref().and_then(|r| r.contact_email.clone()).or(self.contact_email);
         if let Some(object) = manifest.as_object_mut() {
-            object.insert("visibility".into(), Value::String(self.visibility));
+            object.insert("visibility".into(), Value::String(visibility));
         }
         Deployment {
             project_id: self.id.clone(),
             id: self.id,
-            project_name: self.name,
-            slug: self.slug,
+            project_name: name,
+            slug,
             url: deployment_url(public_origin, &installed.hostname),
             created_at: installed.created_at,
-            released_at: installed.released_at.unwrap_or(installed.created_at),
-            source_digest: installed.source_digest,
+            released_at: installed.released_at.or_else(|| released.as_ref().and_then(|r| r.released_at)).unwrap_or(installed.created_at),
+            source_digest: installed.source_digest.or_else(|| released.as_ref().and_then(|r| r.source_digest.clone())),
             manifest,
             hostname: installed.hostname,
             actions: installed.actions,
             artifact_version: installed.artifact_version,
-            signup_policy: self.signup_policy,
-            sign_in_methods: self.sign_in_methods,
-            contact_email: self.contact_email,
+            signup_policy,
+            sign_in_methods,
+            contact_email,
+            released_schema: released.as_ref().map(|r| r.schema_sql.clone()).unwrap_or_default(),
         }
     }
 }
@@ -423,8 +493,23 @@ pub struct ProjectInput {
     pub id: String,
     pub name: String,
     pub slug: String,
+    /// The files of `app/` by path. A path `encodings` names is base64.
+    /// Konae's `release_plan` fills them from the sources transfer when the
+    /// payload leaves them out.
+    #[serde(default)]
     pub files: HashMap<String, String>,
+    #[serde(default)]
+    pub encodings: HashMap<String, String>,
+    #[serde(default)]
+    pub directories: Vec<String>,
     pub manifest: Value,
+}
+
+impl ProjectInput {
+    /// The bytes of each file of `app/` the release carries.
+    pub fn sources(&self) -> Result<sources::Files, String> {
+        sources::decode(&self.files, &self.encodings)
+    }
 }
 
 #[derive(Deserialize)]
@@ -542,15 +627,19 @@ pub struct Startup {
     pub bind: String,
     pub hosts: hosts::Hosts,
     pub data_root: PathBuf,
+    pub execution_mode: execution::ExecutionMode,
 }
 
 impl Startup {
     pub fn from_env() -> Result<Self> {
+        let bind = env("KONAE_BIND", "127.0.0.1");
+        let execution_mode = execution::ExecutionMode::parse(std::env::var("KONAE_EXECUTION_MODE").ok().as_deref(), &bind)?;
         Ok(Self {
             port: env("KONAE_KERNEL_PORT", "8787").parse::<u16>()?,
-            bind: env("KONAE_BIND", "127.0.0.1"),
+            bind,
             hosts: hosts::from_env()?,
             data_root: PathBuf::from(env("KONAE_DATA_DIR", "/data")),
+            execution_mode,
         })
     }
 }
@@ -618,15 +707,25 @@ pub async fn state_from_env(
     let data_root = startup.data_root.clone();
     let public_origin = startup.hosts.public_origin.clone();
     tokio::fs::create_dir_all(crate::layout::apps(&data_root)).await?;
-    let account_settings = accounts::AccountSettings::from_env(&data_root, mail_key, &public_origin, &installation)?;
-    let (s3, data_bucket) = match copy_bucket_from_env()? {
-        Some((client, bucket)) => (Some(client), bucket),
-        None => (None, String::new()),
+    let account_settings = accounts::AccountSettings::from_env(&data_root, mail_key, &public_origin, &installation, startup.execution_mode)?;
+    let (s3, data_bucket, copy_config) = if startup.execution_mode.is_test() {
+        (None, String::new(), None)
+    } else {
+        let (s3, data_bucket) = match copy_bucket_from_env()? {
+            Some((client, bucket)) => (Some(client), bucket),
+            None => (None, String::new()),
+        };
+        let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
+        (s3, data_bucket, copy_config)
     };
-    let copy_config = copies::CopyConfig::from_env(&data_root, s3.is_some())?;
     let deployments = load_deployments(&data_root, &public_origin).await?;
-    let files = file_store::Files::from_env(&data_root).await?;
+    let files = if startup.execution_mode.is_test() {
+        file_store::Files::new(Arc::new(file_store::LocalFolder::new(&data_root)), file_store::FileLimits::from_env()?)
+    } else {
+        file_store::Files::from_env(&data_root).await?
+    };
     let state = AppState {
+        execution_mode: startup.execution_mode,
         deployments: Arc::new(RwLock::new(deployments)),
         db_locks: LockMap::default(),
         s3,
@@ -670,7 +769,7 @@ mod bind_tests {
     async fn a_taken_port_is_refused_with_its_number_and_how_to_pick_another() {
         let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = held.local_addr().unwrap().port();
-        let startup = Startup { port, bind: "127.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new() };
+        let startup = Startup { port, bind: "127.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new(), execution_mode: execution::ExecutionMode::Live };
         let message = bind(&startup).await.unwrap_err().to_string();
         assert!(message.contains(&format!("Port {port} on 127.0.0.1 is already in use")), "{message}");
         assert!(message.contains("KONAE_KERNEL_PORT") && message.contains("--port"), "{message}");
@@ -678,7 +777,7 @@ mod bind_tests {
 
     #[tokio::test]
     async fn another_bind_failure_keeps_the_system_text_and_the_address() {
-        let startup = Startup { port: 0, bind: "256.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new() };
+        let startup = Startup { port: 0, bind: "256.0.0.1".into(), hosts: hosts::resolve(|_| None).unwrap(), data_root: PathBuf::new(), execution_mode: execution::ExecutionMode::Live };
         let message = bind(&startup).await.unwrap_err().to_string();
         assert!(message.starts_with("Could not listen on 256.0.0.1:0: "), "{message}");
     }
@@ -750,8 +849,8 @@ pub fn backup_dir(state: &AppState, id: &str) -> PathBuf {
 /// Installs a release from its JSON payload: the project, the build and
 /// what a first release imports.
 pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
-    if body.len() > 26_000_000 {
-        return error(StatusCode::BAD_REQUEST, "Deployment request is too large.");
+    if body.len() > size::RELEASE_BYTES {
+        return error(StatusCode::BAD_REQUEST, &size::release_refused(body.len()));
     }
     let input: DeployInput = match serde_json::from_slice(body) {
         Ok(value) => value,
@@ -762,6 +861,13 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             );
         }
     };
+    deploy_input(state, input).await
+}
+
+/// Installs a release: the project, the build and what a first release
+/// imports. `app/`, `dist/`, the database and the record change together, or
+/// none of them does.
+pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
         return error(StatusCode::BAD_REQUEST, &error_value.to_string());
     }
@@ -777,6 +883,10 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             "Visibility must be public or private.",
         );
     }
+    let release_sources = match input.project.sources() {
+        Ok(files) => files,
+        Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
     let actions = match input.project.files.get("actions.json") {
         Some(value) => value.clone(),
         None => return error(StatusCode::BAD_REQUEST, "actions.json is required."),
@@ -849,6 +959,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     };
     // The app keeps one ID: its folder, its project and its Deployment share it.
     let id = input.project.id.clone();
+    let release_directories = input.project.directories.clone();
     // Same rule as a bare Kernel folder: the slug is the address when free.
     // The name stays held until this release serves on it.
     let (hostname, _taking) = match existing.as_ref() {
@@ -862,6 +973,8 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
         .as_ref()
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
+    let released_schema = input.project.files.get("schema.sql").cloned().unwrap_or_default();
+    let released_transforms = input.project.files.get("schema-transforms.json").cloned();
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
@@ -876,7 +989,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             .map(|item| item.created_at)
             .unwrap_or_else(now_ms),
         released_at: now_ms(),
-        source_digest: Some(sources::digest(input.project.files.iter().map(|(path, text)| (path.as_str(), text.as_bytes())))),
+        source_digest: Some(sources::digest(release_sources.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())))),
         manifest,
         hostname: hostname.clone(),
         actions,
@@ -890,6 +1003,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
         },
         contact_email: input.contact_email.clone(),
+        released_schema,
     };
     let data = layout::data(&state.data_root, &id);
     if let Err(error_value) = tokio::fs::create_dir_all(&data).await {
@@ -957,7 +1071,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     // Database, so none writes a row the copy below would miss.
     let database_guard = database_lock(&state, &id).await;
     let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
-    let staged = stage_database(&db_path, &staged_database, &schema, &program, input.schema_confirmation.as_deref())
+    let staged = stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref())
         .and_then(|change| release_step(&id, "schema_change").map(|()| change));
     let change = match staged {
         Ok(change) => change,
@@ -970,14 +1084,35 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             };
         }
     };
-    // The database, the record, dist/ and the Deployment in memory change
-    // together. A step that fails puts back the ones before it.
+    // These sources travel with this build, so app/ and dist/ change together.
+    let source_metadata = json!({
+        "name": deployment.project_name, "slug": deployment.slug, "manifest": deployment.manifest,
+        "directories": input.project.directories, "updatedAt": now_ms(),
+    });
+    let staged_sources = match sources::stage_release(&state.data_root, &id, &release_sources, &source_metadata).await {
+        Ok(staged) => staged,
+        Err(error_value) => {
+            remove_database_files(&staged_database);
+            remove_staged_dist(&state, &id, &artifact_version).await;
+            return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The sources of this release could not be written beside app/: {error_value:#}"));
+        }
+    };
+    if let Err(error_value) = release_step(&id, "stage_sources") {
+        staged_sources.discard().await;
+        remove_database_files(&staged_database);
+        remove_staged_dist(&state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    }
+    // The database, the record, app/, dist/ and the Deployment in memory
+    // change together. A step that fails puts back the ones before it.
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
-    let swapped = if change.statements.is_empty() {
+    let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
+    let swapped = if change.statements.is_empty() && !has_transformation_changes {
         remove_database_files(&staged_database);
         false
     } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
+        staged_sources.discard().await;
         remove_database_files(&staged_database);
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The changed database could not take the place of the live one: {error_value}"));
@@ -991,16 +1126,31 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
             }
         }
     };
-    if let Err(error_value) = persist_deployment(&state, &deployment)
+    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref())
         .await
         .and_then(|()| release_step(&id, "persist_deployment"))
     {
         recorded.put_back().await;
         undo_database();
+        staged_sources.discard().await;
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
+    // A swap that fails part way puts the old app/ back itself, so only a
+    // swap that went through needs putting back.
+    let swapped_sources = match staged_sources.swap().await {
+        Err(error_value) => Err((error_value, false)),
+        Ok(()) => release_step(&id, "swap_sources").map_err(|error_value| (error_value, true)),
+    };
+    if let Err((error_value, swapped_app)) = swapped_sources {
+        if swapped_app { staged_sources.put_back().await; } else { staged_sources.discard().await; }
+        recorded.put_back().await;
+        undo_database();
+        remove_staged_dist(&state, &id, &artifact_version).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The new sources could not take the place of app/: {error_value:#}"));
+    }
     if let Err(error_value) = switch_dist(&state, &id, &artifact_version).await {
+        staged_sources.put_back().await;
         recorded.put_back().await;
         undo_database();
         remove_staged_dist(&state, &id, &artifact_version).await;
@@ -1015,10 +1165,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
     if swapped {
         remove_database_files(&replaced);
     }
-    // An app the editor never saved keeps the release's sources in app/, so its folder is whole.
-    if let Err(error_value) = sources::write_release(&state.data_root, &id, &input.project.files).await {
-        eprintln!("Could not write the sources of release {artifact_version} to app/: {error_value:#}");
-    }
+    staged_sources.finish().await;
     http::routes_published(&deployment);
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
@@ -1078,10 +1225,10 @@ pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::
 /// Copies the live database with `VACUUM INTO` and applies `schema` to the
 /// copy, so a change that fails, or a release that fails after it, leaves the
 /// live database as it was. The caller holds the database lock alone.
-fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, confirmation: Option<&str>) -> Result<schema_change::Change> {
+fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, transforms: Option<&str>, confirmation: Option<&str>) -> Result<schema_change::Change> {
     remove_database_files(staged);
     Connection::open(live)?.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
-    let change = schema_change::apply(staged, schema, program, schema_change::Mode::Apply(confirmation))?;
+    let change = schema_change::apply_with_transforms(staged, schema, program, transforms, schema_change::Mode::Apply(confirmation))?;
     // The copy leaves in rollback mode. Closing this connection checkpoints
     // and removes its WAL, so only the file moves into place.
     Connection::open(staged)?.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
@@ -2374,7 +2521,7 @@ pub async fn action_lock(state: &AppState, id: &str, kind: &str) -> ActionLock {
 
 pub fn inspect_database(path: &Path) -> Result<Vec<Value>> {
     let db = Connection::open(path)?;
-    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY name")?;
     let names = statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -2387,6 +2534,7 @@ pub fn inspect_database(path: &Path) -> Result<Vec<Value>> {
 }
 
 pub fn table_columns(db: &Connection, table: &str) -> Result<Vec<Value>> {
+    anyhow::ensure!(!schema_transform::is_internal_table(table), "Reserved Kernel table.");
     if !table_exists(db, table)? {
         anyhow::bail!("Table not found: {table}");
     }
@@ -2499,6 +2647,10 @@ pub fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
     }
     if sql.len() > 100_000 {
         anyhow::bail!("SQL script is too large.");
+    }
+    let tokens = sql_tokens(sql);
+    if tokens.windows(3).any(|tokens| tokens[0].is_word("RENAME") && tokens[1].is_word("TO") && matches!(tokens[2].kind, SqlTokKind::Word | SqlTokKind::Ident) && schema_transform::is_internal_table(&tokens[2].text)) {
+        anyhow::bail!("SQL cannot rename a table to a reserved Kernel table.");
     }
     let db = Connection::open(path)?;
     restrict_database(&db)?;
@@ -2931,6 +3083,15 @@ pub fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Re
 
 pub fn validate_declarations(name: &str, action: &ActionDefinition) -> std::result::Result<(), refusal::Refusal> {
     action_shape::check_action(name, action)?;
+    let tokens = sql_tokens(&action.statement);
+    if tokens.iter().enumerate().any(|(index, token)| {
+        let after_modifier = if token.is_word("UPDATE") && tokens.get(index + 1).is_some_and(|next| next.is_word("OR")) { index + 3 } else { index + 1 };
+        let target = if tokens.get(after_modifier + 1).is_some_and(|dot| dot.is_symbol(".")) { tokens.get(after_modifier + 2) } else { tokens.get(after_modifier) };
+        token.is_any(&["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "REFERENCES"])
+            && target.is_some_and(|target| matches!(target.kind, SqlTokKind::Word | SqlTokKind::Ident) && schema_transform::is_internal_table(&target.text))
+    }) {
+        return Err(refusal::refuse("schema-transform.statement-refused", format!("Action {name} cannot read or write a reserved Kernel table.")));
+    }
     if calls::check_kind(name, action)?.is_some() {
         return Ok(());
     }
@@ -3321,20 +3482,107 @@ pub fn safe_relative_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-/// Writes the app's settings to `konae.json` and the installation's part to
-/// `.konae/deployment.json`.
+/// Persists changes made to the applied Deployment while keeping editable settings intact.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
-    Settings::of(deployment).write(&state.data_root).await?;
-    let installed = Installed {
-        hostname: deployment.hostname.clone(),
-        created_at: deployment.created_at,
-        released_at: Some(deployment.released_at),
-        source_digest: deployment.source_digest.clone(),
-        actions: deployment.actions.clone(),
-        artifact_version: deployment.artifact_version.clone(),
+    persist_applied(state, deployment, None, None).await
+}
+
+/// Records the artifact currently in a folder without replacing its saved draft.
+pub async fn persist_folder_snapshot(state: &AppState, deployment: &Deployment, artifact_digest: &str) -> Result<()> {
+    persist_applied(state, deployment, Some(artifact_digest), None).await
+}
+
+pub async fn persist_folder_snapshot_with_transforms(state: &AppState, deployment: &Deployment, artifact_digest: &str, schema_transforms: Option<&str>) -> Result<()> {
+    persist_applied(state, deployment, Some(artifact_digest), Some(schema_transforms)).await
+}
+
+async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_digest: Option<&str>, schema_transforms: Option<Option<&str>>) -> Result<()> {
+    let mut settings = match Settings::read(&state.data_root, &deployment.id) {
+        Ok(settings) => settings,
+        Err(_) if !layout::settings(&state.data_root, &deployment.id).exists() => Settings::of(deployment),
+        Err(error) => return Err(error),
     };
+    let record_path = layout::record(&state.data_root, &deployment.id);
+    let installed = match tokio::fs::read(&record_path).await {
+        Ok(bytes) => serde_json::from_slice::<Installed>(&bytes).context("The installed Deployment record is malformed.")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Installed {
+            hostname: deployment.hostname.clone(), created_at: deployment.created_at,
+            released_at: Some(deployment.released_at), source_digest: deployment.source_digest.clone(),
+            actions: deployment.actions.clone(), artifact_version: deployment.artifact_version.clone(), released: None,
+        },
+        Err(error) => return Err(error.into()),
+    };
+    let recovered = crate::sources::capture_released_state(&state.data_root, &deployment.id, &settings, &installed)?;
+    settings.signup_policy = deployment.signup_policy.clone();
+    settings.sign_in_methods = deployment.sign_in_methods.clone();
+    settings.contact_email = deployment.contact_email.clone();
+    settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
+    let mut released = released_settings(deployment);
+    if released.schema_sql.trim().is_empty() { released.schema_sql = recovered.schema_sql; }
+    if let Some(schema_transforms) = schema_transforms {
+        released.schema_transforms = schema_transforms.map(str::to_owned);
+    } else if released.schema_transforms.is_none() {
+        released.schema_transforms = recovered.schema_transforms;
+    }
+    if released.source_digest.is_none() { released.source_digest = recovered.source_digest; }
+    released.artifact_digest = artifact_digest.map(str::to_owned).or(recovered.artifact_digest);
+    settings.released = Some(released.clone());
+    persist_settings_and_record(state, deployment, settings, released).await
+}
+
+/// Persists the new source and artifact state after a successful release.
+pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String], schema_transforms: Option<&str>) -> Result<()> {
+    let mut settings = Settings::of(deployment);
+    if let Ok(previous) = Settings::read(&state.data_root, &deployment.id) { settings.updated_at = previous.updated_at; }
+    settings.directories = directories.to_vec();
+    let mut released = settings.released.clone().expect("Settings::of records released settings");
+    released.artifact_digest = Some(artifact_digest.to_owned());
+    released.schema_transforms = schema_transforms.map(str::to_owned);
+    settings.released = Some(released.clone());
+    persist_settings_and_record(state, deployment, settings, released).await
+}
+
+async fn persist_settings_and_record(state: &AppState, deployment: &Deployment, settings: Settings, released: ReleasedSettings) -> Result<()> {
+    let settings_path = layout::settings(&state.data_root, &deployment.id);
+    let record_path = layout::record(&state.data_root, &deployment.id);
+    let settings_before = match tokio::fs::read(&settings_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let record_before = match tokio::fs::read(&record_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let settings_bytes = serde_json::to_vec_pretty(&settings)?;
+    let installed = Installed {
+        hostname: deployment.hostname.clone(), created_at: deployment.created_at,
+        released_at: Some(deployment.released_at), source_digest: deployment.source_digest.clone(),
+        actions: deployment.actions.clone(), artifact_version: deployment.artifact_version.clone(), released: Some(released),
+    };
+    let record_bytes = serde_json::to_vec_pretty(&installed)?;
     tokio::fs::create_dir_all(layout::private(&state.data_root, &deployment.id)).await?;
-    write_atomic(&layout::record(&state.data_root, &deployment.id), &serde_json::to_vec_pretty(&installed)?).await?;
+    write_atomic(&settings_path, &settings_bytes).await?;
+    if let Err(error) = write_atomic(&record_path, &record_bytes).await {
+        let settings_restore = restore_optional(&settings_path, settings_before.as_deref()).await;
+        let record_restore = restore_optional(&record_path, record_before.as_deref()).await;
+        if let Err(restore) = settings_restore { anyhow::bail!("Writing the Deployment record failed: {error}. Restoring konae.json failed: {restore:#}"); }
+        if let Err(restore) = record_restore { anyhow::bail!("Writing the Deployment record failed: {error}. Restoring the previous record failed: {restore:#}"); }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+async fn restore_optional(path: &Path, bytes: Option<&[u8]>) -> Result<()> {
+    match bytes {
+        Some(bytes) => write_atomic(path, bytes).await?,
+        None => match tokio::fs::remove_file(path).await {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        },
+    }
     Ok(())
 }
 
@@ -3348,6 +3596,7 @@ pub fn write_record_for_test(root: &Path, deployment: &Deployment) {
         source_digest: deployment.source_digest.clone(),
         actions: deployment.actions.clone(),
         artifact_version: deployment.artifact_version.clone(),
+        released: Some(released_settings(deployment)),
     };
     std::fs::create_dir_all(layout::private(root, &deployment.id)).unwrap();
     std::fs::write(layout::settings(root, &deployment.id), serde_json::to_vec(&Settings::of(deployment)).unwrap()).unwrap();
@@ -3447,7 +3696,7 @@ pub async fn deployment_by_id(state: &AppState, id: &str) -> Option<Deployment> 
 
 /// Fails closed: a Deployment is public only when its manifest says "public",
 /// so a record with no visibility or an unknown one needs a login.
-/// The Signup Policy as `signup_policy_read` answers it.
+    /// The Signup Policy as `project_inspect.deployment.signupPolicy` returns it.
 pub fn signup_policy_value(deployment: &Deployment) -> Value {
     json!({"deploymentId":deployment.id,"visibility":if is_private(deployment) { "private" } else { "public" },"mode":deployment.signup_policy.mode,"allowlist":deployment.signup_policy.allowlist})
 }
@@ -3608,6 +3857,15 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
     arm_deadline(db);
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
+        AuthAction::CreateTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::CreateIndex { index_name, table_name } if schema_transform::is_internal_table(index_name) || schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::AlterTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::DropTable { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::DropIndex { index_name, table_name } if schema_transform::is_internal_table(index_name) || schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Read { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Insert { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Update { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Delete { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
         // Konae runs no triggers or views, and Studio and the schema change
         // use this connection too, so neither can add one the Gate never saw.
         AuthAction::CreateTrigger { .. } | AuthAction::CreateTempTrigger { .. } => Authorization::Deny,
@@ -3968,6 +4226,24 @@ pub mod tests {
     use super::*;
 
     #[test]
+    fn the_transformation_journal_is_hidden_and_owner_sql_cannot_rewrite_it() {
+        let root = std::env::temp_dir().join(format!("konae-schema-journal-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY); CREATE TABLE __konae_schema_state(format_version INTEGER NOT NULL); CREATE TABLE __konae_schema_history(id TEXT);").unwrap();
+        drop(db);
+        let tables = inspect_database(&path).unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0]["name"], "notes");
+        assert!(run_admin_sql(&path, "SELECT * FROM __konae_schema_state").is_err());
+        assert!(run_admin_sql(&path, "CREATE TABLE __konae_schema_state(id INTEGER)").is_err());
+        assert!(run_admin_sql(&path, "DROP TABLE __konae_schema_history").is_err());
+        assert!(run_admin_sql(&path, "ALTER TABLE notes RENAME TO __konae_schema_state").is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn deploy_input_reads_the_initial_signup_policy() {
         let input: DeployInput = serde_json::from_value(json!({
             "project": { "id": "app_1", "name": "App", "slug": "app", "files": {}, "manifest": {} },
@@ -4021,6 +4297,7 @@ pub mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
+            released_schema: String::new(),
         };
         tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))
             .await
@@ -4233,6 +4510,34 @@ pub mod tests {
         let request = Request::builder().body(Body::from(body.to_string())).unwrap();
         assert_eq!(login(State(state.clone()), headers.clone(), request).await.status(), StatusCode::OK);
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn operator_policy_updates_keep_saved_source_settings_across_restart() {
+        let root = std::env::temp_dir().join(format!("konae-policy-preserves-draft-{}", Uuid::new_v4()));
+        let (state, _) = login_test_state(&root, "public").await;
+        let mut current = state.deployments.read().await.values().next().unwrap().clone();
+        current.actions = "{\"version\":1,\"actions\":{}}".into();
+        state.deployments.write().await.insert(current.hostname.clone(), current.clone());
+        Settings::of(&current).write(&root).await.unwrap();
+        let draft = json!({"id":current.id,"name":"Unpublished draft name","slug":"app","files":{"index.html":"<main>app</main>","actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""},"directories":[],"manifest":{"version":1,"visibility":"private","fileAccess":"app-users"},"updatedAt":now_ms()});
+        crate::sources::write(&root, &current.id, &draft).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::dist(&root, &current.id)).await.unwrap();
+        tokio::fs::write(crate::layout::dist(&root, &current.id).join("index.html"), "<main>deployed</main>").await.unwrap();
+
+        set_signup_policy(&state, &current.id, SignupMode::Closed, None).await.unwrap();
+        let saved = crate::sources::read(&root, &current.id).await.unwrap().unwrap();
+        assert_eq!(saved["name"], "Unpublished draft name");
+        assert_eq!(saved["manifest"]["visibility"], "private");
+        assert_eq!(saved["manifest"]["fileAccess"], "app-users");
+
+        let restarted = AppState::for_test(&root);
+        let serving = folder::open(&restarted, &current.id, None).await.unwrap();
+        assert_eq!(serving.project_name, current.project_name);
+        assert_eq!(serving.manifest["visibility"], "public");
+        assert!(serving.manifest.get("fileAccess").is_none());
+        assert_eq!(serving.signup_policy.mode, SignupMode::Closed);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -4870,7 +5175,7 @@ pub mod tests {
     #[test]
     fn a_private_apps_files_stay_out_of_shared_caches() {
         let deployment = Settings::new("app", "App", "app", &json!({"visibility": "private"}))
-            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, released_at: None, source_digest: None, actions: "{}".into(), artifact_version: "v1".into() }, "http://localhost");
+            .deployment(Installed { hostname: "app.localhost".into(), created_at: 1, released_at: None, source_digest: None, actions: "{}".into(), artifact_version: "v1".into(), released: None }, "http://localhost");
         assert_eq!(ArtifactCache::of(&deployment).control(), "private, no-cache");
     }
 
@@ -4971,8 +5276,46 @@ pub mod tests {
             let id = second["id"].as_str().unwrap();
             let stored = Settings::read(&root, id).unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
+            let mut legacy = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+            legacy.manifest["runtime"] = json!({"database":{"mode":"declared-actions"}});
+            assert!(released_settings(&legacy).manifest.get("runtime").is_none());
             let _ = tokio::fs::remove_dir_all(root).await;
         }
+    }
+
+    #[tokio::test]
+    async fn an_operation_completes_a_legacy_applied_snapshot_from_live_files_and_database() {
+        let root = std::env::temp_dir().join(format!("konae-legacy-operation-snapshot-{}", Uuid::new_v4()));
+        let id = "app_legacy_operation";
+        let settings = Settings::new(id, "Applied", "applied", &json!({"version":1,"visibility":"public"}));
+        settings.write(&root).await.unwrap();
+        tokio::fs::create_dir_all(crate::layout::dist(&root, id)).await.unwrap();
+        tokio::fs::write(crate::layout::dist(&root, id).join("index.html"), "old applied artifact").await.unwrap();
+        let database = crate::layout::database(&root, id);
+        tokio::fs::create_dir_all(database.parent().unwrap()).await.unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE \"live notes\"(id INTEGER PRIMARY KEY, title TEXT); CREATE INDEX \"live notes title\" ON \"live notes\"(title); INSERT INTO \"live notes\" VALUES(1,'kept');").unwrap();
+        let installed = Installed {
+            hostname: "applied.localhost".into(), created_at: 1, released_at: Some(2), source_digest: Some("old-source".into()),
+            actions: r#"{"version":1,"actions":{"applied.read":{"kind":"query","access":"anonymous","statement":"SELECT title FROM \"live notes\" LIMIT 5","bindings":[]}}}"#.into(),
+            artifact_version: "v-old".into(), released: None,
+        };
+        tokio::fs::create_dir_all(crate::layout::private(&root, id)).await.unwrap();
+        tokio::fs::write(crate::layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
+        let state = test_state(&root);
+        let deployment = settings.deployment(installed, "http://localhost");
+        state.deployments.write().await.insert(deployment.hostname.clone(), deployment.clone());
+
+        let mut operated = deployment;
+        operated.signup_policy = SignupPolicy::from_input(SignupMode::Closed, &[]).unwrap();
+        persist_deployment(&state, &operated).await.unwrap();
+
+        let migrated = Settings::read(&root, id).unwrap().released.unwrap();
+        assert_eq!(migrated.signup_policy.mode, SignupMode::Closed);
+        assert!(migrated.schema_sql.contains("CREATE TABLE IF NOT EXISTS \"live notes\""));
+        assert!(migrated.schema_sql.contains("CREATE INDEX IF NOT EXISTS \"live notes title\""));
+        let expected_digest = crate::folder::version_of(&HashMap::from([("index.html".to_owned(), b"old applied artifact".to_vec())]));
+        assert_eq!(migrated.artifact_digest.as_deref(), Some(expected_digest.as_str()));
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
@@ -5089,11 +5432,83 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn release_swaps_fresh_baseline_and_existing_data_transformations() {
+        let root = std::env::temp_dir().join(format!("konae-release-transform-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let id = "app_transform_release";
+        let schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);";
+        let actions = json!({
+            "notes.list": {"kind":"query", "access":"anonymous", "statement":"SELECT body FROM notes ORDER BY id LIMIT 10", "bindings": []}
+        });
+        let v1 = json!({
+            "id": "baseline", "predecessor": null,
+            "before": format!("sha256:{}", "0".repeat(64)),
+            "after": schema_transform::fingerprint_schema(schema).unwrap(),
+            "maxRows": 10, "statements": ["CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL)"]
+        });
+        let document = json!({"version": 1, "transitions": [v1.clone()]}).to_string();
+        let mut first = release_body(id, schema, actions.clone(), "<p>first</p>", None);
+        first["project"]["files"]["schema-transforms.json"] = json!(document);
+        let response = deploy(&state, first.to_string().as_bytes()).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+
+        async fn read_notes(state: &AppState) -> (StatusCode, String) {
+            let deployment = state.deployments.read().await.values().next().unwrap().clone();
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, deployment.hostname.parse().unwrap());
+            let response = invoke_action(State(state.clone()), AxumPath("notes.list".into()), headers, Json(json!({}))).await;
+            let status = response.status();
+            let body = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+            (status, body)
+        }
+
+        assert_eq!(read_notes(&state).await.0, StatusCode::OK, "fresh baseline schema must reach the live database");
+        let database = database_path(&state, id);
+        Connection::open(&database).unwrap().execute("INSERT INTO notes(body) VALUES('before')", []).unwrap();
+        let fingerprint = schema_transform::fingerprint(&Connection::open(&database).unwrap()).unwrap();
+        let v2 = json!({
+            "id": "rewrite", "predecessor": "baseline",
+            "before": fingerprint, "after": schema_transform::fingerprint_schema(schema).unwrap(),
+            "maxRows": 1, "statements": ["UPDATE notes SET body='after' WHERE id=1"]
+        });
+        let update_document = json!({"version": 1, "transitions": [v1, v2]}).to_string();
+        let mut second = release_body(id, schema, actions, "<p>second</p>", None);
+        second["project"]["files"]["schema-transforms.json"] = json!(update_document);
+        let input: DeployInput = serde_json::from_value(second.clone()).unwrap();
+        let confirmation = runtime::validate_release(&state, &input, None).await.unwrap().confirmation().unwrap();
+        second["schemaConfirmation"] = json!(confirmation);
+        let response = deploy(&state, second.to_string().as_bytes()).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+        let (status, body) = read_notes(&state).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("after"), "the release must swap the staged transformed data: {body}");
+
+        let restarted = test_state(&root);
+        let deployment = folder::open(&restarted, id, None).await.unwrap();
+        let (status, body) = read_notes(&restarted).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("after"), "the transformed rows must survive a restart: {body}");
+        let db = Connection::open(database_path(&restarted, id)).unwrap();
+        let history = schema_transform::load_history(&db).unwrap();
+        assert_eq!(history.entries.len(), 2);
+        assert!(history.entries[0].baseline_skipped);
+        assert_eq!(history.entries[1].id, "rewrite");
+        assert_eq!(history.entries[1].affected_rows, 1);
+        assert_eq!(deployment.id, id);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn a_release_that_fails_at_any_step_leaves_the_old_actions_on_the_old_rows() {
         let list = |table: &str, column: &str| json!({"kind": "query", "access": "anonymous", "statement": format!("SELECT {column} FROM {table} ORDER BY id LIMIT 50"), "bindings": []});
         let both = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n";
         let notes_only = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n";
-        for step in ["stage_local_artifact", "open_auth", "schema_change", "persist_deployment", "switch_dist"] {
+        for step in ["stage_local_artifact", "open_auth", "schema_change", "stage_sources", "persist_deployment", "swap_sources", "switch_dist"] {
             let root = std::env::temp_dir().join(format!("konae-release-step-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);
@@ -5106,6 +5521,9 @@ pub mod tests {
             Connection::open(database_path(&state, &id)).unwrap()
                 .execute_batch("INSERT INTO notes(body) VALUES ('kept note'); INSERT INTO tags(name) VALUES ('old tag');").unwrap();
             let live = state.deployments.read().await.values().next().cloned().unwrap();
+            let app = crate::layout::sources(&root, &id);
+            let first_actions = std::fs::read(app.join("actions.json")).unwrap();
+            assert!(!crate::layout::private(&root, &id).join("sources.json").exists());
 
             // The next release drops tags, confirmed as release_plan would confirm it.
             let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
@@ -5136,7 +5554,14 @@ pub mod tests {
             let record: Value = serde_json::from_slice(&std::fs::read(crate::layout::record(&root, &id)).unwrap()).unwrap();
             assert_eq!(record["artifactVersion"], json!(live.artifact_version), "{step}: the record names the release memory serves");
             assert_eq!(read_artifact(&state, &serving, "index.html").await.unwrap(), b"<p>one</p>", "{step}");
+            assert_eq!(std::fs::read(crate::layout::dist(&root, &id).join("index.html")).unwrap(), b"<p>one</p>", "{step}: dist/ is the first release's");
+            assert_eq!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the first release's");
+            assert!(!crate::layout::private(&root, &id).join("sources.json").exists(), "{step}: the release does not write editor metadata outside app/");
             assert!(staged_or_retired(&root, &id).is_empty(), "{step}: no staged files stay");
+            let staged_sources: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with("app-")).collect();
+            assert!(staged_sources.is_empty(), "{step}: {staged_sources:?}");
             let leftovers: Vec<_> = std::fs::read_dir(crate::layout::private(&root, &id)).unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())
                 .filter(|name| name.starts_with("release-")).collect();
@@ -5144,6 +5569,7 @@ pub mod tests {
 
             // The same release goes through once nothing fails.
             assert_eq!(deploy(&state, second.to_string().as_bytes()).await.status(), StatusCode::OK, "{step}");
+            assert_ne!(std::fs::read(app.join("actions.json")).unwrap(), first_actions, "{step}: app/ is the second release's");
             assert_eq!(call("tags.list").await.0, StatusCode::NOT_FOUND, "{step}");
             assert!(call("notes.list").await.1.contains("kept note"), "{step}");
             let _ = tokio::fs::remove_dir_all(root).await;

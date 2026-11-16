@@ -24,7 +24,7 @@ export type { ReleaseFacts };
  * publish. `ownerActs` is true when the owner, not an edit, clears the refusal.
  */
 export function deployReadiness(
-  project: { files: Record<string, string | undefined>; manifest: { runtime: { database: { actions: DescribedAction[] } } } },
+  project: { files: Record<string, string | undefined> },
   facts: ReleaseFacts = {},
 ): { refusal: string | null; ownerActs: boolean; actions: DescribedAction[] } {
   try {
@@ -32,7 +32,7 @@ export function deployReadiness(
     const refusal = releaseRefusal(program, facts);
     return { refusal: refusal?.message ?? null, ownerActs: ownerFixes(refusal?.code), actions: Object.values(program.actions) };
   } catch (error) {
-    return { refusal: error instanceof Error ? error.message : String(error), ownerActs: false, actions: project.manifest.runtime.database.actions };
+    return { refusal: error instanceof Error ? error.message : String(error), ownerActs: false, actions: [] };
   }
 }
 

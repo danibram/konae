@@ -884,7 +884,7 @@ export function renderActionContractMarkdown(contract: ActionContract): string {
           : `each verified account of this app whose ID a changed row holds in \`${recipient.column}\`, with only its own rows`;
         lines.push(`When the statement changes a row the Kernel queues an email to ${to} with the subject \`${action.notify.subject}\`. The answer does not wait for it or depend on it; Usage counts it under \`notify\`.`, "");
       }
-      if (action.schedule) lines.push(`The Kernel's timer runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. ${action.http ? "Its route answers callers too." : "Only the timer runs it."} The owner reads each run under \`scheduled\` with \`usage_read\`.`, "");
+      if (action.schedule) lines.push(`The Kernel's timer runs it ${"every" in action.schedule ? `every ${action.schedule.every}` : `daily at ${action.schedule.daily} UTC`}, with no caller: an \`actor\` binding is null and the guard does not apply. ${action.http ? "Its route answers callers too." : "Only the timer runs it."} The owner reads each run under \`scheduled\` with \`usage_summary\`.`, "");
     } else if (action.output.kind === "queued") {
       lines.push("`{ callId, queued: true }`. The Kernel sends the request later, from its own process.", "");
     } else {

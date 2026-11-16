@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { handlePreviewMcp, type PreviewMcpRequest } from "../mcp/preview";
-import { MiniAppRuntimeHost } from "./host";
+import type { MiniAppRuntimeHost } from "./host";
 import { previewDocumentTracker } from "./preview-document";
 
 /**
@@ -11,27 +11,10 @@ import { previewDocumentTracker } from "./preview-document";
  */
 export function useRuntimeBridge(
   iframe: HTMLIFrameElement | null,
-  appId: string,
-  schema: string,
-  actions: string,
-  fileAccess?: "app-users",
+  host: MiniAppRuntimeHost,
 ) {
-  const hostRef = useRef<MiniAppRuntimeHost>(null!);
-  const appIdRef = useRef(appId);
-  if (!hostRef.current || appIdRef.current !== appId) {
-    hostRef.current = new MiniAppRuntimeHost(appId, schema, actions, fileAccess);
-    appIdRef.current = appId;
-  }
-
-  hostRef.current.setFileAccess(fileAccess);
-
-  useEffect(() => {
-    void hostRef.current.setSchema(schema);
-  }, [schema]);
-
-  useEffect(() => {
-    hostRef.current.setActions(actions);
-  }, [actions]);
+  const hostRef = useRef(host);
+  hostRef.current = host;
 
   useEffect(() => {
     if (!iframe) return;
@@ -93,7 +76,7 @@ export function useRuntimeBridge(
       iframe.removeEventListener("load", connect);
       for (const port of ports) port.close();
     };
-  }, [appId, iframe]);
+  }, [host, iframe]);
 
   return hostRef;
 }

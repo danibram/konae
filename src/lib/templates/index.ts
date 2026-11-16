@@ -1,5 +1,4 @@
 import { withVisibility } from "../../deployments/manifest";
-import { parseServerActionSource } from "../../kernel/actions";
 import { withPrivateNotes } from "../private-notes";
 import type { MiniAppProject } from "../types";
 import { digestTemplate } from "./digest";
@@ -46,16 +45,11 @@ export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProj
   }
   const source = templateSource(id);
   if (!source) return base;
-  const program = parseServerActionSource(source.files["actions.json"]);
-  const declarations = Object.values(program.actions).map((action) => ({ name: action.name, kind: action.kind, access: action.access }));
   return {
     ...base,
     directories: [],
     files: { ...source.files },
-    manifest: withVisibility({
-      ...base.manifest,
-      runtime: { ...base.manifest.runtime, database: { ...base.manifest.runtime.database, actions: declarations } },
-    }, source.visibility),
+    manifest: withVisibility(base.manifest, source.visibility),
     updatedAt: Date.now(),
   };
 }

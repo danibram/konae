@@ -99,6 +99,12 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
       - name: Build the kernel binary on macOS
         if: matrix.os == 'darwin'
         env:
@@ -116,18 +122,22 @@ jobs:
             cargo build --locked --release --bin kernel --manifest-path kernel-rs/Cargo.toml
 
       - name: Name the binary
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: |
           name="kernel-${{ needs.prepare.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p out
           cp kernel-rs/target/release/kernel "out/${name}"
           chmod 755 "out/${name}"
           "out/${name}" --help || true
+          bun run scripts/build-konae-binary.ts
+          "out/konae-${{ needs.prepare.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}" --help
 
       - name: Keep the binary for the release job
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.os }}-${{ matrix.arch }}
-          path: out/kernel-*
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: out/*-${{ needs.prepare.outputs.version }}-*
           if-no-files-found: error
 
   # Each image builds once per architecture on a native runner and is pushed by
@@ -243,7 +253,7 @@ jobs:
       - name: Download the binaries
         uses: actions/download-artifact@v4
         with:
-          pattern: kernel-*
+          pattern: binaries-*
           path: assets
           merge-multiple: true
 
@@ -256,8 +266,8 @@ jobs:
       - name: Write SHA256SUMS
         working-directory: assets
         run: |
-          binaries=(kernel-*)
-          [ "${#binaries[@]}" = 4 ] || { echo "Expected four binaries, found: ${binaries[*]}" >&2; exit 1; }
+          binaries=(kernel-* konae-*)
+          [ "${#binaries[@]}" = 8 ] || { echo "Expected eight binaries, found: ${binaries[*]}" >&2; exit 1; }
           sha256sum "${binaries[@]}" > SHA256SUMS
           cat SHA256SUMS
 
@@ -271,4 +281,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             assets/kernel-*
+            assets/konae-*
             assets/SHA256SUMS

@@ -564,7 +564,7 @@ fn copy_private(source: &Path, target: &Path) -> Result<()> {
         let name = entry.file_name();
         let (from, to) = (entry.path(), target.join(&name));
         match &*name.to_string_lossy() {
-            "deployment.json" | crate::layout::SOURCES_METADATA | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
+            "deployment.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             "backups" if kind.is_dir() => {
@@ -1380,6 +1380,7 @@ mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: crate::default_sign_in_methods(),
             contact_email: None,
+            released_schema: String::new(),
         };
         let folder = crate::layout::folder(&root, &deployment.id);
         std::fs::create_dir_all(folder.join("dist")).unwrap();

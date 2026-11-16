@@ -65,7 +65,8 @@ async function release(id: string, files: Record<string, string>) {
     artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Usage</main>" } },
   })), id);
   try {
-    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     return await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
   } finally { await owner.cancel(transfer.transferId); }
 }
@@ -85,10 +86,10 @@ function post(pathname: string, body: unknown, headers: Record<string, string> =
   });
 }
 
-type Totals = { totals: { kind: string; name: string; count: number }[] };
+type Totals = { usage: { totals: { kind: string; name: string; count: number }[] } };
 async function totals() {
-  const usage = await owner.call<Totals>("usage_read", { deploymentId, from: yesterday(), to: today() });
-  return Object.fromEntries(usage.totals.map((row) => [row.name ? `${row.kind} ${row.name}` : row.kind, row.count]));
+  const usage = await owner.call<Totals>("usage_summary", { projectId: deploymentId, from: yesterday(), to: today() });
+  return Object.fromEntries(usage.usage.totals.map((row) => [row.name ? `${row.kind} ${row.name}` : row.kind, row.count]));
 }
 
 beforeAll(async () => {
@@ -138,8 +139,8 @@ afterAll(async () => {
 
 describe("Usage and Signals", () => {
   test("a new Deployment has no store and reads as empty", async () => {
-    expect(await owner.call("usage_read", { deploymentId, from: today(), to: today() })).toEqual({ from: today(), to: today(), days: [], totals: [], scheduled: [] });
-    expect(await owner.call("signals_read", { deploymentId })).toEqual({ signals: [], nextCursor: null });
+    expect(await owner.call("usage_summary", { projectId: deploymentId, from: today(), to: today() })).toMatchObject({ usage: { from: today(), to: today(), days: [], totals: [], scheduled: [] } });
+    expect(await owner.call("signals_read", { projectId: deploymentId })).toEqual({ signals: [], nextCursor: null });
   });
 
   test("counts what the Kernel allowed and records each declared Signal from its inputs", async () => {
@@ -167,21 +168,21 @@ describe("Usage and Signals", () => {
       session: 1, "action notes.add": 1, "action page.like": 2, "action notes.list": 1, "route POST /hooks/orders": 1,
       signup: 1, login: 1, upload: 1, file_read: 2,
     });
-    const signals = await owner.call<{ signals: { name: string; at: number; properties: Record<string, unknown> }[] }>("signals_read", { deploymentId });
+    const signals = await owner.call<{ signals: { name: string; at: number; properties: Record<string, unknown> }[] }>("signals_read", { projectId: deploymentId });
     expect(signals.signals.map(({ name, properties }) => ({ name, properties }))).toEqual([
       { name: "order.received", properties: { id: "A-1" } },
       { name: "page.liked", properties: { page: "/about", stars: null } },
       { name: "page.liked", properties: { page: "/home", stars: 5 } },
       { name: "note.added", properties: { topic: "garden" } },
     ]);
-    const liked = await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId, name: "page.liked" });
+    const liked = await owner.call<{ signals: unknown[] }>("signals_read", { projectId: deploymentId, name: "page.liked" });
     expect(liked.signals).toHaveLength(2);
     expect((await stat(path.join(root, "apps", deploymentId, "data", "usage.sqlite"))).isFile()).toBe(true);
   });
 
   test("a refused call counts nothing and records no Signal", async () => {
     const before = await totals();
-    const signalsBefore = (await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId })).signals.length;
+    const signalsBefore = (await owner.call<{ signals: unknown[] }>("signals_read", { projectId: deploymentId })).signals.length;
     const visitor = runtime();
     // Needs a session.
     await expect(visitor.call("actions_invoke", { name: "notes.mine" })).rejects.toThrow("authentication-required");
@@ -198,31 +199,31 @@ describe("Usage and Signals", () => {
     // A file another caller may not read.
     expect((await fetch(`${url}/_konae/files/${crypto.randomUUID()}`, { headers: { host } })).status).toBe(404);
     expect(await totals()).toEqual(before);
-    expect((await owner.call<{ signals: unknown[] }>("signals_read", { deploymentId })).signals).toHaveLength(signalsBefore);
+    expect((await owner.call<{ signals: unknown[] }>("signals_read", { projectId: deploymentId })).signals).toHaveLength(signalsBefore);
   });
 
   test("only the owner reads Usage and Signals", async () => {
     for (const name of ["usage_read", "signals_read", "usage_summary", "usage_overview"]) {
-      await expect(runtime().call(name, { deploymentId, from: today(), to: today() })).rejects.toThrow("Unknown tool or insufficient permission.");
+      await expect(runtime().call(name, { projectId: deploymentId, from: today(), to: today() })).rejects.toThrow("Unknown tool or insufficient permission.");
     }
     await owner.call("project_create", { projectId: "usage_other", name: "Other" });
     const { token } = await owner.call<{ token: string }>("token_create", { scopes: ["read"], projectIds: ["usage_other"], ttlSeconds: 600 });
     const elsewhere = new McpClient(`${url}/mcp`, { token });
-    await expect(elsewhere.call("usage_read", { deploymentId, from: today(), to: today() })).rejects.toThrow("outside this token's grants");
-    await expect(elsewhere.call("signals_read", { deploymentId })).rejects.toThrow("outside this token's grants");
+    await expect(elsewhere.call("usage_summary", { projectId: deploymentId, from: today(), to: today() })).rejects.toThrow("outside this token's grants");
+    await expect(elsewhere.call("signals_read", { projectId: deploymentId })).rejects.toThrow("outside this token's grants");
     const { token: reader } = await owner.call<{ token: string }>("token_create", { scopes: ["read"], projectIds: ["usage_app"], ttlSeconds: 600 });
-    expect((await new McpClient(`${url}/mcp`, { token: reader }).call<Totals>("usage_read", { deploymentId, from: today(), to: today() })).totals.length).toBeGreaterThan(0);
+    expect((await new McpClient(`${url}/mcp`, { token: reader }).call<Totals>("usage_summary", { projectId: deploymentId, from: today(), to: today() })).usage.totals.length).toBeGreaterThan(0);
   });
 
-  test("usage_read refuses a malformed or oversized range and signals_read a forged cursor", async () => {
-    await expect(owner.call("usage_read", { deploymentId, from: "2026-02-30", to: today() })).rejects.toThrow("from and to must be dates written YYYY-MM-DD.");
-    await expect(owner.call("usage_read", { deploymentId, from: today(), to: yesterday() })).rejects.toThrow("from must not be after to.");
-    await expect(owner.call("usage_read", { deploymentId, from: "2020-01-01", to: today() })).rejects.toThrow("Usage covers at most 400 days at a time.");
-    await expect(owner.call("signals_read", { deploymentId, cursor: "next" })).rejects.toThrow("Invalid cursor.");
+  test("usage_summary refuses a malformed or oversized range and signals_read a forged cursor", async () => {
+    await expect(owner.call("usage_summary", { projectId: deploymentId, from: "2026-02-30", to: today() })).rejects.toThrow("from and to must be dates written YYYY-MM-DD.");
+    await expect(owner.call("usage_summary", { projectId: deploymentId, from: today(), to: yesterday() })).rejects.toThrow("from must not be after to.");
+    await expect(owner.call("usage_summary", { projectId: deploymentId, from: "2020-01-01", to: today() })).rejects.toThrow("Usage covers at most 400 days at a time.");
+    await expect(owner.call("signals_read", { projectId: deploymentId, cursor: "next" })).rejects.toThrow("Invalid cursor.");
   });
 
   test("the monitor keeps execution failures separate and groups routes by their action", async () => {
-    const summary = await owner.call<UsageSummary>("usage_summary", { deploymentId, from: yesterday(), to: today() });
+    const summary = await owner.call<UsageSummary>("usage_summary", { projectId: deploymentId, from: yesterday(), to: today() });
     expect(summary.coverage.startedAt).toBeNumber();
     expect(summary.actions.some((a) => a.name === "orders.receive" && a.http?.path === "/hooks/orders")).toBe(true);
     expect(summary.metrics).toEqual(expect.arrayContaining([
@@ -246,7 +247,7 @@ describe("Usage and Signals", () => {
     const limited = new McpClient(`${url}/mcp`, { token });
     const allowed = await limited.call<UsageOverview>("usage_overview", { from: yesterday(), to: today() });
     expect(allowed.apps.map((a) => a.projectId)).toEqual(["usage_other"]);
-    await expect(limited.call("usage_summary", { deploymentId, from: today(), to: today() })).rejects.toThrow("outside this token's grants");
+    await expect(limited.call("usage_summary", { projectId: deploymentId, from: today(), to: today() })).rejects.toThrow("outside this token's grants");
     const { token: writer } = await owner.call<{ token: string }>("token_create", { scopes: ["write"], projectIds: ["usage_app"], ttlSeconds: 600 });
     await expect(new McpClient(`${url}/mcp`, { token: writer }).call("usage_overview", { from: today(), to: today() })).rejects.toThrow();
     await expect(owner.call("usage_overview", { from: "2020-01-01", to: today() })).rejects.toThrow("at most 400 days");
@@ -292,7 +293,7 @@ describe("Usage and Signals", () => {
     await runtime().call("auth_session");
     await runtime().call("actions_invoke", { name: "notes.list" });
 
-    const summary = await owner.call<UsageSummary>("usage_summary", { deploymentId, from: today(), to: today() });
+    const summary = await owner.call<UsageSummary>("usage_summary", { projectId: deploymentId, from: today(), to: today() });
     expect(summary.accounts).toMatchObject({ active: 2, opens: 3, actions: 4, days: [{ day: today(), active: 2 }] });
     expect(summary.accounts?.top).toEqual([
       expect.objectContaining({ account: session.userId, email: "ana@usage.test", opens: 1, actions: 3, activeDays: 1 }),

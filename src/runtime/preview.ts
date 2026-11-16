@@ -1,4 +1,6 @@
 import type { MiniAppProject } from "../lib/types";
+import { sourceBytes } from "../lib/source-files";
+import { resolveReference, servedPath } from "../lib/static-artifact.js";
 import { renderCapsuleDocument } from "./artifact";
 
 export const runtimeClient = String.raw`
@@ -129,10 +131,146 @@ export const runtimeClient = String.raw`
  * differs.
  */
 export function createPreviewDocument(project: MiniAppProject): string {
-  return renderCapsuleDocument({
+  const assets = new Map<string, string>();
+  const stylesheets = new Map<string, string>();
+  for (const source of Object.keys(project.files)) {
+    if (!source.startsWith("public/") && !source.endsWith(".css")) continue;
+    const served = servedPath(source);
+    const bytes = sourceBytes(project, source);
+    if (served && source.startsWith("public/")) assets.set(served, `data:${mediaType(served)};base64,${bytesToBase64(bytes)}`);
+    if (source.endsWith(".css")) {
+      try { stylesheets.set(served ?? source, new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { /* A binary file cannot be a stylesheet. */ }
+    }
+  }
+  const document = renderCapsuleDocument({
     body: project.files["index.html"] ?? "",
     styles: project.files["styles.css"] ?? "",
     script: project.files["app.js"] ?? "",
     runtime: runtimeClient,
   });
+  return rewritePreviewAssets(document, assets, stylesheets);
+}
+
+/** Rewrites only static fetch attributes and CSS URLs the shared builder resolves. */
+function rewritePreviewAssets(document: string, assets: Map<string, string>, stylesheets: Map<string, string>): string {
+  const rewriteCss = (css: string, from: string, visited = new Set<string>()): string => {
+    let output = css.replace(/@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?([^;]*);/gi, (whole, quote, raw, suffix) => {
+      const target = resolveReferenceOrNull(raw, from);
+      const sheet = target && stylesheets.get(target);
+      if (!sheet || visited.has(target)) return whole;
+      const imported = rewriteCss(sheet, target, new Set(visited).add(target));
+      const media = suffix.trim();
+      return media ? `@media ${media}{${imported}}` : imported;
+    });
+    output = output.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi, (whole, double, single, bare) => {
+      const raw = (double ?? single ?? bare ?? "").trim();
+      const target = previewAsset(raw, from, assets);
+      if (!target) return whole;
+      const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
+      return `url(${quote}${target}${quote})`;
+    });
+    return output;
+  };
+
+  const rewriteMarkup = (markup: string) => markup.replace(/<(?!script\b)([a-z][\w-]*)(\s[^<>]*?)?>/gi, (_tag, name: string, attributes = "") => {
+    const kind = name.toLowerCase();
+    const rel = readAttribute(attributes, "rel") ?? "";
+    const href = readAttribute(attributes, "href");
+    if (kind === "link" && rel.toLowerCase().split(/\s+/).includes("stylesheet") && href) {
+      const target = resolveReferenceOrNull(href, "index.html");
+      const sheet = target && stylesheets.get(target);
+      if (target !== null && typeof sheet === "string") {
+        const media = readAttribute(attributes, "media");
+        const disabled = hasBooleanAttribute(attributes, "disabled");
+        if (!disabled) return `<style${media === undefined ? "" : ` media="${escapeAttribute(media)}"`}>${rewriteCss(sheet, target)}</style>`;
+        const restoredMedia = media ?? "";
+        return `<style media="not all" data-konae-media="${escapeAttribute(restoredMedia)}">${rewriteCss(sheet, target)}</style><script>var style=document.currentScript.previousElementSibling;style.media=style.dataset.konaeMedia;style.disabled=true</script>`;
+      }
+    }
+    const isIcon = kind === "link" && /(?:^|\s)(?:icon|apple-touch-icon|mask-icon)(?:\s|$)/i.test(rel);
+    const permitted = kind === "img" || kind === "source" || isIcon;
+    let next = attributes;
+    if (permitted) {
+      next = next.replace(/(^|\s)(src|href)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
+        if (key.toLowerCase() === "href" && !isIcon) return attribute;
+        const quote = quoted[0] === '"' || quoted[0] === "'" ? quoted[0] : "";
+        const raw = quote ? quoted.slice(1, -1) : quoted;
+        const target = previewAsset(raw, "index.html", assets);
+        return target ? `${prefix}${key}${separator}${quote}${target}${quote}` : attribute;
+      });
+      next = next.replace(/(^|\s)(srcset)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
+        const quote = quoted[0] === '"' || quoted[0] === "'" ? quoted[0] : "";
+        const value = quote ? quoted.slice(1, -1) : quoted;
+        const updated = rewriteSrcset(value, (raw) => previewAsset(raw, "index.html", assets));
+        return `${prefix}${key}${separator}${quote}${updated}${quote}`;
+      });
+    }
+    next = next.replace(/(^|\s)(style)(\s*=\s*)("[^"]*"|'[^']*')/gi, (_attribute: string, prefix: string, key: string, separator: string, quoted: string) => {
+      const quote = quoted[0];
+      return `${prefix}${key}${separator}${quote}${rewriteCss(quoted.slice(1, -1), "index.html")}${quote}`;
+    });
+    return `<${name}${next}>`;
+  }).replace(/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi, (_whole, attributes, css) => `<style${attributes}>${rewriteCss(css, "index.html")}</style>`);
+  return document.split(/(<script\b[\s\S]*?<\/script\s*>)/gi).map((part, index) => index % 2 ? part : rewriteMarkup(part)).join("");
+}
+
+function readAttribute(attributes: string, name: string): string | undefined {
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(attributes);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function hasBooleanAttribute(attributes: string, name: string): boolean {
+  return new RegExp(`(?:^|\\s)${name}(?:\\s|=|$)`, "i").test(attributes);
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+function resolveReferenceOrNull(raw: string, from: string): string | null {
+  try { return resolveReference(raw, from); } catch { return null; }
+}
+
+function rewriteSrcset(value: string, asset: (raw: string) => string | null): string {
+  let output = "";
+  let cursor = 0;
+  while (cursor < value.length) {
+    const prefix = /^[\s,]*/.exec(value.slice(cursor))?.[0] ?? "";
+    output += prefix;
+    cursor += prefix.length;
+    if (cursor === value.length) break;
+    const start = cursor;
+    while (cursor < value.length && !/\s/.test(value[cursor])) cursor += 1;
+    const token = value.slice(start, cursor);
+    const trailing = /,+$/.exec(token)?.[0] ?? "";
+    const raw = trailing ? token.slice(0, -trailing.length) : token;
+    output += asset(raw) ?? raw;
+    output += trailing;
+    if (trailing) continue;
+    const descriptorStart = cursor;
+    while (cursor < value.length && value[cursor] !== ",") cursor += 1;
+    output += value.slice(descriptorStart, cursor);
+  }
+  return output;
+}
+
+function previewAsset(raw: string, from: string, assets: Map<string, string>): string | null {
+  let target: string | null;
+  try { target = resolveReference(raw, from); } catch { return null; }
+  if (target === null) return null;
+  const asset = assets.get(target);
+  if (!asset) return null;
+  const fragmentAt = raw.indexOf("#");
+  return fragmentAt === -1 ? asset : `${asset}${raw.slice(fragmentAt)}`;
+}
+
+function mediaType(path: string): string {
+  const extension = path.split(".").pop()?.toLowerCase();
+  return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon", avif: "image/avif", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf" } as Record<string, string>)[extension ?? ""] ?? "application/octet-stream";
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
 }

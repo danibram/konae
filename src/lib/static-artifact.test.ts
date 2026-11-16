@@ -31,6 +31,12 @@ function assemble(files: Record<string, string | Uint8Array>, options: { routing
 }
 
 describe("which Capsule files become pages", () => {
+  test("schema-transforms.json stays in sources and is never served in the Build Artifact", async () => {
+    const artifact = await assemble({ "index.html": "<main id=app></main>", "schema-transforms.json": "{\"version\":1,\"transitions\":[]}" });
+    expect(artifact.files).not.toHaveProperty("schema-transforms.json");
+    await expect(assemble({ "index.html": '<script src="schema-transforms.json"></script>', "schema-transforms.json": "{}" })).rejects.toThrow("Capsule holds no schema-transforms.json");
+  });
+
   test("an .html at the root or under pages/ is a page; pages/ is dropped from the served path", () => {
     expect(servedPath("index.html")).toBe("index.html");
     expect(servedPath("about.html")).toBe("about.html");
@@ -58,6 +64,11 @@ describe("which Capsule files become pages", () => {
 });
 
 describe("the artifact", () => {
+  test("a document keeps its UTF-8 byte order mark in dist", async () => {
+    const artifact = await assemble({ "index.html": `\uFEFF${page("Home")}` });
+    expect(artifact.files["index.html"].charCodeAt(0)).toBe(0xfeff);
+  });
+
   test("holds every page with the SDK, the files the pages load, and public/ as is", async () => {
     const logo = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
     const artifact = await assemble({

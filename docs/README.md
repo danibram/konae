@@ -68,7 +68,7 @@ bun run konae -- login --dir ./my-app --url http://localhost:4173 --manage-users
 bun run konae -- publish --dir ./my-app
 ```
 
-`init` writes the app folder. The `tasks` template is public. Without `--template`, `init` writes `notes`, a private app with invitation signup, and its first `dev` serves a sign-in page. `dev` invites `test@example.com` and prints a link that opens the invitation, so you can choose a password and sign in. `dev` compiles the Kernel on its first run, which takes about a minute, runs the folder with the `kernel` binary, and starts it again when the files change. `login` saves a 24-hour credential in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
+`init` writes the app folder. The `tasks` template is public. Without `--template`, `init` writes `notes`, a private app with invitation signup, and its first `dev` serves a sign-in page. `dev` invites `test@example.com` and prints a link that opens the invitation, so you can choose a password and sign in. From a repository checkout, `dev` uses that checkout's Kernel and builds it with Cargo if absent. The compiled CLI downloads its matching Kernel and checks its SHA-256 against the release `SHA256SUMS`, unless `KONAE_KERNEL_BIN` names a local binary. Both run the folder with its own data and restart it when files change. The shared local builder runs a folder's npm build script when `node_modules/` exists; otherwise it uses the built-in builder. `login` saves a credential in `./my-app/.konae/credentials.json`, and the first `publish` registers the project on that installation. The [CLI guide](./guides/edit-files-with-the-cli.md) explains each step.
 
 ### 4. Prove it
 
@@ -92,5 +92,7 @@ An agent that connects over MCP calls `platform_describe` and `projects_list` fi
 - [Concepts](./concepts.md), the words the rest of the docs use
 - [The Capsule](./capsule.md), the files of an app
 - [Pick the smallest piece](./pieces.md), which declaration fits a need
+- [Rehearse a source change locally](./guides/rehearse-locally.md), against a fresh snapshot of published data
+- [Carry data through schema changes](./guides/schema-transformations.md), with explicit transitions and portable history
 - [Example apps](./examples.md)
 - [Operate an installation](./operate.md), for whoever runs a Kernel

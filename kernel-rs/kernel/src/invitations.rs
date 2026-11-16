@@ -28,6 +28,7 @@ pub const MAX_PAGE: usize = 100;
 const IDEMPOTENCY_SECONDS: i64 = 7 * 24 * 60 * 60;
 /// Beside an invitation's link when the development transport kept its email.
 pub const LOCAL_MAILBOX_INVITATION: &str = "No email left this server. The development mail transport writes the invitation to mailbox.jsonl in the Kernel's data directory instead of sending it. Send acceptUrl to the person yourself; it works once.";
+pub const TEST_MAILBOX_INVITATION: &str = "Local test email stays in mail-testbox.jsonl in the app's data directory. Send acceptUrl to the person yourself; it works once.";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -422,7 +423,7 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
                 if let Some(url) = entry["invitationId"].as_str().and_then(|id| links.get(id)) {
                     entry["delivery"] = json!("local-mailbox");
                     entry["acceptUrl"] = json!(url);
-                    entry["note"] = json!(LOCAL_MAILBOX_INVITATION);
+                    entry["note"] = json!(if state.execution_mode.is_test() { TEST_MAILBOX_INVITATION } else { LOCAL_MAILBOX_INVITATION });
                 }
             };
             match response.get_mut("results").and_then(Value::as_array_mut) {
@@ -809,6 +810,7 @@ mod tests {
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
                 sign_in_methods: default_sign_in_methods(),
                 contact_email: None,
+                released_schema: String::new(),
             };
             std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();
             deployments.insert(host.to_owned(), item);

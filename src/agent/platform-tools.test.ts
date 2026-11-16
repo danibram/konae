@@ -5,12 +5,12 @@ const text = { type: "string", minLength: 1 };
 const listed: McpToolDefinition[] = [
   { name: "platform_guide", description: "Read a guide topic.", inputSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] } },
   { name: "project_inspect", description: "Inspect a project.", inputSchema: { type: "object", properties: { projectId: text }, required: ["projectId"] } },
-  { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { deploymentId: text }, required: ["deploymentId"] } },
-  { name: "domain_set", description: "Set a domain.", inputSchema: { type: "object", properties: { deploymentId: text, hostname: text }, required: ["deploymentId", "hostname"] } },
-  { name: "path_read", description: "Read a path address.", inputSchema: { type: "object", properties: { deploymentId: text }, required: ["deploymentId"] } },
-  { name: "path_set", description: "Set a path address.", inputSchema: { type: "object", properties: { deploymentId: text, enabled: { type: "boolean" }, name: text, acceptSharedOrigin: { type: "boolean" } }, required: ["deploymentId", "enabled"] } },
-  { name: "path_clear", description: "Clear a path address.", inputSchema: { type: "object", properties: { deploymentId: text }, required: ["deploymentId"] } },
-  { name: "database_execute", description: "Run a database operation.", inputSchema: { type: "object", properties: { deploymentId: text, operation: { type: "string" }, input: { type: "object" } }, required: ["deploymentId", "operation"] } },
+  { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { projectId: text }, required: ["projectId"] } },
+  { name: "domain_set", description: "Set a domain.", inputSchema: { type: "object", properties: { projectId: text, hostname: text }, required: ["projectId", "hostname"] } },
+  { name: "path_read", description: "Read a path address.", inputSchema: { type: "object", properties: { projectId: text }, required: ["projectId"] } },
+  { name: "path_set", description: "Set a path address.", inputSchema: { type: "object", properties: { projectId: text, enabled: { type: "boolean" }, name: text, acceptSharedOrigin: { type: "boolean" } }, required: ["projectId", "enabled"] } },
+  { name: "path_clear", description: "Clear a path address.", inputSchema: { type: "object", properties: { projectId: text }, required: ["projectId"] } },
+  { name: "database_execute", description: "Run a database operation.", inputSchema: { type: "object", properties: { projectId: text, operation: { type: "string" }, input: { type: "object" } }, required: ["projectId", "operation"] } },
   { name: "project_sources_save", description: "Save sources.", inputSchema: { type: "object", properties: { projectId: text, transferId: text, expectedRevision: { type: "integer" } } } },
   { name: "token_create", description: "Delegate a credential.", inputSchema: { type: "object", properties: {} } },
   { name: "secret_set", description: "Set a secret.", inputSchema: { type: "object", properties: { projectId: text, name: text, value: text } } },
@@ -23,7 +23,7 @@ function binding(overrides: Partial<AgentPlatformBinding> = {}) {
   const value: AgentPlatformBinding = {
     listTools: async () => listed,
     call: async (name, args) => { calls.push({ name, args }); return { ok: name }; },
-    deploymentForProject: (projectId) => `deployment-${projectId}`,
+    deploymentForProject: (projectId) => projectId,
     confirm: async (request) => { confirmations.push(request); return true; },
     ...overrides,
   };
@@ -57,9 +57,9 @@ describe("the build agent's tools from the owner's MCP", () => {
     await run(tools.domain_read);
     expect(calls).toEqual([
       { name: "project_inspect", args: { projectId: "p1" } },
-      { name: "domain_read", args: { deploymentId: "deployment-p1" } },
+      { name: "domain_read", args: { projectId: "p1" } },
     ]);
-    await expect(run(tools.domain_read, { deploymentId: "deployment-other" })).rejects.toThrow("acts on the open project only. Leave out deploymentId.");
+    await expect(run(tools.domain_read, { projectId: "other-project" })).rejects.toThrow("acts on the open project only. Leave out projectId.");
     await expect(run(tools.project_inspect, { projectId: "p2" })).rejects.toThrow("Leave out projectId.");
     expect(calls).toHaveLength(2);
   });
@@ -77,7 +77,7 @@ describe("the build agent's tools from the owner's MCP", () => {
     let tools = await toolsFor(approve.value);
     await run(tools.domain_set, { hostname: "notes.example.org" });
     expect(approve.confirmations).toEqual([{ projectId: "p1", tool: "domain_set", summary: "The agent will set notes.example.org as this app's domain and check its TXT record.", arguments: { hostname: "notes.example.org" } }]);
-    expect(approve.calls).toEqual([{ name: "domain_set", args: { hostname: "notes.example.org", deploymentId: "deployment-p1" } }]);
+    expect(approve.calls).toEqual([{ name: "domain_set", args: { hostname: "notes.example.org", projectId: "p1" } }]);
 
     const decline = binding({ confirm: async () => false });
     tools = await toolsFor(decline.value);
@@ -96,9 +96,9 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(confirmations[0]!.summary).toBe("The agent will turn on this app's path address with the name spring-menu.");
     expect(confirmations[1]!.summary).toBe("The agent will turn off this app's path address and remove its name. The generated address and any custom domain keep working.");
     expect(calls).toEqual([
-      { name: "path_read", args: { deploymentId: "deployment-p1" } },
-      { name: "path_set", args: { enabled: true, name: "spring-menu", deploymentId: "deployment-p1" } },
-      { name: "path_clear", args: { deploymentId: "deployment-p1" } },
+      { name: "path_read", args: { projectId: "p1" } },
+      { name: "path_set", args: { enabled: true, name: "spring-menu", projectId: "p1" } },
+      { name: "path_clear", args: { projectId: "p1" } },
     ]);
   });
 
@@ -133,8 +133,8 @@ describe("the build agent's tools from the owner's MCP", () => {
   });
 
   test("a deployment replaced while the owner decides runs nothing", async () => {
-    let id = "deployment-a";
-    const { value, calls } = binding({ deploymentForProject: () => id, confirm: async () => { id = "deployment-b"; return true; } });
+    let published = true;
+    const { value, calls } = binding({ deploymentForProject: () => published ? "p1" : null, confirm: async () => { published = false; return true; } });
     const tools = await toolsFor(value);
     await expect(run(tools.domain_set, { hostname: "notes.example.org" })).rejects.toThrow("deployment changed while waiting for the owner");
     expect(calls).toEqual([]);

@@ -48,7 +48,7 @@ export function AgentSettingsModal({
     () => Boolean(keyStore.getKey(provider.id)),
     [keyStore, provider.id, keyVersion],
   );
-  const key = keyState(provider, hasKey);
+  const key = keyState(hasKey);
   const customModel = isCustomModelId(provider, sessionConfig.modelId);
   const askingForKey = key === "missing" || editingKey;
 
@@ -143,11 +143,9 @@ export function AgentSettingsModal({
           </Field>
         )}
 
-        {key === "not-needed" && <p className="agent-settings-note">Konae holds the key for {provider.label}.</p>}
-
         {key === "stored" && !editingKey && (
           <div className="agent-settings-stored">
-            <span><Check size={14} aria-hidden="true" /> A key for {provider.label} is saved in this browser.</span>
+            <span><Check size={14} aria-hidden="true" /> Your {provider.label} key is saved in this browser.</span>
             <Button size="sm" onClick={() => { setFailure(""); setEditingKey(true); }}>Change</Button>
             <Button size="sm" onClick={() => { keyStore.clearKey(provider.id); setKeyVersion((version) => version + 1); onKeyStoreChange?.(); }}>Forget</Button>
           </div>
@@ -171,15 +169,15 @@ export function AgentSettingsModal({
               {provider.keyPage
                 ? <>Create one on <a href={provider.keyPage} target="_blank" rel="noopener noreferrer">{provider.label}'s API keys page<ExternalLink size={12} aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span></a>.</>
                 : <>Create one in your {provider.label} account.</>}{" "}
-              {provider.label} bills that key for what Konae sends.
+              {provider.label} charges the account that owns this key for model use.
             </p>
           </div>
         )}
 
-        {key !== "not-needed" && <p className="agent-settings-note">
-          The key stays in this browser and goes only to {provider.label}.
+        <p className="agent-settings-note">
+          Konae stores this key in this browser's local storage. Requests send it only to {provider.label}.
           {askingForKey && " After Save, press Send in Describe, and Konae builds the app from what you wrote."}
-        </p>}
+        </p>
       </form>
     </Dialog>
   );

@@ -6,6 +6,34 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-16
+
+### Added
+
+- `konae dev` runs in Kernel test mode on loopback. It captures outbound calls, keeps email in a separate local mailbox, uses local files, pauses schedules, and refuses Google sign-in and external browser connections.
+- `konae test status`, `calls`, `reply`, `schedule` and `scenario` inspect and control local test runs. The events page exposes those controls through an owner token. Captured calls retain retry timing and response numbers, and interrupted continuations do not replay.
+- `konae pull --data-only` refreshes the published data snapshot while keeping local sources. `dev --reset` verifies the snapshot components, backs up local data and queues, and restores them if the reset fails. Reset and test controls cannot mutate local state at the same time.
+- `konae rehearse` builds the current sources and checks them against an isolated copy of the verified pull snapshot. `konae publish --plan` reports the production schema plan without applying it or creating a remote project.
+- Optional `app/schema-transforms.json` records an append-only chain of bounded SQLite transitions. Planning reports affected rows; applying checks fingerprints, actions and constraints in one transaction. The journal travels with the database through export, import and restore. `konae schema fingerprint` reads the source schema or local database without starting an app.
+- Guides for [local rehearsal](./docs/guides/rehearse-locally.md) and [schema transformations](./docs/guides/schema-transformations.md) document the development and publication workflow.
+
+### Fixed
+
+- Schema confirmations include reported loss counts and transformation definitions and row counts, so changed production counts require a new confirmation.
+- Test-mode restarts apply schema and transformation edits even when the built browser files have not changed. Publishing preserves transformed rows and their journal when it swaps the staged database.
+- Local shutdown waits for an active reload before releasing its lifecycle lock and stops the final Kernel process.
+
+### Changed
+
+- The editor and folder workflow use the same editable `app/` files, including binary assets. Sources and Build Artifacts travel in separate uploads and use separate limits. Existing folder apps open in the editor without source metadata sidecars.
+- `konae pull` downloads sources, `dist/`, settings and published data. It stages incoming sources when local edits differ, scopes observed revisions to one installation and project, and blocks `push` until `dev --reset` imports pulled data.
+- Publishing checks the observed source revision at planning and apply. A source save after planning makes the release stale.
+- The project list loads metadata without source payloads. Opening a project loads its files, and source edits send deltas when possible. A full-document departure cancels known reads, with unknown transfers expiring after one hour if the browser cannot complete cancellation.
+- The editor preview shows proposals before Apply and isolates candidate rows, files and actor state. Static saved public assets work in Preview; fetches of local saved assets and runtime-created local asset URLs require `konae dev` or a Deployment. Fetches to other origins still work in the CSP-free preview.
+- The compiled `konae` CLI uses the shared local builder and downloads a matching Kernel after checking its checksum. Only macOS arm64 has been verified; its CLI binary requires macOS 13.0.
+- Owner MCP requests for Deployment operations now require `projectId` instead of `deploymentId`. The `signup_policy_read` and `usage_read` tools are removed; `project_inspect` returns Signup Policy, and `usage_summary` returns daily Usage under its `usage` field. Successful `release_apply` consumes its release uploads and retries receipt cleanup after a fault. Runtime tools and the SDK remain unchanged.
+
+
 ## [0.8.0] - 2026-11-14
 
 This release carries the Kamynando rollout fixes and the security fixes for import, restore and access revocation that were not in 0.7.0, and the three fixes from the review of 0.7.0.

@@ -72,6 +72,9 @@
 .agent-proposal.blocked .agent-proposal-state svg { color: var(--ds-danger); }
 .agent-proposal.validated .agent-proposal-state svg { color: var(--ds-success); }
 .agent-proposal-detail { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; color: var(--ds-text); font: 12px/1.45 var(--ds-mono); }
+.agent-proposal-warning { grid-column: 1 / -1; padding: 8px; border: 1px solid var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); font-size: 12px; line-height: 1.45; }
+.agent-proposal-warning p { margin: 0; overflow-wrap: anywhere; }
+.agent-proposal-warning p + p { margin-top: 5px; color: var(--ds-muted); }
 .agent-proposal-owner { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 8px; padding: 8px; border: 1px solid var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); font-size: 12px; line-height: 1.45; }
 .agent-proposal-owner svg { flex: 0 0 auto; margin-top: 2px; color: var(--ds-warning); }
 .agent-proposal-owner p { margin: 0; min-width: 0; overflow-wrap: anywhere; }

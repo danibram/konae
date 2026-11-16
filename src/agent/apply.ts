@@ -1,4 +1,6 @@
-import type { ProjectFile } from "../lib/types";
+import { directoriesForFiles } from "../lib/project-files";
+import { keptEncodings, textFiles } from "../lib/source-files";
+import type { MiniAppProject, ProjectFile } from "../lib/types";
 import type { AgentProposal, CapsuleFiles } from "./contracts";
 
 export type ProposalMerge =
@@ -30,4 +32,25 @@ export function mergeProposal(current: CapsuleFiles, proposal: AgentProposal): P
   const files = { ...current };
   for (const file of changed) files[file] = proposal.files[file];
   return { ok: true, files, changedFiles: [...changed] };
+}
+
+/**
+ * The project after Apply. The agent saw the text files only, so the merge
+ * checks those. A file that is not text stays as it is, with its encoding,
+ * unless the proposal writes text at its path. Null when the merge refuses.
+ */
+export function applyProposal(project: MiniAppProject, proposal: AgentProposal, now = Date.now()): { project: MiniAppProject; changedFiles: ProjectFile[] } | null {
+  const merge = mergeProposal(textFiles(project), proposal);
+  if (!merge.ok) return null;
+  const files = { ...project.files, ...merge.files };
+  return {
+    project: {
+      ...project,
+      files,
+      encodings: keptEncodings(project.encodings, files, { replaced: merge.changedFiles }),
+      directories: [...new Set([...project.directories, ...directoriesForFiles(files)])].sort(),
+      updatedAt: now,
+    },
+    changedFiles: merge.changedFiles,
+  };
 }

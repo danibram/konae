@@ -1,11 +1,13 @@
-// The app folder of ADR-0001: what `konae init` writes, what `konae export`
-// and the editor's Export hand over, and what the Kernel keeps for each app.
+// The generated developer files for the app folder of ADR-0001. `konae init`
+// writes them and export includes them. The Kernel needs only konae.json,
+// app/, dist/ and data/; these developer files remain optional there.
 //
 //   konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
-//   app/            the sources: pages, actions.json, schema.sql
+//   app/            the sources: pages, actions.json, schema.sql and optional schema-transforms.json
 //   dist/           the built static files the Kernel serves
 //   data/           database.sqlite, identity.sqlite, usage.sqlite, files/
-//   compose.yaml, .env.example, AGENTS.md, action-contract.md, actions.d.ts, package.json, scripts/
+//   compose.yaml, .env.example, .gitignore, AGENTS.md, action-contract.md,
+//   actions.d.ts, package.json, tsconfig.json, scripts/*.mjs
 //
 // The CLI writes these entries to disk and the editor packs them in a tar.
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
@@ -69,10 +71,10 @@ export function secretNames(actionsSource: string): string[] {
 /**
  * The files the folder carries beside `app/`, `dist/` and `data/`. `runtime`
  * is the SDK (src/mcp/runtime.js) and `staticArtifact` the build rules
- * (src/lib/static-artifact.js), so `npm run build` makes the same `dist/` the
- * editor and `konae build` make.
+ * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
+ * both local build doors run.
  */
-export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string }): FolderEntry[] {
+export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
   return [
@@ -86,6 +88,7 @@ export function generatedFiles(input: { settings: AppSettings; actionsSource: st
     { path: "tsconfig.json", contents: tsconfig },
     { path: "scripts/build.mjs", contents: buildScript },
     { path: "scripts/static-artifact.mjs", contents: input.staticArtifact },
+    { path: "scripts/local-builder.mjs", contents: input.localBuilder },
     { path: "scripts/runtime.js", contents: input.runtime },
   ];
 }
@@ -174,13 +177,15 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 ## Layout
 
 - \`konae.json\`: the app's name, visibility (${settings.visibility}), Signup Policy, sign-in methods, contact email and the Kernel version.
-- \`app/\`: the sources. \`index.html\`, \`app.js\`, \`src/main.ts\` or \`src/main.tsx\`, \`styles.css\`, \`actions.json\` and \`schema.sql\`.
+- \`app/\`: the editable sources. It may also hold binary assets. Konae checks the same path, count and decoded-size limits before saving and publishing them.
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
 - \`action-contract.md\`: every Server Action with its inputs and the columns it returns.
 - \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call. When \`app/src/\` holds TypeScript, \`npm run build\` checks it, and what it imports, against them with \`tsconfig.json\` and stops on an error.
 
 ## Rules the Kernel checks
+
+An optional \`schema-transforms.json\` records ordered data changes between schema fingerprints. The Kernel stores applied history in \`data/database.sqlite\`; the definition travels with app sources and never ships in \`dist/\`. The Validation Gate checks its shape, order, bounds and SQL subset. It cannot prove a transition against a real database.
 
 - The page talks to the database only through the named Server Actions in \`app/actions.json\`. \`action-contract.md\` lists them.
 - A query that reads rows names a LIMIT.
@@ -193,10 +198,10 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Run it
 
-1. To write \`dist/\`, run \`npm install\` once, then \`npm run build\`, which bundles \`app/\` with esbuild. From a Konae checkout, \`bun run konae -- build --dir <this folder>\` and \`dev\` write it without \`npm install\`. They use the checkout's bundler until \`node_modules\` exists, then run \`npm run build\`. An exported folder already carries a built \`dist/\`.
-2. On this machine, from a Konae checkout: \`bun run konae -- dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes.
+1. To write \`dist/\`, if \`package.json\` lists an npm package, run \`npm install\` once, then \`npm run build\`. The shared local builder builds a template without an install. \`dev\` writes it without \`npm install\` when no imported package needs one. If \`package.json\` has a build script but \`node_modules/\` is absent, it uses the built-in builder. Once that directory exists, the builder runs \`npm run build\`. An exported folder already carries its built \`dist/\`.
+2. Run \`konae dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes. From a repository checkout, it uses that checkout's Kernel and builds it with Cargo if absent. The compiled CLI downloads the matching Kernel binary and verifies its checksum unless \`KONAE_KERNEL_BIN\` names a local one.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
-4. To publish on a Konae installation: \`bun run konae -- login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`bun run konae -- publish --dir <this folder>\`. \`bun run konae -- push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so, after a backup.
+4. To publish on a Konae installation: \`konae login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`konae publish --dir <this folder>\`. \`konae push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so after a backup. A pending pull blocks push until you import the pulled data with \`dev --reset\`.
 
 At startup the Kernel checks the folder as Konae checks a release. It refuses a folder whose \`dist/\` breaks the publishing rules, whose actions break a rule above, or whose \`schema.sql\` drops or retypes a column, and says which. To apply a change that loses data, start it once with the \`KONAE_CONFIRM_SCHEMA\` value it names.
 ${secrets.length ? `\nThe app's routes and calls sign with ${secrets.length === 1 ? "the secret" : "the secrets"} ${secrets.join(", ")}. A secret never travels with the folder, so set each where the app runs: \`kernel secret set <name>\` below, or \`bun run konae -- secret set <name> --dir <this folder>\` on Konae, which reads the value from standard input. The Kernel does not serve the app until each is set.\n` : ""}
@@ -229,8 +234,8 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
+import { bundleModule } from './local-builder.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
@@ -244,16 +249,16 @@ const artifact = await assembleStaticArtifact({
   paths,
   read: async (file) => {
     const bytes = await readFile(path.join(app, file));
-    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return new Uint8Array(bytes); }
+    try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return new Uint8Array(bytes); }
   },
   compile: async () => {
     const entry = appEntry(paths);
     if (entry === null) throw new Error('Expected ' + appEntries.map((file) => 'app/' + file).join(', ') + '.');
-    const { script, styles } = await bundle(entry);
+    const { script, styles } = await bundleModule(app, entry, development);
     const sourceStyles = paths.includes('styles.css') ? await readFile(path.join(app, 'styles.css'), 'utf8') : '';
     return { script, styles: [sourceStyles, styles].filter(Boolean).join('\\n') };
   },
-  bundle,
+  bundle: (relative) => bundleModule(app, relative, development),
   runtime,
   routing: settings.manifest?.routing,
   warn: (message) => console.warn('Warning: ' + message),
@@ -265,16 +270,6 @@ for (const [file, contents] of Object.entries(artifact.files)) {
   await writeFile(target, artifact.encodings?.[file] === 'base64' ? Buffer.from(contents, 'base64') : contents);
 }
 console.log('Built dist/');
-
-async function bundle(entry) {
-  const result = await build({
-    entryPoints: [path.join(app, entry)], absWorkingDir: app, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', outdir: 'out', jsx: 'automatic',
-    minify: !development, define: { 'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production') },
-  });
-  const script = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text;
-  if (script === undefined) throw new Error('The app build did not produce JavaScript.');
-  return { script, styles: result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '' };
-}
 
 // tsconfig.json includes app/src/ and actions.d.ts, which types miniapp.actions.call for each action.
 function typecheck() {

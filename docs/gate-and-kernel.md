@@ -18,7 +18,7 @@ flowchart TB
   GATE & PLAN & START -->|"a rule is broken"| REF["Refusal<br/>code, message and hint,<br/>the same at every door"]
 ```
 
-The same Capsule meets a door in three places: the Gate in the editor, `release_plan` on the Kernel that publishes it, and the `kernel` binary that starts the folder on another machine. One case file per rule feeds the tests of both sides, so a declaration one door refuses is refused by the others with the same code and sentence.
+The same Capsule meets a door in three places: the Gate in the editor, `release_plan` on the Kernel that publishes it, and the `kernel` binary that starts the folder on another machine. Shared rule suites run against case files on both sides. Root-relative paths have TypeScript-only cases; hostname, path state and schema change have Kernel-only cases. The shared declarations refuse with the same code and sentence.
 
 ## Why two doors
 
@@ -29,13 +29,13 @@ The app has to leave with its rules unchanged. If the editor accepted a statemen
 | Validation Gate | `src/agent/gate.ts`, with the parser in `src/kernel/actions.ts` | Before a change is applied to the project |
 | Kernel | `kernel-rs/kernel/src/action_shape.rs`, `sql_rules.rs` and the modules beside them | At `release_plan`, and when the `kernel` binary starts an app folder |
 
-The Gate runs three stages. `schema` runs `schema.sql` twice on a fresh database. `actions` parses `actions.json` and prepares every statement against that schema. `preview-rows` runs `schema.sql` on a copy of the preview's own rows and prepares every action against the result. When all three hold, the editor shows "Validated. Schema, preview rows and actions hold." When the preview's rows could not be read, it shows "Validated. Schema and actions hold. The preview rows were not checked."
+The Gate runs three stages. `schema` runs `schema.sql` twice on a fresh database. `actions` parses `actions.json` and prepares every statement against that schema. `preview-rows` runs `schema.sql` on a copy of the preview's own rows and prepares every action against the result. When all three hold, the editor shows "Validated. Schema, preview rows and actions hold." When preview rows could not be checked because the preview schema lacks a declared table or column, it reports `PREVIEW_BEHIND`, names the difference and says to try on `konae dev` or a Deployment. Its summary says the row checks were skipped.
 
-`schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/kernel/src/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`, so when it lacks a table or column the file declares, the Gate warns and passes.
+`schema.sql` states what the database should be. At `release_plan` the Kernel loads it into a scratch database, compares tables, columns and indexes with the live database and returns the change (`kernel-rs/kernel/src/schema_change.rs`). A new table, column or index applies. A dropped table, a dropped column or a retyped column comes back as a plan with its statements and what they lose, and `release_apply` runs it only with that plan's `confirmSchema`. A table SQLite cannot change in place is rebuilt in one transaction, following the SQLite page on ALTER TABLE, and every column that still exists keeps its values. The preview keeps its own test rows and only re-runs `schema.sql`; if a declared table or column is missing from preview, the Gate marks preview rows unchecked and gives the truthful `PREVIEW_BEHIND` warning.
 
-## Shared case files
+## Case files
 
-These files live in `kernel-rs/kernel/src`, and both sides parse the same cases. They include the following.
+These shared files live in `kernel-rs/kernel/src`, and both sides parse the same cases. They include the following. Additional one-sided cases live beside the code that owns them.
 
 - `sql-rule-cases.json`, for statements
 - `action-cases.json`, for an action's name, access, kind, bindings and size

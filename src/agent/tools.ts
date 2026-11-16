@@ -14,6 +14,8 @@ import type {
   ValidationResult,
 } from "./contracts";
 import type { ReleaseFacts } from "./release-check";
+import type { ValidationFacts } from "./contracts";
+import type { SourceFiles } from "../lib/source-files";
 
 export type PreviewFailureReport = {
   kind: string;
@@ -31,6 +33,8 @@ export type CapsuleToolHooks = {
   previewErrors?: () => PreviewFailureReport[];
   /** The project's secret names and the installation's hosts, so the Gate gives release_plan's sentences. */
   releaseFacts?: () => Promise<ReleaseFacts>;
+  /** Binary source files stay outside the agent workspace, so the Gate receives them separately. */
+  sourceFiles?: () => SourceFiles;
 };
 
 /**
@@ -215,7 +219,7 @@ function validateTool(
       return queue(async () => {
         // The snapshot is taken inside the queue, so it is exactly what gets validated.
         const files = workspace.serialize().files;
-        const validation = await validator.validate(files, await readLiveDatabase(hooks), await readReleaseFacts(hooks));
+        const validation = await validator.validate(files, await readLiveDatabase(hooks), await readValidationFacts(hooks));
         hooks.onValidated?.(files, validation);
         return result(formatValidation(validation), validation);
       });
@@ -250,6 +254,13 @@ export async function readReleaseFacts(hooks: CapsuleToolHooks): Promise<Release
   } catch {
     return {};
   }
+}
+
+export async function readValidationFacts(hooks: CapsuleToolHooks): Promise<ValidationFacts> {
+  return {
+    ...await readReleaseFacts(hooks),
+    ...(hooks.sourceFiles ? { sourceFiles: hooks.sourceFiles() } : {}),
+  };
 }
 
 /** Widen a concretely-typed tool: the loop validates arguments against `parameters` before calling `execute`. */

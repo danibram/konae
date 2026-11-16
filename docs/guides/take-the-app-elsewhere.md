@@ -42,6 +42,8 @@ my-app/
 
 `data/` holds password hashes and uploaded files, so keep an export with data private. The folder's `.gitignore` keeps `data/` and `.env` out of Git.
 
+The editor's Export and `konae export` also include generated developer files. The `project_export` MCP transfer carries `konae.json`, `app/` and `dist/`; each data component is a separate download.
+
 ## Export the app
 
 1. Log in with `export_data`, unless the login saved in the folder already has it. `tool session_inspect` shows it in the `can` map. Only an OAuth client on this machine, such as `login --browser --export-data`, gets `export_data`. Otherwise use a password login or a token the owner creates in their browser session with that permission.
@@ -58,15 +60,15 @@ my-app/
     ```
 
 3. Or, in the editor, choose Export. A published app downloads as a tar of the folder with its data; an app not published yet downloads its sources and build. When `app/actions.json` differs from the actions the published app runs, the editor says that `app/` is ahead of `dist/` and `data/`.
-4. Or over MCP, call `project_export` with the `deploymentId`. It returns `folder`, a download of `konae.json`, `app/` and `dist/`, and a manifest with one download per part of `data/`: `database`, `identity`, `files` and, when the app recorded any, `usage`. `sourcesAhead` compares `app/` with the release's `sourceDigest`. Older releases without a digest compare `app/actions.json` with the actions the release runs. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
+4. Or over MCP, call `project_export { projectId }`. It returns `folder`, a download of `konae.json`, `app/` and `dist/`, and a manifest with one download per part of `data/`: `database`, `identity`, `files` and, when the app recorded any, `usage`. `sourcesAhead` compares `app/` with the release's `sourceDigest`. Older releases without a digest compare `app/actions.json` with the actions the release runs. Read each download with `transfer_read` and its `transferId` and `offset` until `nextOffset` equals `size`. Check its SHA-256, then call `transfer_cancel`.
 
 ## Run it without Konae
 
-The `kernel` binary serves an exported folder as it is, with its `data/`. At startup it checks the folder as Konae checks a release, applies the schema change `app/schema.sql` asks, writes its own record into the folder's `.konae/`, and prints the app's address. People sign in with the passwords they have.
+The `kernel` binary serves an exported folder as it is, with its `data/`. The export's `konae.json` and `app/` carry saved drafts, while a separate released snapshot keeps the effective published settings, actions, schema and artifact identity. If `dist/` is unchanged, a new Kernel keeps that applied state even when the saved settings or sources are ahead. If the artifact changes, startup reads the current sources and applies their matching settings, actions and schema through the normal confirmation path. Legacy folders recover applied state from the Installation record and live database instead of treating `app/` drafts as released. The Kernel writes its own record into `.konae/` and prints the app's address. People sign in with the passwords they have.
 
 ### Get the binary
 
-Each release attaches the `kernel` binary to its GitHub Release for macOS and Linux, on arm64 and x64. Download the one for this machine, check it against `SHA256SUMS` and make it executable. Replace `X.Y.Z` with the version in the exported folder's `konae.json` and `darwin-arm64` with `darwin-x64`, `linux-x64` or `linux-arm64`.
+The published [v0.8.0 release](https://github.com/danibram/konae/releases/tag/v0.8.0) has Kernel binaries for macOS and Linux on arm64 and x64, plus `SHA256SUMS`. Check the release for the version in the exported folder's `konae.json` before using these download commands; availability varies by release. Replace `X.Y.Z` with that version and `darwin-arm64` with `darwin-x64`, `linux-x64` or `linux-arm64`.
 
 ```sh
 base=https://github.com/danibram/konae/releases/download/vX.Y.Z
@@ -88,7 +90,7 @@ That writes `kernel-rs/target/debug/kernel`.
 
 ### On this machine
 
-`dev` serves the folder in place, with its `data/`, and restarts the Kernel when `app/` changes. Set `KONAE_KERNEL_BIN` to the downloaded binary and `dev` runs it and needs no Rust. Without it, the first run compiles the Kernel from the checkout.
+`dev` serves the folder in place, with its `data/`, and restarts the Kernel when `app/` changes. The compiled CLI downloads the matching Kernel binary and verifies its checksum. Set `KONAE_KERNEL_BIN` to a local binary to use it instead. When running `dev` from a repository checkout without that variable, the checkout builds the Kernel with Cargo.
 
 ```sh
 KONAE_KERNEL_BIN="$PWD/kernel-X.Y.Z-darwin-arm64" bun run konae -- dev --dir /tmp/my-app-export

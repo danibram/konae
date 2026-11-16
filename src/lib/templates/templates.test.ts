@@ -37,8 +37,7 @@ describe("a project born from a template", () => {
     const visibility = Object.fromEntries(templateChoices.map(({ id }) => [id, born(id).manifest.visibility]));
     expect(visibility).toEqual({ tasks: "public", notes: "private", members: "private", form: "public", webhook: "private", digest: "private", gallery: "public" });
     for (const { id } of templateChoices) {
-      const { visibility: chosen, runtime } = born(id).manifest;
-      expect(runtime.auth.mode).toBe(chosen === "private" ? "required" : "optional");
+      expect(born(id).manifest).not.toHaveProperty("runtime");
     }
   });
 
@@ -47,7 +46,6 @@ describe("a project born from a template", () => {
     expect(templates.defaultTemplate).toBe(DEFAULT_TEMPLATE);
     const created = applyTemplate({ ...cloneStarter(), id: "app_default", name: "Default", slug: "default" }, templates.defaultTemplate);
     expect(created.manifest.visibility).toBe("private");
-    expect(created.manifest.runtime.auth.mode).toBe("required");
     const dashboard = readFileSync(path.join(import.meta.dir, "../../components/ProjectDashboard.tsx"), "utf8");
     // New project opens with nothing chosen: a description picks "No template", or the person clicks one.
     expect(dashboard).toContain("setCreating({ template: null })");
@@ -60,7 +58,6 @@ describe("a project born from a template", () => {
 
   test("a project described from scratch starts private", () => {
     expect(cloneStarter().manifest.visibility).toBe("private");
-    expect(cloneStarter().manifest.runtime.auth.mode).toBe("required");
   });
 
   for (const { id } of templateChoices) {
@@ -79,13 +76,13 @@ describe("a project born from a template", () => {
       expect(fresh.ok).toBe(true);
       const live = await validator.validate(files, { state: "loaded", bytes: await exportDatabase(files["schema.sql"]) });
       expect(live.errors).toEqual([]);
-      expect(live.checked).toEqual(["schema", "actions", "preview-rows"]);
+      expect(live.checked).toEqual(["sources", "schema", "actions", "preview-rows"]);
     });
 
-    test(`${id} declares exactly its own actions in the manifest and keeps the project's identity`, () => {
+    test(`${id} declares actions in actions.json and keeps the project's identity`, () => {
       const project = born(id);
-      const declared = project.manifest.runtime.database.actions.map((action) => action.name).sort();
-      expect(declared).toEqual(Object.keys(parseServerActionSource(project.files["actions.json"]!).actions).sort());
+      expect(project.manifest).not.toHaveProperty("runtime");
+      expect(Object.keys(parseServerActionSource(project.files["actions.json"]!).actions).length).toBeGreaterThan(0);
       expect(project.id).toBe("app_template_test");
       expect(project.slug).toBe("test");
       for (const name of ["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]) expect(project.files[name as keyof typeof project.files]).toBeTruthy();
@@ -148,11 +145,9 @@ describe("a project born from a template", () => {
 
     test("is a private plain list whose page, card and Access agree", () => {
       expect(plain.manifest.visibility).toBe("private");
-      expect(plain.manifest.runtime.auth.mode).toBe("required");
       const { actions } = parseServerActionSource(plain.files["actions.json"]);
       for (const action of Object.values(actions)) expect(action.access).toBe("authenticated");
-      expect(plain.manifest.runtime.database.actions.map((action) => [action.name, action.access]).sort())
-        .toEqual(Object.keys(actions).sort().map((name) => [name, "authenticated"]));
+      expect(plain.manifest).not.toHaveProperty("runtime");
       for (const file of ["index.html", "app.js"] as const) {
         expect(plain.files[file]).not.toMatch(/anyone|pinboard|miniapp\.files|Tiny Tasks|Shared list|Guest/i);
       }

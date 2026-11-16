@@ -19,9 +19,11 @@ The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It
 
 The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
 
+Saved public assets work in the preview, including images in `public/`, linked stylesheets, imported CSS, media conditions and SVG fragments. Programmatic `fetch()` of local saved assets and runtime-created URLs that point to local saved assets need `konae dev` or a Deployment. The preview's missing Content Security Policy still allows fetches to other origins.
+
 ## Email on konae dev
 
-`konae dev` sends no email. Account email and notices land in `.konae/kernel/mailbox.jsonl` of the folder, and `konae events` lists them.
+`konae dev` sends no email. Account email and notices land in `.konae/kernel/mail-testbox.jsonl` of the folder, and `konae events` lists them. Its test mode captures outbound calls, pauses schedule timers, refuses Google sign-in, and blocks browser connections to other origins. It is not an OS sandbox for npm scripts or other shell commands.
 
 ## File size
 
@@ -33,11 +35,11 @@ The editor preview has no Google sign-in, and `miniapp.auth.signInWithGoogle()` 
 
 ## npm packages
 
-The editor's build reads npm packages from esm.sh. `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the two bundles are not byte-identical.
+The editor's build fetches exact npm package versions from esm.sh. `konae build` and an app folder's `npm run build` use the versions installed in `node_modules`. The bundles can differ because esm.sh transforms packages for its CDN.
 
 ## Preview database and schema.sql
 
-The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the change at publish and asks before one that deletes data. When the preview lacks a table or column `schema.sql` declares, the Gate warns and passes. Try such a change on `konae dev` or a published Deployment.
+The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the change at publish and asks before one that deletes data. When preview rows cannot be checked because the preview schema is behind, the Gate shows `PREVIEW_BEHIND`, names the schema difference and says to try it on `konae dev` or a Deployment. The validation summary says it skipped preview-row checks.
 
 ## Gate and publish builders
 

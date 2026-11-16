@@ -62,7 +62,8 @@ function payload(id: string) {
 async function release(client: McpClient, request: object, projectId: string) {
   const upload = await client.upload(new TextEncoder().encode(JSON.stringify(request)), projectId);
   try {
-    const plan = await client.call<{ planId: string }>("release_plan", { transferId: upload.transferId });
+    const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
+    const plan = await client.call<{ planId: string }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });
     return { planId: plan.planId, receipt: await client.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId }) };
   } finally { await client.cancel(upload.transferId).catch(() => {}); }
 }
@@ -138,12 +139,48 @@ async function sourcePackage(id: string, directory: string) {
   const upload = await writer.upload(new TextEncoder().encode("attachment bytes"));
   const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
-  const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { deploymentId: source.id, name: "Mirror", files: ["public"] });
-  const exported = await owner.call<Exported>("project_export", { deploymentId: source.id });
+  const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { projectId: source.id, name: "Mirror", files: ["public"] });
+  const exported = await owner.call<Exported>("project_export", { projectId: source.id });
   return { source, cookie, fileId: file.id, key, exported, files: await download(owner, exported, directory) };
 }
 
 describe("chunked package", () => {
+  test("a legacy export keeps saved source metadata separate from the installed release", async () => {
+    const id = "pkg_legacy_metadata";
+    const receipt = await publish(id);
+    const folder = path.join(root, "data", "apps", id);
+    const settingsPath = path.join(folder, "konae.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    delete settings.released;
+    await writeFile(settingsPath, JSON.stringify(settings));
+    const recordPath = path.join(folder, ".konae", "deployment.json");
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    delete record.released;
+    await writeFile(recordPath, JSON.stringify(record));
+    await writeFile(path.join(folder, ".konae", "sources.json"), JSON.stringify({
+      name: "Legacy saved draft", slug: "legacy-draft", updatedAt: 77, directories: ["empty/nested"],
+      manifest: { version: 1, visibility: "private", fileAccess: "app-users" },
+    }));
+
+    const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
+    try {
+      const archive = new Map(readTar(await owner.download(exported.folder)).map((entry) => [entry.path, entry.contents]));
+      const portableSettings = JSON.parse(new TextDecoder().decode(archive.get("konae.json")!));
+      expect(portableSettings.name).toBe("Legacy saved draft");
+      expect(portableSettings.slug).toBe("legacy-draft");
+      expect(portableSettings.visibility).toBe("private");
+      expect(portableSettings.manifest.fileAccess).toBe("app-users");
+      expect(portableSettings.manifest.runtime).toBeUndefined();
+      expect(portableSettings.directories).toEqual(["empty/nested"]);
+      expect(portableSettings.released.actions).toBe(record.actions);
+      expect(portableSettings.released.schemaSql).toContain("CREATE TABLE IF NOT EXISTS");
+      expect(portableSettings.released.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(exported.sourcesAhead).toBe(false);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+    }
+  });
+
   test("an export compares every saved file with the release and clears the warning after a revert", async () => {
     const id = "pkg_source_digest";
     const request = payload(id);
@@ -161,8 +198,9 @@ describe("chunked package", () => {
     };
     await save(original);
     const { receipt } = await release(owner, { ...request, project: source }, id);
+    revision = 2; // A release advances the source revision with the app/ it installed.
     const ahead = async () => {
-      const exported = await owner.call<Exported>("project_export", { deploymentId: receipt.id });
+      const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
       try { return exported.sourcesAhead; }
       finally {
         for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId);
@@ -177,6 +215,39 @@ describe("chunked package", () => {
     expect(await ahead()).toBe(true);
     await save(original);
     expect(await ahead()).toBe(false);
+  });
+
+  test("an export carries a saved file that is not text byte for byte, and compares its bytes with the release", async () => {
+    const id = "pkg_binary_sources";
+    const request = payload(id);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff, 0xfe]);
+    const files = { ...request.project.files, "index.html": "<main><img src=\"logo.png\" alt=\"\"></main>", "public/logo.png": encodeBase64(png) };
+    const encodings = { "public/logo.png": "base64" };
+    const manifest = { ...request.project.manifest, runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "optional" }, files: { access: "deployment" } } };
+    const source = { ...request.project, manifest, files, encodings, directories: [], updatedAt: 1 };
+    await owner.call("project_create", { projectId: id, name: source.name });
+    const upload = await owner.upload(new TextEncoder().encode(JSON.stringify(source)), id);
+    try { await owner.call("project_sources_save", { projectId: id, transferId: upload.transferId, expectedRevision: 0 }); }
+    finally { await owner.cancel(upload.transferId); }
+    const artifact = { ...request.artifact, files: { ...request.artifact.files, "logo.png": encodeBase64(png) }, encodings: { "logo.png": "base64" } };
+    const { receipt } = await release(owner, { ...request, project: source, artifact }, id);
+    const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
+    try {
+      expect(exported.sourcesAhead).toBe(false);
+      const folder = new Map(readTar(await owner.download(exported.folder)).map((entry) => [entry.path, entry.contents]));
+      expect(folder.get("app/public/logo.png")).toEqual(png);
+      expect(folder.get("dist/logo.png")).toEqual(png);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+    }
+
+    const { "public/logo.png": _logo, ...withoutLogo } = files;
+    const next = await owner.upload(new TextEncoder().encode(JSON.stringify({ ...source, files: withoutLogo, encodings: undefined, updatedAt: 2 })), id);
+    try { await owner.call("project_sources_save", { projectId: id, transferId: next.transferId, expectedRevision: 2 }); }
+    finally { await owner.cancel(next.transferId); }
+    const after = await owner.call<Exported>("project_export", { projectId: receipt.id });
+    for (const transfer of [after.folder, ...Object.values(after.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+    expect(after.sourcesAhead).toBe(true);
   });
 
   test("moves rows, accounts and files into a new app, drops sessions, and a repeated apply returns its receipt", async () => {
@@ -207,16 +278,20 @@ describe("chunked package", () => {
     const first = await release(owner, { ...payload("pkg_target"), initialPackage: { manifest, components } }, "pkg_target");
     expect(first.receipt.signupPolicy).toEqual(manifest.signupPolicy);
     expect(await owner.call("release_apply", { planId: first.planId })).toEqual(first.receipt);
+    for (const transferId of Object.values(components)) {
+      await expect(owner.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
+      await expect(owner.cancel(transferId)).resolves.toMatchObject({ ok: true });
+    }
     const inspected = await owner.call<{ deployment: { id: string } }>("project_inspect", { projectId: "pkg_target" });
     expect(inspected.deployment.id).toBe(first.receipt.id);
     const today = new Date().toISOString().slice(0, 10);
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: first.receipt.id, from: yesterday, to: today });
-    expect(usage.totals).toEqual(expect.arrayContaining([
+    const usage = await owner.call<{ usage: { totals: { kind: string; name: string; count: number }[] } }>("usage_summary", { projectId: first.receipt.id, from: yesterday, to: today });
+    expect(usage.usage.totals).toEqual(expect.arrayContaining([
       { kind: "signup", name: "", count: 1 }, { kind: "action", name: "notes.create", count: 1 }, { kind: "upload", name: "", count: 1 },
     ]));
 
-    const monitor = await owner.call<UsageSummary>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    const monitor = await owner.call<UsageSummary>("usage_summary", { projectId: first.receipt.id, from: yesterday, to: today });
     expect(monitor.coverage.startedAt).toBeNumber();
     expect(monitor.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ name: "notes.create", origin: "runtime", count: 1 })]));
     expect(monitor.accounts).toMatchObject({ active: 1, opens: 0, actions: 1, top: [
@@ -226,7 +301,7 @@ describe("chunked package", () => {
 
     const moved = runtime(first.receipt.hostname, await account(first.receipt.hostname, "login", "writer@pkg_source.test"));
     expect(await moved.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Moved with the package" }]);
-    const continued = await owner.call<UsageSummary>("usage_summary", { deploymentId: first.receipt.id, from: yesterday, to: today });
+    const continued = await owner.call<UsageSummary>("usage_summary", { projectId: first.receipt.id, from: yesterday, to: today });
     expect(continued.accounts).toMatchObject({ active: 1, actions: 2, top: [
       { account: monitor.accounts!.top[0].account, email: "writer@pkg_source.test", actions: 2 },
     ] });
@@ -237,12 +312,45 @@ describe("chunked package", () => {
     expect(new TextDecoder().decode(await moved.download(await moved.call<Transfer>("files_read", { fileId })))).toBe("attachment bytes");
     expect(await runtime(first.receipt.hostname, cookie).call("auth_session")).toMatchObject({ role: "anonymous" });
     // The destination lists the origin's key as revoked at import, and refuses it.
-    const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { deploymentId: first.receipt.id });
+    const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { projectId: first.receipt.id });
     expect(keys.keys).toEqual([expect.objectContaining({ keyId: key.keyId, name: "Mirror", files: ["public"], revokedAt: expect.any(Number), revokedReason: "import" })]);
     const refused = await fetch(`${url}/_konae/files/${fileId}`, { headers: { host: first.receipt.hostname, "x-forwarded-for": freshClient(), authorization: `Bearer ${key.key}` } });
     expect(refused.status).toBe(401);
     for (const id of Object.values(components)) await owner.cancel(id);
   }, 60_000);
+
+  test("retries component cleanup after first-party cancellation removes the release JSON", async () => {
+    const directory = await mkdtemp(path.join(root, "cleanup-replay-"));
+    const { exported, files } = await sourcePackage("pkg_cleanup_source", directory);
+    const targetId = "pkg_cleanup_replay";
+    await owner.call("project_create", { projectId: targetId, name: "Cleanup replay" });
+    const components = await uploadPackage(owner, exported.manifest, files, targetId);
+    const request = { ...payload(targetId), initialPackage: { manifest: exported.manifest, components } };
+    const releaseUpload = await owner.upload(new TextEncoder().encode(JSON.stringify(request)), targetId);
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: releaseUpload.transferId, observedSourcesRevision: 0 });
+    const held = components.database;
+    const transfersDb = new Database(path.join(root, "data", "transfers.sqlite"));
+    try {
+      transfersDb.exec(`CREATE TRIGGER refuse_component_cleanup BEFORE DELETE ON transfers WHEN OLD.id='${held}' BEGIN SELECT RAISE(ABORT, 'injected component cleanup failure'); END;`);
+      await expect(owner.call("release_apply", { planId: plan.planId })).rejects.toThrow("injected component cleanup failure");
+      // First-party publishers cancel all uploads in finally, including the
+      // release JSON needed by the old cleanup implementation.
+      for (const transferId of [releaseUpload.transferId, ...Object.values(components)]) await owner.cancel(transferId).catch(() => {});
+      transfersDb.exec("DROP TRIGGER refuse_component_cleanup");
+
+      const receipt = await owner.call("release_apply", { planId: plan.planId });
+      expect(await owner.call("release_apply", { planId: plan.planId })).toEqual(receipt);
+      for (const transferId of [releaseUpload.transferId, ...Object.values(components)]) {
+        await expect(owner.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
+        expect(await Bun.file(path.join(root, "data", "transfers", transferId)).exists()).toBe(false);
+      }
+    } finally {
+      transfersDb.exec("DROP TRIGGER IF EXISTS refuse_component_cleanup");
+      transfersDb.close();
+      for (const transfer of [...Object.values(exported.downloads), exported.folder]) await owner.cancel(transfer.transferId).catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("refuses a package for a project that already has a deployment", async () => {
     const directory = await mkdtemp(path.join(root, "export-"));
@@ -283,7 +391,7 @@ describe("chunked package", () => {
     await owner.call("project_create", { projectId: "pkg_quota", name: "Quota" });
     const sha256 = "a".repeat(64);
     await expect(owner.call("transfer_begin", { projectId: "pkg_quota", size: 64 * 1024 * 1024 + 1, sha256, component: "identity" })).rejects.toThrow("for the identity component");
-    await expect(owner.call("transfer_begin", { projectId: "pkg_quota", size: 32 * 1024 * 1024 + 1, sha256 })).rejects.toThrow("outside the limit");
+    await expect(owner.call("transfer_begin", { projectId: "pkg_quota", size: 32 * 1024 * 1024 + 1, sha256 })).rejects.toThrow("An upload holds 1 byte to 32 MiB.");
     const accepted = await owner.call<Transfer>("transfer_begin", { projectId: "pkg_quota", size: 256 * 1024 * 1024, sha256, component: "database" });
     await owner.cancel(accepted.transferId);
   });
@@ -294,13 +402,13 @@ describe("chunked package", () => {
     for (const scopes of [["read"], ["publish"], ["read", "write", "publish"]]) {
       const client = await delegate(scopes, ["pkg_permission"]);
       for (const name of ["project_export"]) {
-        await expect(client.call(name, { deploymentId: source.id })).rejects.toThrow("Unknown tool or insufficient permission");
+        await expect(client.call(name, { projectId: source.id })).rejects.toThrow("Unknown tool or insufficient permission");
       }
     }
     const elsewhere = await delegate(["export_data"], ["pkg_other"]);
-    await expect(elsewhere.call("project_export", { deploymentId: source.id })).rejects.toThrow("outside this token's grants");
+    await expect(elsewhere.call("project_export", { projectId: source.id })).rejects.toThrow("outside this token's grants");
     const exporter = await delegate(["export_data"], ["pkg_permission"]);
-    const exported = await exporter.call<Exported>("project_export", { deploymentId: source.id });
+    const exported = await exporter.call<Exported>("project_export", { projectId: source.id });
     for (const transfer of [...Object.values(exported.downloads), exported.folder]) await exporter.cancel(transfer.transferId);
   }, 30_000);
 
@@ -309,8 +417,8 @@ describe("chunked package", () => {
     const writer = runtime(source.hostname, await account(source.hostname, "signup", "writer@leak.test"));
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "first" } });
     // About 300 KiB of rows, so the database download takes several blocks.
-    await owner.call("database_execute", { deploymentId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
-    const exported = await owner.call<Exported>("project_export", { deploymentId: source.id });
+    await owner.call("database_execute", { projectId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
+    const exported = await owner.call<Exported>("project_export", { projectId: source.id });
     expect(exported.downloads.database.size).toBeGreaterThan(4 * 64 * 1024);
     const reader = await delegate(["read"], ["pkg_leak"]);
     for (const transfer of Object.values(exported.downloads)) {
@@ -326,8 +434,8 @@ describe("chunked package", () => {
       // The source app recorded Usage, so its package has a fourth component.
       expect(details(0)).toEqual(["database", "files", "identity", "usage"]);
       expect(details(1)).toEqual(["database", "files", "folder", "identity", "usage"]);
-      const reads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read'").get() as { n: number };
-      expect(reads.n).toBe(0);
+      const deniedReads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read' AND ok=0").get() as { n: number };
+      expect(deniedReads.n).toBe(0);
       // Component uploads in the earlier tests wrote one row per component, not one per block.
       const writes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_write'").get() as { n: number };
       const completes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_complete' AND ok=1").get() as { n: number };

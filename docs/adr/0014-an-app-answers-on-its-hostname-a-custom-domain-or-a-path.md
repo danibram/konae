@@ -25,7 +25,7 @@ The home is a public app. The Deployment whose path address holds the name `kona
 
 ### A Deployment may hold one custom domain
 
-- `domain_read` needs `read`. `domain_set { deploymentId, hostname }` and `domain_clear` need `publish`, the permission that decides what a Deployment serves.
+- `domain_read { projectId }` needs `read`. `domain_set { projectId, hostname }` and `domain_clear { projectId }` need `publish`, the permission that decides what a Deployment serves.
 - A hostname is a DNS name with at least two labels, not an IP address, not `localhost`, not under the installation's suffix and not an editor or MCP host. `kernel-rs/kernel/src/domain-cases.json` holds every rule, and the Kernel and `src/lib/domain-name.ts` both run it.
 - The first `domain_set` records a pending claim with a random token and answers with the TXT record `_konae.<hostname>` that must hold it. Each later `domain_set` looks the record up with the Kernel's own DNS query. The alias serves when one of the record's values is the token. A name another Deployment serves is refused, and a pending claim blocks nobody.
 - A verified alias is the app's own origin, with no other change: the runtime endpoint's `Origin` check, host-only cookies, the policy's `'self'`, routes, the file path and the maintenance page. The generated hostname keeps answering, and a session made on one host is not sent to the other.
@@ -34,9 +34,9 @@ The home is a public app. The Deployment whose path address holds the name `kona
 
 ### An app may answer on a path
 
-- The owner turns the path on with `path_set { deploymentId, enabled, name?, acceptSharedOrigin? }`. The app answers on `/p/<deployment id>`, which never changes, and on `/p/<name>` when the owner names it. The id address keeps answering next to the name, so a shared link never breaks.
+- The owner turns the path on with `path_set { projectId, enabled, name?, acceptSharedOrigin? }`. The app answers on `/p/<deployment id>`, which never changes, and on `/p/<name>` when the owner names it. The id address keeps answering next to the name, so a shared link never breaks.
 - A name is 3 to 40 lowercase letters, digits and hyphens, is not shaped like a UUID and is not reserved (`_konae`, `p`, `app`, `mcp`, `www`, `api`, `admin`, `runtime.js`). `kernel-rs/kernel/src/path-cases.json` holds the rules for both doors.
-- The router strips `/p/<x>` before the request reaches the app, so the runtime endpoint, files, `/runtime.js` and routes answer under the prefix unchanged. The SDK reads its base from `location.pathname`, so one artifact answers on a hostname, an alias and a path. The Gate and the release warn about a page that names a root-relative URL, because it leaves the prefix.
+- The router strips `/p/<x>` before the request reaches the app, so the runtime endpoint, files, `/runtime.js` and routes answer under the prefix unchanged. The SDK reads its base from `location.pathname`, so one artifact answers on a hostname, an alias and a path. The TypeScript builder warns about a page that names a root-relative URL, because it leaves the prefix; the Kernel does not run that warning check.
 - An export carries whether the path is on and its name, never the id. On import the app gets its own `/p/<id>`, keeps the name when it is free there, and the import says so when it is not.
 
 ### Sharing an origin is the owner's choice, said before it happens

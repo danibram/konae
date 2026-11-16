@@ -27,7 +27,7 @@ pub const ADMIN_MCP_BODY_BYTES: usize = ADMIN_CHUNK.div_ceil(3) * 4 + 64 * 1024;
 pub fn chunk_bytes(principal: &str) -> usize {
     if principal.starts_with("runtime:") { CHUNK } else { ADMIN_CHUNK }
 }
-pub const MAX_TRANSFER: usize = 32 * 1024 * 1024;
+pub const MAX_TRANSFER: usize = super::size::UPLOAD_BYTES;
 /// Active transfers every principal outside the runtime shares.
 pub const MAX_ADMIN_TRANSFERS: usize = 128;
 pub const MAX_DEPLOYMENT_TRANSFERS: usize = 32;
@@ -59,8 +59,25 @@ pub fn transfer_path(state: &AppState, id: &str) -> Result<PathBuf> {
     Ok(state.data_root.join("transfers").join(id))
 }
 
+/// Whether a completed owner upload remains available for post-commit cleanup.
+/// Missing uploads are already consumed, so callers can safely retry cleanup.
+pub fn completed_upload(state: &AppState, principal: &str, id: &str) -> Result<bool> {
+    match transfer(state, principal, &json!({"transferId": id})) {
+        Ok(upload) => {
+            anyhow::ensure!(upload["direction"] == "upload" && upload["complete"] == true, "Completed upload required.");
+            Ok(true)
+        }
+        Err(error_value) if error_value.to_string().contains("Transfer not found or expired") => Ok(false),
+        Err(error_value) => Err(error_value),
+    }
+}
+
 
 pub fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
+    owned_transfer(state, principal, a)?.ok_or_else(|| anyhow::anyhow!("Transfer not found or expired."))
+}
+
+pub fn owned_transfer(state: &AppState, principal: &str, a: &Value) -> Result<Option<Value>> {
     let id = a["transferId"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Transfer ID required."))?;
@@ -72,9 +89,7 @@ pub fn transfer(state: &AppState, principal: &str, a: &Value) -> Result<Value> {
             |r| r.get(0),
         )
         .optional()?;
-    Ok(serde_json::from_str(&body.ok_or_else(|| {
-        anyhow::anyhow!("Transfer not found or expired.")
-    })?)?)
+    body.map(|value| serde_json::from_str(&value).map_err(Into::into)).transpose()
 }
 
 
@@ -256,7 +271,7 @@ pub async fn transfer_call(
                 "Transfer size is outside the limit of {limit} bytes for the {component} component."
             ),
             None if runtime => anyhow::ensure!(size > 0 && size <= limit, "{}", state.files.limits.file_size_refused()),
-            None => anyhow::ensure!(size > 0 && size <= limit, "Transfer size is outside the limit."),
+            None => anyhow::ensure!(size > 0 && size <= limit, "{}", super::size::upload_refused(size as usize)),
         }
         anyhow::ensure!(
             hash.len() == 64
@@ -275,6 +290,26 @@ pub async fn transfer_call(
     let id = a["transferId"].as_str().unwrap();
     let path = transfer_path(state, id)?;
     let _guard = database_lock(state, &format!("transfer:{id}")).await;
+    if name == "transfer_cancel" && !principal.starts_with("runtime:") {
+        // A guessed transfer ID must never let one owner remove another
+        // owner's file, even though cancellation of a missing ID is a no-op.
+        if owned_transfer(state, principal, a)?.is_none() {
+            return Ok(json!({"ok":true}));
+        }
+        // Remove bytes before the row. If unlinking fails, the upload remains
+        // discoverable and a later cancel can retry. If deleting the row
+        // fails, a missing file is harmless on retry.
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error_value) => return Err(error_value.into()),
+        }
+        store(state)?.execute(
+            "DELETE FROM transfers WHERE id=?1 AND principal=?2",
+            params![id, principal],
+        )?;
+        return Ok(json!({"ok":true}));
+    }
     let mut t = transfer(state, principal, a)?;
     match name {
         "transfer_cancel" => {
@@ -363,6 +398,35 @@ pub async fn transfer_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn owner_cancel_keeps_retry_state_when_unlink_fails_and_isolated_for_other_principals() {
+        let root = std::env::temp_dir().join(format!("konae-transfer-cancel-{}", Uuid::new_v4()));
+        let (state, _) = crate::tests::login_test_state(&root, "public").await;
+        let begun = new_transfer(&state, "owner:alice", json!({"direction":"upload","size":1,"sha256":"00","complete":false,"projectId":"app_a"})).await.unwrap();
+        let id = begun["transferId"].as_str().unwrap();
+        let path = transfer_path(&state, id).unwrap();
+
+        // A directory at the transfer path makes remove_file fail on each
+        // supported platform, while retaining the same transfer row.
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::create_dir(&path).await.unwrap();
+        let failed = transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap_err();
+        assert!(!failed.to_string().is_empty(), "{failed}");
+        assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_some());
+
+        // A different owner gets the idempotent missing/foreign no-op, and
+        // cannot unlink the original owner's path.
+        transfer_call(&state, "owner:bob", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
+        assert!(tokio::fs::metadata(&path).await.unwrap().is_dir());
+        assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_some());
+
+        tokio::fs::remove_dir(&path).await.unwrap();
+        transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
+        assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_none());
+        transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     #[tokio::test]
     async fn one_body_completes_an_upload_and_a_wrong_one_leaves_it_open() {

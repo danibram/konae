@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { McpClient } from "../src/mcp/client";
+import { McpClient, type Transfer } from "../src/mcp/client";
+import { readTar } from "../src/lib/tar";
 import { INIT_TEMPLATES, buildLocal, configOf, initLocal, localKernel, publishLocal, readSettings, resetData, setDevSecrets } from "../scripts/konae";
 import { pullLocal, readPulled } from "../scripts/pull";
 import { provideLocalAppDependencies } from "./local-app-deps";
@@ -147,7 +148,7 @@ describe("init, publish, pull, dev --reset", () => {
 
     const published = await publishLocal(app, { ...config, url: origin.url }, origin.token);
     expect(published.first).toBe(true);
-    await origin.owner.call("signup_policy_set", { deploymentId: published.id, mode: "open" });
+    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
     const ana = await member(origin, hostOf(published), "signup");
     await ana.call("actions_invoke", { name: "notes.create", input: { title: "Written on the origin" } });
 
@@ -190,7 +191,7 @@ describe("init, publish, pull, dev --reset", () => {
     const born = configOf(await initLocal(next, { name: "Next version" }));
     await provideLocalAppDependencies(next);
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
-    await origin.owner.call("signup_policy_set", { deploymentId: published.id, mode: "open" });
+    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
     await (await member(origin, hostOf(published), "signup")).call("actions_invoke", { name: "notes.create", input: { title: "Before the column" } });
     const pulled = await pullLocal(next, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
 
@@ -200,10 +201,226 @@ describe("init, publish, pull, dev --reset", () => {
     const schema = await readFile(path.join(next, "app", "schema.sql"), "utf8");
     expect(schema).toMatch(/created_at[^,\n]*\n\s*\);/);
     await writeFile(path.join(next, "app", "schema.sql"), schema.replace(/(created_at[^,\n]*)\n(\s*\);)/, "$1,\n  pinned INTEGER NOT NULL DEFAULT 0\n$2"));
+    await writeFile(path.join(next, "app", "index.html"), `${await readFile(path.join(next, "app", "index.html"), "utf8")}\n<!-- built next version -->\n`);
 
     await importPulled(next, pulled);
     const released = await serveLocally(next);
     const there = await member(released.local, hostOf(released), "login");
     expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Before the column", pinned: 0 }]);
   }, 120_000);
+});
+
+/** Every file under `directory` by its path inside it, as bytes. */
+async function filesOf(directory: string): Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>();
+  for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const full = path.join(entry.parentPath, entry.name);
+    files.set(path.relative(directory, full).split(path.sep).join("/"), new Uint8Array(await readFile(full)));
+  }
+  return files;
+}
+
+describe("a file of app/ that is not text", () => {
+  test("publish leaves every file of app/ in the installation byte for byte, the export carries them, and a build of the export gives the dist/ the installation serves", async () => {
+    const folder = path.join(root, "binary");
+    const born = configOf(await initLocal(folder, { name: "Binary folder", template: "tasks" }));
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xff, 0xfe]);
+    await mkdir(path.join(folder, "app/public"), { recursive: true });
+    await writeFile(path.join(folder, "app/public/logo.png"), png);
+    await writeFile(path.join(folder, "app/public/icon.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+    await writeFile(path.join(folder, "app/public/site.webmanifest"), '\ufeff{"name":"Binary folder"}\n');
+    await writeFile(path.join(folder, "app/notes.md"), "Kept with the sources.\n");
+    const published = await publishLocal(folder, { ...born, url: origin.url }, origin.token, () => {});
+    const sources = await filesOf(path.join(folder, "app"));
+    expect(await filesOf(path.join(root, "origin", "apps", published.id, "app"))).toEqual(sources);
+
+    const client = new McpClient(`${origin.url}/mcp`, { token: origin.token });
+    const exported = await client.call<{ folder: Transfer; downloads: Record<string, Transfer>; sourcesAhead: boolean }>("project_export", { projectId: published.id });
+    let entries: ReturnType<typeof readTar>;
+    try { entries = readTar(await client.download(exported.folder)); }
+    finally { for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await client.cancel(transfer.transferId).catch(() => {}); }
+    expect(exported.sourcesAhead).toBe(false);
+    const copy = path.join(root, "binary-export");
+    for (const entry of entries) {
+      await mkdir(path.dirname(path.join(copy, entry.path)), { recursive: true });
+      await writeFile(path.join(copy, entry.path), entry.contents);
+    }
+    expect(await filesOf(path.join(copy, "app"))).toEqual(sources);
+    const served = await filesOf(path.join(copy, "dist"));
+    expect(served.get("logo.png")).toEqual(png);
+    await rm(path.join(copy, "dist"), { recursive: true });
+    await buildLocal(copy);
+    expect(await filesOf(path.join(copy, "dist"))).toEqual(served);
+  }, 60_000);
+
+  test("pull recovers the published sources, and publish refuses a folder behind the observed revision", async () => {
+    const folder = path.join(root, "source-roundtrip");
+    const settings = configOf(await initLocal(folder, { name: "Source round trip" }));
+    await provideLocalAppDependencies(folder);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0xfe, 0xff]);
+    await mkdir(path.join(folder, "app/public"), { recursive: true });
+    await writeFile(path.join(folder, "app/public/logo.png"), png);
+    const published = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
+    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    const ana = await member(origin, hostOf(published), "signup");
+    await ana.call("actions_invoke", { name: "notes.create", input: { title: "Kept through source changes" } });
+
+    const pulled = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, settings.project.id);
+    expect(pulled.sourcesInstalled).toBe(true);
+    expect(pulled.sourcesRevision).toBe(1);
+    expect(JSON.parse(await readFile(path.join(folder, ".konae/source-revision.json"), "utf8")).sourcesRevision).toBe(1);
+    expect(await readFile(path.join(folder, "app/public/logo.png"))).toEqual(png);
+    expect(await readFile(path.join(folder, ".konae/pull/data/database.sqlite"))).toBeInstanceOf(Buffer);
+
+    const schemaPath = path.join(folder, "app/schema.sql");
+    const schema = await readFile(schemaPath, "utf8");
+    await writeFile(schemaPath, schema.replace(/\n\);\s*$/, ",\n  pinned INTEGER NOT NULL DEFAULT 0\n);"));
+    const actionsPath = path.join(folder, "app/actions.json");
+    const actions = JSON.parse(await readFile(actionsPath, "utf8"));
+    actions.actions["notes.list"].statement = actions.actions["notes.list"].statement.replace("id, title, created_at", "id, title, pinned, created_at");
+    await writeFile(actionsPath, JSON.stringify(actions, null, 2));
+    const next = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
+    const nextAccount = await member(origin, hostOf(next), "login");
+    expect(await nextAccount.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Kept through source changes", pinned: 0 }]);
+    expect(await readFile(path.join(root, "origin/apps", next.id, "app/public/logo.png"))).toEqual(png);
+
+    const inspected = await origin.owner.call<{ project: { name: string; slug: string }; sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: settings.project.id });
+    const saved = await origin.owner.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId: settings.project.id });
+    const source = JSON.parse(new TextDecoder().decode(await origin.owner.download(saved.transfer)));
+    source.files["remote-change.txt"] = "Saved on the installation";
+    const sourceActions = JSON.parse(await readFile(path.join(folder, "app/actions.json"), "utf8"));
+    source.manifest = { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: Object.entries(sourceActions.actions).map(([name, action]: [string, any]) => ({ name, kind: action.kind, access: action.access })) }, auth: { mode: "required" }, files: { access: "deployment" } } };
+    const sourceDocument = { ...source, id: settings.project.id, name: inspected.project.name, slug: inspected.project.slug, updatedAt: Date.now() };
+    const sourceUpload = await origin.owner.upload(new TextEncoder().encode(JSON.stringify(sourceDocument)), settings.project.id);
+    try { await origin.owner.call("project_sources_save", { projectId: settings.project.id, transferId: sourceUpload.transferId, expectedRevision: saved.revision }); }
+    finally { await origin.owner.cancel(sourceUpload.transferId); }
+    const stalePublish = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {}).then(() => null, (error) => error);
+    expect(stalePublish?.refusal?.code).toBe("sources.revision-conflict");
+    expect((await origin.owner.call<{ deployment: { artifactVersion: string } }>("project_inspect", { projectId: settings.project.id })).deployment.artifactVersion).toBe(inspected.deployment.artifactVersion);
+
+    const recovered = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, settings.project.id);
+    expect(recovered.sourcesInstalled).toBe(true);
+    expect(await readFile(path.join(folder, "app/remote-change.txt"), "utf8")).toBe("Saved on the installation");
+    const { visibility: _visibility, signupPolicy: _signupPolicy, runtime: _runtime, ...pulledManifest } = source.manifest;
+    expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).manifest).toEqual(pulledManifest);
+    const final = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
+    expect(final.id).toBe(published.id);
+    expect(await nextAccount.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Kept through source changes", pinned: 0 }]);
+  }, 120_000);
+
+  test("a source revision marker is bound to its installation and project", async () => {
+    const port = Number(new URL(origin.url).port) + 2;
+    const other = await start("other-origin", port);
+    try {
+      const source = path.join(root, "scope-source");
+      const sourceSettings = configOf(await initLocal(source, { name: "Scoped source" }));
+      sourceSettings.project.id = "scope_collision";
+      await writeFile(path.join(source, "konae.json"), JSON.stringify(sourceSettings, null, 2) + "\n");
+      await provideLocalAppDependencies(source);
+      await writeFile(path.join(source, "app/app.js"), "window.sourceInstallation = 'first';");
+      await publishLocal(source, { ...sourceSettings, url: origin.url }, origin.token, () => {});
+
+      const collision = path.join(root, "scope-collision");
+      const collisionSettings = configOf(await initLocal(collision, { name: "Other installation copy" }));
+      collisionSettings.project.id = "scope_collision";
+      await writeFile(path.join(collision, "konae.json"), JSON.stringify(collisionSettings, null, 2) + "\n");
+      await provideLocalAppDependencies(collision);
+      await writeFile(path.join(collision, "app/app.js"), "window.sourceInstallation = 'second';");
+      const otherRelease = await publishLocal(collision, { ...collisionSettings, url: other.url }, other.token, () => {});
+      const before = await other.owner.call<{ sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: "scope_collision" });
+      const refused = await publishLocal(source, { ...sourceSettings, url: other.url }, other.token, () => {}).then(() => null, (error) => error);
+      expect(refused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(await other.owner.call("project_inspect", { projectId: "scope_collision" })).toMatchObject(before);
+      expect(await readFile(path.join(root, "other-origin", "apps", otherRelease.id, "app/app.js"), "utf8")).toBe("window.sourceInstallation = 'second';");
+
+      const changedId = path.join(root, "scope-changed-id");
+      const changedSettings = configOf(await initLocal(changedId, { name: "Changed project id" }));
+      changedSettings.project.id = "scope_other_project";
+      await writeFile(path.join(changedId, "konae.json"), JSON.stringify(changedSettings, null, 2) + "\n");
+      await provideLocalAppDependencies(changedId);
+      await publishLocal(changedId, { ...changedSettings, url: other.url }, other.token, () => {});
+      const otherProjectBefore = await other.owner.call<{ sourcesRevision: number; deployment: { artifactVersion: string } }>("project_inspect", { projectId: "scope_other_project" });
+      sourceSettings.project.id = "scope_other_project";
+      await writeFile(path.join(source, "konae.json"), JSON.stringify(sourceSettings, null, 2) + "\n");
+      const changedProjectRefused = await publishLocal(source, { ...sourceSettings, url: other.url }, other.token, () => {}).then(() => null, (error) => error);
+      expect(changedProjectRefused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(await other.owner.call("project_inspect", { projectId: "scope_other_project" })).toMatchObject(otherProjectBefore);
+
+      await writeFile(path.join(source, ".konae/source-revision.json"), JSON.stringify({ sourcesRevision: 1, sourceDigest: "legacy", settingsDigest: "legacy" }));
+      const unscopedRefused = await publishLocal(source, { ...sourceSettings, url: other.url }, other.token, () => {}).then(() => null, (error) => error);
+      expect(unscopedRefused?.refusal?.code).toBe("sources.revision-conflict");
+      expect(await other.owner.call("project_inspect", { projectId: "scope_other_project" })).toMatchObject(otherProjectBefore);
+    } finally {
+      other.process.kill();
+      await other.process.exited;
+    }
+  }, 120_000);
+
+  test("pull stages changed remote settings when the local konae.json has edits, then records them after recovery", async () => {
+    const folder = path.join(root, "settings-recovery");
+    const settings = configOf(await initLocal(folder, { name: "Settings recovery" }));
+    await provideLocalAppDependencies(folder);
+    await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
+    const saved = await origin.owner.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId: settings.project.id });
+    const source = JSON.parse(new TextDecoder().decode(await origin.owner.download(saved.transfer)));
+    const actions = JSON.parse(source.files["actions.json"]);
+    source.manifest = {
+      ...source.manifest,
+      visibility: "public",
+      connects: ["https://remote.example.test"],
+      runtime: {
+        database: { mode: "declared-actions", actions: Object.entries(actions.actions).map(([name, action]: [string, any]) => ({ name, kind: action.kind, access: action.access })) },
+        auth: { mode: "required" }, files: { access: "deployment" },
+      },
+    };
+    const upload = await origin.owner.upload(new TextEncoder().encode(JSON.stringify(source)), settings.project.id);
+    try { await origin.owner.call("project_sources_save", { projectId: settings.project.id, transferId: upload.transferId, expectedRevision: saved.revision }); }
+    finally { await origin.owner.cancel(upload.transferId); }
+
+    const localSettings = await readSettings(folder);
+    localSettings.manifest.connects = ["https://local.example.test"];
+    await writeFile(path.join(folder, "konae.json"), JSON.stringify(localSettings, null, 2) + "\n");
+    const client = new McpClient(`${origin.url}/mcp`, { token: origin.token });
+    const staged = await pullLocal(folder, client, origin.url, settings.project.id);
+    expect(staged.sourcesInstalled).toBe(false);
+    expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).manifest.connects).toEqual(["https://local.example.test"]);
+    expect(JSON.parse(await readFile(path.join(folder, ".konae/pull/konae.json"), "utf8")).manifest.connects).toEqual(["https://remote.example.test"]);
+    expect(JSON.parse(await readFile(path.join(folder, ".konae/pull/konae.json"), "utf8")).visibility).toBe("public");
+    expect(JSON.parse(await readFile(path.join(folder, ".konae/source-revision.json"), "utf8")).sourcesRevision).toBe(1);
+
+    await rm(path.join(folder, "app"), { recursive: true });
+    await cp(path.join(folder, ".konae/pull/app"), path.join(folder, "app"), { recursive: true });
+    await cp(path.join(folder, ".konae/pull/konae.json"), path.join(folder, "konae.json"));
+    const recovered = await pullLocal(folder, client, origin.url, settings.project.id);
+    expect(recovered.sourcesInstalled).toBe(true);
+    expect(JSON.parse(await readFile(path.join(folder, ".konae/source-revision.json"), "utf8")).sourcesRevision).toBe(2);
+    expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).manifest.connects).toEqual(["https://remote.example.test"]);
+    expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).visibility).toBe("public");
+  }, 60_000);
+
+  test("a failure retiring app/ leaves the original app, pull data and revision marker untouched", async () => {
+    const folder = path.join(root, "retire-failure");
+    const settings = configOf(await initLocal(folder, { name: "Retire failure" }));
+    await provideLocalAppDependencies(folder);
+    await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
+    const client = new McpClient(`${origin.url}/mcp`, { token: origin.token });
+    await pullLocal(folder, client, origin.url, settings.project.id);
+    const oldApp = await readFile(path.join(folder, "app/actions.json"));
+    const oldSettings = await readFile(path.join(folder, "konae.json"));
+    const oldMarker = await readFile(path.join(folder, ".konae/source-revision.json"));
+    const oldRecord = await readFile(path.join(folder, ".konae/pull/pull.json"));
+    await writeFile(path.join(folder, ".konae/pull/keep.bin"), new Uint8Array([0, 255, 7]));
+    const appPath = path.join(folder, "app");
+    const operations = { rename: async (from: string, to: string) => {
+      if (from === appPath) throw new Error("Injected app retirement failure");
+      return rename(from, to);
+    } };
+    await expect(pullLocal(folder, client, origin.url, settings.project.id, operations)).rejects.toThrow("Injected app retirement failure");
+    expect(await readFile(path.join(folder, "app/actions.json"))).toEqual(oldApp);
+    expect(await readFile(path.join(folder, "konae.json"))).toEqual(oldSettings);
+    expect(await readFile(path.join(folder, ".konae/source-revision.json"))).toEqual(oldMarker);
+    expect(await readFile(path.join(folder, ".konae/pull/pull.json"))).toEqual(oldRecord);
+    expect(new Uint8Array(await readFile(path.join(folder, ".konae/pull/keep.bin")))).toEqual(new Uint8Array([0, 255, 7]));
+  }, 60_000);
 });

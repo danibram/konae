@@ -70,6 +70,22 @@ export type RuntimeSession = {
 
 export type PreviewActor = "guest" | "alice" | "bob";
 
+export type RuntimeHostOptions = {
+  fileAccess?: "app-users";
+  actorAppId?: string;
+  storage?: RuntimeStorage;
+};
+
+export type RuntimeStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+class MemoryRuntimeStorage implements RuntimeStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string) { return this.values.get(key) ?? null; }
+  setItem(key: string, value: string) { this.values.set(key, String(value)); }
+  removeItem(key: string) { this.values.delete(key); }
+}
+
 export type DatabaseAdminHost = {
   inspectDatabase(): Promise<DatabaseTable[]>;
   runSql(sql: string): Promise<DatabaseRunResult>;
@@ -142,13 +158,24 @@ export class MiniAppRuntimeHost {
   private schemaFailure: string | null = null;
   private actionProgram: ServerActionProgram = emptyActionProgram;
   private actionsFailure: string | null = null;
+  private fileAccess?: "app-users";
+  private readonly actorAppId: string;
+  private readonly storage: RuntimeStorage;
 
   /**
    * Never throws on bad Capsule files: the host is built during render, and a
    * throw there would take the whole editor down with it, on every reload. A
    * broken actions.json or schema.sql is reported through `diagnostics()`.
    */
-  constructor(private readonly appId: string, schema: string, actions: string, private fileAccess?: "app-users") {
+  constructor(
+    private readonly appId: string,
+    schema: string,
+    actions: string,
+    options: RuntimeHostOptions = {},
+  ) {
+    this.fileAccess = options.fileAccess;
+    this.actorAppId = options.actorAppId ?? appId;
+    this.storage = options.storage ?? localStorage;
     this.requestedSchema = schema;
     this.setActions(actions);
     this.dbPromise = this.openDatabase();
@@ -276,6 +303,32 @@ export class MiniAppRuntimeHost {
     return (await this.dbPromise).export();
   }
 
+  async cloneForProposal(appId: string, schema: string, actions: string, fileAccess?: "app-users") {
+    const db = await this.dbPromise;
+    const database = db.export();
+    const files = this.getFiles();
+    const backups = this.storage.getItem(this.databaseBackupsKey);
+    const databaseKey = `konae:database:${appId}`;
+    const filesKey = `konae:files:${appId}`;
+    const backupsKey = `konae:database-backups:${appId}`;
+    const storage = new MemoryRuntimeStorage();
+    let clone: MiniAppRuntimeHost | null = null;
+    try {
+      storage.setItem(databaseKey, bytesToBase64(database));
+      storage.setItem(filesKey, JSON.stringify(files));
+      if (backups !== null) storage.setItem(backupsKey, backups);
+
+      clone = new MiniAppRuntimeHost(appId, schema, actions, { fileAccess, actorAppId: this.actorAppId, storage });
+      clone.setPreviewActor(this.previewActor);
+      await clone.exportDatabase();
+      return clone;
+    } catch (error) {
+      if (clone) await clone.dispose(true);
+      else for (const key of [databaseKey, filesKey, backupsKey]) storage.removeItem(key);
+      throw error;
+    }
+  }
+
   async listDatabaseBackups(): Promise<DatabaseBackup[]> {
     return this.readDatabaseBackups().map(({ database: _database, ...backup }) => backup);
   }
@@ -290,7 +343,7 @@ export class MiniAppRuntimeHost {
       database: bytesToBase64(bytes),
     };
     const backups = [backup, ...this.readDatabaseBackups()].slice(0, localBackupLimit);
-    localStorage.setItem(this.databaseBackupsKey, JSON.stringify(backups));
+    this.storage.setItem(this.databaseBackupsKey, JSON.stringify(backups));
     const { database: _database, ...summary } = backup;
     return summary;
   }
@@ -513,16 +566,28 @@ export class MiniAppRuntimeHost {
   }
 
   reset() {
-    localStorage.removeItem(this.databaseKey);
-    localStorage.removeItem(this.filesKey);
+    this.storage.removeItem(this.databaseKey);
+    this.storage.removeItem(this.filesKey);
     this.notifyFiles();
     this.dbPromise = this.openDatabase(true);
+  }
+
+  async dispose(removeStoredState = false) {
+    const db = await this.dbPromise.catch(() => null);
+    db?.close();
+    if (!removeStoredState) return;
+    for (const key of [this.databaseKey, this.filesKey, this.databaseBackupsKey]) {
+      try { this.storage.removeItem(key); } catch { /* Storage may be unavailable in a restricted preview. */ }
+    }
+    this.sessionListeners.clear();
+    this.fileListeners.clear();
+    this.diagnosticListeners.clear();
   }
 
   /** Resolves with a usable database even when schema.sql fails; the failure goes to `diagnostics()`. */
   private async openDatabase(ignoreStored = false): Promise<Database> {
     const SQL = await loadSqlJs();
-    const stored = ignoreStored ? null : localStorage.getItem(this.databaseKey);
+    const stored = ignoreStored ? null : this.storage.getItem(this.databaseKey);
     const db = stored ? new SQL.Database(base64ToBytes(stored)) : new SQL.Database();
     this.appliedSchema = null;
     this.applySchema(db, this.requestedSchema);
@@ -537,7 +602,7 @@ export class MiniAppRuntimeHost {
   private getRuntimeSession(): RuntimeSession {
     if (this.previewActor === "guest") return { userId: "anonymous", name: "Anonymous", role: "anonymous" };
     return {
-      userId: `${this.previewActor}_${this.appId}`,
+      userId: `${this.previewActor}_${this.actorAppId}`,
       name: this.previewActor === "alice" ? "Alice" : "Bob",
       role: "member",
     };
@@ -590,7 +655,7 @@ export class MiniAppRuntimeHost {
       throw new Error("authentication-required");
     }
     const { action, params } = resolveServerAction(this.actionProgram, String(request.name), request.input, {
-      actorId: this.previewActor === "guest" ? null : `${this.previewActor}_${this.appId}`,
+      actorId: this.previewActor === "guest" ? null : `${this.previewActor}_${this.actorAppId}`,
     });
     // The preview keeps no Usage store. A signal action runs no SQL and answers
     // as the Kernel does, which records the Signal on a Deployment.
@@ -666,7 +731,7 @@ export class MiniAppRuntimeHost {
       this.persist(db);
     } catch (error) {
       const SQL = await loadSqlJs();
-      const stored = localStorage.getItem(this.databaseKey);
+      const stored = this.storage.getItem(this.databaseKey);
       const restored = stored ? new SQL.Database(base64ToBytes(stored)) : new SQL.Database();
       // The stored copy can predate a schema change whose own save failed.
       this.applySchema(restored, this.requestedSchema);
@@ -679,7 +744,7 @@ export class MiniAppRuntimeHost {
   private persist(db: Database, exported?: Uint8Array) {
     const bytes = exported ?? db.export();
     assertRuntimeDatabaseWithinLimits(bytes);
-    localStorage.setItem(this.databaseKey, bytesToBase64(bytes));
+    this.storage.setItem(this.databaseKey, bytesToBase64(bytes));
   }
 
   private tableColumns(db: Database, escapedName: string): string[] {
@@ -722,10 +787,10 @@ export class MiniAppRuntimeHost {
       url,
       createdAt: Date.now(),
       visibility,
-      ownerId: `${this.previewActor}_${this.appId}`,
+      ownerId: `${this.previewActor}_${this.actorAppId}`,
     };
     const files = this.readFiles();
-    localStorage.setItem(this.filesKey, JSON.stringify([file, ...files]));
+    this.storage.setItem(this.filesKey, JSON.stringify([file, ...files]));
     this.notifyFiles();
     return file;
   }
@@ -776,7 +841,7 @@ export class MiniAppRuntimeHost {
       return { ...file, visibility: "app-users" };
     }
     files[index] = { ...files[index], visibility };
-    localStorage.setItem(this.filesKey, JSON.stringify(files));
+    this.storage.setItem(this.filesKey, JSON.stringify(files));
     this.notifyFiles();
     const { url: _url, ...file } = files[index];
     return file;
@@ -796,14 +861,14 @@ export class MiniAppRuntimeHost {
   private deleteFile(payload: unknown) {
     const { files, index } = this.ownedFile(payload);
     const [removed] = files.splice(index, 1);
-    localStorage.setItem(this.filesKey, JSON.stringify(files));
+    this.storage.setItem(this.filesKey, JSON.stringify(files));
     this.notifyFiles();
     return { id: removed.id, deleted: true };
   }
 
   private readFiles(): StoredFile[] {
     try {
-      return JSON.parse(localStorage.getItem(this.filesKey) ?? "[]") as StoredFile[];
+      return JSON.parse(this.storage.getItem(this.filesKey) ?? "[]") as StoredFile[];
     } catch {
       return [];
     }
@@ -811,7 +876,7 @@ export class MiniAppRuntimeHost {
 
   private readDatabaseBackups(): StoredDatabaseBackup[] {
     try {
-      const parsed = JSON.parse(localStorage.getItem(this.databaseBackupsKey) ?? "[]") as unknown;
+      const parsed = JSON.parse(this.storage.getItem(this.databaseBackupsKey) ?? "[]") as unknown;
       if (!Array.isArray(parsed)) return [];
       return parsed.filter((backup): backup is StoredDatabaseBackup => (
         typeof backup === "object" && backup !== null

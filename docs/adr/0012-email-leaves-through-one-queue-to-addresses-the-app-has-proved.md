@@ -61,5 +61,5 @@ A mutation may declare `"notify": { "to": ..., "subject": "<template>", "body": 
 - Rotating `KONAE_MAIL_SECRET`, or the key it falls back to, fails pending jobs, and people ask for a new link.
 - A restore ends pending jobs, and an imported app sends none of its origin's email.
 - There is no per-recipient unsubscribe yet. Verification proves an address belongs to an account of the app, not consent to every notice, and the per-recipient budget bounds the harm.
-- The editor preview sends no email. `konae dev` writes it to the development mailbox file, and `konae events` lists it.
+- The editor preview sends no email. `konae dev` writes it to `.konae/kernel/mail-testbox.jsonl`, and `konae events` lists it.
 - A Kernel that crashes between the two commits can lose one email, and the person asks again.

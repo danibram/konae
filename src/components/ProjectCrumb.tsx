@@ -20,11 +20,10 @@ const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey &
  * link to the list; the name opens a menu that starts with "All projects", so a
  * phone that hides the link still has a way home, then every project in the
  * order the list shows them, each with its state, and focus on the current one.
- * The editor and the page of an app edited in a folder both draw it.
  */
 export function ProjectCrumb({ current, projects, onProjects, onOpen, className }: {
   current: CrumbProject;
-  /** Every project of the owner, including ones edited in a folder. */
+  /** Every project the owner can open. */
   projects: CrumbProject[];
   onProjects?: () => void;
   onOpen?: (projectId: string) => void;

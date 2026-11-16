@@ -101,8 +101,8 @@ mod tests {
     /// The parts of a Capsule a code may name, and the parts of the
     /// installation the owner names outside it.
     const GROUPS: &[&str] = &[
-        "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "path", "query", "release", "route", "schedule", "schema",
-        "secret", "signal", "signature", "signin", "statement",
+        "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
+        "secret", "signal", "signature", "signin", "sources", "statement",
     ];
 
     /// Every refusal case in every shape case file, as (file, case, code).

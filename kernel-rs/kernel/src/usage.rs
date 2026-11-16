@@ -4,7 +4,7 @@
 //! `database.sqlite` and `identity.sqlite`. It holds daily totals of the
 //! runtime endpoint's operations the Kernel authorized and the Signals that Server Actions
 //! declared. Nothing else writes it and a Runtime Actor never reads it; the
-//! owner reads it with `usage_read` and `signals_read`.
+//! owner reads it with `usage_summary` and `signals_read`.
 //!
 //! A handler calls `count` or `signal` after the operation succeeded. Both put a
 //! message on a bounded queue and return at once. One writer thread drains the
@@ -50,7 +50,7 @@ const MAX_ACCOUNT_ROWS: i64 = 100_000;
 const ACCOUNTS_PAGE: i64 = 20;
 /// Scheduled runs kept, oldest dropped first. A job every 5 minutes makes 288 a day.
 pub const MAX_SCHEDULED_RUNS: i64 = 10_000;
-/// The scheduled runs `usage_read` returns, newest first.
+/// The scheduled runs `usage_summary` returns, newest first.
 const SCHEDULED_PAGE: i64 = 500;
 pub const MAX_SIGNAL_PROPERTIES: usize = 8;
 /// The property that records the caller's ID instead of an input.
@@ -220,7 +220,7 @@ fn truncate(text: &str, bytes: usize) -> &str {
 }
 
 /// Waits until every message queued before this call is written, or five
-/// seconds pass. `usage_read` and `signals_read` call it so the owner sees what
+/// seconds pass. `usage_summary` and `signals_read` call it so the owner sees what
 /// happened up to the moment they asked.
 pub fn flush() {
     let _ = flush_status();
@@ -613,9 +613,8 @@ fn valid_name(name: &str) -> bool {
 // The usage and Signal reads, which the caller has authorized for one
 // Deployment. The runtime endpoint never offers them.
 
-/// Answers `usage_read` and `signals_read` for a Deployment the caller may read.
+/// Answers `usage_summary` and `signals_read` for a Deployment the caller may read.
 pub async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
-    let path = crate::layout::usage(data_root, &deployment.id);
     let arguments = a.clone();
     let deployment = deployment.clone();
     let data_root = data_root.to_path_buf();
@@ -624,8 +623,7 @@ pub async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a
         let flushed = flush_status();
         match name.as_str() {
             "usage_summary" => read_summary(&data_root, &deployment, arguments["from"].as_str().unwrap_or(""), arguments["to"].as_str().unwrap_or(""), flushed),
-            "usage_read" => read_usage(&path, arguments["from"].as_str().unwrap_or(""), arguments["to"].as_str().unwrap_or("")),
-            _ => read_signals(&path, arguments["name"].as_str(), arguments["cursor"].as_str()),
+            _ => read_signals(&crate::layout::usage(&data_root, &deployment.id), arguments["name"].as_str(), arguments["cursor"].as_str()),
         }
     })
     .await?

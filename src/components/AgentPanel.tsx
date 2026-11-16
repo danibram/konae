@@ -27,6 +27,8 @@ type Props = {
   onOpenSettings: () => void;
   /** Changes this app does not make yet, offered before anyone types. */
   suggestions?: string[];
+  proposalReady?: boolean;
+  proposalError?: string;
 };
 
 /**
@@ -39,7 +41,7 @@ type Props = {
  * which is always there. With no model connected a picked suggestion still
  * fills the composer, and the send button says what it needs.
  */
-export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [] }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -92,11 +94,11 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
               <Button variant="primary" className="agent-ready-connect" onClick={onOpenSettings}><Settings2 size={13} aria-hidden="true" /> Connect a model</Button>
             </> : justConnected && waiting && live && !running ? <>
               <h2 id="agent-start" tabIndex={-1}>Your description is ready</h2>
-              <p>Send it, and Konae builds the app from these words. You see the result in the preview and apply it when it looks right.</p>
+              <p>Send it, and Konae builds the app from these words. A change that passes the Gate appears in Preview before you apply it.</p>
             </> : <>
             <h2 id="agent-start" tabIndex={-1}>What should change?</h2>
             <p>{live
-              ? "Describe it in one sentence. You see the change in the preview and apply it when it looks right."
+              ? "Describe it in one sentence. A change that passes the Gate appears in Preview before you apply it."
               : "Describe it in one sentence. A model you connect makes the change, and you apply it after you see it."}</p>
             {suggestions.length > 0 && <>
               <p className="agent-examples-label">Try one</p>
@@ -127,16 +129,6 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
         )}
       </div>
 
-      {thread.demoPending && (
-        <div className="agent-proposal validated">
-          <p className="agent-proposal-state"><ShieldCheck size={13} /> Review this change, then apply it. The files stay as they are until you do.</p>
-          <div className="agent-proposal-actions">
-            <button className="agent-discard" onClick={thread.discardDemo}>Undo</button>
-            <button className="agent-apply" onClick={thread.applyDemo}><Send size={12} /> Apply</button>
-          </div>
-        </div>
-      )}
-
       {footer.kind !== "empty" && (
         <div className={`agent-proposal ${footer.kind}`}>
           <div className="agent-proposal-files">
@@ -145,9 +137,20 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
           <p className="agent-proposal-state">
             {footer.kind === "validated" && <><ShieldCheck size={13} /> {validationSummary(footer.checked)}</>}
             {footer.kind === "unvalidated" && <><Loader2 size={13} className="spin" /> Waiting for the Validation Gate.</>}
-            {footer.kind === "blocked" && <><CircleAlert size={13} /> <em>{footer.stage}</em> {footer.message}</>}
+            {footer.kind === "blocked" && <><CircleAlert size={13} /> <span>The Gate stopped at {stageName(footer.stage)}. {footer.message}</span></>}
           </p>
           {footer.kind === "blocked" && footer.detail && <p className="agent-proposal-detail">{footer.detail}</p>}
+          {footer.kind === "blocked" && footer.hint && <p className="agent-proposal-detail">Try this. {footer.hint.remedy}</p>}
+          {footer.kind === "blocked" && footer.code && <p className="agent-proposal-detail">Check code: {footer.code}</p>}
+          {footer.kind === "blocked" && footer.remainingErrors > 0 && <p className="agent-proposal-detail">{footer.remainingErrors} more {footer.remainingErrors === 1 ? "problem needs" : "problems need"} fixing.</p>}
+          {footer.kind === "validated" && !proposalReady && <p className="agent-proposal-detail" role="status">{proposalError ? `The proposal preview could not be prepared. ${proposalError}` : "Preparing the proposal preview before Apply."}</p>}
+          {footer.kind === "validated" && footer.warnings.map((warning, index) => (
+            <div className="agent-proposal-warning" role="status" key={`${warning.stage}:${index}`}>
+              <p><strong>{stageName(warning.stage)}.</strong> {warning.message}</p>
+              {warning.detail && <p>{warning.detail}</p>}
+              {warning.hint && <p>Try this. {warning.hint.remedy}</p>}
+            </div>
+          ))}
           {footer.kind === "validated" && footer.owner && (
             <div className="agent-proposal-owner" role="status">
               <CircleAlert size={13} />
@@ -156,7 +159,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
           )}
           <div className="agent-proposal-actions">
             <button className="agent-discard" onClick={thread.discard}>Discard</button>
-            <button className="agent-apply" disabled={!footer.canApply || running} onClick={thread.apply}>
+            <button className="agent-apply" disabled={!footer.canApply || running || (footer.kind === "validated" && !proposalReady)} onClick={() => void thread.apply()}>
               <Send size={12} /> Apply
             </button>
           </div>
@@ -201,6 +204,10 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
       </div>
     </div>
   );
+}
+
+function stageName(stage: "sources" | "schema" | "preview-rows" | "actions") {
+  return stage === "preview-rows" ? "Preview rows" : stage === "schema" ? "Schema" : stage === "sources" ? "Sources" : "Actions";
 }
 
 function ExamplePrompts({ sentences, onPick }: { sentences: string[]; onPick: (sentence: string) => void }) {

@@ -14,7 +14,8 @@ describe("private notes starter", () => {
     expect(project.slug).toBe(original.slug);
     expect(project.files["schema.sql"]).toContain("owner_id TEXT NOT NULL");
     expect(original.files["schema.sql"]).not.toContain("owner_id");
-    expect(project.manifest.runtime.auth.mode).toBe("optional");
+    expect(project.manifest.visibility).toBe("public");
+    expect(project.manifest).not.toHaveProperty("runtime");
   });
 
   test("binds every notes operation to the authenticated actor", () => {

@@ -13,10 +13,6 @@ export function agentKeyName(provider: ProviderId) {
   return `${keyNamespace}${provider}`;
 }
 
-export function isAgentKeyName(name: string) {
-  return name.startsWith(keyNamespace);
-}
-
 export function createAgentKeyStore(storage: KeyStorage = localStorage, ownerId?: string): AgentKeyStore {
   const keyName = (provider: ProviderId) => ownerId ? `${keyNamespace}owner:${encodeURIComponent(ownerId)}:${provider}` : agentKeyName(provider);
   return {
@@ -34,7 +30,7 @@ export function createAgentKeyStore(storage: KeyStorage = localStorage, ownerId?
   };
 }
 
-/** A store that holds nothing: the Kernel-proxy path, and the safe default in tests. */
+/** A store that holds nothing for tests and callers that do not persist keys. */
 export function emptyAgentKeyStore(): AgentKeyStore {
   return { getKey: () => null, setKey: () => {}, clearKey: () => {} };
 }

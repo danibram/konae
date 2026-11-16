@@ -49,6 +49,41 @@ describe("validation gate", () => {
     expect(result.ok).toBe(true);
   });
 
+  test("refuses a proposal whose changed text and retained binary file exceed the source count", async () => {
+    const files = { ...starterProject.files };
+    for (let index = 0; Object.keys(files).length < 1_000; index += 1) files[`extra-${index}.txt`] = "";
+    const project = {
+      files: { ...starterProject.files, "public/logo.bin": Buffer.from([0, 255, 1]).toString("base64") },
+      encodings: { "public/logo.bin": "base64" as const },
+    };
+    const result = await validator.validate(files, { state: "absent" }, { sourceFiles: project });
+
+    expect(result.ok).toBe(false);
+    expect(result.checked).toEqual([]);
+    expect(result.errors[0]).toMatchObject({
+      stage: "sources",
+      code: "sources.file-count",
+      message: "app/ holds 1001 files. A project's sources hold at most 1000 files.",
+    });
+    expect(result.errors[0].hint?.remedy).toBeTruthy();
+  });
+
+  test("counts retained binary bytes against the shared decoded source size", async () => {
+    const bytes = Buffer.alloc(20 * 1024 * 1024 + 1, 255);
+    const project = {
+      files: { ...starterProject.files, "public/large.bin": bytes.toString("base64") },
+      encodings: { "public/large.bin": "base64" as const },
+    };
+    const result = await validator.validate(capsule(), { state: "absent" }, { sourceFiles: project });
+
+    expect(result.ok).toBe(false);
+    expect(result.checked).toEqual([]);
+    expect(result.errors[0].stage).toBe("sources");
+    expect(result.errors[0].code).toBe("sources.size");
+    expect(result.errors[0].message).toContain("A project's sources hold at most 20 MiB.");
+    expect(result.errors[0].hint?.remedy).toBeTruthy();
+  });
+
   test("warns, without failing, when a query returns an expression without a name", async () => {
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
@@ -262,7 +297,8 @@ describe("validation gate", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
-    expect(result.checked).toContain("preview-rows");
+    expect(result.checked).not.toContain("preview-rows");
+    expect(result.checked).toEqual(["sources", "schema", "actions"]);
     expect(result.warnings).toEqual([expect.objectContaining({ stage: "preview-rows", message: expect.stringContaining("Publishing applies it"), detail: "Its table tasks has no due_at." })]);
   });
 
@@ -419,11 +455,11 @@ END;`,
   test("a verdict names the stages that actually ran", async () => {
     const withoutDatabase = await validator.validate(capsule());
     expect(withoutDatabase.ok).toBe(true);
-    expect(withoutDatabase.checked).toEqual(["schema", "actions"]);
+    expect(withoutDatabase.checked).toEqual(["sources", "schema", "actions"]);
 
     const withDatabase = await validator.validate(capsule(), loaded(await exportDatabase(starterProject.files["schema.sql"])));
     expect(withDatabase.ok).toBe(true);
-    expect(withDatabase.checked).toEqual(["schema", "actions", "preview-rows"]);
+    expect(withDatabase.checked).toEqual(["sources", "schema", "actions", "preview-rows"]);
 
     const unreadable = await validator.validate(capsule(), { state: "unreadable", reason: "the wasm heap is gone" });
     expect(unreadable.ok).toBe(false);

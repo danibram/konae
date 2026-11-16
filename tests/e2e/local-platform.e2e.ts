@@ -12,6 +12,19 @@ test.beforeEach(async ({ page }) => {
   expect(response.ok()).toBe(true);
 });
 
+function sourceReadRequest(body: string): { projectId?: string; requestId?: string; cancelRequestId?: string; metadataOnly?: boolean } | undefined {
+  try {
+    const request = JSON.parse(body);
+    if (request.params?.name !== "project_sources_read") return undefined;
+    return request.params.arguments;
+  } catch { return undefined; }
+}
+
+function isFullSourceRead(body: string): boolean {
+  const args = sourceReadRequest(body);
+  return Boolean(args?.projectId && args.requestId && !args.cancelRequestId && args.metadataOnly !== true);
+}
+
 test("platform pages require an owner session and return to the requested page after sign-in", async ({ page }) => {
   const email = `owner-${crypto.randomUUID()}@example.test`;
   const password = "Owner-test-password-2026";
@@ -70,6 +83,52 @@ async function createProject(page: Page, name: string, template: keyof typeof te
   return new URL(page.url()).pathname;
 }
 
+async function writeTypedPreview(page: Page, message: string) {
+  const explorer = await openExplorer(page);
+  await explorer.getByRole("button", { name: "New file" }).click();
+  await page.getByLabel("File path").fill("src/greeting.ts");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByLabel("src/greeting.ts code editor").fill(`export const greeting: string = ${JSON.stringify(message)};`);
+  await explorer.getByRole("button", { name: "app.js" }).click();
+  await page.getByLabel("app.js code editor").fill('import { greeting } from "./src/greeting.ts"; document.body.innerHTML = `<h1>${greeting}</h1>`;');
+  await waitForKernelSave(page);
+}
+
+async function seedRetainedBinary(page: Page, projectId: string) {
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, {
+    fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
+  });
+  const inspected = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
+  const saved = await client.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const source = JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
+  const asset = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pWQAAAAASUVORK5CYII=";
+  const appliedImage = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGO4I6fxHxkzkC4AAIMIIhELyVVQAAAAAElFTkSuQmCC";
+  const candidateImage = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGMQCbjzHxkzkC4AAKv4I/ELTj/5AAAAAElFTkSuQmCC";
+  source.files["public/retained.png"] = asset;
+  source.files["public/applied.png"] = appliedImage;
+  source.files["public/candidate.png"] = candidateImage;
+  source.files["public/theme.css"] = '.asset-stylesheet-probe { color: rgb(16, 32, 48); background-image: url("./applied.png?from=theme#background"); }';
+  source.files["public/print.css"] = '.media-print-probe { color: rgb(16, 32, 48); }';
+  source.files["public/disabled.css"] = '.media-disabled-probe { background-color: rgb(16, 32, 48); }';
+  source.files["index.html"] += '<link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/print.css" media="print"><link rel="stylesheet" href="/disabled.css" media="screen" disabled><p id="stylesheet-probe" class="asset-stylesheet-probe">Stylesheet proof</p><p id="media-default-probe">Default screen style</p><p class="media-print-probe">Print only</p><p class="media-disabled-probe">Initially disabled</p><img id="asset-image" alt="Applied public asset" width="48" height="48" src="/applied.png?version=applied#preview">';
+  source.encodings = { ...source.encodings, "public/retained.png": "base64", "public/applied.png": "base64", "public/candidate.png": "base64" };
+  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
+  await client.call("project_sources_save", { projectId, transferId: transfer.transferId, expectedRevision: inspected.sourcesRevision });
+  return asset;
+}
+
+async function readSavedSources(page: Page, projectId: string) {
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, {
+    fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
+  });
+  const saved = await client.call<{ transfer: Transfer }>("project_sources_read", { projectId });
+  return JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
+}
+
 // The editor sends project sources to the Kernel 500 ms after the last edit (App.tsx) and
 // shows "Saving" until the Kernel has them. A reload before that loads the older sources.
 async function waitForKernelSave(page: Page) {
@@ -78,8 +137,112 @@ async function waitForKernelSave(page: Page) {
   await expect(page.getByRole("banner").getByText("Not saved")).toHaveCount(0);
 }
 
-async function showSection(page: Page, name: "Preview" | "Access" | "Files" | "Data" | "Uploads") {
-  await page.getByRole("navigation", { name: "Workspace sections" }).getByRole("tab", { name, exact: true }).click();
+async function showSection(page: Page, name: "Preview" | "Describe" | "Access" | "Files" | "Data" | "Uploads") {
+  const tab = page.getByRole("navigation", { name: "Workspace sections" }).getByRole("tab", { name, exact: true });
+  if (await tab.count()) {
+    await tab.click();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    return;
+  }
+  if (name === "Describe") {
+    const open = page.getByRole("button", { name: "Open Describe", exact: true });
+    if (await open.isVisible()) await open.click();
+    return;
+  }
+  throw new Error(`The ${name} section is not available.`);
+}
+
+function providerEvent(type: string, data: unknown) {
+  return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function providerReply(tool?: { name: string; input: Record<string, unknown> }, text = "The checked change is ready.") {
+  const contentBlock = tool
+    ? { type: "tool_use", id: `toolu_${crypto.randomUUID()}`, name: tool.name, input: {} }
+    : { type: "text", text: "" };
+  const events = [providerEvent("message_start", {
+    type: "message_start",
+    message: { id: `msg_${crypto.randomUUID()}`, type: "message", role: "assistant", model: "claude-3-5-sonnet-latest", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } },
+  })];
+  events.push(providerEvent("content_block_start", { type: "content_block_start", index: 0, content_block: contentBlock }));
+  events.push(providerEvent("content_block_delta", tool
+    ? { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input) } }
+    : { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }));
+  events.push(providerEvent("content_block_stop", { type: "content_block_stop", index: 0 }));
+  events.push(providerEvent("message_delta", { type: "message_delta", delta: { stop_reason: tool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }));
+  events.push(providerEvent("message_stop", { type: "message_stop" }));
+  return events.join("");
+}
+
+async function installProposalFixture(page: Page) {
+  let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "drift" | "build-fail" | "preview-behind" = "discard";
+  let step = 0;
+  const html = "<main><h1>PROPOSAL PREVIEW</h1><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>";
+  const assetHtml = (useApplied: boolean) => `<link rel='stylesheet' href='/theme.css'><link rel='stylesheet' href='/print.css' media='print'><link rel='stylesheet' href='/disabled.css' media='screen' disabled><main><h1>PROPOSAL PREVIEW</h1><p id='stylesheet-probe' class='asset-stylesheet-probe'>Stylesheet proof</p><p id='media-default-probe'>Default screen style</p><p class='media-print-probe'>Print only</p><p class='media-disabled-probe'>Initially disabled</p><img id='asset-image' alt='Candidate public asset' width='48' height='48' src='/${useApplied ? "applied.png?version=alternate" : "candidate.png?version=candidate"}#proposal'><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>`;
+  const proposalScript = (mutate: boolean) => `
+const rows = await miniapp.actions.call('tasks.list');
+document.querySelector('#proposal-rows').textContent = rows.map(row => row.title).join(', ');
+const session = await miniapp.auth.session();
+document.querySelector('#proposal-actor').textContent = session.name;
+const files = await miniapp.files.list();
+document.querySelector('#proposal-files').textContent = files.map(file => file.name).join(', ');
+${mutate ? "await miniapp.actions.call('tasks.create', { title: 'Scratch row' }); if (files[0]) await miniapp.files.delete(files[0].id);" : ""}
+`;
+  const invalidActions = JSON.stringify({ version: 1, actions: {
+    "tasks.update": { kind: "mutation", access: "anonymous", statement: "UPDATE tasks SET done=1 WHERE id=1", bindings: [], notify: { to: "owner", changes: ["missing"], subject: "Changed", body: "{changes}" } },
+    "tasks.list": { kind: "query", access: "anonymous", statement: "SELECT missing FROM tasks LIMIT 5", bindings: [] },
+  } });
+  await page.route("https://api.anthropic.com/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: { "access-control-allow-origin": route.request().headers().origin ?? "*", "access-control-allow-methods": "POST,OPTIONS", "access-control-allow-headers": "*" } });
+      return;
+    }
+    let tool: { name: string; input: Record<string, unknown> } | undefined;
+    if (scenario === "blocked") {
+      if (step === 0) tool = { name: "write", input: { path: "/workspace/actions.json", content: invalidActions } };
+      else if (step === 1) tool = { name: "validate_capsule", input: {} };
+    } else if (step === 0) {
+      const path = scenario === "preview-behind" ? "/workspace/schema.sql" : "/workspace/index.html";
+      const content = scenario === "preview-behind" ? `
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  due_at INTEGER
+);
+` : scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? assetHtml(scenario === "asset-discard-applied") : html;
+      tool = { name: "write", input: { path, content } };
+    } else if (step === 1) {
+      tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" || scenario === "apply" || scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? proposalScript(scenario === "discard" || scenario === "asset-discard" || scenario === "asset-discard-applied") : scenario === "build-fail" ? "const = ;" : "document.documentElement.dataset.proposal = 'ready';" } };
+    } else if (step === 2) {
+      tool = { name: "validate_capsule", input: {} };
+    }
+    step += 1;
+    if (!tool) step = 0;
+    const origin = route.request().headers().origin ?? "*";
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "access-control-allow-origin": origin, "access-control-allow-headers": "*", "access-control-expose-headers": "*", "cache-control": "no-cache" },
+      body: providerReply(tool),
+    });
+  });
+  return { setScenario(value: typeof scenario) { scenario = value; } };
+}
+
+async function connectProposalFixture(page: Page) {
+  await showSection(page, "Describe");
+  await page.getByRole("button", { name: "Connect a model to send" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect a model" });
+  await dialog.getByLabel("Anthropic API key").fill("fixture-key-unused");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
+async function askFixture(page: Page, prompt: string) {
+  await page.getByRole("textbox", { name: "Message to agent" }).fill(prompt);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
 }
 
 // Export and App settings live in the top bar's More menu.
@@ -91,8 +254,8 @@ async function fromMore(page: Page, item: "Export" | "App settings") {
 // Files has a File list button that opens New file and New folder beside the editor.
 async function openExplorer(page: Page) {
   await showSection(page, "Files");
-  await page.getByRole("button", { name: "File list", exact: true }).click();
   const explorer = page.getByRole("navigation", { name: "Project files" });
+  if (!await explorer.isVisible()) await page.getByRole("button", { name: "File list", exact: true }).click();
   await expect(explorer).toBeVisible();
   return explorer;
 }
@@ -150,6 +313,257 @@ test("uploads added through the app appear in the editor file list", async ({ pa
   await showSection(page, "Uploads");
   const uploads = page.getByRole("region", { name: "Uploads", exact: true });
   await expect(uploads.getByText("elena furia.png", { exact: true })).toBeVisible();
+});
+
+test("a Gate-approved proposal previews before Apply and isolates discarded rows", async ({ page }) => {
+  const projectPath = await createProject(page, "Proposal preview", "tasks");
+  const projectId = projectPath.split("/").at(-1)!;
+  const retainedAsset = await seedRetainedBinary(page, projectId);
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await showSection(page, "Preview");
+  let preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await preview.locator("#task-input").fill("Saved row");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await preview.locator('input[type="file"]').setInputFiles({ name: "proposal-proof.png", mimeType: "image/png", buffer: Buffer.from("preview-image-bytes") });
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
+
+  const fixture = await installProposalFixture(page);
+  await connectProposalFixture(page);
+  fixture.setScenario("discard");
+  await askFixture(page, "Discard this preview proposal after checking it.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  let proposalFrame = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(proposalFrame.locator("#proposal-rows")).toHaveText("Saved row");
+  await expect(proposalFrame.locator("#proposal-actor")).toHaveText("Alice");
+  await expect(proposalFrame.locator("#proposal-files")).toHaveText("proposal-proof.png");
+  await showSection(page, "Describe");
+  await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+  await showSection(page, "Preview");
+  await page.screenshot({ path: "/tmp/konae-u3-proposal/proposal-before-apply.png" });
+
+  const original = await openFile(page, "index.html");
+  expect(await original.inputValue()).not.toContain("PROPOSAL PREVIEW");
+  await showSection(page, "Preview");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible();
+  await showSection(page, "Describe");
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  await showSection(page, "Preview");
+  preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
+
+  fixture.setScenario("apply");
+  await showSection(page, "Describe");
+  await askFixture(page, "Show the checked proposal and apply it.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  proposalFrame = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(proposalFrame.locator("#proposal-rows")).toHaveText("Saved row");
+  await expect(proposalFrame.locator("#proposal-actor")).toHaveText("Alice");
+  await expect(proposalFrame.locator("#proposal-files")).toHaveText("proposal-proof.png");
+  await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await showSection(page, "Preview");
+  proposalFrame = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(proposalFrame.getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible();
+  await expect(proposalFrame.locator("#proposal-rows")).toHaveText("Saved row");
+  await expect(proposalFrame.locator("#proposal-actor")).toHaveText("Alice");
+  await expect(proposalFrame.locator("#proposal-files")).toHaveText("proposal-proof.png");
+  await openFile(page, "index.html");
+  expect(await page.getByLabel("index.html code editor").inputValue()).toContain("PROPOSAL PREVIEW");
+  await waitForKernelSave(page);
+  const savedSources = await readSavedSources(page, projectId);
+  expect(savedSources.files["public/retained.png"]).toBe(retainedAsset);
+  expect(savedSources.encodings?.["public/retained.png"]).toBe("base64");
+
+  fixture.setScenario("blocked");
+  await showSection(page, "Describe");
+  await askFixture(page, "Give me two invalid row-reading actions.");
+  await expect(page.getByText("Check code: notify.column-unknown")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Try this. Name columns of the table the statement changes, in notify \"changes\" and \"to\".")).toBeVisible();
+  await expect(page.getByText("3 more problems need fixing.")).toBeVisible();
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "BLOCKED PROPOSAL" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+  fixture.setScenario("preview-behind");
+  await showSection(page, "Describe");
+  await askFixture(page, "Show the schema change and explain what the preview could not check.");
+  await expect(page.getByText("Validated. Sources, schema and actions hold. The preview rows were not checked.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/The preview's test database is behind schema\.sql/)).toBeVisible();
+  await expect(page.getByText("Its table tasks has no due_at.", { exact: true })).toBeVisible();
+  await expect(page.getByText(/try the change on konae dev or a published Deployment\./i)).toBeVisible();
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+  fixture.setScenario("build-fail");
+  await showSection(page, "Describe");
+  await askFixture(page, "Try an invalid script so preview preparation fails.");
+  const applyButton = page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true });
+  await expect(applyButton).toBeDisabled({ timeout: 30_000 });
+  await expect(page.getByText(/The proposal preview could not be prepared\./)).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+  fixture.setScenario("drift");
+  await askFixture(page, "Make a proposal, then keep my file edit.");
+  await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toBeEnabled({ timeout: 30_000 });
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  const styles = await openFile(page, "styles.css");
+  await expect(styles).toBeVisible();
+  await styles.fill(`${await styles.inputValue()}\n/* Manual owner edit */`);
+  await showSection(page, "Describe");
+  await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toHaveCount(0);
+  await openFile(page, "styles.css");
+  expect(await page.getByLabel("styles.css code editor").inputValue()).toContain("Manual owner edit");
+  await waitForKernelSave(page);
+});
+
+test("public image bytes stay with each proposal through Discard and Apply", async ({ page }) => {
+  await page.addInitScript(() => {
+    const active = new Set<string>();
+    (window as typeof window & { __konaeObjectUrls?: Set<string> }).__konaeObjectUrls = active;
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = (value: Blob | MediaSource) => {
+      const url = create(value);
+      active.add(url);
+      return url;
+    };
+    URL.revokeObjectURL = (url: string) => {
+      active.delete(url);
+      revoke(url);
+    };
+  });
+  const projectPath = await createProject(page, "Proposal public assets", "tasks");
+  const projectId = projectPath.split("/").at(-1)!;
+  const retainedAsset = await seedRetainedBinary(page, projectId);
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await showSection(page, "Preview");
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  const appliedImage = preview.locator("#asset-image");
+  await expect.poll(() => appliedImage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+  await expect.poll(() => preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+  expect(await preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("data:image/png;base64,");
+  const screenMedia = await preview.locator("#media-default-probe").evaluate((node) => {
+    const defaultStyle = getComputedStyle(node);
+    const printStyle = getComputedStyle(document.querySelector(".media-print-probe")!);
+    const disabledStyle = getComputedStyle(document.querySelector(".media-disabled-probe")!);
+    const disabledSheet = [...document.styleSheets].find((sheet) => (sheet.ownerNode as HTMLStyleElement).dataset.konaeMedia !== undefined);
+    return { defaultColor: defaultStyle.color, printColor: printStyle.color, defaultBackground: defaultStyle.backgroundColor, disabledBackground: disabledStyle.backgroundColor, disabled: disabledSheet?.disabled, disabledMedia: (disabledSheet?.ownerNode as HTMLStyleElement | undefined)?.media, printMedia: [...document.querySelectorAll("style")].find((style) => style.media === "print")?.media };
+  });
+  expect(screenMedia.printColor).toBe(screenMedia.defaultColor);
+  expect(screenMedia.disabledBackground).toBe(screenMedia.defaultBackground);
+  expect(screenMedia.disabled).toBe(true);
+  expect(screenMedia.disabledMedia).toBe("screen");
+  expect(screenMedia.printMedia).toBe("print");
+  const appliedDataUrl = await appliedImage.getAttribute("src");
+  expect(appliedDataUrl).toContain("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+");
+
+  await preview.locator("#task-input").fill("Saved row");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await preview.locator('input[type="file"]').setInputFiles({ name: "proposal-proof.png", mimeType: "image/png", buffer: Buffer.from("preview-image-bytes") });
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
+
+  const fixture = await installProposalFixture(page);
+  await connectProposalFixture(page);
+  const storageBefore = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort(([a], [b]) => a.localeCompare(b))));
+  const objectUrlsIn = async () => {
+    const frame = page.frames().find((candidate) => candidate.parentFrame() !== null);
+    return frame?.evaluate(() => (window as typeof window & { __konaeObjectUrls?: Set<string> }).__konaeObjectUrls?.size ?? 0) ?? 0;
+  };
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const useAlternateImage = iteration % 2 === 1;
+    fixture.setScenario(useAlternateImage ? "asset-discard-applied" : "asset-discard");
+    await showSection(page, "Describe");
+    await askFixture(page, `Preview the candidate image ${iteration + 1}.`);
+    await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+    const candidate = page.frameLocator('iframe[title="Mini-app preview"]').locator("#asset-image");
+    await expect.poll(() => candidate.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+    await expect.poll(() => page.frameLocator('iframe[title="Mini-app preview"]').locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+    const candidateMedia = await page.frameLocator('iframe[title="Mini-app preview"]').locator("#media-default-probe").evaluate((node) => {
+      const defaultStyle = getComputedStyle(node);
+      return { defaultColor: defaultStyle.color, printColor: getComputedStyle(document.querySelector(".media-print-probe")!).color };
+    });
+    expect(candidateMedia.printColor).toBe(candidateMedia.defaultColor);
+    const candidateDataUrl = await candidate.getAttribute("src");
+    expect(candidateDataUrl).toContain("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+");
+    const candidateBytesUrl = candidateDataUrl?.split("#", 1)[0];
+    const appliedBytesUrl = appliedDataUrl?.split("#", 1)[0];
+    if (useAlternateImage) expect(candidateBytesUrl).toBe(appliedBytesUrl);
+    else expect(candidateBytesUrl).not.toBe(appliedBytesUrl);
+    await candidate.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(100);
+    await page.screenshot({ path: "/tmp/konae-u1b2-assets-luna/proposal-public-image.png" });
+    const candidateFrame = page.frames().find((frame) => frame.parentFrame() !== null);
+    expect(await candidateFrame?.evaluate(() => [...document.images].map((image) => image.src))).toContain(await candidate.getAttribute("src"));
+    expect(await objectUrlsIn()).toBe(0);
+    await showSection(page, "Describe");
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
+    await showSection(page, "Preview");
+    await expect.poll(() => preview.locator("#asset-image").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+    await expect(preview.locator("#asset-image")).toHaveAttribute("src", appliedDataUrl!);
+    await expect.poll(() => preview.locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+    await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+    await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+    await expect(preview.getByRole("img", { name: "proposal-proof.png" })).toBeVisible();
+    expect(await objectUrlsIn()).toBe(0);
+    expect(await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort(([a], [b]) => a.localeCompare(b))))).toBe(storageBefore);
+  }
+
+  fixture.setScenario("asset-apply");
+  await showSection(page, "Describe");
+  await askFixture(page, "Show the candidate public image and apply it.");
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  const candidate = page.frameLocator('iframe[title="Mini-app preview"]').locator("#asset-image");
+  await expect.poll(() => candidate.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+  await expect.poll(() => page.frameLocator('iframe[title="Mini-app preview"]').locator("#stylesheet-probe").evaluate((node) => getComputedStyle(node).color)).toBe("rgb(16, 32, 48)");
+  expect(await candidate.getAttribute("src")).not.toBe(appliedDataUrl);
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await showSection(page, "Preview");
+  await expect.poll(() => preview.locator("#asset-image").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(4);
+  expect(await preview.locator("#asset-image").getAttribute("src")).toBe(await candidate.getAttribute("src"));
+  await expect(preview.getByText("Saved row", { exact: true })).toBeVisible();
+  await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
+  await expect(preview.locator("#proposal-files")).toHaveText("proposal-proof.png");
+  expect(await objectUrlsIn()).toBe(0);
+  await waitForKernelSave(page);
+  const savedSources = await readSavedSources(page, projectId);
+  expect(savedSources.files["public/retained.png"]).toBe(retainedAsset);
+  expect(savedSources.files["public/applied.png"]).toBeDefined();
+  expect(savedSources.files["public/candidate.png"]).toBeDefined();
+  expect(savedSources.encodings?.["public/applied.png"]).toBe("base64");
+  expect(savedSources.encodings?.["public/candidate.png"]).toBe("base64");
+});
+
+test("manual action edits leave the running preview unchanged until Run", async ({ page }) => {
+  await createProject(page, "Run applies action edits", "tasks");
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await showSection(page, "Preview");
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await preview.locator("#task-input").fill("Before edit");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Before edit", { exact: true })).toBeVisible();
+
+  const actions = await openFile(page, "actions.json");
+  const original = await actions.inputValue();
+  expect(original).toContain('"tasks.list"');
+  await actions.fill(original.replace('"tasks.list": {', '"tasks.pending": {'));
+  await showSection(page, "Preview");
+  await expect(preview.getByText("Before edit", { exact: true })).toBeVisible();
+  await preview.locator("#task-input").fill("Still using the checked preview");
+  await preview.getByRole("button", { name: "Add task" }).click();
+  await expect(preview.getByText("Still using the checked preview", { exact: true })).toBeVisible();
+
+  await showSection(page, "Files");
+  await page.getByRole("button", { name: "Check", exact: true }).click();
+  await expect(page.locator(".preview-problems")).toContainText("Server action not declared.", { timeout: 30_000 });
 });
 
 test("mobile domain settings persist claims, explain TXT checks and confirm changes", async ({ page, context }) => {
@@ -284,7 +698,7 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await app.screenshot({ path: testInfo.outputPath("published-app.png"), fullPage: true });
 });
 
-test("the Deploy dialog says when the editor holds other files than a release published from an app folder", async ({ page, baseURL }) => {
+test("the editor reloads sources published from an app folder", async ({ page, baseURL }, testInfo) => {
   const projectId = (await createProject(page, `Folder publish ${Date.now()}`)).split("/").pop()!;
   await publish(page);
   // The owner's browser session delegates a token, as `konae login` does.
@@ -299,24 +713,314 @@ test("the Deploy dialog says when the editor holds other files than a release pu
   }, projectId);
   // An exported folder with one changed query, published through publishProject as `konae publish` does.
   const folder = new McpClient(new URL("/mcp", baseURL).href, { token });
-  const saved = await folder.call<{ transfer: Transfer }>("project_sources_read", { projectId });
+  const saved = await folder.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
   const project = JSON.parse(new TextDecoder().decode(await folder.download(saved.transfer)));
   project.files["actions.json"] = project.files["actions.json"].replace("LIMIT 100", "LIMIT 50");
+  project.files["app.js"] = "window.folderRelease = true;";
   const artifact = { version: 1, entrypoint: "index.html", files: { "index.html": "<p>Published from a folder</p>" } };
-  await publishProject(folder, project, () => ({ project, visibility: "public", artifact }), async () => true);
+  await publishProject(folder, project, () => ({ project, visibility: "public", artifact }), async () => true, undefined, undefined, saved.revision);
 
-  const warning = "The editor holds other files than the published app runs, after edits here or a publish from an app folder. Deploy replaces what runs with these files. Its accounts and rows stay.";
   const dialog = page.getByRole("dialog", { name: /^Deploy / });
-  await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
-  await expect(dialog.getByText(warning)).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath("deploy-dialog-sources-differ.png") });
-  await dialog.getByRole("button", { name: /^Deploy (public|changes)$/ }).click();
-  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Done", exact: true }).click();
-  // After the editor's own release the published app runs these files again, so the dialog no longer says they differ.
+  const app = await openFile(page, "app.js");
+  await expect(app).toHaveValue("window.folderRelease = true;", { timeout: 15_000 });
   await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(warning)).toHaveCount(0);
+  await expect(dialog.getByText(/The editor holds other files/)).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("editor-after-folder-publish.png"), fullPage: true });
+});
+
+test("a direct reload compiles the selected TypeScript project before its first preview", async ({ page }, testInfo) => {
+  const projectPath = await createProject(page, `Direct TypeScript load ${Date.now()}`, "tasks");
+  await writeTypedPreview(page, "Compiled on direct reload");
+
+  await page.goto(projectPath);
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(preview.getByRole("heading", { name: "Compiled on direct reload" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("direct-typescript-reload.png"), fullPage: true });
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  const projectCard = page.locator(`a.project-card-link[href="${projectPath}"]`);
+  await expect(projectCard).toBeVisible();
+  await projectCard.click();
+  await expect(preview.getByRole("heading", { name: "Compiled on direct reload" })).toBeVisible();
+});
+
+test("switching between cached TypeScript projects compiles each selected source", async ({ page }) => {
+  const firstPath = await createProject(page, `Typed first ${Date.now()}`, "tasks");
+  await writeTypedPreview(page, "First cached app");
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill(`Typed second ${Date.now()}`);
+  await page.getByText("Start from a template instead", { exact: true }).click();
+  await page.getByRole("radio", { name: /^Shared list/ }).check();
+  await page.getByRole("button", { name: /^Create/ }).click();
+  const secondPath = new URL(page.url()).pathname;
+  await writeTypedPreview(page, "Second cached app");
+
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.locator(`a.project-card-link[href="${secondPath}"]`).click();
+  await expect(preview.getByRole("heading", { name: "Second cached app" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.locator(`a.project-card-link[href="${firstPath}"]`).click();
+  await expect(preview.getByRole("heading", { name: "First cached app" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Projects" }).click();
+  await page.locator(`a.project-card-link[href="${secondPath}"]`).click();
+  await expect(preview.getByRole("heading", { name: "Second cached app" })).toBeVisible();
+});
+
+test("Try again compiles sources after a project load fails", async ({ page }) => {
+  const projectPath = await createProject(page, `Retry TypeScript ${Date.now()}`, "tasks");
+  const projectId = projectPath.slice("/app/".length);
+  await writeTypedPreview(page, "Retry succeeded");
+  let refuseReadsUntilError = true;
+  const refusedRequestIds: string[] = [];
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    const sourceRead = sourceReadRequest(body);
+    if (refuseReadsUntilError && isFullSourceRead(body) && sourceRead?.projectId === projectId) {
+      refusedRequestIds.push(sourceRead.requestId!);
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
+  refuseReadsUntilError = false;
+  expect(refusedRequestIds.length).toBeGreaterThan(0);
+  await page.unroute("**/mcp");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Retry succeeded" })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`${projectPath}$`));
+});
+
+test("a delayed Try again response cannot select a project after leaving it", async ({ page }) => {
+  const projectPath = await createProject(page, `Abandoned retry ${Date.now()}`, "tasks");
+  const projectId = projectPath.slice("/app/".length);
+  await writeTypedPreview(page, "Retry after leaving");
+  await page.addInitScript(() => {
+    const state = window as typeof window & { __holdNextSourceRead?: boolean; __sourceReadHeld?: Promise<void>; __releaseSourceRead?: () => void };
+    const isFullSourceRead = (body: string) => {
+      try {
+        const request = JSON.parse(body);
+        const args = request.params?.name === "project_sources_read" ? request.params.arguments : undefined;
+        return Boolean(args?.projectId && args.requestId && !args.cancelRequestId && args.metadataOnly !== true);
+      } catch { return false; }
+    };
+    let signalHeld!: () => void;
+    state.__sourceReadHeld = new Promise<void>((resolve) => { signalHeld = resolve; });
+    let releaseHeld!: () => void;
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      const response = await original(input, init);
+      if (state.__holdNextSourceRead && isFullSourceRead(body)) {
+        state.__holdNextSourceRead = false;
+        signalHeld();
+        await new Promise<void>((resolve) => { releaseHeld = resolve; });
+      }
+      return response;
+    };
+    state.__releaseSourceRead = () => releaseHeld?.();
+  });
+  let refuseReadsUntilError = true;
+  const refusedRequestIds: string[] = [];
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    const sourceRead = sourceReadRequest(body);
+    if (refuseReadsUntilError && isFullSourceRead(body) && sourceRead?.projectId === projectId) {
+      refusedRequestIds.push(sourceRead.requestId!);
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Could not open this project" })).toBeVisible();
+  refuseReadsUntilError = false;
+  expect(refusedRequestIds.length).toBeGreaterThan(0);
+  await page.unroute("**/mcp");
+  await page.evaluate(() => { (window as typeof window & { __holdNextSourceRead?: boolean }).__holdNextSourceRead = true; });
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.evaluate(async () => { await (window as typeof window & { __sourceReadHeld?: Promise<void> }).__sourceReadHeld; });
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { __releaseSourceRead?: () => void }).__releaseSourceRead?.());
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await page.locator(`a.project-card-link[href="${projectPath}"]`).click();
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Retry after leaving" })).toBeVisible();
+});
+
+test("full document navigation cancels allocated source reads before their responses arrive", async ({ page }) => {
+  const projectPath = await createProject(page, `Reload transfer probe ${Date.now()}`, "tasks");
+  const allocatedTransfers: string[] = [];
+  let completedCancels = 0;
+  let holdNext = false;
+  let signalReady: () => void = () => {};
+  let releaseResponse: () => void = () => {};
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (body.includes('"cancelRequestId"')) {
+      const response = await route.fetch();
+      completedCancels++;
+      await route.fulfill({ response }).catch(() => {});
+      return;
+    }
+    if (holdNext && body.includes('"project_sources_read"') && !body.includes('"metadataOnly":true')) {
+      holdNext = false;
+      const response = await route.fetch();
+      const responseText = await response.text();
+      const result = JSON.parse(responseText).result.structuredContent.result;
+      expect(result.transfer.transferId).toBeTruthy();
+      allocatedTransfers.push(result.transfer.transferId);
+      signalReady();
+      await new Promise<void>((resolve) => { releaseResponse = resolve; });
+      await route.fulfill({ response }).catch(() => {});
+      return;
+    }
+    await route.continue();
+  });
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    const ready = new Promise<void>((resolve) => { signalReady = resolve; });
+    holdNext = true;
+    await page.goto("/");
+    await page.locator(`a.project-card-link[href="${projectPath}"]`).click();
+    await ready;
+    // Leave the document while the allocated source response is still held.
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect.poll(() => completedCancels).toBe(attempt + 1);
+    releaseResponse();
+  }
+  await page.unroute("**/mcp");
+  expect(allocatedTransfers).toHaveLength(9);
+  expect(completedCancels).toBeGreaterThanOrEqual(9);
+  await page.goto(projectPath);
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "Tiny Tasks" })).toBeVisible();
+});
+
+test("the editor reloads clean sources and keeps a dirty draft when another tab saves", async ({ page }, testInfo) => {
+  const projectId = (await createProject(page, `Source conflict ${Date.now()}`, "tasks")).split("/").pop()!;
+  await publish(page);
+  const token = await page.evaluate(async (projectId) => {
+    const rpc = async (method: string, params: object) => (await (await fetch("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+    })).json()).result;
+    await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
+    return (await rpc("tools/call", { name: "token_create", arguments: { scopes: ["read", "write"], projectIds: [projectId], ttlSeconds: 600 } })).structuredContent.result.token as string;
+  }, projectId);
+  const outside = new McpClient(new URL("/mcp", page.url()).href, { token });
+  const saved = await outside.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const project = JSON.parse(new TextDecoder().decode(await outside.download(saved.transfer)));
+  const app = await openFile(page, "app.js");
+  await expect(app).toBeVisible();
+
+  const saveOutside = async (filesToChange: Record<string, string>, revision: number) => {
+    const files = { ...project.files, ...filesToChange };
+    const upload = await outside.upload(new TextEncoder().encode(JSON.stringify({ ...project, files, updatedAt: Date.now() })), projectId);
+    try { return await outside.call<{ revision: number }>("project_sources_save", { projectId, transferId: upload.transferId, expectedRevision: revision }); }
+    finally { await outside.cancel(upload.transferId); }
+  };
+
+  const remoteFiles = (value: string) => ({
+    "app.js": 'import { remoteLabel } from "./remote.ts"; document.body.dataset.remoteLabel = remoteLabel;',
+    "remote.ts": `export const remoteLabel: string = "${value}";`,
+  });
+  const revision = (await saveOutside(remoteFiles("clean TypeScript reload"), saved.revision)).revision;
+  await expect(app).toHaveValue(remoteFiles("clean TypeScript reload")["app.js"], { timeout: 15_000 });
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').locator("body")).toHaveAttribute("data-remote-label", "clean TypeScript reload", { timeout: 15_000 });
+  const holdNextInspection = () => {
+    let releaseInspection!: () => void;
+    let inspectionPending!: () => void;
+    const release = new Promise<void>((resolve) => { releaseInspection = resolve; });
+    const held = new Promise<void>((resolve) => { inspectionPending = resolve; });
+    let waitForRead = true;
+    let holdInspection = true;
+    const route = page.route("**/mcp", async (requestRoute) => {
+      const body = requestRoute.request().postData() ?? "";
+      if (body.includes('"project_sources_read"')) {
+        waitForRead = false;
+        await requestRoute.continue();
+        return;
+      }
+      if (!waitForRead && holdInspection && body.includes('"project_inspect"')) {
+        holdInspection = false;
+        const response = await requestRoute.fetch();
+        inspectionPending();
+        await release;
+        await requestRoute.fulfill({ response });
+        return;
+      }
+      await requestRoute.continue();
+    });
+    return { held, release: releaseInspection, route };
+  };
+  let automatic = holdNextInspection();
+  const newer = saveOutside(remoteFiles("newer TypeScript source"), revision);
+  await newer;
+  await automatic.held;
+  await app.fill("window.localDraft = 'keep this';");
+  automatic.release();
+  await expect(app).toHaveValue("window.localDraft = 'keep this';");
+  await expect(page.getByText("This app changed on another machine. Your draft is still here.")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("dirty-source-conflict.png"), fullPage: true });
+
+  await page.unroute("**/mcp");
+  const explicit = holdNextInspection();
+  await page.getByRole("button", { name: "Reload saved sources" }).click();
+  await explicit.held;
+  await app.fill("window.explicitDraft = 'keep this too';");
+  explicit.release();
+  await expect(app).toHaveValue("window.explicitDraft = 'keep this too';");
+  await expect(page.getByText("This app changed on another machine. Your draft is still here.")).toBeVisible();
+  await page.unroute("**/mcp");
+  await page.getByRole("button", { name: "Reload saved sources" }).click();
+  await expect(app).toHaveValue(remoteFiles("newer TypeScript source")["app.js"]);
+});
+
+test("the editor keeps edits made while a release response is pending", async ({ page }) => {
+  await createProject(page, `Publish draft ${Date.now()}`, "tasks");
+  await publish(page);
+  const editor = await openFile(page, "app.js");
+  await editor.fill("window.releaseSource = true;");
+  await waitForKernelSave(page);
+
+  let releaseResponseReady!: () => void;
+  let releaseResponse!: () => void;
+  const responseReady = new Promise<void>((resolve) => { releaseResponseReady = resolve; });
+  const held = new Promise<void>((resolve) => { releaseResponse = resolve; });
+  let holdApply = true;
+  let sourceSavesWhileHeld = 0;
+  page.on("request", (request) => {
+    const body = request.postData() ?? "";
+    if (body.includes('"project_sources_save"')) sourceSavesWhileHeld++;
+  });
+  await page.route("**/mcp", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (holdApply && body.includes('"release_apply"')) {
+      holdApply = false;
+      releaseResponseReady();
+      await held;
+      await route.continue();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("banner").getByRole("button", { name: "Deploy changes", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Deploy changes", exact: true }).click();
+  await responseReady;
+  await editor.fill("window.draftDuringPublish = true;", { force: true });
+  await page.waitForTimeout(800);
+  expect(sourceSavesWhileHeld).toBe(0);
+  releaseResponse();
+  await expect(editor).toHaveValue("window.draftDuringPublish = true;");
+  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.unroute("**/mcp");
+  await waitForKernelSave(page);
 });
 
 test("public notes authenticate users and isolate private rows", async ({ page, context }, testInfo) => {

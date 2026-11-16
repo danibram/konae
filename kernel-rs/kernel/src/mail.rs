@@ -25,6 +25,7 @@ use accounts::{AccountMail, AccountMessage, DevelopmentMailbox};
 use auth::{AuthError, ChallengeOutbox, IssuedChallenge, Purpose};
 
 pub const MAIL_DATABASE: &str = "mail.sqlite";
+pub const TEST_MAIL_DATABASE: &str = "mail-test.sqlite";
 /// How long a claimed job stays with the worker before another pass may
 /// claim it again. A Kernel stopped mid-send leaves the lease to expire.
 const LEASE_MS: i64 = 2 * 60 * 1000;
@@ -236,6 +237,7 @@ pub trait Transport: Send + Sync {
 
 /// The file in the data directory the development transport writes.
 pub const MAILBOX_FILE: &str = "mailbox.jsonl";
+pub const TEST_MAILBOX_FILE: &str = "mail-testbox.jsonl";
 
 /// What health and `mail_status` say while the development transport runs.
 pub const LOCAL_MAILBOX: &str = "With KONAE_MAIL_TRANSPORT=development no email leaves this server. The Kernel writes every message, account links included, to mailbox.jsonl in its data directory. Set KONAE_MAIL_TRANSPORT to resend or smtp to send email.";
@@ -508,7 +510,7 @@ fn sender_domain(sender: &str) -> Option<String> {
 
 /// Reads `KONAE_MAIL_TRANSPORT` and the variables of the chosen
 /// transport. Unset means no transport.
-fn transport_from_env(data_root: &Path) -> Result<Option<(Arc<dyn Transport>, String)>> {
+fn transport_from_env(data_root: &Path, force_local: bool) -> Result<Option<(Arc<dyn Transport>, String)>> {
     let required = |name: &str| -> Result<String> {
         std::env::var(name)
             .ok()
@@ -516,6 +518,10 @@ fn transport_from_env(data_root: &Path) -> Result<Option<(Arc<dyn Transport>, St
             .ok_or_else(|| anyhow::anyhow!("{name} is required for this mail transport."))
     };
     let optional = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    if force_local {
+        let transport: Arc<dyn Transport> = Arc::new(DevelopmentTransport(DevelopmentMailbox::new(data_root.join(TEST_MAILBOX_FILE))));
+        return Ok(Some((transport, "Konae <konae@localhost>".into())));
+    }
     let transport: Arc<dyn Transport> = match std::env::var("KONAE_MAIL_TRANSPORT").as_deref() {
         Err(_) | Ok("") => return Ok(None),
         Ok("development") => Arc::new(DevelopmentTransport(DevelopmentMailbox::new(data_root.join(MAILBOX_FILE)))),
@@ -778,8 +784,8 @@ fn storage(error_value: rusqlite::Error) -> AuthError {
 impl MailQueue {
     /// Builds the queue from the environment, or None when no transport is
     /// configured.
-    pub fn from_env(data_root: &Path, key: &str, installation: &crate::installation::Installation) -> Result<Option<Arc<Self>>> {
-        let Some((transport, from)) = transport_from_env(data_root)? else {
+    pub fn from_env(data_root: &Path, key: &str, installation: &crate::installation::Installation, force_local: bool) -> Result<Option<Arc<Self>>> {
+        let Some((transport, from)) = transport_from_env(data_root, force_local)? else {
             return Ok(None);
         };
         let secret = mail_secret(key, transport.name() == "development")?;
@@ -787,8 +793,10 @@ impl MailQueue {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(5000);
-        let mut queue = Self::open(
+        let queue_path = if force_local { TEST_MAIL_DATABASE } else { MAIL_DATABASE };
+        let mut queue = Self::open_at(
             data_root,
+            data_root.join(queue_path),
             transport,
             &from,
             &secret,
@@ -807,8 +815,12 @@ impl MailQueue {
         limits: Limits,
         interval: Duration,
     ) -> Result<Self> {
+        Self::open_at(data_root, data_root.join(MAIL_DATABASE), transport, from, secret, limits, interval)
+    }
+
+    fn open_at(data_root: &Path, path: PathBuf, transport: Arc<dyn Transport>, from: &str, secret: &str, limits: Limits, interval: Duration) -> Result<Self> {
         let queue = Self {
-            path: data_root.join(MAIL_DATABASE),
+            path,
             data_root: data_root.to_path_buf(),
             key: LinkKey::derive(secret),
             transport,
@@ -836,8 +848,21 @@ impl MailQueue {
     /// The mailbox file mail goes to instead of leaving the server, when the
     /// transport is the development one.
     pub fn local_mailbox(&self) -> Option<PathBuf> {
-        (self.transport.name() == "development").then(|| self.data_root.join(MAILBOX_FILE))
+        (self.transport.name() == "development").then(|| {
+            let name = if self.path.file_name().is_some_and(|name| name == TEST_MAIL_DATABASE) { TEST_MAILBOX_FILE } else { MAILBOX_FILE };
+            self.data_root.join(name)
+        })
     }
+
+    fn local_mailbox_warning(&self) -> String {
+        if self.path.file_name().is_some_and(|name| name == TEST_MAIL_DATABASE) {
+            format!("Local test email is written to {}. No email leaves this Kernel.", TEST_MAILBOX_FILE)
+        } else {
+            LOCAL_MAILBOX.to_owned()
+        }
+    }
+
+    fn database_path(&self) -> &Path { &self.path }
 
     fn set_preflight(&self, result: PreflightResult) {
         let next = match result {
@@ -1275,7 +1300,7 @@ impl MailQueue {
         });
         if self.local_mailbox().is_some() {
             health["delivery"] = json!("local-mailbox");
-            health["warning"] = json!(LOCAL_MAILBOX);
+            health["warning"] = json!(self.local_mailbox_warning());
         }
         health
     }
@@ -1295,7 +1320,7 @@ impl MailQueue {
         });
         if let Some(mailbox) = self.local_mailbox() {
             status["delivery"] = json!("local-mailbox");
-            status["warning"] = json!(LOCAL_MAILBOX);
+            status["warning"] = json!(self.local_mailbox_warning());
             status["mailbox"] = json!(mailbox.display().to_string());
         }
         Ok(status)
@@ -1323,7 +1348,7 @@ const NOTICE_PAGE: i64 = 50;
 
 pub async fn notices_tool(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
     let before = super::calls::page_before(a)?;
-    let path = state.data_root.join(MAIL_DATABASE);
+    let path = state.accounts.queue.as_ref().map(|queue| queue.database_path().to_path_buf()).unwrap_or_else(|| state.data_root.join(MAIL_DATABASE));
     let scope = format!("deployment:{}", deployment.id);
     tokio::task::spawn_blocking(move || read_notices(&path, &scope, before)).await?
 }
@@ -1642,6 +1667,28 @@ pub fn end_pending_after_restore(path: &Path) -> Result<usize> {
     )?)
 }
 
+/// Retires this app's undelivered email while its local Kernel is stopped for a data reset.
+pub fn end_pending_for_local_reset(path: &Path, app_id: &str) -> Result<usize> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let connection = Connection::open(path)?;
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(0);
+    }
+    Ok(connection.execute(
+        "UPDATE jobs SET state = 'failed', error_kind = 'local-reset', link_nonce = NULL, link_sealed = NULL,
+           leased_until = NULL, updated_at = ?1
+         WHERE state = 'pending' AND scope = ?2",
+        params![now(), auth::deployment_scope(app_id)],
+    )?)
+}
+
 // ---------------------------------------------------------------------------
 // Provider events
 
@@ -1722,6 +1769,15 @@ async fn resend_events(State(state): State<AppState>, headers: HeaderMap, body: 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_mode_selects_local_mail_without_reading_sender_settings() {
+        let root = std::env::temp_dir().join(format!("konae-mail-test-policy-{}", uuid::Uuid::new_v4()));
+        let (transport, from) = super::transport_from_env(&root, true).unwrap().unwrap();
+        assert_eq!(transport.name(), "development");
+        assert_eq!(from, "Konae <konae@localhost>");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn an_old_mail_limit_name_is_refused_with_the_new_one() {
         // Serialised by the name: no other test sets it.
@@ -1818,6 +1874,7 @@ mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: Some("owner@example.test".into()),
+            released_schema: String::new(),
         }
     }
 
@@ -2597,6 +2654,30 @@ mod tests {
         let second = signup(State(fixture.state.clone()), headers, request("person@example.test")).await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(fixture.jobs().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_local_reset_retires_only_its_apps_pending_mail_and_preserves_history() {
+        let fixture = fixture(Scripted::new()).await;
+        fixture.signup(&fixture.app, "reset@example.test").await.unwrap();
+        fixture.signup(&fixture.other, "keep@example.test").await.unwrap();
+        fixture.signup(&fixture.app, "delivered@example.test").await.unwrap();
+        fixture.db().execute("UPDATE jobs SET state = 'delivered' WHERE recipient = 'delivered@example.test'", []).unwrap();
+        let database = fixture.root.join(MAIL_DATABASE);
+        assert_eq!(end_pending_for_local_reset(&database, &fixture.app.id).unwrap(), 1);
+        assert_eq!(end_pending_for_local_reset(&database, &fixture.app.id).unwrap(), 0);
+        let entries: Vec<(String, String, Option<String>, bool)> = fixture.db()
+            .prepare("SELECT recipient, state, error_kind, link_sealed IS NOT NULL FROM jobs ORDER BY recipient")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].1, "delivered");
+        assert_eq!(entries[1].1, "pending");
+        assert!(entries[1].3);
+        assert_eq!(entries[2], ("reset@example.test".into(), "failed".into(), Some("local-reset".into()), false));
     }
 
     #[tokio::test]

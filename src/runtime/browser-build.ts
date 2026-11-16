@@ -2,24 +2,24 @@ import * as esbuild from "esbuild-wasm";
 import wasmUrl from "esbuild-wasm/esbuild.wasm?url";
 import type { MiniAppProject } from "../lib/types";
 import { normalizeProjectPath } from "../lib/project-files";
+import { sourceBytes, sourceContents, textFiles } from "../lib/source-files";
 import { hostedRuntime, type BuildArtifact } from "./artifact";
-import { appEntry, assembleStaticArtifact } from "../lib/static-artifact.js";
+import { appEntry, assembleStaticArtifact, resolveReference, servedPath } from "../lib/static-artifact.js";
 
 let initialized: Promise<void> | undefined;
 
 /**
  * The editor's door to the static publishing contract in
- * src/lib/static-artifact.js, the same rules `konae build` runs. A Managed
- * Project holds text files only, so a page that references an image the
- * project does not hold is refused here as it would be by the CLI.
+ * src/lib/static-artifact.js, the same rules `konae build` runs. A referenced
+ * binary asset reaches esbuild as bytes for a CSS URL token, then becomes a data URL.
  */
 export async function buildProjectInBrowser(project: MiniAppProject): Promise<BuildArtifact> {
   return assembleStaticArtifact({
     paths: Object.keys(project.files),
-    read: async (path) => project.files[path],
+    read: async (path) => sourceContents(project, path),
     // A Deploy minifies with NODE_ENV production, as konae build does; the preview stays readable, as konae dev does.
     compile: () => compileProjectInBrowser(project, { release: true }),
-    bundle: async (path) => bundleInBrowser(project.files, path, true),
+    bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
     routing: project.manifest.routing,
   });
@@ -27,15 +27,26 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
 
 export async function compileProjectInBrowser(project: MiniAppProject, options: { release?: boolean } = {}): Promise<{ body: string; styles: string; script: string }> {
   const entrypoint = appEntry(Object.keys(project.files)) ?? "app.js";
-  const { script, styles: importedCss } = await bundleInBrowser(project.files, entrypoint, options.release ?? false);
-  return {
+  const bundled = await bundleInBrowser(project, textFiles(project), entrypoint, options.release ?? false);
+  const compiled = {
     body: project.files["index.html"] ?? "<main id=app></main>",
-    styles: [project.files["styles.css"] ?? "", importedCss].filter(Boolean).join("\n"),
-    script,
+    styles: [project.files["styles.css"] ?? "", bundled.styles].filter(Boolean).join("\n"),
+    script: bundled.script,
   };
+  // Preview and release share the same path checks, including files referenced
+  // by styles imported from the app entry.
+  await assembleStaticArtifact({
+    paths: Object.keys(project.files),
+    read: async (path) => sourceContents(project, path),
+    compile: async () => ({ styles: compiled.styles, script: compiled.script }),
+    bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
+    runtime: hostedRuntime,
+    routing: project.manifest.routing,
+  });
+  return compiled;
 }
 
-async function bundleInBrowser(files: Record<string, string>, entrypoint: string, release = false): Promise<{ script: string; styles: string }> {
+async function bundleInBrowser(project: MiniAppProject, files: Record<string, string>, entrypoint: string, release = false): Promise<{ script: string; styles: string }> {
   // A failed start (a wasm fetch that dropped, say) is not cached, or every later build would fail too.
   initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
     initialized = undefined;
@@ -52,19 +63,30 @@ async function bundleInBrowser(files: Record<string, string>, entrypoint: string
     outdir: "out",
     minify: release,
     define: { "process.env.NODE_ENV": JSON.stringify(release ? "production" : "development") },
-    plugins: [projectFilesPlugin(files), packagesPlugin(declaredPackages(files))],
+    plugins: [projectFilesPlugin(files, project), packagesPlugin(declaredPackages(files))],
   });
   const script = result.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
   if (!script) throw new Error("The browser builder did not produce JavaScript.");
   return { script, styles: result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "" };
 }
 
-function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
+function projectFilesPlugin(files: Record<string, string>, project: MiniAppProject): esbuild.Plugin {
   return {
     name: "konae-project-files",
     setup(build) {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === "package") return undefined;
+        if (args.kind === "url-token") {
+          const importer = servedPath(args.importer) ?? args.importer;
+          let target: string | null;
+          try { target = resolveReference(args.path, importer); } catch { target = null; }
+          if (target === null) return { path: args.path, external: true };
+          const source = Object.keys(project.files).find((path) => path === target)
+            ?? Object.keys(project.files).find((path) => servedPath(path) === target);
+          if (!source) throw new Error(`${args.importer} references ${args.path}, but the Capsule holds no ${target}.`);
+          const bytes = sourceBytes(project, source);
+          return { path: `data:${mediaType(target)};base64,${bytesToBase64(bytes)}${fragmentSuffix(args.path)}`, external: true };
+        }
         // esbuild names an entry ./<path> when a file of that name sits in its working directory, as src/main.tsx does in this checkout.
         if (!args.importer) return { path: requireProjectFile(args.path.replace(/^\.\//, "")), namespace: "konae" };
         if (!args.path.startsWith(".")) return undefined;
@@ -81,6 +103,22 @@ function projectFilesPlugin(files: Record<string, string>): esbuild.Plugin {
       });
     },
   };
+}
+
+function fragmentSuffix(raw: string): string {
+  const fragmentAt = raw.indexOf("#");
+  return fragmentAt === -1 ? "" : raw.slice(fragmentAt);
+}
+
+function mediaType(path: string): string {
+  const extension = path.split(".").pop()?.toLowerCase();
+  return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon", avif: "image/avif", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf", eot: "application/vnd.ms-fontobject" } as Record<string, string>)[extension ?? ""] ?? "application/octet-stream";
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
 }
 
 /**

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as esbuild from "esbuild";
 import type { MiniAppProject } from "../lib/types";
+import { decodeBase64, encodeBase64 } from "../mcp/client";
 
 // esbuild-wasm starts only in a browser; the editor's plugins run the same on native esbuild.
 mock.module("esbuild-wasm", () => ({ initialize: async () => {}, build: esbuild.build }));
-const { compileProjectInBrowser, packageUrl } = await import("./browser-build");
+const { buildProjectInBrowser, compileProjectInBrowser, packageUrl } = await import("./browser-build");
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -81,5 +82,38 @@ describe("packages in the editor's build", () => {
   test("an app file cannot import a URL", async () => {
     serve({});
     await expect(compileProjectInBrowser(project({ "app.js": 'import "https://esm.sh/x@1.0.0";' }))).rejects.toThrow("Import a package by its name and list it in package.json.");
+  });
+});
+
+describe("a file that is not text in the editor's build", () => {
+  test("a binary public file is published as its bytes, and esbuild never reads it", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
+    const built = await buildProjectInBrowser({ ...project({ "app.js": "document.body.dataset.ready = '1';", "public/logo.png": encodeBase64(png) }), encodings: { "public/logo.png": "base64" } });
+    expect(built.encodings).toEqual({ "logo.png": "base64" });
+    expect(decodeBase64(built.files["logo.png"]!)).toEqual(png);
+  });
+
+  test("preview compilation reports a missing public asset with its source reference", async () => {
+    await expect(compileProjectInBrowser(project({ "index.html": '<img src="./public/missing.png?size=large">', "app.js": "document.title = 'preview';" })))
+      .rejects.toThrow('index.html references ./public/missing.png?size=large, but the Capsule holds no public/missing.png.');
+  });
+
+  test("an imported CSS file resolves a binary public asset through a URL token", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
+    const capsule = project({ "app.js": 'import "./theme.css"; document.body.dataset.ready = "yes";', "theme.css": '.hero { background: url("./public/logo.png?q=1#hero"); } .bare { background: url("public/logo.png"); }' });
+    const built = await compileProjectInBrowser({
+      ...capsule,
+      files: { ...capsule.files, "public/logo.png": encodeBase64(png) },
+      encodings: { "public/logo.png": "base64" },
+    });
+    expect(built.styles.match(/url\(data:image\/png;base64,/g)).toHaveLength(2);
+  });
+
+  test("an imported CSS file keeps an SVG view fragment after its data payload", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><view id="focus" viewBox="0 0 4 4"/></svg>';
+    const capsule = project({ "app.js": 'import "./theme.css"; document.body.dataset.ready = "yes";', "theme.css": '.icon { background: url("./public/views.svg?version=1#focus"); }' });
+    const built = await compileProjectInBrowser({ ...capsule, files: { ...capsule.files, "public/views.svg": svg } });
+    const payload = `data:image/svg+xml;base64,${encodeBase64(new TextEncoder().encode(svg))}`;
+    expect(built.styles).toContain(`url(${payload}#focus)`);
   });
 });

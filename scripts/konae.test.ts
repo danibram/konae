@@ -1,21 +1,43 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
+import { packageComponentFiles } from "../src/lib/portable-package";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
+import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testControls, testReply } from "./local-test";
 import { usageRange } from "../src/lib/usage";
+import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
-import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, browserLogin, creatorVerificationToken, domainLocal, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pipedSecret, publishLocal, readSecret, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
 /** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
 /** Answers a test sets for one tool, over the defaults below. */
 const answers: Record<string, unknown> = {};
-let uploaded = "";
+/** The JSON of each upload, in order. A publish uploads the files of app/, then the release. */
+const uploads: string[] = [];
+const releaseUpload = () => JSON.parse(uploads.at(-1)!);
 let server: ReturnType<typeof Bun.serve>;
+
+async function mockPulled(root: string, packageId: string, snapshotId: string) {
+  const bytes = new TextEncoder().encode("database component fixture");
+  const pull = path.join(root, ".konae/pull");
+  await mkdir(pull, { recursive: true });
+  await writeFile(path.join(pull, packageComponentFiles.database), bytes);
+  return {
+    snapshotId,
+    manifest: {
+      format: "konae-package", version: 1, packageId, createdAt: 1, deploymentId: "app_test", projectId: "app_test",
+      visibility: "public", publishedRevision: 1,
+      contents: [{ name: "database", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }], excluded: [],
+    },
+  } as never;
+}
 
 beforeAll(() => {
   server = Bun.serve({
@@ -29,12 +51,15 @@ beforeAll(() => {
       const { name, arguments: args } = message.params!;
       calls.push({ name, arguments: args });
       if (failing.has(name)) return reply({ isError: true, content: [{ type: "text", text: `${name} failed` }] });
-      if (name === "transfer_write") uploaded += atob(String(args.data));
+      if (name === "transfer_begin") uploads.push("");
+      if (name === "transfer_write") uploads[uploads.length - 1] += atob(String(args.data));
       const results: Record<string, unknown> = {
         project_create: { id: "app_test", name: "Test", slug: "test", manifest: {}, files: { "app.js": "" } },
-        transfer_begin: { transferId: "transfer_1", size: 0, sha256: "", chunkBytes: 65_536 },
-        release_plan: { planId: "plan_1", schema: { statements: [], losses: [], confirmation: null } },
+        project_inspect: { deployment: null, sourcesRevision: 0 },
+        transfer_begin: { transferId: `transfer_${uploads.length}`, size: 0, sha256: "", chunkBytes: 65_536 },
+        release_plan: { planId: "plan_1", expiresAt: Date.now() + 900_000, schema: { statements: [], losses: [], confirmation: null } },
         release_apply: { id: "dep_1", url: "http://test.localhost/" },
+        projects_list: { projects: [{ project: { id: "app_test" } }] },
       };
       return reply({ isError: false, structuredContent: { result: answers[name] ?? results[name] ?? {} } });
     },
@@ -48,7 +73,7 @@ beforeEach(async () => {
   calls.length = 0;
   failing.clear();
   for (const name of Object.keys(answers)) delete answers[name];
-  uploaded = "";
+  uploads.length = 0;
   directory = await mkdtemp(path.join(tmpdir(), "konae-cli-"));
   await mkdir(path.join(directory, "app"));
 });
@@ -91,7 +116,153 @@ test("a folder init wrote builds without npm install, with the built-in bundler"
   }
 }, 60_000);
 
+test("init keeps existing .gitignore entries and adds required entries once", async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), "konae-gitignore-"));
+  try {
+    await writeFile(path.join(folder, ".gitignore"), "private.txt\nnode_modules/\n");
+    await initLocal(folder, { template: "tasks" });
+    const lines = (await readFile(path.join(folder, ".gitignore"), "utf8")).split(/\r?\n/);
+    expect(lines.filter((line) => line === "private.txt")).toHaveLength(1);
+    expect(lines.filter((line) => line === "node_modules/")).toHaveLength(1);
+    expect(lines).toContain("data/");
+    expect(lines).toContain(".konae/");
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test("downloadKernel verifies the release checksum and repairs a changed cached binary", async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), "konae-kernel-cache-"));
+  const oldCache = process.env.KONAE_CACHE_DIR;
+  const oldFetch = globalThis.fetch;
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const os = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const name = `kernel-test-${os}-${arch}`;
+  const kernelDirectory = path.join(folder, "kernels", "test");
+  const cachedBinary = path.join(kernelDirectory, name);
+  await mkdir(kernelDirectory, { recursive: true });
+  await writeFile(cachedBinary, new Uint8Array([9]));
+  const priorInode = (await stat(cachedBinary)).ino;
+  let downloads = 0;
+  process.env.KONAE_CACHE_DIR = folder;
+  globalThis.fetch = async (input) => {
+    downloads++;
+    return String(input).endsWith("SHA256SUMS")
+      ? new Response(`${digest}  ${name}\n`)
+      : new Response(bytes);
+  };
+  try {
+    const binary = await downloadKernel("test");
+    expect(await readFile(binary)).toEqual(bytes);
+    expect((await stat(binary)).ino).not.toBe(priorInode);
+    expect((await stat(binary)).mode & 0o777).toBe(0o755);
+    expect((await readdir(kernelDirectory)).sort()).toEqual(["SHA256SUMS", name]);
+    expect(downloads).toBe(2);
+    await writeFile(binary, new Uint8Array([9]));
+    expect(await downloadKernel("test")).toBe(binary);
+    expect(await readFile(binary)).toEqual(bytes);
+    expect(downloads).toBe(4);
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldCache === undefined) delete process.env.KONAE_CACHE_DIR; else process.env.KONAE_CACHE_DIR = oldCache;
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
 describe("konae CLI", () => {
+  test("publish --plan calls release_plan only, leaves success markers alone, and releases uploads", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, ".konae-source-marker"), "untouched");
+    await mkdir(path.join(directory, ".konae"));
+    await writeFile(path.join(directory, ".konae/source-revision.json"), "marker-before");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    const plan = await publishLocal(directory, config, "token", undefined, undefined, true);
+
+    expect(calls.map((call) => call.name)).toContain("release_plan");
+    expect(calls.map((call) => call.name)).not.toContain("release_apply");
+    expect(calls.map((call) => call.name)).not.toContain("project_create");
+    expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(2);
+    expect(await readFile(path.join(directory, ".konae/source-revision.json"), "utf8")).toBe("marker-before");
+    expect(await stat(path.join(directory, ".konae/published.json")).then(() => true, () => false)).toBe(false);
+    expect(plan.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(Date.parse(plan.expiresAt)).toBeGreaterThan(Date.now());
+  });
+
+  test("publish --plan reports transfer cleanup failure and still returns the plan", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    failing.add("transfer_cancel");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    const warnings: string[] = [];
+
+    const plan = await publishLocal(directory, config, "token", (message) => warnings.push(message), undefined, true);
+
+    expect(plan.plan.planId).toBe("plan_1");
+    expect(warnings).toHaveLength(2);
+  });
+
+  test("publish --plan uses a local-only first-release plan without creating a remote project", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    answers.projects_list = { projects: [] };
+    const config = { url: origin(), project: { id: "app_new", name: "New", slug: "new", manifest: {} } };
+
+    const plan = await publishLocal(directory, config, "token", undefined, undefined, true);
+
+    expect(plan.plan.mode).toBe("local-first-release");
+    expect(calls.map((call) => call.name)).toEqual(["projects_list"]);
+    expect(plan.expiresAt).toBeNull();
+  });
+
+  test("a failed clean-baseline rehearsal uses pull's snapshot, not edited local data", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "konae-rehearsal-test-"));
+    const pull = path.join(folder, ".konae/pull");
+    const localData = path.join(folder, "data/database.sqlite");
+    try {
+      await mkdir(path.join(folder, "app"), { recursive: true });
+      await mkdir(path.join(folder, "dist"), { recursive: true });
+      await mkdir(pull, { recursive: true });
+      await mkdir(path.join(folder, "files-archive"), { recursive: true });
+      await mkdir(path.dirname(localData), { recursive: true });
+      await writeFile(path.join(folder, "konae.json"), JSON.stringify({ id: "app_test", name: "Candidate", slug: "candidate", manifest: {} }));
+      await writeFile(path.join(folder, "app/actions.json"), "{\"actions\":{}}");
+      await writeFile(path.join(folder, "app/schema.sql"), "CREATE TABLE tasks (id INTEGER PRIMARY KEY);");
+      await writeFile(path.join(folder, "dist/index.html"), "candidate build");
+      const remoteBytes = new Uint8Array([1, 2, 3]);
+      const identityBytes = new Uint8Array([4, 5, 6]);
+      const localBytes = new Uint8Array([9, 8, 7]);
+      const archiveIndex = Buffer.from('{"files":[]}');
+      await writeFile(path.join(pull, packageComponentFiles.database), remoteBytes);
+      await writeFile(path.join(pull, packageComponentFiles.identity), identityBytes);
+      await writeFile(path.join(folder, "files-archive/index.json"), archiveIndex);
+      await writeFile(path.join(folder, "files-archive/blob-1"), new Uint8Array([7]));
+      const filesTarPath = path.join(pull, packageComponentFiles.files);
+      const filesTar = Bun.spawn(["tar", "-cf", filesTarPath, "-C", path.join(folder, "files-archive"), "index.json", "blob-1"], { stdout: "pipe", stderr: "pipe" });
+      expect(await filesTar.exited).toBe(0);
+      const filesBytes = new Uint8Array(await readFile(filesTarPath));
+      await writeFile(localData, localBytes);
+      const component = (name: string, bytes: Uint8Array) => ({ name, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+      const manifest = { format: "konae-package", version: 1, packageId: "pkg_baseline", createdAt: 1, deploymentId: "dep_test", projectId: "app_test", visibility: "private", publishedRevision: 1, contents: [component("database", remoteBytes), component("identity", identityBytes), component("files", filesBytes)], excluded: [] };
+      await writeFile(path.join(pull, "pull.json"), JSON.stringify({ manifest, from: "http://localhost", at: 1, sourceBaseline: { packageId: "pkg_old", sourceDigest: "old-source-digest", sourcesRevision: 8, capturedAt: 1 } }));
+
+      await expect(rehearsePulledSnapshot(folder, { id: "app_test", name: "Candidate", slug: "candidate", visibility: "private", signupPolicy: { mode: "closed" }, signInMethods: ["password"], kernel: "test", manifest: {} }, async (scratch, snapshot) => {
+        expect(scratch).not.toBe(folder);
+        expect(await readFile(path.join(scratch, "app/schema.sql"), "utf8")).toContain("tasks");
+        expect(await readFile(path.join(scratch, "dist/index.html"), "utf8")).toBe("candidate build");
+        expect(JSON.parse(await readFile(path.join(scratch, "konae.json"), "utf8")).name).toBe("Candidate");
+        expect(await readFile(path.join(snapshot, "data/database.sqlite"))).toEqual(remoteBytes);
+        expect(await readFile(path.join(snapshot, "data/identity.sqlite"))).toEqual(identityBytes);
+        expect(await readFile(path.join(snapshot, "data/files/index.json"))).toEqual(archiveIndex);
+        expect(await readFile(path.join(scratch, "app/schema.sql"), "utf8")).not.toContain("old published schema");
+        throw Error("schema validation failed");
+      })).rejects.toThrow("schema validation failed");
+      expect(await readFile(localData)).toEqual(localBytes);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
   test.each(["release_plan", "release_apply"])("a failed %s releases its upload so later publishes can proceed", async (step) => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     failing.add(step);
@@ -100,7 +271,8 @@ describe("konae CLI", () => {
     for (let attempt = 0; attempt < 9; attempt++) {
       await expect(publishLocal(directory, config, "token")).rejects.toThrow(`${step} failed`);
     }
-    expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(9);
+    // Each attempt cancels both of its uploads, the files of app/ and the release.
+    expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(18);
     failing.clear();
     expect((await publishLocal(directory, config, "token")).url).toBe("http://test.localhost/");
   });
@@ -125,9 +297,39 @@ describe("konae CLI", () => {
     expect(receipt.url).toBe("http://test.localhost/");
     expect(calls.map((call) => call.name)).toContain("transfer_cancel");
     // No visibility in the manifest publishes private, the same default as the exported deploy script.
-    expect(JSON.parse(uploaded).visibility).toBe("private");
+    expect(releaseUpload().visibility).toBe("private");
     const html = await readFile(path.join(directory, "dist/index.html"), "utf8");
     expect(html).toContain("<script data-konae-runtime>");
+  });
+
+  test("a publish sends the files of app/ in an upload of their own and names both uploads to release_plan", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "index.html"), "<main id=app></main>");
+    await mkdir(path.join(directory, "app", "public"));
+    await writeFile(path.join(directory, "app", "public", "logo.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]));
+    await writeFile(path.join(directory, "app", "public", ".DS_Store"), new Uint8Array([0, 0, 0, 1, 0xff]));
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    await publishLocal(directory, config, "token");
+
+    expect(uploads).toHaveLength(2);
+    const sources = JSON.parse(uploads[0]);
+    expect(Object.keys(sources.files).sort()).toEqual(["app.js", "index.html", "public/logo.png"]);
+    expect(sources.encodings).toEqual({ "public/logo.png": "base64" });
+    expect(releaseUpload().project).toEqual({ id: "app_test", name: "Test", slug: "test", manifest: {} });
+    expect(calls.find((call) => call.name === "release_plan")!.arguments).toEqual({ transferId: "transfer_2", sourcesTransferId: "transfer_1", observedSourcesRevision: 0 });
+    expect(calls.filter((call) => call.name === "transfer_cancel").map((call) => call.arguments.transferId)).toEqual(["transfer_1", "transfer_2"]);
+  });
+
+  test("a publish past the sources limit is refused before a byte travels, naming the total, the limit and the largest files", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    await writeFile(path.join(directory, "app", "index.html"), "<main id=app></main>");
+    await mkdir(path.join(directory, "app", "raw"));
+    await writeFile(path.join(directory, "app", "raw", "big.bin"), new Uint8Array(20 * 1024 * 1024));
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow("app/ holds 20.1 MiB. A project's sources hold at most 20 MiB. The largest files are raw/big.bin (20.0 MiB), index.html (20 bytes) and app.js (18 bytes).");
+    expect(calls.map((call) => call.name)).not.toContain("transfer_begin");
   });
 
   test("login adds manage_users and export_data only when a flag asks", () => {
@@ -329,12 +531,14 @@ describe("konae CLI", () => {
   test("a local Kernel keeps the Kernel's own per-file limit, a 1 TiB quota, and takes either from the environment", async () => {
     const saved = { quota: process.env.KONAE_FILES_QUOTA_BYTES, file: process.env.KONAE_FILE_MAX_BYTES, bin: process.env.KONAE_KERNEL_BIN };
     const fake = path.join(directory, "kernel");
-    await writeFile(fake, "");
+    await writeFile(fake, `#!${process.execPath}\nconsole.log(JSON.stringify({executionTest: 1}));\n`);
+    await chmod(fake, 0o700);
     try {
       process.env.KONAE_KERNEL_BIN = fake;
       delete process.env.KONAE_FILES_QUOTA_BYTES; delete process.env.KONAE_FILE_MAX_BYTES;
       const settings = await initLocal(path.join(directory, "app-folder"), { name: "Probe" });
       const bare = await localKernel(path.join(directory, "app-folder"), settings);
+      expect(bare.env.KONAE_EXECUTION_MODE).toBe("test");
       expect(bare.env.KONAE_FILES_QUOTA_BYTES).toBe(String(1024 ** 4));
       expect("KONAE_FILE_MAX_BYTES" in bare.env).toBe(false);
       process.env.KONAE_FILE_MAX_BYTES = "5242880"; process.env.KONAE_FILES_QUOTA_BYTES = "10485760";
@@ -351,7 +555,7 @@ describe("konae CLI", () => {
     for (const word of ["login", "init", "dev", "build", "contract", "publish", "conform", "export", "--manage-users", "--export-data", "--verify-from", "--with-data", "--secret", "--key", "--inputs", "domain", "--deployment", "--set", "--clear", "pull", "sql", "events", "--prod", "--follow", "--json", "--events-port", "KONAE_KERNEL_BIN", "--file", "--reset", "--template", "tool", "--browser", "--no-open", "secret", "--use", "push", "hostname"]) expect(HELP).toContain(word);
     const run = cli("deploy");
     expect(await run.exited).toBe(1);
-    expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: bun run konae --");
+    expect(await new Response(run.stderr).text()).toContain("Unknown command deploy.\n\nUsage: konae <command> [options]");
   });
 
   test("help calls the address of an installation its installation URL and says what to put there", () => {
@@ -384,11 +588,11 @@ describe("konae CLI", () => {
     const fromFolder = withUrl("--dir", directory);
     expect(await fromFolder.exited).toBe(0);
     expect(await new Response(fromFolder.stdout).text()).toContain("This app has no custom domain.");
-    expect(calls.map((call) => [call.name, call.arguments.deploymentId])).toEqual([["domain_read", "app_from_folder"]]);
+    expect(calls.map((call) => [call.name, call.arguments.projectId])).toEqual([["domain_read", "app_from_folder"]]);
     calls.length = 0;
     const named = withUrl("--dir", directory, "--deployment", "dep_named");
     expect(await named.exited).toBe(0);
-    expect(calls.map((call) => call.arguments.deploymentId)).toEqual(["dep_named"]);
+    expect(calls.map((call) => call.arguments.projectId)).toEqual(["dep_named"]);
     calls.length = 0;
     const neither = withUrl();
     expect(await neither.exited).toBe(1);
@@ -470,7 +674,7 @@ describe("konae CLI", () => {
 
     await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
-    const payload = JSON.parse(uploaded);
+    const payload = releaseUpload();
     expect(payload.initialSignupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
     expect(payload.project.manifest).toEqual({ visibility: "private" });
     expect(calls.find((call) => call.name === "project_create")!.arguments.manifest).toEqual({ visibility: "private" });
@@ -478,18 +682,335 @@ describe("konae CLI", () => {
     expect(warnings).toEqual([]);
   });
 
+  test("a failed first build does not create a remote project", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "const = ;");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { visibility: "private" } } };
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow();
+    expect(calls.map((call) => call.name)).not.toContain("project_create");
+  });
+
+  test("pendingPull clears only after dev imports the same package", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "konae-pull-marker-"));
+    const manifest = { format: "konae-package", version: 1, packageId: "pkg_1", createdAt: 1, deploymentId: "dep_1", projectId: "app_1", visibility: "private", publishedRevision: 1, contents: [{ name: "database", size: 1, sha256: "a".repeat(64) }], excluded: [] };
+    try {
+      await mkdir(path.join(folder, ".konae/pull"), { recursive: true });
+      await writeFile(path.join(folder, ".konae/pull/pull.json"), JSON.stringify({ manifest, from: "http://localhost", at: 1 }));
+      expect(await pendingPull(folder)).toBeTruthy();
+      await writeFile(path.join(folder, ".konae/pull-imported.json"), JSON.stringify({ packageId: "pkg_1" }));
+      expect(await pendingPull(folder)).toBeUndefined();
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed import leaves local data and reset records untouched", async () => {
+    await mkdir(path.join(directory, "data"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "old-db");
+    const pulled = await mockPulled(directory, "pkg_bad", "snapshot_bad");
+    await expect(resetData(directory, { data: "kernel", run: async () => { throw Error("invalid import"); } }, pulled)).rejects.toThrow("invalid import");
+    expect(await readFile(path.join(directory, "data/database.sqlite"), "utf8")).toBe("old-db");
+    await expect(readFile(path.join(directory, ".konae/local-state.json"))).rejects.toThrow();
+  });
+
+  test("an empty reset keeps a recoverable backup and local secrets", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    await mkdir(path.join(directory, "data"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "old-db");
+    await writeFile(path.join(directory, "data/secrets.sqlite"), "local-secrets");
+    await writeFile(path.join(directory, "data/operator-note"), "keep in backup");
+    const reset = await resetData(directory, { data: "kernel", run: async () => JSON.stringify({ callsRetired: 0, mailRetired: 0 }) }, undefined);
+    expect(await readFile(path.join(directory, "data/secrets.sqlite"), "utf8")).toBe("local-secrets");
+    expect(await readdir(path.join(directory, "data"))).toEqual(["secrets.sqlite"]);
+    expect(await readFile(path.join(reset.backup, "data/database.sqlite"), "utf8")).toBe("old-db");
+    expect(await readFile(path.join(reset.backup, "data/operator-note"), "utf8")).toBe("keep in backup");
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8")).callsRetired).toBe(0);
+  });
+
+  test("repeated empty resets write distinct execution records", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    const kernel = { data: "kernel", run: async () => JSON.stringify({ callsRetired: 0, mailRetired: 0 }) };
+    const first = await resetData(directory, kernel, undefined);
+    const second = await resetData(directory, kernel, undefined);
+    expect(second.executionId).not.toBe(first.executionId);
+    expect(second.snapshotId).not.toBe(first.snapshotId);
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8")).executionId).toBe(second.executionId);
+  });
+
+  test("a live local process prevents a competing lifecycle operation", async () => {
+    const release = await acquireLocalLifecycleLock(directory);
+    await expect(acquireLocalLifecycleLock(directory)).rejects.toThrow(`pid ${process.pid}`);
+    await release();
+    const releaseAgain = await acquireLocalLifecycleLock(directory);
+    await releaseAgain();
+  });
+
+  test("SIGINT releases the lifecycle lock so the same app can restart", async () => {
+    const folder = path.join(directory, "restart-app");
+    await initLocal(folder, { name: "Restart app", template: "tasks" });
+    const settings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
+    settings.signupPolicy = { mode: "open" };
+    await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings));
+    const binary = path.join(directory, "kernel-stub.js");
+    const marker = path.join(folder, ".konae/kernel/stub-started");
+    await writeFile(binary, `#!/usr/bin/env node
+const fs = require("node:fs");
+if (process.argv.includes("capabilities")) { console.log(JSON.stringify({executionTest:1})); process.exit(0); }
+if (process.argv.includes("secret")) { process.stdout.write('{"secrets":[]}'); process.exit(0); }
+if (process.argv.includes("test")) { process.stdout.write('{"callsRetired":0,"mailRetired":0}'); process.exit(0); }
+fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-started", "x");
+console.log("Serving app at http://localhost:8898/");
+console.log("Kernel listening on 8898");
+setInterval(() => {}, 1000);
+`);
+    await chmod(binary, 0o755);
+    const launch = () => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "dev", "--dir", folder, "--port", "8898", "--events-port", "0"], {
+      env: { ...process.env, KONAE_KERNEL_BIN: binary }, stdout: "pipe", stderr: "pipe",
+    });
+    const waitForStart = async (child?: ReturnType<typeof Bun.spawn>, output?: { stdout: string; stderr: string }) => {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (await stat(marker).then(() => true, () => false)) return;
+        if (child?.exitCode !== null && child?.exitCode !== undefined) throw Error(`The dev process exited ${child.exitCode}. ${output?.stderr ?? ""}`);
+        await Bun.sleep(25);
+      }
+      throw Error(`The development Kernel did not start. stdout: ${output?.stdout ?? ""} stderr: ${output?.stderr ?? ""}`);
+    };
+    const drain = (child: ReturnType<typeof Bun.spawn>, output: { stdout: string; stderr: string }) => {
+      void (async () => { for await (const chunk of child.stdout as ReadableStream<Uint8Array>) output.stdout += new TextDecoder().decode(chunk); })();
+      void (async () => { for await (const chunk of child.stderr as ReadableStream<Uint8Array>) output.stderr += new TextDecoder().decode(chunk); })();
+    };
+
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let output = { stdout: "", stderr: "" };
+    try {
+      child = launch();
+      drain(child, output);
+      await waitForStart(child, output);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true)).toBe(true);
+      child.kill("SIGINT");
+      expect(await child.exited).toBe(130);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+
+      await rm(marker, { force: true });
+      output = { stdout: "", stderr: "" };
+      child = launch();
+      drain(child, output);
+      await waitForStart(child, output);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(143);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+    } catch (error) {
+      throw Error(`${error instanceof Error ? error.message : error}\nstdout: ${output.stdout}\nstderr: ${output.stderr}`);
+    } finally {
+      if (child && child.exitCode === null) { child.kill("SIGTERM"); await child.exited; }
+    }
+  }, 30_000);
+
+  test("SIGINT during a delayed reload waits for the build and never starts another Kernel", async () => {
+    const folder = path.join(directory, "reload-app");
+    await initLocal(folder, { name: "Reload app", template: "tasks" });
+    const settings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
+    settings.signupPolicy = { mode: "open" };
+    await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings));
+    await mkdir(path.join(folder, "node_modules"));
+    await mkdir(path.join(folder, "scripts"), { recursive: true });
+    await writeFile(path.join(folder, "package.json"), JSON.stringify({ name: "reload-app", private: true, scripts: { build: "node scripts/delayed-build.mjs" } }));
+    await writeFile(path.join(folder, "scripts/delayed-build.mjs"), `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+appendFileSync(".konae/build-runs", "build\\n");
+await new Promise(resolve => setTimeout(resolve, 1800));
+mkdirSync("dist", { recursive: true });
+writeFileSync("dist/index.html", "<html><body>reload</body></html>");
+`);
+    const binary = path.join(directory, "reload-kernel-stub.js");
+    const started = path.join(folder, ".konae/kernel/stub-started");
+    const pids = path.join(folder, ".konae/kernel/stub-pids");
+    await writeFile(binary, `#!/usr/bin/env node
+const fs = require("node:fs");
+if (process.argv.includes("capabilities")) { process.stdout.write('{"executionTest":1}'); process.exit(0); }
+if (process.argv.includes("secret")) { process.stdout.write('{"secrets":[]}'); process.exit(0); }
+if (process.argv.includes("test")) { process.stdout.write('{"callsRetired":0,"mailRetired":0}'); process.exit(0); }
+fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-started", "x");
+fs.appendFileSync(process.env.KONAE_DATA_DIR + "/stub-pids", String(process.pid) + "\\n");
+console.log("Serving app at http://localhost:8899/");
+console.log("Kernel listening on 8899");
+setInterval(() => {}, 1000);
+`);
+    await chmod(binary, 0o755);
+    const launch = () => Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "konae.ts"), "dev", "--dir", folder, "--port", "8899", "--events-port", "0"], {
+      env: { ...process.env, KONAE_KERNEL_BIN: binary }, stdout: "pipe", stderr: "pipe",
+    });
+    const track = (child: ReturnType<typeof Bun.spawn>) => {
+      const output = { stdout: "", stderr: "" };
+      void (async () => { for await (const chunk of child.stdout as ReadableStream<Uint8Array>) output.stdout += new TextDecoder().decode(chunk); })();
+      void (async () => { for await (const chunk of child.stderr as ReadableStream<Uint8Array>) output.stderr += new TextDecoder().decode(chunk); })();
+      return output;
+    };
+    const waitFor = async (condition: () => Promise<boolean>, child: ReturnType<typeof Bun.spawn>, output: { stdout: string; stderr: string }) => {
+      for (let attempt = 0; attempt < 240; attempt++) {
+        if (await condition()) return;
+        if (child.exitCode !== null) throw Error(`dev exited ${child.exitCode}; stdout: ${output.stdout}; stderr: ${output.stderr}`);
+        await Bun.sleep(25);
+      }
+      throw Error(`Timed out waiting for dev; stdout: ${output.stdout}; stderr: ${output.stderr}`);
+    };
+    const pidsAreStopped = async () => {
+      const values = (await readFile(pids, "utf8").catch(() => "")).trim().split(/\s+/).filter(Boolean).map(Number);
+      return values.every((pid) => {
+        try { process.kill(pid, 0); return false; }
+        catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+      });
+    };
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let output = { stdout: "", stderr: "" };
+    try {
+      child = launch();
+      output = track(child);
+      await waitFor(async () => await stat(started).then(() => true, () => false), child, output);
+      await waitFor(async () => await stat(path.join(folder, ".konae/dev.json")).then(() => true, () => false), child, output);
+      await Bun.sleep(150);
+      expect((await readFile(path.join(folder, ".konae/build-runs"), "utf8")).trim().split("\n")).toHaveLength(1);
+
+      await writeFile(path.join(folder, "app/index.html"), "<main>changed</main>");
+      await waitFor(async () => (await readFile(path.join(folder, ".konae/build-runs"), "utf8").catch(() => "")).trim().split("\n").length >= 2, child, output);
+      await Bun.sleep(150);
+      child.kill("SIGINT");
+      expect(await child.exited).toBe(130);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+      expect((await readFile(started, "utf8")).length).toBe(1);
+      expect(await pidsAreStopped()).toBe(true);
+
+      await rm(started, { force: true });
+      child = launch();
+      output = track(child);
+      await waitFor(async () => await stat(started).then(() => true, () => false), child, output);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true)).toBe(true);
+      expect((await readFile(pids, "utf8")).trim().split("\n")).toHaveLength(2);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(143);
+      expect(await pidsAreStopped()).toBe(true);
+
+      await rm(started, { force: true });
+      child = launch();
+      output = track(child);
+      await waitFor(async () => (await readFile(path.join(folder, ".konae/build-runs"), "utf8").catch(() => "")).trim().split("\n").length >= 4, child, output);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(143);
+      expect(await stat(started).then(() => true, () => false)).toBe(false);
+      expect(await stat(path.join(folder, ".konae/lifecycle.lock")).then(() => true, () => false)).toBe(false);
+      expect((await readFile(pids, "utf8")).trim().split("\n")).toHaveLength(2);
+      expect(await pidsAreStopped()).toBe(true);
+    } finally {
+      if (child && child.exitCode === null) { child.kill("SIGTERM"); await child.exited; }
+    }
+  }, 30_000);
+
+  test("a failed effect retirement restores app data and both local queues", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    await mkdir(path.join(directory, "data"));
+    await mkdir(path.join(directory, "kernel"));
+    const createQueue = (file: string, value: string) => {
+      const db = new Database(file);
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE reset_probe(value TEXT);");
+      db.query("INSERT INTO reset_probe VALUES (?)").run(value);
+      db.close();
+    };
+    const readQueue = (file: string) => {
+      const db = new Database(file);
+      const result = db.query("SELECT value FROM reset_probe").get() as { value: string };
+      db.close();
+      return result.value;
+    };
+    createQueue(path.join(directory, "data/database.sqlite"), "app before");
+    createQueue(path.join(directory, "kernel/mail.sqlite"), "mail before");
+    createQueue(path.join(directory, "kernel/mail-test.sqlite"), "test mail before");
+    createQueue(path.join(directory, "kernel/calls.sqlite"), "calls before");
+    await writeFile(path.join(directory, "kernel/mail-testbox.jsonl"), "test mailbox before");
+    const kernel = {
+      data: path.join(directory, "kernel"),
+      async run(args: string[]) {
+        if (args[0] === "import") {
+          const db = new Database(path.join(directory, "data/database.sqlite"));
+          db.query("UPDATE reset_probe SET value = 'imported'").run();
+          db.close();
+          return JSON.stringify({ backup: { id: "kernel-backup" } });
+        }
+        if (args[0] === "test") {
+          for (const file of ["mail.sqlite", "mail-test.sqlite", "calls.sqlite"]) {
+            const db = new Database(path.join(directory, "kernel", file));
+            db.query("UPDATE reset_probe SET value = 'retired'").run();
+            db.close();
+          }
+          throw Error("retirement stopped");
+        }
+        throw Error(`Unexpected command ${args.join(" ")}`);
+      },
+    };
+    const pulled = await mockPulled(directory, "package_1", "snapshot_1");
+    await expect(resetData(directory, kernel, pulled)).rejects.toThrow("retirement stopped");
+    expect(readQueue(path.join(directory, "data/database.sqlite"))).toBe("app before");
+    expect(readQueue(path.join(directory, "kernel/mail.sqlite"))).toBe("mail before");
+    expect(readQueue(path.join(directory, "kernel/mail-test.sqlite"))).toBe("test mail before");
+    expect(await readFile(path.join(directory, "kernel/mail-testbox.jsonl"), "utf8")).toBe("test mailbox before");
+    expect(readQueue(path.join(directory, "kernel/calls.sqlite"))).toBe("calls before");
+    await expect(readFile(path.join(directory, ".konae/local-state.json"))).rejects.toThrow();
+  });
+
+  test("a successful reset records the snapshot and keeps data and queue recovery copies", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test" }));
+    await mkdir(path.join(directory, "data"));
+    await mkdir(path.join(directory, "kernel"));
+    await writeFile(path.join(directory, "data/database.sqlite"), "before");
+    await writeFile(path.join(directory, "kernel/mail.sqlite"), "mail before");
+    await writeFile(path.join(directory, "kernel/mail-test.sqlite"), "test mail before");
+    await writeFile(path.join(directory, "kernel/mail-testbox.jsonl"), "test mailbox before");
+    await writeFile(path.join(directory, "kernel/calls.sqlite"), "calls before");
+    const commands: string[] = [];
+    const kernel = {
+      data: path.join(directory, "kernel"),
+      async run(args: string[]) {
+        commands.push(args.join(" "));
+        if (args[0] === "import") {
+          await writeFile(path.join(directory, "data/database.sqlite"), "imported");
+          return JSON.stringify({ backup: { id: "kernel-backup" } });
+        }
+        if (args[0] === "test") return JSON.stringify({ callsRetired: 2, mailRetired: 3 });
+        throw Error(`Unexpected command ${args.join(" ")}`);
+      },
+    };
+    const pulled = await mockPulled(directory, "package_2", "snapshot_2");
+    const reset = await resetData(directory, kernel, pulled);
+    expect(commands.map((command) => command.split(" ")[0])).toEqual(["import", "test"]);
+    expect(await readFile(path.join(reset.backup, "data/database.sqlite"), "utf8")).toBe("before");
+    expect(await readFile(path.join(reset.backup, "queues/mail.sqlite"), "utf8")).toBe("mail before");
+    expect(await readFile(path.join(reset.backup, "queues/mail-test.sqlite"), "utf8")).toBe("test mail before");
+    expect(await readFile(path.join(reset.backup, "queues/mail-testbox.jsonl"), "utf8")).toBe("test mailbox before");
+    expect(await readFile(path.join(reset.backup, "queues/calls.sqlite"), "utf8")).toBe("calls before");
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/local-state.json"), "utf8"))).toMatchObject({ snapshotId: "snapshot_2", callsRetired: 2, mailRetired: 3 });
+    expect(JSON.parse(await readFile(path.join(directory, ".konae/pull-imported.json"), "utf8"))).toMatchObject({ packageId: "package_2", snapshotId: "snapshot_2", executionId: reset.executionId });
+  });
+
+  test("push refuses while the folder holds an unimported pull", async () => {
+    const manifest = { format: "konae-package", version: 1, packageId: "pkg_waiting", createdAt: 1, deploymentId: "dep_1", projectId: "app_test", visibility: "private", publishedRevision: 1, contents: [{ name: "database", size: 1, sha256: "b".repeat(64) }], excluded: [] };
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", manifest: {}, visibility: "private", signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: "0.8.0" }));
+    await mkdir(path.join(directory, ".konae/pull"), { recursive: true });
+    await writeFile(path.join(directory, ".konae/pull/pull.json"), JSON.stringify({ manifest, from: origin(), at: 1 }));
+    const run = cli("push", "--dir", directory);
+    const [exit, stderr] = await Promise.all([run.exited, new Response(run.stderr).text()]);
+    expect(exit).toBe(1);
+    expect(stderr).toContain("Run dev --reset before push");
+    expect(calls).toHaveLength(0);
+  });
+
   test("a republish sends no policy and warns, without failing, when the app has another", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
-    answers.project_inspect = { deployment: { id: "dep_1" } };
-    answers.signup_policy_read = { deploymentId: "dep_1", mode: "closed", allowlist: [] };
+    answers.project_inspect = { deployment: { id: "dep_1", signupPolicy: { mode: "closed", allowlist: [] } } };
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: { mode: "invitation" } } } };
     const warnings: string[] = [];
 
     const receipt = await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
     expect(receipt.url).toBe("http://test.localhost/");
-    expect(JSON.parse(uploaded)).not.toHaveProperty("initialSignupPolicy");
-    expect(calls.find((call) => call.name === "signup_policy_read")!.arguments).toEqual({ deploymentId: "dep_1" });
+    expect(releaseUpload()).not.toHaveProperty("initialSignupPolicy");
+    expect(calls.find((call) => call.name === "project_inspect")!.arguments).toEqual({ projectId: "app_test" });
     expect(warnings).toEqual([
       "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",
     ]);
@@ -497,7 +1018,7 @@ describe("konae CLI", () => {
     // The same policy, or a Kernel that cannot read it, publishes without a word.
     for (const answer of [{ mode: "invitation", allowlist: ["kept@example.test"] }, undefined]) {
       warnings.length = 0;
-      if (answer) answers.signup_policy_read = answer; else failing.add("signup_policy_read");
+      answers.project_inspect = { deployment: { id: "dep_1", ...(answer ? { signupPolicy: answer } : {}) } };
       expect((await publishLocal(directory, config, "token", (message) => warnings.push(message))).url).toBe("http://test.localhost/");
       expect(warnings).toEqual([]);
     }
@@ -594,7 +1115,7 @@ describe("konae CLI", () => {
     await mkdir(path.join(directory, ".konae"));
     await writeFile(path.join(directory, ".konae/credentials.json"), JSON.stringify({ url: origin(), token: "token" }));
     expect(await cli("sql", "--dir", directory, "--prod", "SELECT 1").exited).toBe(0);
-    expect(calls.find((call) => call.name === "database_execute")!.arguments).toEqual({ deploymentId: "dep_1", operation: "sql", input: { sql: "SELECT 1" } });
+    expect(calls.find((call) => call.name === "database_execute")!.arguments).toEqual({ projectId: "dep_1", operation: "sql", input: { sql: "SELECT 1" } });
     const empty = cli("sql", "--dir", directory);
     expect(await empty.exited).toBe(1);
     expect(await new Response(empty.stderr).text()).toContain("Give the statement in quotes or with --file");
@@ -608,10 +1129,10 @@ describe("konae CLI", () => {
     expect(await events.exited).toBe(0);
     expect(JSON.parse(await new Response(events.stdout).text())).toMatchObject({ kind: "signal", title: "Signal order.placed" });
     expect(calls.filter((call) => call.name !== "project_inspect")).toEqual(expect.arrayContaining([
-      { name: "usage_summary", arguments: { deploymentId: "dep_1", ...usageRange(3) } },
-      { name: "calls_read", arguments: { deploymentId: "dep_1" } },
-      { name: "notices_read", arguments: { deploymentId: "dep_1" } },
-      { name: "signals_read", arguments: { deploymentId: "dep_1" } },
+      { name: "usage_summary", arguments: { projectId: "dep_1", ...usageRange(3) } },
+      { name: "calls_read", arguments: { projectId: "dep_1" } },
+      { name: "notices_read", arguments: { projectId: "dep_1" } },
+      { name: "signals_read", arguments: { projectId: "dep_1" } },
     ]));
   });
 
@@ -646,15 +1167,138 @@ describe("konae CLI", () => {
       const page = await fetch(feed.url);
       expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
       // The page writes values as text, so a mail's markup stays text.
-      expect(await page.text()).not.toContain("innerHTML");
-      const events = await (await fetch(`${feed.url}/events.json`)).json() as { kind: string; title: string; mail?: { text: string } }[];
+      const pageText = await page.clone().text();
+      expect(pageText).not.toContain("innerHTML");
+      const feedAddress = new URL(feed.url); const control = new URLSearchParams(feedAddress.hash.slice(1)).get("control")!; feedAddress.hash = ""; feedAddress.pathname = "/events.json";
+      const eventsResponse = await fetch(feedAddress, { headers: { "X-Konae-Control": control } });
+      const events = await eventsResponse.json() as { kind: string; title: string; mail?: { text: string } }[];
       expect(events.map((event) => event.kind)).toEqual(["signal", "mail"]);
       expect(events[1]).toMatchObject({ title: "Email from messages.send to owner@app.test", mail: { text: "<b>Hola</b>" } });
+      expect(await eventsResponse.headers.get("cache-control")).toBe("no-store");
+      expect((await fetch(feedAddress)).status).toBe(403);
+      expect((await fetch(feedAddress, { headers: { "X-Konae-Control": control, Origin: "http://evil.test" } })).status).toBe(403);
+      expect((await fetch(feedAddress, { headers: { "X-Konae-Control": control, Host: "evil.test" } })).status).toBe(403);
+      expect(pageText).toContain("X-Konae-Control");
+      expect(pageText).not.toContain(control);
       failing = true;
-      const failed = await fetch(`${feed.url}/events.json`);
+      const failed = await fetch(feedAddress, { headers: { "X-Konae-Control": control } });
       expect(failed.status).toBe(502);
       expect(await failed.json()).toEqual({ error: "The Kernel stopped." });
-      expect((await fetch(`${feed.url}/other`)).status).toBe(404);
+      expect((await fetch(new URL("other", feedAddress))).status).toBe(403);
+    } finally { feed.stop(); }
+  });
+
+  test("test replies enforce response numbers and scenarios refuse ambiguous matches", async () => {
+    const received: string[] = [];
+    const runner = { run: async (_args: string[], input?: string) => { received.push(input || ""); return JSON.stringify({ accepted: true }); } };
+    await expect(testReply(runner, "call-a", JSON.stringify({ responseNumber: 0, status: 200, body: {} }))).rejects.toThrow("positive responseNumber");
+    await expect(testReply(runner, "call-a", "null")).rejects.toThrow("Reply JSON must be a JSON object");
+    await expect(testReply(runner, "call-a", JSON.stringify({ responseNumber: 1, status: 200, body: {}, extra: true }))).rejects.toThrow("unknown field");
+    expect(await testReply({ run: async () => JSON.stringify({ accepted: false }) }, "call-a", JSON.stringify({ responseNumber: 1, error: "timeout" }))).toEqual({ accepted: false });
+    await expect(testReply({ run: async () => "null" }, "call-a", JSON.stringify({ responseNumber: 1, error: "timeout" }))).rejects.toThrow("Kernel reply result must be a JSON object");
+    await expect(testReply({ run: async () => JSON.stringify({ accepted: "yes" }) }, "call-a", JSON.stringify({ responseNumber: 1, error: "timeout" }))).rejects.toThrow("accepted boolean");
+    expect(localResetSummary({ executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3, backup: "/private/host/path" })).toEqual({ executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3 });
+    expect(localResetSummary({ executionId: "exec-1", snapshotId: "snap-1", resetAt: "bad", callsRetired: 2, mailRetired: 3 })).toBeUndefined();
+    const controls = testControls({ run: async (args) => args[1] === "status" ? JSON.stringify({ mode: "test", pausedSchedules: [] }) : JSON.stringify({ calls: [] }) }, async () => ({ executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3 }));
+    expect(await controls.status()).toEqual({ mode: "test", pausedSchedules: [], localState: { executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3 } });
+    const directory = await mkdtemp(path.join(tmpdir(), "konae-scenario-"));
+    try {
+      const filename = path.join(directory, "scenario.json");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: {}, response: { responseNumber: 2, status: 200, body: {} } }] }));
+      const ambiguous = { run: async () => JSON.stringify({ calls: [
+        { callId: "c1", action: "mail.send", responseNumber: 2, awaitingAt: 4 },
+        { callId: "c2", action: "mail.send", responseNumber: 2, awaitingAt: 5 },
+      ] }) };
+      await expect(runScenario(ambiguous, filename)).rejects.toThrow("matched 2 awaiting calls");
+      const backoffUntil = Date.now() + 60_000;
+      const backoff = { run: async () => JSON.stringify({ calls: [{ callId: "retry-1", action: "mail.send", responseNumber: 2, state: "pending", awaitingAt: null, nextAttemptAt: backoffUntil }] }) };
+      let retryRefusal: ScenarioRefusal | undefined;
+      try { await runScenario(backoff, filename); } catch (error) { if (error instanceof ScenarioRefusal) retryRefusal = error; else throw error; }
+      expect(retryRefusal?.message).toContain("retry for mail.send is pending");
+      expect(retryRefusal?.result.pending).toMatchObject([{ callId: "retry-1", nextAttemptAt: backoffUntil }]);
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: { input: { recipient: "ana" } }, response: { responseNumber: 2, status: 202, body: { ok: true } } }] }));
+      const commands: string[][] = [];
+      let callReads = 0;
+      const exact = { run: async (args: string[], input?: string) => {
+        commands.push(args);
+        if (args[1] === "calls") return JSON.stringify({ calls: callReads++ === 0 ? [{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 2, awaitingAt: 8 }] : [{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 3, attempts: 2, nextAttemptAt: 100 }] });
+        expect(JSON.parse(input!)).toEqual({ responseNumber: 2, status: 202, body: { ok: true } });
+        return JSON.stringify({ accepted: true, attempt: 1 });
+      } };
+      const applied = await runScenario(exact, filename);
+      expect(applied.applied).toHaveLength(1);
+      expect(applied.pending).toEqual([{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 3, attempts: 2, nextAttemptAt: 100 }]);
+      expect(commands).toEqual([["test", "calls"], ["test", "reply", "c3"], ["test", "calls"]]);
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: { input: { recipient: "ana" } }, response: { responseNumber: 1, status: 202, body: { ok: true } } }] }));
+      const mismatch = { run: async () => JSON.stringify({ calls: [{ callId: "c3", action: "mail.send", input: { recipient: "ana" }, responseNumber: 3, awaitingAt: 10 }] }) };
+      await expect(runScenario(mismatch, filename)).rejects.toThrow("expected response 3, got 1");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: {}, response: { responseNumber: 2, status: 200, body: {}, extra: true } }] }));
+      await expect(runScenario(exact, filename)).rejects.toThrow("unknown field");
+      await writeFile(filename, "[]");
+      await expect(runScenario(exact, filename)).rejects.toThrow("Scenario must be a JSON object");
+      await writeFile(filename, " ".repeat(1024 * 1024 + 1));
+      await expect(runScenario(exact, filename)).rejects.toThrow("regular file no larger than");
+      const root = path.join(directory, "project"); const tests = path.join(root, "tests"); const outside = path.join(directory, "outside.json");
+      await mkdir(tests, { recursive: true }); await writeFile(outside, "{}");
+      const escaped = path.join(tests, "escape.json"); await symlink(outside, escaped);
+      await expect(resolveScenarioPath(root, escaped)).rejects.toThrow("inside project tests/");
+      await writeFile(path.join(tests, "okay.json"), "{}");
+      expect(await resolveScenarioPath(root, path.join(tests, "okay.json"))).toBe(await realpath(path.join(tests, "okay.json")));
+      const oversized = path.join(directory, "reply.json"); await writeFile(oversized, " ".repeat(64 * 1024 + 1));
+      await expect(readReplyFile(oversized)).rejects.toThrow("regular file no larger than");
+      await expect(readReplyInput(new Blob([" ".repeat(64 * 1024 + 1)]).stream())).rejects.toThrow("Reply JSON exceeds");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [
+        { action: "mail.send", match: { input: { recipient: "one" } }, response: { responseNumber: 1, status: 200, body: {} } },
+        { action: "mail.send", match: { input: { recipient: "two" } }, response: { responseNumber: 99, status: 200, body: {} } },
+      ] }));
+      let reads = 0;
+      const partial = { run: async (args: string[], input?: string) => {
+        if (args[1] === "calls") return JSON.stringify({ calls: reads++ === 0 ? [
+          { callId: "first", action: "mail.send", input: { recipient: "one" }, responseNumber: 1, awaitingAt: 1 },
+          { callId: "second", action: "mail.send", input: { recipient: "two" }, responseNumber: 2, awaitingAt: 2 },
+        ] : [{ callId: "second", action: "mail.send", input: { recipient: "two" }, responseNumber: 2, awaitingAt: 2 }] });
+        if (args[1] === "reply") return JSON.stringify({ accepted: true });
+        throw Error("Unexpected command");
+      } };
+      let refusal: ScenarioRefusal | undefined;
+      try { await runScenario(partial, filename); } catch (error) { if (error instanceof ScenarioRefusal) refusal = error; else throw error; }
+      expect(refusal?.result).toMatchObject({ refused: true, applied: [{ callId: "first" }], pending: [{ callId: "second" }] });
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: {}, response: { responseNumber: 1, error: "timeout" } }] }));
+      const rejectedReply = { run: async (args: string[]) => args[1] === "calls"
+        ? JSON.stringify({ calls: [{ callId: "stale", action: "mail.send", responseNumber: 1, awaitingAt: 1 }] })
+        : JSON.stringify({ accepted: false, reason: "stale" }) };
+      let rejected: ScenarioRefusal | undefined;
+      try { await runScenario(rejectedReply, filename); } catch (error) { if (error instanceof ScenarioRefusal) rejected = error; else throw error; }
+      expect(rejected?.result).toMatchObject({ refused: true, applied: [], pending: [{ callId: "stale" }] });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  test("events controls authorize local reads and mutations with the owner token", async () => {
+    const mailbox = path.join(directory, "control-mailbox.jsonl"); await writeFile(mailbox, "");
+    const mutations: string[] = [];
+    const controls = {
+      status: async () => ({ mode: "test", pausedSchedules: [{ action: "digest.run", paused: true }] }),
+      calls: async () => ({ calls: [] }),
+      reply: async (id: string, body: string) => { mutations.push(`reply:${id}:${body}`); return { accepted: false }; },
+      schedule: async (action: string) => { mutations.push(`schedule:${action}`); return { ok: true }; },
+    };
+    const feed = serveEvents(async () => ({ summary: { usage: { days: [] }, metrics: [], actions: [] }, calls: [], notices: [], signals: [] }) as unknown as Sources, "dep_1", mailbox, 0, controls);
+    try {
+      const base = new URL(feed.url); const token = new URLSearchParams(base.hash.slice(1)).get("control")!; base.hash = "";
+      const get = (route: string, headers: Record<string, string> = {}) => fetch(new URL(route, base), { headers: { "X-Konae-Control": token, ...headers } });
+      expect((await get("test/status")).status).toBe(200);
+      expect((await get("test/calls", { Origin: "http://localhost:4173" })).status).toBe(403);
+      expect((await get("events.json", { Origin: "http://localhost:4173" })).status).toBe(403);
+      expect((await fetch(new URL("test/status", base))).status).toBe(403);
+      const reply = await fetch(new URL("test/reply/c-1", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: '{"responseNumber":1}' });
+      expect(await reply.json()).toEqual({ accepted: false });
+      const schedule = await fetch(new URL("test/schedule/digest.run", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: "{}" });
+      expect(await schedule.json()).toEqual({ ok: true });
+      const oversized = await fetch(new URL("test/reply/c-2", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: " ".repeat(65537) });
+      expect(oversized.status).toBe(413);
+      const invalidSchedule = await fetch(new URL("test/schedule/digest.run", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: "[]" });
+      expect(invalidSchedule.status).toBe(400);
+      expect(mutations).toEqual(["reply:c-1:{\"responseNumber\":1}", "schedule:digest.run"]);
     } finally { feed.stop(); }
   });
 
@@ -681,10 +1325,10 @@ describe("konae CLI", () => {
     }
     expect(ranges).toEqual([usageRange(3), usageRange(3)]);
     expect(asked.slice(0, 4)).toEqual([
-      { name: "usage_summary", input: { deploymentId: "dep_1", ...usageRange(3) } },
-      { name: "calls_read", input: { deploymentId: "dep_1" } },
-      { name: "notices_read", input: { deploymentId: "dep_1" } },
-      { name: "signals_read", input: { deploymentId: "dep_1" } },
+      { name: "usage_summary", input: { projectId: "dep_1", ...usageRange(3) } },
+      { name: "calls_read", input: { projectId: "dep_1" } },
+      { name: "notices_read", input: { projectId: "dep_1" } },
+      { name: "signals_read", input: { projectId: "dep_1" } },
     ]);
     // Locally one run of the kernel binary's events command answers the range.
     const runs: string[][] = [];
@@ -737,7 +1381,7 @@ describe("konae CLI", () => {
 
   test("tool takes one JSON object as its arguments", () => {
     expect(toolArguments()).toEqual({});
-    expect(toolArguments('{"deploymentId":"dep_1"}')).toEqual({ deploymentId: "dep_1" });
+    expect(toolArguments('{"projectId":"dep_1"}')).toEqual({ projectId: "dep_1" });
     expect(toolArguments('{"projectId":"app_1","name":"hook"}', { key: "value", value: "whsec_1\r\n" })).toEqual({ projectId: "app_1", name: "hook", value: "whsec_1" });
     expect(toolArguments(undefined, { key: "value", value: "v" })).toEqual({ value: "v" });
     for (const text of ["[1]", "null", "3", "{deploymentId}"]) expect(() => toolArguments(text)).toThrow(`The arguments must be one JSON object, such as '{"projectId":"app_1"}', not ${text}.`);

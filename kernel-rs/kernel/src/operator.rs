@@ -17,7 +17,7 @@ use crate::{
     Settings, SignupMode, Startup,
 };
 
-const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter"];
+const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test"];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -33,6 +33,13 @@ pub fn usage() -> &'static str {
   kernel secret set <name> [--use route|call|google]   reads the value from standard input
   kernel sql <statement>
   kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>
+  kernel capabilities
+  kernel schema fingerprint --schema <schema.sql> | --database <database.sqlite>
+  kernel test status [--app <id>]
+  kernel test schedule <action> [--app <id>]
+  kernel test calls [--app <id>]
+  kernel test reply <call id> [--app <id>]   reads response JSON from standard input
+  kernel test reset-effects [--app <id>]   retires pending work after a stopped local reset
   kernel maintenance on|off
   kernel enter <email>   prints a one-time link that signs this browser in as the account, for 2 minutes
   kernel import <folder> [--confirm-schema <confirmation>]   replaces the app's data with the data/ of an exported folder, after a backup"
@@ -74,6 +81,21 @@ pub fn mail_key(data_root: &std::path::Path) -> Result<String> {
 /// it names none of these.
 pub async fn command(installation: &Installation) -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|name| name == "capabilities") {
+        ensure!(args.len() == 1, "kernel capabilities takes no arguments.");
+        println!("{}", serde_json::to_string_pretty(&crate::execution::capabilities())?);
+        return Ok(true);
+    }
+    if args.first().is_some_and(|name| name == "schema") {
+        let mut words = Arguments::new(&args[1..]);
+        ensure!(words.next().as_deref() == Some("fingerprint"), "{}", usage());
+        let schema = words.option("schema")?;
+        let database = words.option("database")?;
+        ensure!(words.rest().is_empty(), "{}", usage());
+        let fingerprint = schema_fingerprint(schema.as_deref(), database.as_deref())?;
+        println!("{}", json!({"fingerprint": fingerprint}));
+        return Ok(true);
+    }
     if matches!(args.first().map(String::as_str), Some("help" | "--help")) {
         println!("{}", usage());
         return Ok(true);
@@ -86,9 +108,98 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let startup = Startup::from_env()?;
     let state = crate::state_from_env(&startup, installation.clone(), &mail_key(&startup.data_root)?, Vec::new(), None).await?.0;
     let id = app_id(&state, app).await?;
-    let answer = run(&state, &id, name, &mut words).await?;
+    let answer = if name == "test" { test_command(&state, &id, &mut words).await? } else { run(&state, &id, name, &mut words).await? };
     println!("{}", serde_json::to_string_pretty(&answer)?);
     Ok(true)
+}
+
+fn schema_fingerprint(schema: Option<&str>, database: Option<&str>) -> Result<String> {
+    match (schema, database) {
+        (Some(path), None) => {
+            let sql = std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
+            Ok(crate::schema_transform::fingerprint_schema(&sql)?)
+        }
+        (None, Some(path)) => {
+            let connection = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .with_context(|| format!("Cannot read {path}"))?;
+            Ok(crate::schema_transform::fingerprint(&connection)?)
+        }
+        _ => bail!("Choose exactly one of --schema <schema.sql> or --database <database.sqlite>."),
+    }
+}
+
+async fn test_command(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {
+    ensure!(state.execution_mode.is_test(), "Kernel test controls require KONAE_EXECUTION_MODE=test.");
+    match words.next().as_deref() {
+        Some("status") => {
+            ensure!(words.rest().is_empty(), "{}", usage());
+            let deployment = served(state, id).await?;
+            Ok(json!({"mode": "test", "pausedSchedules": crate::schedule::paused_schedules(&deployment)}))
+        }
+        Some("schedule") => {
+            let action = words.required("the scheduled action's name")?;
+            ensure!(words.rest().is_empty(), "{}", usage());
+            let deployment = served(state, id).await?;
+            crate::schedule::run_manually(state, &deployment, &action).await
+        }
+        Some("calls") => {
+            ensure!(words.rest().is_empty(), "{}", usage());
+            Ok(json!({"calls": crate::calls::list_test_calls_for_app(state, id).await?}))
+        }
+        Some("reply") => {
+            let call = words.required("the captured call's ID")?;
+            ensure!(words.rest().is_empty(), "{}", usage());
+            let (number, outcome) = read_test_reply(std::io::stdin().lock())?;
+            let result = crate::calls::submit_synthetic_response(state, id, &call, number, outcome).await?;
+            Ok(json!({"accepted": result == crate::calls::SyntheticSubmission::Accepted, "callId": call, "responseNumber": number}))
+        }
+        Some("reset-effects") => {
+            ensure!(words.rest().is_empty(), "{}", usage());
+            let calls = crate::calls::retire_after_local_reset(state, id).await?;
+            let root = state.data_root.clone();
+            let app = id.to_owned();
+            let mail = tokio::task::spawn_blocking(move || -> Result<usize> {
+                let test = crate::mail::end_pending_for_local_reset(&root.join(crate::mail::TEST_MAIL_DATABASE), &app)?;
+                let legacy = crate::mail::end_pending_for_local_reset(&root.join(crate::mail::MAIL_DATABASE), &app)?;
+                Ok(test + legacy)
+            }).await??;
+            Ok(json!({"callsRetired": calls, "mailRetired": mail}))
+        }
+        _ => bail!("{}", usage()),
+    }
+}
+
+fn read_test_reply(reader: impl Read) -> Result<(i64, crate::calls::SyntheticOutcome)> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Reply {
+        Http(HttpReply),
+        Network(NetworkReply),
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct HttpReply { response_number: i64, status: u16, body: Value }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct NetworkReply { response_number: i64, error: String }
+
+    let mut bytes = Vec::new();
+    reader.take(65_537).read_to_end(&mut bytes).context("Could not read response JSON from standard input")?;
+    ensure!(bytes.len() <= 65_536, "Synthetic response exceeds 64 KiB.");
+    let reply: Reply = serde_json::from_slice(&bytes).context("Reply JSON needs a positive responseNumber and either status (100 to 599) with body, or error.")?;
+    let (number, outcome) = match reply {
+        Reply::Http(reply) => {
+            ensure!((100..=599).contains(&reply.status), "HTTP status must be between 100 and 599.");
+            let body = match reply.body { Value::String(text) => text.into_bytes(), value => serde_json::to_vec(&value)? };
+            (reply.response_number, crate::calls::SyntheticOutcome::Http { status: reply.status, body })
+        }
+        Reply::Network(reply) => {
+            ensure!(!reply.error.is_empty(), "Reply error must not be empty.");
+            (reply.response_number, crate::calls::SyntheticOutcome::Network { error: reply.error })
+        }
+    };
+    ensure!(number > 0, "Reply JSON needs a positive responseNumber.");
+    Ok((number, outcome))
 }
 
 async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> Result<Value> {
@@ -221,8 +332,11 @@ async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Val
     let target = Target::sources(state, id)?;
     match import_folder(state, &deployment, &folder, &target, confirmation.as_deref()).await? {
         Outcome::NeedsConfirmation(change) => {
-            let losses = change.losses.iter().map(|loss| loss.sentence.as_str()).collect::<Vec<_>>().join(" ");
-            bail!("app/schema.sql asks for a change of the imported data that loses data. {losses} To import it, run again with --confirm-schema {}.", change.confirmation().unwrap_or_default())
+            let mut details = change.losses.iter().map(|loss| loss.sentence.clone()).collect::<Vec<_>>();
+            for transition in change.transformations.iter().flatten() {
+                details.push(format!("Transition {} changes {} rows, with a limit of {}.", transition.id, transition.affected_rows, transition.max_rows));
+            }
+            bail!("The imported data requires schema change confirmation. {} To import it, run again with --confirm-schema {}.", details.join(" "), change.confirmation().unwrap_or_default())
         }
         Outcome::Imported { backup, change } => Ok(json!({"imported": true, "replace": "data", "backup": backup, "schema": change.to_json()})),
     }
@@ -321,6 +435,24 @@ impl Arguments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_reply_requires_one_bounded_outcome() {
+        let (number, outcome) = read_test_reply(br#"{"responseNumber":2,"status":200,"body":{"ok":true}}"#.as_slice()).unwrap();
+        assert_eq!(number, 2);
+        assert!(matches!(outcome, crate::calls::SyntheticOutcome::Http { status: 200, body } if body == br#"{"ok":true}"#));
+        for input in [
+            r#"null"#, r#"[]"#,
+            r#"{"responseNumber":0,"error":"timeout"}"#,
+            r#"{"responseNumber":1,"status":600,"body":null}"#,
+            r#"{"responseNumber":1,"status":200}"#,
+            r#"{"responseNumber":1,"status":200,"body":null,"error":"timeout"}"#,
+            r#"{"responseNumber":1,"error":"timeout","extra":true}"#,
+            r#"{"responseNumber":1,"error":""}"#,
+        ] { assert!(read_test_reply(input.as_bytes()).is_err(), "{input}"); }
+        assert!(read_test_reply(vec![b' '; 65_537].as_slice()).is_err());
+        assert!(matches!(read_test_reply(br#"{"responseNumber":1,"error":"timeout"}"#.as_slice()).unwrap().1, crate::calls::SyntheticOutcome::Network { error } if error == "timeout"));
+    }
 
     #[cfg(unix)]
     #[test]

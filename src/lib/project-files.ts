@@ -1,6 +1,10 @@
+import { keptEncodings } from "./source-files";
+import { checkSources } from "./source-rules";
 export type ProjectTree = {
   files: Record<string, string>;
   directories: string[];
+  /** The files that are not text, as src/lib/source-files.ts describes. A move or a delete takes them along. */
+  encodings?: Record<string, "base64">;
 };
 
 /**
@@ -8,6 +12,8 @@ export type ProjectTree = {
  * deletes as ordinary tree entries.
  */
 export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]);
+const reservedProjectPaths = new Set([...protectedProjectPaths, "schema-transforms.json"]);
+const optionalProtectedFiles = new Set(["schema-transforms.json"]);
 
 /**
  * The key two project paths share when a case-insensitive filesystem (the
@@ -25,7 +31,7 @@ export function foldPath(path: string): string {
  */
 export function reservedPathConflict(path: string): string | null {
   const folded = foldPath(path);
-  for (const reserved of protectedProjectPaths) {
+  for (const reserved of reservedProjectPaths) {
     if (folded === reserved || folded.startsWith(`${reserved}/`)) return reserved;
   }
   return null;
@@ -52,6 +58,11 @@ export function existingDirectory(directories: Iterable<string>, path: string): 
 export function requireUnreservedPath(path: string) {
   const reserved = reservedPathConflict(path);
   if (reserved) throw new Error(`${reserved} is a reserved project file. Choose another name.`);
+}
+
+/** Refuses a new path the sources cannot hold, such as .env or node_modules/x.js, with the sentence the save and the Kernel give. */
+export function requireHeldPath(path: string) {
+  checkSources([[path, 0]]);
 }
 
 export function normalizeProjectPath(input: string): string | null {
@@ -81,14 +92,16 @@ export function fileAncestor(files: Record<string, string>, path: string): strin
 export function createDirectory(tree: ProjectTree, input: string): ProjectTree {
   const path = requirePath(input);
   requireUnreservedPath(path);
+  requireHeldPath(path);
   requireNoFile(tree.files, path);
   requireNoFileAncestor(tree.files, path);
-  return { files: { ...tree.files }, directories: mergeDirectories(tree.directories, path) };
+  return { files: { ...tree.files }, directories: mergeDirectories(tree.directories, path), encodings: tree.encodings };
 }
 
 export function createFile(tree: ProjectTree, input: string, content = ""): ProjectTree {
   const path = requirePath(input);
-  requireUnreservedPath(path);
+  if (!optionalProtectedFiles.has(path)) requireUnreservedPath(path);
+  requireHeldPath(path);
   requireNoFile(tree.files, path);
   const directory = existingDirectory([...tree.directories, ...directoriesForFiles(tree.files)], path);
   if (directory) throw new Error(`A directory already exists at ${directory}.`);
@@ -97,15 +110,18 @@ export function createFile(tree: ProjectTree, input: string, content = ""): Proj
   return {
     files: { ...tree.files, [path]: content },
     directories: parent ? mergeDirectories(tree.directories, parent) : [...tree.directories].sort(),
+    encodings: tree.encodings,
   };
 }
 
 export function removePath(tree: ProjectTree, input: string): ProjectTree {
   const path = requirePath(input);
   const prefix = `${path}/`;
+  const files = Object.fromEntries(Object.entries(tree.files).filter(([name]) => name !== path && !name.startsWith(prefix)));
   return {
-    files: Object.fromEntries(Object.entries(tree.files).filter(([name]) => name !== path && !name.startsWith(prefix))),
+    files,
     directories: tree.directories.filter((name) => name !== path && !name.startsWith(prefix)).sort(),
+    encodings: keptEncodings(tree.encodings, files),
   };
 }
 

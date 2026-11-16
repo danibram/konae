@@ -323,7 +323,6 @@ export function plainListProject(base: MiniAppProject, description = ""): MiniAp
     <p class="ui-list-note">The list stops at 100 rows.</p>
   </section>
 </main>`;
-  const declarations = Object.entries(plainListActions.actions).map(([actionName, action]) => ({ name: actionName, kind: action.kind as "query" | "mutation", access: "authenticated" as const }));
   return {
     ...base,
     directories: [],
@@ -335,36 +334,7 @@ export function plainListProject(base: MiniAppProject, description = ""): MiniAp
       "schema.sql": starterProject.files["schema.sql"],
       "actions.json": `${JSON.stringify(plainListActions, null, 2)}\n`,
     },
-    manifest: withVisibility({
-      ...base.manifest,
-      runtime: { ...base.manifest.runtime, database: { ...base.manifest.runtime.database, actions: declarations } },
-    }, "private"),
+    manifest: withVisibility(base.manifest, "private"),
     updatedAt: Date.now(),
-  };
-}
-
-const droppedPreviewUpload =`if ((await miniapp.auth.session()).role === 'anonymous') {
-    fileInput.value = '';
-    miniapp.auth.signIn();
-    return;
-  }`;
-
-const keptPreviewUpload = `if ((await miniapp.auth.session()).role === 'anonymous') {
-    await miniapp.auth.signIn();
-    const session = await miniapp.auth.session();
-    if (session.role === 'anonymous') {
-      fileInput.value = '';
-      return;
-    }
-    identity.textContent = session.name;
-  }`;
-
-/** Rewrites the starter upload handler that cleared the File before sign-in finished. */
-export function repairDroppedPreviewUpload(project: MiniAppProject): MiniAppProject {
-  const script = project.files["app.js"];
-  if (!script?.includes(droppedPreviewUpload)) return project;
-  return {
-    ...project,
-    files: { ...project.files, "app.js": script.replace(droppedPreviewUpload, keptPreviewUpload) },
   };
 }

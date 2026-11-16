@@ -45,6 +45,7 @@ const SOURCES_FILE: &str = "sources.json";
 pub struct Target {
     pub sql: String,
     pub program: ActionProgram,
+    pub schema_transforms: Option<String>,
 }
 
 impl Target {
@@ -53,6 +54,7 @@ impl Target {
         Ok(Self {
             sql: input.project.files.get("schema.sql").cloned().unwrap_or_default(),
             program: serde_json::from_str(input.project.files.get("actions.json").context("actions.json is required.")?)?,
+            schema_transforms: input.project.files.get("schema-transforms.json").cloned(),
         })
     }
 
@@ -63,15 +65,26 @@ impl Target {
         Ok(Self {
             sql: std::fs::read_to_string(sources.join("schema.sql")).unwrap_or_default(),
             program: serde_json::from_str(&std::fs::read_to_string(sources.join("actions.json")).context("app/actions.json is missing.")?)?,
+            schema_transforms: read_optional_transform_document(&sources.join("schema-transforms.json"))?,
         })
     }
 
     /// The tables and indexes the live database has now, and the actions the app runs.
     pub fn live(state: &AppState, deployment: &Deployment) -> Result<Self> {
+        let settings = Settings::read(&state.data_root, &deployment.id)?;
         Ok(Self {
             sql: live_schema(&layout::database(&state.data_root, &deployment.id))?,
             program: serde_json::from_str(&deployment.actions).context("The app's actions cannot be read.")?,
+            schema_transforms: settings.released.and_then(|released| released.schema_transforms),
         })
+    }
+}
+
+fn read_optional_transform_document(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(document) => Ok(Some(document)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -107,7 +120,7 @@ impl Incoming {
 pub fn live_schema(path: &Path) -> Result<String> {
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut statement = connection.prepare(
-        "SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY rowid",
+        "SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY rowid",
     )?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     let mut schema = String::new();
@@ -142,7 +155,7 @@ fn plan(state: &AppState, database: &Path, target: &Target) -> Result<Change> {
     std::fs::create_dir_all(state.data_root.join("transfers"))?;
     let result = std::fs::copy(database, &scratch)
         .map_err(anyhow::Error::from)
-        .and_then(|_| schema_change::apply(&scratch, &target.sql, &target.program, Mode::Plan));
+        .and_then(|_| schema_change::apply_with_transforms(&scratch, &target.sql, &target.program, target.schema_transforms.as_deref(), Mode::Plan));
     remove_database(&scratch);
     result
 }
@@ -335,7 +348,7 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
         let database = stage.join("database.sqlite");
         std::fs::copy(&incoming.database, &database)?;
         let change = match schema {
-            Some((target, confirmation)) => schema_change::apply(&database, &target.sql, &target.program, Mode::Apply(confirmation))?,
+            Some((target, confirmation)) => schema_change::apply_with_transforms(&database, &target.sql, &target.program, target.schema_transforms.as_deref(), Mode::Apply(confirmation))?,
             None => Change::default(),
         };
         let identity = match &incoming.identity {
@@ -463,6 +476,57 @@ async fn forget_unlisted(state: &AppState, deployment: &Deployment) -> Result<()
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn importing_a_database_keeps_its_transformation_journal_and_rows() {
+        let root = std::env::temp_dir().join(format!("konae-import-transform-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::for_test(&root);
+        let incoming = root.join("incoming.sqlite");
+        initialize_database(&incoming).unwrap();
+        let schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);";
+        let document = serde_json::json!({
+            "version": 1,
+            "transitions": [{
+                "id": "baseline",
+                "predecessor": null,
+                "before": format!("sha256:{}", "0".repeat(64)),
+                "after": crate::schema_transform::fingerprint_schema(schema).unwrap(),
+                "maxRows": 10,
+                "statements": ["CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL)"]
+            }]
+        }).to_string();
+        let definition = crate::schema_transform::parse(&document).unwrap();
+        let db = Connection::open(&incoming).unwrap();
+        let tx = db.unchecked_transaction().unwrap();
+        crate::schema_transform::initialize_fresh_baseline(&tx, &definition, schema).unwrap();
+        tx.commit().unwrap();
+        db.execute("INSERT INTO notes(body) VALUES('kept')", []).unwrap();
+        drop(db);
+        let target = Target {
+            sql: schema.into(),
+            program: serde_json::from_str(r#"{"version":1,"actions":{}}"#).unwrap(),
+            schema_transforms: Some(document),
+        };
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "id": "notes_app", "projectId": "notes_app", "projectName": "Notes", "slug": "notes",
+            "url": "http://notes.localhost", "createdAt": 1, "releasedAt": 1, "manifest": {},
+            "hostname": "notes.localhost", "actions": "{}", "artifactVersion": "v1",
+            "signupPolicy": {"mode":"open", "allowlist":[]}, "signInMethods": ["password"]
+        })).unwrap();
+        let files = layout::data(&root, &deployment.id);
+        std::fs::create_dir_all(&files).unwrap();
+        let incoming_files = Incoming { database: incoming, identity: None, files: None, usage: None };
+        replace_held(&state, &deployment, incoming_files, Some((&target, None))).await.unwrap();
+        let live = Connection::open(layout::database(&root, &deployment.id)).unwrap();
+        let body: String = live.query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(body, "kept");
+        let history = crate::schema_transform::load_history(&live).unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].id, "baseline");
+        assert!(history.entries[0].baseline_skipped);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn the_live_schema_runs_twice_and_creates_the_same_tables() {
         let root = std::env::temp_dir().join(format!("konae-import-{}", Uuid::new_v4()));
@@ -473,12 +537,15 @@ mod tests {
             "CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL, done INTEGER DEFAULT 0);
              CREATE TABLE IF NOT EXISTS tags(name TEXT);
              CREATE INDEX notes_body ON notes(body);
-             create unique index tags_name on tags(name);",
+             create unique index tags_name on tags(name);
+             CREATE TABLE __konae_schema_state(format_version INTEGER NOT NULL);
+             CREATE TABLE __konae_schema_history(id TEXT);",
         )
         .unwrap();
         let schema = live_schema(&path).unwrap();
         assert!(schema.starts_with("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY"), "{schema}");
         assert!(schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS tags_name on tags(name);"), "{schema}");
+        assert!(!schema.contains("__konae_schema_"), "internal journal tables belong in the database file, not schema.sql: {schema}");
         let copy = Connection::open_in_memory().unwrap();
         copy.execute_batch(&schema).unwrap();
         copy.execute_batch(&schema).unwrap();

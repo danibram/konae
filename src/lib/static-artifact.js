@@ -17,6 +17,8 @@ export const runtimeScriptAttribute = "data-konae-runtime";
 
 /** The SDK file a document page loads. The build adds it; a Capsule cannot hold its own. */
 export const runtimeFile = "runtime.js";
+/** Source metadata stays in app/ and never enters a Build Artifact. */
+export const sourceOnlyFiles = ["schema-transforms.json"];
 
 /**
  * The rule that finds the base path of a path address: /p/<id-or-name> and
@@ -170,7 +172,8 @@ export function splitFragmentHead(fragment) {
  */
 export async function assembleStaticArtifact(input) {
   checkRouting(input.routing);
-  const held = new Set(input.paths);
+  const sourceOnly = new Set(sourceOnlyFiles);
+  const held = new Set(input.paths.filter((path) => !sourceOnly.has(path)));
   /** served path -> Capsule path */
   const sources = new Map();
   const claim = (served, source) => {
@@ -224,19 +227,21 @@ export async function assembleStaticArtifact(input) {
   if (neverRuns) throw new Error(neverRuns);
 
   for (const [served, source] of pages) {
-    const html = source === null ? defaultBody : seen[source];
+    const sourceHtml = source === null ? defaultBody : seen[source];
+    const bom = sourceHtml.startsWith("\uFEFF") ? "\uFEFF" : "";
+    const html = bom ? sourceHtml.slice(1) : sourceHtml;
     if (!isDocument(html)) {
       compiled ??= withoutModulePaths(await input.compile(), held);
       scanHtml(html, served, reference);
       scanCss(compiled.styles, served, reference);
-      files[served] = renderCapsuleDocument({ body: html, styles: compiled.styles, script: compiled.script, runtime: input.runtime, head: input.head });
+      files[served] = bom + renderCapsuleDocument({ body: html, styles: compiled.styles, script: compiled.script, runtime: input.runtime, head: input.head });
       continue;
     }
     scanHtml(html, served, reference);
     // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
     const page = insertIntoHead(withoutRuntimeTags(html, served), `${input.head ?? ""}${runtimeLoaderScript()}`);
     usesRuntimeFile = true;
-    files[served] = page;
+    files[served] = bom + page;
   }
 
   while (pending.length) {

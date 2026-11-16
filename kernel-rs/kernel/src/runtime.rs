@@ -678,8 +678,12 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     super::artifact::check_file_access(&input.project.manifest).map_err(anyhow::Error::msg)?;
     super::calls::check_connects(&input.project.manifest)?;
     // The limit counts the bytes the Kernel stores, after base64 is decoded.
-    let total: usize = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?.values().map(Vec::len).sum();
-    anyhow::ensure!(total <= 16 * 1024 * 1024, "Artifact exceeds 16 MiB.");
+    let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
+    let sizes = artifact.iter().map(|(path, bytes)| (path.as_str(), bytes.len()));
+    anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= super::size::ARTIFACT_BYTES, "{}", super::size::artifact_refused(sizes));
+    drop(artifact);
+    // The sources become app/, so they meet the rules a save meets before anything is written.
+    super::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let program = super::action_shape::read(
         input
             .project
@@ -712,7 +716,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         } else {
             initialize_database(&temp)?;
         }
-        super::schema_change::apply(
+        super::schema_change::apply_with_transforms(
             &temp,
             input
                 .project
@@ -721,6 +725,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
                 .map(String::as_str)
                 .unwrap_or(""),
             &program,
+            input.project.files.get("schema-transforms.json").map(String::as_str),
             super::schema_change::Mode::Plan,
         )
     })();

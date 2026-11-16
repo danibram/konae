@@ -27,7 +27,7 @@ Listing accounts, suspending them, inviting and changing the Signup Policy need 
 
 ### Owners are admitted by Konae
 
-Konae admits owners with invitation codes that the operator issues, lists and revokes with `konae creator-code-create`, `creator-code-list` and `creator-code-revoke`. A code is stored as a hash and is consumed in the transaction that creates the pending owner. The account it creates still verifies its email. The installation's setup key creates an owner only while no owner and no code exists. A code presented for a taken email is consumed and creates nothing, and without a valid code a taken email and a new one get the same answer.
+Konae admits owners with invitation codes that the operator issues, lists and revokes with `konae owner-code-create`, `owner-code-list` and `owner-code-revoke`. A code is stored as a hash and is consumed in the transaction that creates the pending owner. The account it creates still verifies its email. The installation's setup key creates an owner only while no owner and no code exists. A code presented for a taken email is consumed and creates nothing, and without a valid code a taken email and a new one get the same answer.
 
 ### An app account may sign in with the app's own Google client
 
@@ -57,3 +57,5 @@ Konae admits owners with invitation codes that the operator issues, lists and re
 - An account's `verified_at` may come from a challenge or from Google.
 
 On 2026-11-14 the commands became `owner-code-create`, `owner-code-list`, `owner-code-revoke`, `owner-account-suspend`, `owner-account-resume` and `owner-suspend`, because every other page calls this person an owner. The old names answer with the new one and fail.
+
+On 2026-11-15 required-mode signup asks for the email first. The verification page then asks the person to choose a password, and a successful verification opens Projects. The CLI verification link follows the same email-first rule.

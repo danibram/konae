@@ -8,7 +8,7 @@ An owner needs to see whether an app is used, and an app needs a way to name a b
 
 ### Usage and Signals live in their own store
 
-Each Deployment keeps `usage.sqlite` in its data, next to the database and the identity file. They do not go in an audit log or in the app's tables. The owner reads them with `usage_read`, `usage_summary`, `usage_overview` and `signals_read`, which need `read`. A Runtime Actor never reads them. There is no `miniapp.track`.
+Each Deployment keeps `usage.sqlite` in its data, next to the database and the identity file. They do not go in an audit log or in the app's tables. The owner reads them with `usage_summary`, `signals_read` and `usage_overview`, which need `read`. A Runtime Actor never reads them. There is no `miniapp.track`.
 
 ### Usage counts what the Kernel allowed and what succeeded
 

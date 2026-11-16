@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
-import { mergeProposal } from "./agent/apply";
+import { applyProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
 import type { KonaeAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
@@ -47,6 +47,7 @@ import { switcherProjects } from "./components/project-list";
 import { suggestedChanges } from "./components/agent-suggestions";
 import "./components/workbench.css";
 import { AgentPanel } from "./components/AgentPanel";
+import { proposalPreviewProject, type ProposalPreview } from "./components/proposal-preview";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { describeDraftKey, useAgentThread } from "./components/useAgentThread";
 import { focusPanelTab, WorkbenchLayout, type PanelRender } from "./components/WorkbenchLayout";
@@ -73,19 +74,20 @@ import { McpError, platformMcp } from "./mcp/client";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { parseServerActionSource } from "./kernel/actions";
-import { applyLocalAgentEdit } from "./lib/agent";
 import { parseRoute, pushRoute } from "./lib/routing";
-import { PublishedAppView } from "./components/PublishedAppView";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
-import { createDirectory, createFile, directoriesForFiles, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
+import { isEncoded, sourceBytes } from "./lib/source-files";
+import { formatBytes } from "./lib/usage";
+import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, refusedSpot } from "./components/action-readiness";
-import { createWorkspaceProject, dismissDrafts, loadWorkspaceState, persistWorkspace, readDismissedDrafts, recoveryDrafts, resetWorkspaceProject, storedLocalProjects } from "./lib/workspace";
-import { ProjectSources, type ProjectMetadata } from "./lib/project-sources";
+import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./lib/workspace";
+import { ProjectSources, SaveSupersededError, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
+import { ProposalHostLifecycle } from "./runtime/proposal-host";
 
 const WhatHappenedView = heldLazy(() => import("./components/WhatHappenedView").then((module) => module.WhatHappenedView));
 const CapabilityWorkspace = heldLazy(() => import("./components/CapabilityWorkspace").then((module) => module.CapabilityWorkspace));
@@ -164,39 +166,23 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const cached = loadWorkspaceState(workspaceStorage);
     return { projects: loaded.projects, deployments: loaded.deployments, activeProjectId: loaded.projects.some((item) => item.id === cached.activeProjectId) ? cached.activeProjectId : loaded.projects[0]?.id ?? "" };
   });
-  const [drafts, setDrafts] = useState(() => {
-    const candidates: MiniAppProject[] = [];
-    try {
-      const recovery = JSON.parse(workspaceStorage.getItem("recovery") ?? "[]") as MiniAppProject[];
-      if (Array.isArray(recovery)) candidates.push(...recovery);
-      candidates.push(...storedLocalProjects(workspaceStorage), ...storedLocalProjects());
-    } catch { /* Invalid local drafts remain untouched. */ }
-    return recoveryDrafts(candidates, loaded.projects, readDismissedDrafts(workspaceStorage));
-  });
   const [missing, setMissing] = useState(loaded.missing);
   const [projects, setProjects] = useState(initialWorkspace.projects);
   const [deployments, setDeployments] = useState(initialWorkspace.deployments);
   const [project, setProject] = useState(() => initialWorkspace.projects.find((item) => item.id === initialWorkspace.activeProjectId) ?? initialWorkspace.projects[0] ?? cloneStarter());
   const [previewProject, setPreviewProject] = useState(project);
+  const [loadingProjectId, setLoadingProjectId] = useState("");
+  const [projectLoadError, setProjectLoadError] = useState("");
   const [previewEpoch, setPreviewEpoch] = useState(0);
   const [route, setRoute] = useState(() => {
     const requested = parseRoute(window.location.pathname);
     if (requested.screen !== "editor" || loaded.projects.some((item) => item.id === requested.projectId)) return requested;
     // A published app with no editor files opens on its data. An unpublished one is on the list below; any other id has no page.
-    if (loaded.missing.some((item) => item.id === requested.projectId)) return loaded.deployments[requested.projectId] ? requested : { screen: "projects" as const };
+    if (loaded.missing.some((item) => item.id === requested.projectId)) return requested;
     return { screen: "not-found" as const, what: "project" as const, path: window.location.pathname };
   });
   const screen = route.screen;
   // A link to an unpublished app this account holds without editor files says so, and the address bar stops naming it.
-  const [routeNotice, setRouteNotice] = useState("");
-  const explainMissingRoute = () => {
-    window.history.replaceState({}, "", "/");
-    setRouteNotice("That app is edited in a folder and is not published yet, so it has no page here.");
-  };
-  useEffect(() => {
-    const requested = parseRoute(window.location.pathname);
-    if (requested.screen === "editor" && loaded.missing.some((item) => item.id === requested.projectId) && !loaded.deployments[requested.projectId]) explainMissingRoute();
-  }, []);
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
   const [selectedPath, setSelectedPath] = useState("app.js");
   const [newEntry, setNewEntry] = useState<"file" | "folder" | null>(null);
@@ -221,6 +207,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [schemaChange, setSchemaChange] = useState<{ change: SchemaChange; resolve: (confirmed: boolean) => void } | null>(null);
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState("");
+  const [sourceConflict, setSourceConflict] = useState(false);
   const [operationError, setOperationError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
@@ -240,9 +227,36 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const agentRef = useRef<KonaeAgentHandle | null>(null);
   const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
   const projectRef = useRef(project);
-  const demoProject = useRef<MiniAppProject | null>(null);
+  const hostLifecycleRef = useRef<{ projectId: string; lifecycle: ProposalHostLifecycle } | null>(null);
+  if (hostLifecycleRef.current?.projectId !== project.id) {
+    hostLifecycleRef.current = {
+      projectId: project.id,
+      lifecycle: new ProposalHostLifecycle(project.id, {
+        schema: project.files["schema.sql"],
+        actions: project.files["actions.json"],
+        fileAccess: project.manifest.fileAccess,
+      }),
+    };
+  }
+  const hostLifecycle = hostLifecycleRef.current.lifecycle;
+  useEffect(() => hostLifecycle.retain(), [hostLifecycle]);
+  useEffect(() => {
+    void hostLifecycle.updateAppliedSource({
+      schema: previewProject.files["schema.sql"],
+      actions: previewProject.files["actions.json"],
+      fileAccess: previewProject.manifest.fileAccess,
+    });
+  }, [hostLifecycle, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess]);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
+  const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
+  const conflictedRevision = useRef<number | null>(null);
+  const previewBuildVersion = useRef(0);
+  const workspaceGeneration = useRef(0);
+  const projectSelectionVersion = useRef(0);
+  const activeProjectSelection = useRef<string | null>(null);
+  const retryLoadController = useRef<AbortController | null>(null);
+  const routeRef = useRef(route);
   const pendingSaves = useRef(0);
   const failedSave = useRef(false);
   const failedProjects = useRef(new Set<string>());
@@ -250,11 +264,17 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   workspaceRef.current = { projects, project, deployments };
 
   useEffect(() => {
+    const generation = ++workspaceGeneration.current;
+    return () => { if (workspaceGeneration.current === generation) workspaceGeneration.current++; };
+  }, []);
+
+  useEffect(() => {
     const flush = () => {
       const current = workspaceRef.current;
       const items = current.projects.map((item) => item.id === current.project.id ? current.project : item);
-      try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...items])); }
+      try { persistWorkspace(items, current.project.id, current.deployments, workspaceStorage); }
       catch { /* The regular save reports storage failures in the editor. */ }
+      sources.cancelAll();
     };
     window.addEventListener("pagehide", flush);
     window.addEventListener("beforeunload", flush);
@@ -262,7 +282,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("beforeunload", flush);
     };
-  }, [workspaceStorage, drafts]);
+  }, [workspaceStorage, sources]);
 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -338,17 +358,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     }
     setStage(panel);
   };
+  const [proposalPreview, setProposalPreview] = useState<ProposalPreview | null>(null);
+  const [proposalPreparation, setProposalPreparation] = useState<{ proposal: AgentProposal; error?: string } | null>(null);
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
-  const hostRef = useRuntimeBridge(previewFrame, project.id, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess);
-  const previewProblems = usePreviewProblems(hostRef, project.id);
-
-  const previewDocument = useMemo(() => createPreviewDocument(previewProject), [previewProject]);
-  /**
-   * Assigning a new srcDoc to a live iframe is a navigation that adds a browser
-   * history entry, so the editor's Back button stepped through old previews.
-   * A new document gets a new iframe instead.
-   */
-  const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
   // Data, Uploads, Access, What happened and App settings load while the browser is idle, so their first open shows no loader.
   useEffect(() => {
     const preload = () => { for (const panel of [CapabilityWorkspace, WhatHappenedView, AppSettingsDialog]) panel.preload().catch(() => {}); };
@@ -360,10 +372,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return () => window.clearTimeout(timer);
   }, []);
   const activeDeployment = deployments[project.id] ?? null;
-  const sourceDigest = useSourceDigest(activeDeployment ? project.files : null);
+  const sourceDigest = useSourceDigest(activeDeployment ? project : null);
   // Deploy stays quiet while a new app is still what New project wrote, since publishing the placeholder gives it a live address.
   const createdDigest = activeDeployment ? null : readCreatedDigest(workspaceStorage, project.id);
-  const currentDigest = useSourceDigest(createdDigest ? project.files : null);
+  const currentDigest = useSourceDigest(createdDigest ? project : null);
   const asCreated = createdDigest !== null && (createdDigest === "pending" || currentDigest === null || currentDigest === createdDigest);
   useEffect(() => {
     // Once the app changes or deploys, it is no longer the placeholder, even if an edit is undone later.
@@ -377,7 +389,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const liveRows = useLiveRowCount(deployedDatabase, shownSection === "preview" || shownSection === "code");
   const actionContract = useActionContract(project.files["actions.json"], project.files["schema.sql"], project);
   const contractOpen = activeFile === ACTION_CONTRACT_MARKDOWN;
-  const activeSource = contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : project.files[activeFile] ?? "";
+  const activeEncoded = !contractOpen && isEncoded(project, activeFile);
+  const activeSource = contractOpen ? (actionContract.ok ? actionContract.markdown : actionContract.reason) : activeEncoded ? "" : project.files[activeFile] ?? "";
   const activeMeta = fileMetaFor(activeFile);
   const lines = activeSource.split("\n").length;
 
@@ -394,7 +407,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const timeout = window.setTimeout(() => {
       try {
         persistWorkspace(projects, project.id, deployments, workspaceStorage);
-        workspaceStorage.setItem("recovery", JSON.stringify([...drafts, ...projects]));
       } catch (error) {
         // A full or unavailable localStorage must say so. Reporting "Saving"
         // forever, or worse "Saved locally", would hide that the work of the
@@ -403,17 +415,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       }
     }, 350);
     return () => window.clearTimeout(timeout);
-  }, [deployments, project, projects, workspaceStorage, drafts]);
+  }, [deployments, project, projects, workspaceStorage]);
 
   useEffect(() => {
+    if (publishing) return;
     const timeout = window.setTimeout(() => {
       for (const item of projects) {
+        if (sources.hasSources(item.id) && !sources.isLoaded(item.id)) continue;
         const snapshot = JSON.stringify(item);
         if (synchronized.current.get(item.id) === snapshot) continue;
         synchronized.current.set(item.id, snapshot);
         pendingSaves.current++;
         setSaved(false);
-        void sources.save(item).catch((error) => {
+        void sources.save(item).then(() => { serverSnapshots.current.set(item.id, snapshot); }).catch((error) => {
+          if (error instanceof SaveSupersededError) return;
           failedSave.current = true;
           failedProjects.current.add(item.id);
           setSaveError(error instanceof Error ? error.message : String(error));
@@ -424,7 +439,140 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       }
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [projects, sources, saveAttempt]);
+  }, [projects, publishing, sources, saveAttempt]);
+
+  useEffect(() => {
+    if (!activeDeployment || route.screen !== "editor" || !sources.isLoaded(project.id)) return;
+    let active = true;
+    const check = async () => {
+      let reloadPending = false;
+      try {
+        const revision = await sources.inspectRevision(project.id);
+        if (!active || revision === sources.revision(project.id) || conflictedRevision.current === revision) return;
+        const clean = JSON.stringify(projectRef.current) === serverSnapshots.current.get(project.id);
+        if (!clean) {
+          conflictedRevision.current = revision;
+          setSourceConflict(true);
+          return;
+        }
+        const baseline = JSON.stringify(projectRef.current);
+        const latest = await sources.reload(project.id);
+        reloadPending = true;
+        if (!active || !latest.project || projectRef.current.id !== project.id || JSON.stringify(projectRef.current) !== baseline) {
+          sources.cancelReload(project.id);
+          if (active && projectRef.current.id === project.id) {
+            conflictedRevision.current = latest.revision;
+            setSourceConflict(true);
+          }
+          return;
+        }
+        const compiled = await compilePreviewSnapshot(latest.project);
+        if (!active || projectRef.current.id !== project.id || JSON.stringify(projectRef.current) !== baseline) {
+          sources.cancelReload(project.id);
+          if (active && projectRef.current.id === project.id) {
+            conflictedRevision.current = latest.revision;
+            setSourceConflict(true);
+          }
+          return;
+        }
+        const currentRevision = await sources.inspectRevision(project.id);
+        if (!active || projectRef.current.id !== project.id || JSON.stringify(projectRef.current) !== baseline) {
+          sources.cancelReload(project.id);
+          if (active && projectRef.current.id === project.id) {
+            conflictedRevision.current = latest.revision;
+            setSourceConflict(true);
+            setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+          }
+          return;
+        }
+        if (currentRevision !== latest.revision) {
+          sources.cancelReload(project.id);
+          conflictedRevision.current = null;
+          return;
+        }
+        sources.acceptReload(project.id, latest);
+        reloadPending = false;
+        serverSnapshots.current.set(project.id, JSON.stringify(latest.project));
+        synchronized.current.set(project.id, JSON.stringify(latest.project));
+        failedProjects.current.delete(project.id);
+        failedSave.current = failedProjects.current.size > 0;
+        setSaveError("");
+        setProject(latest.project);
+        setProjects((current) => current.map((item) => item.id === project.id ? latest.project! : item));
+        if (compiled) {
+          setPreviewProject(compiled);
+          setPreviewEpoch((value) => value + 1);
+        }
+        setSourceConflict(false);
+        conflictedRevision.current = null;
+      } catch {
+        if (reloadPending) sources.cancelReload(project.id);
+        /* The normal save or next poll reports a stale owner session. */
+      }
+    };
+    const timer = window.setInterval(() => { void check(); }, 2500);
+    void check();
+    return () => { active = false; window.clearInterval(timer); };
+  }, [activeDeployment?.id, project.id, route.screen, sources]);
+
+  const reloadConflictingSources = async () => {
+    const id = project.id;
+    const generation = workspaceGeneration.current;
+    const baseline = JSON.stringify(projectRef.current);
+    try {
+      const latest = await sources.reload(id);
+      if (!latest.project || projectRef.current.id !== id || JSON.stringify(projectRef.current) !== baseline) {
+        sources.cancelReload(id);
+        if (projectRef.current.id === id) {
+          conflictedRevision.current = latest.revision;
+          setSourceConflict(true);
+          setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+        }
+        return;
+      }
+      const compiled = await compilePreviewSnapshot(latest.project);
+      if (projectRef.current.id !== id || JSON.stringify(projectRef.current) !== baseline) {
+        sources.cancelReload(id);
+        conflictedRevision.current = latest.revision;
+        setSourceConflict(true);
+        setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+        return;
+      }
+      const currentRevision = await sources.inspectRevision(id);
+      if (generation !== workspaceGeneration.current || projectRef.current.id !== id || JSON.stringify(projectRef.current) !== baseline) {
+        sources.cancelReload(id);
+        if (generation === workspaceGeneration.current && projectRef.current.id === id) {
+          conflictedRevision.current = latest.revision;
+          setSourceConflict(true);
+          setSaveError("This draft changed while saved sources were loading. Keep this draft or reload saved sources again.");
+        }
+        return;
+      }
+      if (currentRevision !== latest.revision) {
+        sources.cancelReload(id);
+        conflictedRevision.current = null;
+        setSourceConflict(true);
+        return;
+      }
+      sources.acceptReload(id, latest);
+      serverSnapshots.current.set(id, JSON.stringify(latest.project));
+      synchronized.current.set(id, JSON.stringify(latest.project));
+      failedProjects.current.delete(id);
+      failedSave.current = failedProjects.current.size > 0;
+      setSaveError("");
+      setProject(latest.project);
+      setProjects((current) => current.map((item) => item.id === id ? latest.project! : item));
+      if (compiled) {
+        setPreviewProject(compiled);
+        setPreviewEpoch((value) => value + 1);
+      }
+      setSourceConflict(false);
+      conflictedRevision.current = null;
+    } catch (error) {
+      sources.cancelReload(id);
+      setSaveError(`Could not reload saved sources: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   const retrySave = () => {
     if (pendingSaves.current) return;
@@ -489,11 +637,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const updateFile = (value: string) => {
     if (contractOpen) return;
-    setProject((current) => ({
+    setProject((current) => isEncoded(current, activeFile) ? current : {
       ...current,
       updatedAt: Date.now(),
       files: { ...current.files, [activeFile]: value },
-    }));
+    });
   };
 
   // Tree edits are computed before React sees them, because a throw inside a
@@ -506,7 +654,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     }
     try {
       const current = projectRef.current;
-      const tree = { files: current.files, directories: current.directories };
+      const tree = { files: current.files, directories: current.directories, encodings: current.encodings };
       const next = newEntry === "file" ? createFile(tree, newEntryPath) : createDirectory(tree, newEntryPath);
       const path = normalizeProjectPath(newEntryPath) ?? "";
       setProject({ ...current, ...next, updatedAt: Date.now() });
@@ -540,7 +688,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     try {
       const current = projectRef.current;
       const from = selectedPath;
-      const next = renamePath({ files: current.files, directories: current.directories }, from, renameValue);
+      const next = renamePath({ files: current.files, directories: current.directories, encodings: current.encodings }, from, renameValue);
       const to = normalizeProjectPath(renameValue) ?? from;
       const moved = (path: string) => path === from ? to : path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
       setProject({ ...current, ...next, updatedAt: Date.now() });
@@ -558,7 +706,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const current = projectRef.current;
     setProject({
       ...current,
-      ...removePath({ files: current.files, directories: current.directories }, path),
+      ...removePath({ files: current.files, directories: current.directories, encodings: current.encodings }, path),
       updatedAt: Date.now(),
     });
     if (activeFile === path || activeFile.startsWith(`${path}/`)) setActiveFile("app.js");
@@ -571,14 +719,67 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
    * beside Files when Files is showing, so the person sees what the edit did.
    * A failed build shows nothing new; the "Build failed" alert says why.
    */
+  const compilePreviewSnapshot = async (snapshot: MiniAppProject): Promise<MiniAppProject | null> => {
+    const version = ++previewBuildVersion.current;
+    setOperationError("");
+    try {
+      const compiled = await compileProjectInBrowser(snapshot);
+      if (version !== previewBuildVersion.current) return null;
+      return {
+        ...snapshot,
+        files: { ...snapshot.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
+      };
+    } catch (error) {
+      if (version === previewBuildVersion.current) setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  };
+
+  const isCurrentProjectSelection = (projectId: string, version: number) =>
+    version === projectSelectionVersion.current
+    && routeRef.current.screen === "editor"
+    && routeRef.current.projectId === projectId;
+
+  const invalidateProjectSelection = () => {
+    projectSelectionVersion.current++;
+    activeProjectSelection.current = null;
+    retryLoadController.current?.abort();
+    retryLoadController.current = null;
+  };
+
+  const acceptProjectSelection = (loadedProject: MiniAppProject, selectionVersion: number, fromSourceLoad = false) => {
+    if (!isCurrentProjectSelection(loadedProject.id, selectionVersion)) return;
+    activeProjectSelection.current = loadedProject.id;
+    if (fromSourceLoad) {
+      setProjects((current) => current.map((item) => item.id === loadedProject.id ? loadedProject : item));
+      synchronized.current.set(loadedProject.id, JSON.stringify(loadedProject));
+      serverSnapshots.current.set(loadedProject.id, JSON.stringify(loadedProject));
+    }
+    setProject(loadedProject);
+    void compilePreviewSnapshot(loadedProject).then((compiled) => {
+      if (compiled && activeProjectSelection.current === loadedProject.id
+        && isCurrentProjectSelection(loadedProject.id, selectionVersion)
+        && projectRef.current.id === loadedProject.id
+        && JSON.stringify(projectRef.current) === JSON.stringify(loadedProject)) {
+        setPreviewProject(compiled);
+        setPreviewEpoch((value) => value + 1);
+      }
+    });
+    setThreadResetToken((token) => token + 1);
+    setActiveFile("app.js");
+    setSelectedPath("app.js");
+    setDatabaseTarget(null);
+    setLoadingProjectId("");
+    setProjectLoadError("");
+  };
+
   const runPreview = ({ show: reveal = false }: { show?: boolean } = {}) => {
     setOperationError("");
-    void compileProjectInBrowser(project)
+    const snapshot = project;
+    void compilePreviewSnapshot(snapshot)
       .then((compiled) => {
-        setPreviewProject({
-          ...project,
-          files: { ...project.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
-        });
+        if (!compiled || JSON.stringify(projectRef.current) !== JSON.stringify(snapshot)) return;
+        setPreviewProject(compiled);
         setPreviewEpoch((value) => value + 1);
         // Files already stands beside the preview; elsewhere the preview comes forward.
         if (reveal && shownSection !== "code") show("preview");
@@ -587,23 +788,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   useEffect(() => {
+    if (sources.hasSources(project.id)) return;
     let cancelled = false;
     // A build failure belongs to the project that failed. Opening another one starts clean.
     setOperationError("");
-    void compileProjectInBrowser(project)
-      .then((compiled) => {
-        if (!cancelled) setPreviewProject({
-          ...project,
-          files: { ...project.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
-        });
-      })
-      .catch((error) => {
-        if (!cancelled) setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    return () => { cancelled = true; };
-  }, [project.id]);
+    const snapshot = project;
+    void compilePreviewSnapshot(snapshot).then((compiled) => {
+      if (!cancelled && compiled && projectRef.current.id === snapshot.id && JSON.stringify(projectRef.current) === JSON.stringify(snapshot)) setPreviewProject(compiled);
+    });
+    return () => { cancelled = true; previewBuildVersion.current++; };
+  }, [project.id, sources]);
 
   projectRef.current = project;
+  routeRef.current = route;
 
   useEffect(() => {
     if (route.screen === "editor" && projects.some((item) => item.id === route.projectId)) document.title = `${project.name} · Konae`;
@@ -630,9 +827,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         .then(({ createKonaeAgent }) => {
           const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
             // The Validation Gate's preview-rows stage needs the live database, not just a fresh one.
-            liveDatabase: () => hostRef.current.exportDatabase(),
+            liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
+            sourceFiles: () => projectRef.current,
             // The other half of the gate: what the running preview actually threw.
-            previewErrors: () => hostRef.current.previewErrors(),
+            previewErrors: () => hostLifecycleRef.current!.lifecycle.appliedHost.previewErrors(),
             // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
             releaseFacts: async () => {
               const current = projectRef.current;
@@ -699,34 +897,43 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   // The address bar leads: a reload or a back button lands on the same project.
   useEffect(() => {
-    const follow = () => setRoute(parseRoute(window.location.pathname));
+    const follow = () => { invalidateProjectSelection(); setRoute(parseRoute(window.location.pathname)); };
     window.addEventListener("popstate", follow);
     return () => window.removeEventListener("popstate", follow);
   }, []);
 
+  useEffect(() => () => {
+    retryLoadController.current?.abort();
+    projectSelectionVersion.current++;
+  }, []);
+
   useEffect(() => {
-    if (route.screen !== "editor" || route.projectId === project.id) return;
+    if (route.screen !== "editor") { invalidateProjectSelection(); return; }
+    if (route.projectId === project.id && activeProjectSelection.current === route.projectId
+      && (!sources.hasSources(project.id) || sources.isLoaded(project.id))) return;
+    const selectionVersion = ++projectSelectionVersion.current;
     const target = projects.find((item) => item.id === route.projectId);
     // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
-      if (missing.some((item) => item.id === route.projectId)) {
-        // A published app with no editor files has its own page, which this route already names.
-        if (deployments[route.projectId]) return;
-        setRoute({ screen: "projects" });
-        explainMissingRoute();
-      } else {
+      if (!missing.some((item) => item.id === route.projectId)) {
         setRoute({ screen: "not-found", what: "project", path: window.location.pathname });
       }
       return;
     }
-    setProject(target);
-    setPreviewProject({ ...target, files: { ...target.files } });
-    setThreadResetToken((token) => token + 1);
-    // The open file belongs to the project being left; typing would create it in this one.
-    setActiveFile("app.js");
-    setSelectedPath("app.js");
-    setDatabaseTarget(null);
-  }, [route, projects, project.id]);
+    let active = true;
+    if (sources.hasSources(target.id) && !sources.isLoaded(target.id)) {
+      setLoadingProjectId(target.id);
+      setProjectLoadError("");
+      const controller = new AbortController();
+      void sources.loadProject(target.id, controller.signal).then((loadedProject) => {
+        if (active && loadedProject) acceptProjectSelection(loadedProject, selectionVersion, true);
+        else if (active && isCurrentProjectSelection(target.id, selectionVersion)) setProjectLoadError("This project no longer has saved sources.");
+      }).catch((error) => { if (active && isCurrentProjectSelection(target.id, selectionVersion)) setProjectLoadError(error instanceof Error ? error.message : String(error)); });
+      return () => { active = false; controller.abort(); };
+    }
+    acceptProjectSelection(target, selectionVersion);
+    return () => { active = false; };
+  }, [route, projects, project.id, sources]);
 
   const arrival = useRef<PanelId>("preview");
   const seenProject = useRef<string | null>(null);
@@ -746,23 +953,28 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
-  const applyAgentProposal = (proposal: AgentProposal): boolean => {
+  const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean> => {
     // The Validation Gate is structural here, not just a disabled button in the
-    // panel: the merge refuses a proposal whose untouched files have moved since
+    // panel. The merge refuses a proposal whose untouched files have moved since
     // the gate saw them, because that combination was never validated.
-    const merge = mergeProposal(project.files, proposal);
-    if (!merge.ok) return false;
-    const next: MiniAppProject = {
-      ...project,
-      files: merge.files,
-      directories: [...new Set([...project.directories, ...directoriesForFiles(merge.files)])].sort(),
-      updatedAt: Date.now(),
-    };
+    const applied = applyProposal(project, proposal);
+    if (!applied) return false;
+    const approvedPreview = proposalPreview?.proposal === proposal ? proposalPreview : null;
+    if (!approvedPreview || !hostLifecycle.isProposalReady(approvedPreview.id)) return false;
+    const next = applied.project;
+    const hostApplied = await hostLifecycle.applyProposal(approvedPreview.id, {
+      schema: next.files["schema.sql"],
+      actions: next.files["actions.json"],
+      fileAccess: next.manifest.fileAccess,
+    });
+    if (!hostApplied) return false;
+    setProposalPreview(null);
+    setProposalPreparation(null);
     setProject(next);
-    setPreviewProject(next);
-    agentRef.current?.reseed(next.files);
-    if (merge.changedFiles[0] && isEditorFile(merge.changedFiles[0])) {
-      setActiveFile(merge.changedFiles[0]);
+    setPreviewProject(approvedPreview.project);
+    agentRef.current?.reseed(next.files, next.encodings);
+    if (applied.changedFiles[0] && isEditorFile(applied.changedFiles[0])) {
+      setActiveFile(applied.changedFiles[0]);
     }
     return true;
   };
@@ -775,14 +987,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     threadResetToken,
     keyVersion,
     onApply: applyAgentProposal,
-    onDiscard: () => agentRef.current?.discard(),
-    onDemoSend: (text) => sendDemoPrompt(text),
-    onDemoApply: () => {
-      const next = demoProject.current;
-      if (!next) return;
-      demoProject.current = null;
-      setProject(next);
-      setPreviewProject(next);
+    onDiscard: () => {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
+      setProposalPreview(null);
+      setProposalPreparation(null);
+      agentRef.current?.discard();
     },
     providers: PROVIDERS,
     // An unsent draft waits per project in this browser, so a description typed in New project survives leaving and a reload.
@@ -790,17 +999,86 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     draftStorage: workspaceStorage,
   });
 
-  /** Offline fallback: the scripted demo proposes a change and waits to apply it. */
-  const sendDemoPrompt = async (value: string) => {
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
-    const edit = applyLocalAgentEdit(projectRef.current, value);
-    demoProject.current = edit.changedFiles.length > 0 ? edit.project : null;
-    return { message: edit.message, changedFiles: edit.changedFiles };
-  };
+  useEffect(() => {
+    const proposal = agentThread.state.proposal;
+    if (agentThread.footer.kind !== "validated" || !proposal) {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
+      setProposalPreview(null);
+      setProposalPreparation(null);
+      return;
+    }
+    if (proposalPreview?.proposal === proposal && hostLifecycle.isProposalReady(proposalPreview.id)) return;
+    const candidate = proposalPreviewProject(project, proposal);
+    if (!candidate) {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
+      setProposalPreview(null);
+      setProposalPreparation(null);
+      return;
+    }
+    let current = true;
+    setProposalPreview(null);
+    setProposalPreparation({ proposal });
+    setOperationError("");
+    const id = `proposal:${project.id}:${crypto.randomUUID()}`;
+    void (async () => {
+      try {
+        const compiled = await compileProjectInBrowser(candidate);
+        if (!current) return;
+        const host = await hostLifecycle.prepareProposal(id, {
+          schema: candidate.files["schema.sql"],
+          actions: candidate.files["actions.json"],
+          fileAccess: candidate.manifest.fileAccess,
+        });
+        if (!host || !current) {
+          await hostLifecycle.discardProposal(id);
+          return;
+        }
+        setProposalPreview({
+          id,
+          proposal,
+          project: {
+            ...candidate,
+            files: { ...candidate.files, "index.html": compiled.body, "styles.css": compiled.styles, "app.js": compiled.script },
+          },
+        });
+        setProposalPreparation(null);
+        setStage("preview");
+      } catch (error) {
+        if (current) setProposalPreparation({ proposal, error: error instanceof Error ? error.message : String(error) });
+        await hostLifecycle.discardProposal(id);
+      }
+    })();
+    return () => {
+      current = false;
+      void hostLifecycle.discardProposal(id);
+    };
+  }, [agentThread.footer.kind, agentThread.state.proposal, project, hostLifecycle]);
+
+  const activeProposalPreview = proposalPreview?.project.id === project.id
+    && proposalPreview.proposal === agentThread.state.proposal
+    && hostLifecycle.isProposalReady(proposalPreview.id)
+    ? proposalPreview
+    : null;
+  const activePreviewProject = activeProposalPreview?.project ?? previewProject;
+  const activeRuntimeHost = activeProposalPreview ? hostLifecycle.proposalHost ?? hostLifecycle.appliedHost : hostLifecycle.appliedHost;
+  const hostRef = useRuntimeBridge(previewFrame, activeRuntimeHost);
+  const activePreviewId = activeProposalPreview?.id ?? project.id;
+  const previewProblems = usePreviewProblems(hostRef, activePreviewId);
+  const proposalReady = Boolean(activeProposalPreview);
+  const proposalError = proposalPreparation?.proposal === agentThread.state.proposal ? proposalPreparation.error : undefined;
+
+  const previewDocument = useMemo(() => createPreviewDocument(activePreviewProject), [activePreviewProject]);
+  /**
+   * Assigning a new srcDoc to a live iframe is a navigation that adds a browser
+   * history entry, so the editor's Back button stepped through old previews.
+   * A new document gets a new iframe instead.
+   */
+  const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
 
   const resetProject = () => {
     const fresh = resetWorkspaceProject(project);
-    hostRef.current.reset();
+    hostLifecycle.appliedHost.reset();
+    void hostLifecycle.discardProposal();
     setProject(fresh);
     setPreviewProject(fresh);
     setThreadResetToken((token) => token + 1);
@@ -838,17 +1116,25 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPublishing(true);
     setDeployError("");
     try {
-      // The Kernel compares a release's actions with the saved sources, so the
-      // save of what this Deploy releases lands first. A failed save shows in
-      // the editor already, and the release goes ahead.
-      await sources.save(project).catch(() => undefined);
+      // The release names the revision written by this save. A save failure
+      // stops publishing before the Kernel can change the running app.
+      synchronized.current.set(project.id, JSON.stringify(project));
+      const observedSourcesRevision = await sources.save(project);
+      serverSnapshots.current.set(project.id, JSON.stringify(project));
       const artifact = await buildProjectInBrowser(project);
       // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
-      const record = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy);
+      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision);
+      const record = published.receipt;
       // Taking the release's manifest is not an edit of the person's, so "Edited" keeps its time.
-      setProject((current) => ({ ...current, manifest: record.manifest }));
+      const releasedProject = { ...project, manifest: record.manifest };
+      const releasedSnapshot = JSON.stringify(releasedProject);
+      sources.markPublished(project.id, published.sourcesRevision, releasedProject);
+      serverSnapshots.current.set(project.id, releasedSnapshot);
+      synchronized.current.set(project.id, releasedSnapshot);
+      setProject((current) => current.id === project.id && JSON.stringify(current) === JSON.stringify(project) ? releasedProject : current);
+      setProjects((current) => current.map((item) => item.id === project.id && JSON.stringify(item) === JSON.stringify(project) ? releasedProject : item));
       setExportAhead(false);
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
@@ -866,7 +1152,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const openEditorRoute = (projectId: string) => {
-    setRouteNotice("");
+    invalidateProjectSelection();
     const next = { screen: "editor" as const, projectId };
     setRoute(next);
     pushRoute(next);
@@ -876,21 +1162,44 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const leftProject = useRef<string | undefined>(undefined);
   if (route.screen === "editor") leftProject.current = route.projectId;
   const goToProjects = () => {
+    invalidateProjectSelection();
     const next = { screen: "projects" as const };
     setRoute(next);
     pushRoute(next);
   };
 
+  const retryProjectLoad = () => {
+    if (route.screen !== "editor") return;
+    const projectId = route.projectId;
+    retryLoadController.current?.abort();
+    const controller = new AbortController();
+    retryLoadController.current = controller;
+    const selectionVersion = ++projectSelectionVersion.current;
+    setProjectLoadError("");
+    void sources.loadProject(projectId, controller.signal).then((loadedProject) => {
+      if (!isCurrentProjectSelection(projectId, selectionVersion)) return;
+      if (loadedProject) acceptProjectSelection(loadedProject, selectionVersion, true);
+      else setProjectLoadError("This project no longer has saved sources.");
+    }).catch((error) => {
+      if (!controller.signal.aborted && isCurrentProjectSelection(projectId, selectionVersion)) {
+        setProjectLoadError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (retryLoadController.current === controller) retryLoadController.current = null;
+    });
+  };
+
   const openProject = (projectId: string, entry: "preview" | "agent" | "code" = "preview") => {
     const next = projects.find((item) => item.id === projectId);
-    if (!next) return;
+    if (!next) { if (missing.some((item) => item.id === projectId)) openEditorRoute(projectId); return; }
     arrival.current = entry === "code" ? "code" : entry === "agent" ? "agent" : "preview";
-    setProject(next);
-    setPreviewProject({ ...next, files: { ...next.files } });
-    setThreadResetToken((token) => token + 1);
-    setActiveFile(entry === "code" ? "app.js" : "index.html");
-    setSelectedPath(entry === "code" ? "app.js" : "index.html");
-    setDatabaseTarget(null);
+    if (!sources.hasSources(projectId) || sources.isLoaded(projectId)) {
+      setProject(next);
+      setThreadResetToken((token) => token + 1);
+      setActiveFile(entry === "code" ? "app.js" : "index.html");
+      setSelectedPath(entry === "code" ? "app.js" : "index.html");
+      setDatabaseTarget(null);
+    }
     openEditorRoute(next.id);
   };
 
@@ -913,22 +1222,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     openEditorRoute(next.id);
   };
 
-  const importDraft = (index: number) => {
-    const draft = drafts[index];
-    if (!draft) return;
-    const restore = missing.some((item) => item.id === draft.id);
-    const copy = { ...draft, id: restore ? draft.id : `app_${crypto.randomUUID()}`, updatedAt: Date.now() };
-    setProjects((current) => [...current, copy]);
-    setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const dismissDraft = (index: number) => {
-    const draft = drafts[index];
-    if (!draft) return;
-    dismissDrafts(workspaceStorage, [draft]);
-    setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
   const deleteMissingProject = async (item: ProjectMetadata, name: string) => {
     await sources.deleteProject(item.id, name);
     setMissing((current) => current.filter((entry) => entry.id !== item.id));
@@ -936,12 +1229,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const { [item.id]: _removed, ...rest } = current;
       return rest;
     });
-    // A local copy of a deleted app would otherwise come back as an import.
-    const copies = drafts.filter((draft) => draft.id === item.id);
-    if (copies.length) {
-      dismissDrafts(workspaceStorage, copies);
-      setDrafts((current) => current.filter((draft) => draft.id !== item.id));
-    }
   };
 
   /** Deletes an editable project; it leaves the lists at once, so a pending save cannot bring it back. */
@@ -953,11 +1240,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const { [item.id]: _removed, ...rest } = current;
       return rest;
     });
-    const copies = drafts.filter((draft) => draft.id === item.id);
-    if (copies.length) {
-      dismissDrafts(workspaceStorage, copies);
-      setDrafts((current) => current.filter((draft) => draft.id !== item.id));
-    }
   };
 
   const setActionAccess = (name: string, access: RuntimeActionAccess) => {
@@ -978,17 +1260,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setOperationError(error instanceof Error ? error.message : String(error));
       return;
     }
-    const declarations = Object.values(program.actions).map((action) => ({ name: action.name, kind: action.kind, access: action.access }));
     const next = {
       ...project,
       files: { ...project.files, "actions.json": source },
-      manifest: {
-        ...project.manifest,
-        runtime: {
-          ...project.manifest.runtime,
-          database: { ...project.manifest.runtime.database, actions: declarations },
-        },
-      },
       updatedAt: Date.now(),
     };
     setProject(next);
@@ -1011,13 +1285,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} notice={routeNotice} drafts={drafts} onImportDraft={importDraft} onDismissDraft={dismissDraft} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onOpenPublished={openEditorRoute} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
+    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
   }
 
-  // A published app with no editor files opens on its data, accounts and activity.
-  const published = missing.find((item) => item.id === route.projectId);
-  if (published && deployments[published.id]) {
-    return <PublishedAppView app={published} deployment={deployments[published.id]} ownerSession={ownerSession} projectCount={projects.length + missing.length} projects={switcherProjects(projects, missing, deployments)} onBack={goToProjects} />;
+  if (screen === "editor" && missing.some((item) => item.id === route.projectId)) return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>Could not open this app</h1><p role="alert">This app has no readable app/ source folder. The editor did not replace its files.</p><Button onClick={() => window.location.reload()}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></section></div></main>;
+
+  if (screen === "editor" && loadingProjectId === route.projectId) {
+    return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>{projectLoadError ? "Could not open this project" : "Opening project"}</h1>{projectLoadError ? <><p role="alert">{projectLoadError}</p><Button onClick={retryProjectLoad}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></> : <p>Loading the app files…</p>}</section></div></main>;
   }
 
   const signInHref = platformAccessHref(window.location.pathname);
@@ -1182,7 +1456,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <select className={`file-switch ${compact && explorerFiles.length > 4 ? "is-overflow" : ""}`} aria-label="Open file" value={activeFile} onChange={(event) => { setActiveFile(event.target.value); setSelectedPath(event.target.value); }}>
           {explorerFiles.map((file) => <option key={file} value={file}>{file}</option>)}
         </select>
-        <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} action${listedActions(activeSource) === 1 ? "" : "s"}` : `${activeMeta.language} · ${lines} lines`}</span>
+        <span className="panel-meta">{activeFile === "actions.json" ? `${listedActions(activeSource)} action${listedActions(activeSource) === 1 ? "" : "s"}` : activeEncoded ? formatBytes(sourceBytes(project, activeFile).length) : `${activeMeta.language} · ${lines} lines`}</span>
         <button
           className={`file-list-toggle ${explorerOpen ? "is-open" : ""}`}
           aria-expanded={explorerOpen}
@@ -1217,7 +1491,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           )}
           {activeFile === "actions.json" && <ActionReadout source={activeSource} visibility={project.manifest.visibility} onJump={openRefusal} />}
           {activeFile !== "actions.json" && actionsRefusal && <Alert tone="danger" className="code-refusal" title="actions.json is refused" action={<Button size="sm" onClick={openRefusal}>{refusedLabel(project.files["actions.json"] ?? "", actionsRefusal)}</Button>}>{actionsRefusal}</Alert>}
-          {contractOpen ? <ActionContractView state={actionContract} /> : <div className="code-area">
+          {contractOpen ? <ActionContractView state={actionContract} /> : activeEncoded ? <Alert className="code-not-text" title={`${activeFile} is not text`}>The editor saves its {formatBytes(sourceBytes(project, activeFile).length)} with the app as they are, and cannot change them. To replace it, export the app, put the new file in the folder's app/, and import the folder with Sources only, in App settings under Import.</Alert> : <div className="code-area">
             <div className="line-numbers" aria-hidden="true" ref={gutterRef}>
               {Array.from({ length: lines }, (_, index) => <span key={index}>{index + 1}</span>)}
             </div>
@@ -1338,13 +1612,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           </section>
         )}
         <div className={`preview-canvas ${viewport}`}>
-          <iframe key={`${project.id}:${previewEpoch}:${previewDocumentKey}`} ref={setPreviewFrame} title="Mini-app preview" sandbox="allow-scripts allow-forms" srcDoc={previewDocument} />
+          <iframe key={`${activePreviewId}:${previewEpoch}:${previewDocumentKey}`} ref={setPreviewFrame} title="Mini-app preview" sandbox="allow-scripts allow-forms" srcDoc={previewDocument} />
         </div>
       </div>
     ),
   };
 
-  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} />;
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",
@@ -1427,6 +1701,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       <div className="stage-notices">
         {operationError && <Alert tone="danger" action={<Button size="sm" onClick={() => setOperationError("")}>Dismiss</Button>}>{operationError}</Alert>}
+        {sourceConflict && <Alert tone="warning" action={<Button size="sm" onClick={() => void reloadConflictingSources()}>Reload saved sources</Button>}>This app changed on another machine. Your draft is still here. Reload the saved sources to continue.</Alert>}
         {exportAhead && <Alert tone="warning" title="The export runs your last deploy" action={<Button size="sm" onClick={() => setExportAhead(false)}>Dismiss</Button>}>The folder holds your saved files. An app started from it runs your last deploy. Deploy changes, then export again, to make them match.</Alert>}
         {describedRefusal && agentThread.footer.kind === "blocked" && (
           <Alert tone="danger" title="A check refused the proposed change" action={<Button size="sm" onClick={() => show("agent")}>Open Describe</Button>}>
@@ -1601,7 +1876,7 @@ const createdDigestKey = (projectId: string) => `created-digest:${projectId}`;
 /** What New project wrote, by digest, so the workbench knows while the app is still that placeholder. "pending" until the digest is known. */
 function rememberCreatedDigest(storage: KeyStorage, project: MiniAppProject) {
   try { storage.setItem(createdDigestKey(project.id), "pending"); } catch { return; }
-  void cachedSourceDigest(project.files).then((digest) => {
+  void cachedSourceDigest(project).then((digest) => {
     try { if (storage.getItem(createdDigestKey(project.id)) === "pending") storage.setItem(createdDigestKey(project.id), digest); } catch { /* the button just stays as it is */ }
   }, () => forgetCreatedDigest(storage, project.id));
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDirectory, createFile, normalizeProjectPath, removePath } from "./project-files";
+import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./project-files";
 
 describe("project file tree", () => {
   test("an owner creates nested files and empty directories through project paths", () => {
@@ -29,6 +29,13 @@ describe("project file tree", () => {
     });
   });
 
+  test("a delete takes the encoding of a file that is not text with it", () => {
+    const tree = { files: { "index.html": "home", "public/logo.png": "iVBORw0KGgo=" }, directories: ["public"], encodings: { "public/logo.png": "base64" as const } };
+    expect(removePath(tree, "public").encodings).toBeUndefined();
+    expect(removePath(tree, "index.html").encodings).toEqual({ "public/logo.png": "base64" });
+    expect(createFile(tree, "src/a.ts").encodings).toEqual({ "public/logo.png": "base64" });
+  });
+
   test("refuses to create a reserved project file or anything inside one", () => {
     const tree = { files: { "app.js": "app" }, directories: [] };
     expect(() => createFile(tree, "schema.sql")).toThrow("schema.sql is a reserved project file. Choose another name.");
@@ -36,6 +43,13 @@ describe("project file tree", () => {
     expect(() => createDirectory(tree, "schema.sql")).toThrow("schema.sql is a reserved project file");
     expect(() => createFile(tree, "actions.json/x.json")).toThrow("actions.json is a reserved project file");
     expect(createFile(tree, "src/schema.ts").files["src/schema.ts"]).toBe("");
+  });
+
+  test("schema-transforms.json is the one optional reserved source file owners may create", () => {
+    expect(protectedProjectPaths.has("schema-transforms.json")).toBe(false);
+    const created = createFile({ files: {}, directories: [] }, "schema-transforms.json", "{\"version\":1,\"transitions\":[]}");
+    expect(created.files["schema-transforms.json"]).toContain("transitions");
+    expect(() => createFile({ files: {}, directories: [] }, "Schema-Transforms.json")).toThrow("schema-transforms.json is a reserved project file");
   });
 
   /** The bug this pins: App.js and SCHEMA.SQL passed, then overwrote the real files on a case-insensitive filesystem. */
@@ -62,5 +76,11 @@ describe("project file tree", () => {
     const tree = { files: { "lib.js": "lib" }, directories: [] };
     expect(() => createFile(tree, "lib.js/x.js")).toThrow("lib.js is a file");
     expect(() => createDirectory(tree, "lib.js/sub")).toThrow("lib.js is a file");
+  });
+  test("a new file, folder or name the sources cannot hold is refused with the save's sentence", () => {
+    const rule = "A path inside app/ is at most 240 bytes, with no control character, no space at either end, no backslash, no empty part, and no part that starts with a dot or is node_modules.";
+    expect(() => createFile({ files: {}, directories: [] }, ".env")).toThrow(`The sources cannot hold the path ".env". ${rule}`);
+    expect(() => createFile({ files: {}, directories: [] }, "node_modules/x.js")).toThrow(`The sources cannot hold the path "node_modules/x.js". ${rule}`);
+    expect(() => createDirectory({ files: {}, directories: [] }, "public/.well-known")).toThrow(`The sources cannot hold the path "public/.well-known". ${rule}`);
   });
 });

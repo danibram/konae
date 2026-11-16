@@ -236,6 +236,7 @@ describe("agent thread apply gate", () => {
       stage: "preview-rows",
       message: "table task is missing column due_at",
       detail: "on the preview rows",
+      remainingErrors: 0,
     });
   });
 
@@ -253,6 +254,7 @@ describe("agent thread apply gate", () => {
       changedFiles: ["actions.json"],
       canApply: true,
       checked: ["schema", "actions"],
+      warnings: [{ stage: "actions", message: "A result column has no name." }],
       owner: {
         message: "Action orders.receive signs with the secret orders_webhook, which is not set for this project. Set it with secret_set before publishing.",
         detail: "Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.",
@@ -303,6 +305,7 @@ describe("agent thread apply gate", () => {
       changedFiles: ["styles.css"],
       canApply: true,
       checked: ["schema", "actions", "preview-rows"],
+      warnings: [],
     });
     expect(state.proposal?.changedFiles).toEqual(["styles.css"]);
   });
@@ -313,9 +316,24 @@ describe("agent thread apply gate", () => {
    * preview-rows stage never ran.
    */
   test("a pass only claims the stages that ran", () => {
-    expect(validationSummary(["schema", "actions", "preview-rows"])).toBe("Validated. Schema, preview rows and actions hold.");
-    expect(validationSummary(["schema", "actions"])).toBe("Validated. Schema and actions hold. The preview rows were not checked.");
+    expect(validationSummary(["sources", "schema", "actions", "preview-rows"])).toBe("Validated. Sources, schema, preview rows and actions hold.");
+    expect(validationSummary(["sources", "schema", "actions"])).toBe("Validated. Sources, schema and actions hold. The preview rows were not checked.");
     expect(validationSummary([])).toBe("Validated.");
+  });
+
+  test("a preview-behind pass keeps its warning and remedy visible beside skipped row checks", () => {
+    const warning = {
+      stage: "preview-rows" as const,
+      message: "The preview's test database is behind schema.sql, so the preview cannot run the actions that need the change.",
+      detail: "Its table tasks has no due_at. Publishing applies the change. Try it on konae dev or a published Deployment.",
+    };
+    const result: ValidationResult = { ok: true, errors: [], checked: ["sources", "schema", "actions"], warnings: [warning] };
+    const state = run([
+      { type: "settled", snapshot: snapshot({ state: "ready", changedFiles: ["schema.sql"], result }, result) },
+    ]);
+
+    expect(validationSummary(proposalFooter(state).kind === "validated" ? proposalFooter(state).checked : [])).toContain("The preview rows were not checked.");
+    expect(proposalFooter(state)).toMatchObject({ kind: "validated", warnings: [warning] });
   });
 
   test("discard empties the footer but keeps the thread", () => {
@@ -333,7 +351,25 @@ describe("agent thread apply gate", () => {
     const state = run([
       { type: "settled", snapshot: snapshot({ state: "blocked", changedFiles: ["app.js"], result: { ok: false, errors: [], checked: [] } }) },
     ]);
-    expect(proposalFooter(state)).toMatchObject({ kind: "blocked", stage: "schema", message: "Validation failed." });
+    expect(proposalFooter(state)).toMatchObject({ kind: "blocked", stage: "schema", message: "Validation failed.", remainingErrors: 0 });
+  });
+
+  test("a refusal carries its code, remedy and remaining error count", () => {
+    const state = run([
+      { type: "settled", snapshot: snapshot({
+        state: "blocked",
+        changedFiles: ["actions.json"],
+        result: { ok: false, checked: ["schema"], errors: [
+          { stage: "actions", code: "query-limit-required", message: "Name a row limit.", detail: "Action tasks.list reads rows.", hint: { fix: "edit_capsule", remedy: "Add LIMIT to the query." } },
+          { stage: "actions", message: "The action needs an input." },
+          { stage: "actions", message: "The action needs access." },
+        ] },
+      }) },
+    ]);
+    expect(proposalFooter(state)).toMatchObject({
+      kind: "blocked", code: "query-limit-required", message: "Name a row limit.",
+      detail: "Action tasks.list reads rows.", hint: { remedy: "Add LIMIT to the query." }, remainingErrors: 2,
+    });
   });
 });
 
@@ -350,7 +386,6 @@ describe("agent thread composer and providers", () => {
     expect(submitBlocker(anthropic, false, "claude-sonnet-4-6")).toContain("API key");
     expect(submitBlocker(anthropic, true, "   ")).toContain("model id");
     expect(submitBlocker(anthropic, true, "claude-sonnet-4-6")).toBe("");
-    expect(submitBlocker({ ...anthropic, needsKey: false }, false, "claude-sonnet-4-6")).toBe("");
 
     const blocker = submitBlocker(anthropic, false, "claude-sonnet-4-6");
     expect(canSubmit(initialAgentThreadState, "hola", false, blocker)).toBe(false);
@@ -387,10 +422,8 @@ describe("agent thread composer and providers", () => {
     expect(isCustomModelId(resolveProvider(PROVIDERS, "anthropic"), "claude-from-the-future")).toBe(true);
   });
 
-  test("key state follows custody, not the provider list", () => {
-    const anthropic = resolveProvider(PROVIDERS, "anthropic");
-    expect(keyState(anthropic, false)).toBe("missing");
-    expect(keyState(anthropic, true)).toBe("stored");
-    expect(keyState({ ...anthropic, needsKey: false }, false)).toBe("not-needed");
+  test("every provider needs a key", () => {
+    expect(keyState(false)).toBe("missing");
+    expect(keyState(true)).toBe("stored");
   });
 });

@@ -35,15 +35,15 @@ _Avoid_: owner, editor user
 ### The app and its files
 
 **Project**:
-An app as Konae's project list knows it: its ID, its name, the owner who holds it and the sources the editor saves. Its ID names its app folder and its Deployment. A Project published from a folder or over MCP has no saved sources, so the editor opens only its data, its accounts and what it did, and its files change in the folder.
+An app as Konae's project list knows it: its ID, its name, its owner, its saved settings and the sources in `app/`. The same folder sources open in the editor, whether created there or with `konae init`. `sourcesRevision` advances when Konae accepts source changes through project creation, saves, releases, imports or a source backup restore. Project cards load metadata without asset payloads; opening a project loads its files. The installation's sources take precedence over any older browser backup.
 _Avoid_: workspace, repo, app (when the editable source is meant)
 
 **App Folder**:
-Everything an app is, in one layout that is the same on a laptop, inside the Kernel and in an export: `konae.json`, `app/`, `dist/`, `data/`, `actions.d.ts`, `action-contract.md`, `AGENTS.md`, `compose.yaml` and `.env.example`. `konae init` writes it, `konae dev` serves it, an export hands it over, and the Kernel keeps each app in one under `apps/<id>/`. Inside the Kernel it also holds `.konae/`, what the installation knows about the app, which never leaves. `kernel-rs/kernel/src/layout.rs` names every path (ADR-0001).
+The app's files and state. `konae init` writes `konae.json`, `app/`, generated developer files and build scripts. A build creates `dist/`; local development and the Kernel create or use `data/`. The Kernel opens a portable folder with `konae.json`, `app/`, `dist/` and `data/`; it keeps installation state in `.konae/`. An export omits `.konae/`. `kernel-rs/kernel/src/layout.rs` names the Kernel paths (ADR-0001).
 _Avoid_: kit, package, workspace, repo
 
 **Capsule**:
-The app's editable sources, `app/` of the app folder: its pages, styles and scripts, `schema.sql`, `actions.json` and an optional `package.json`. The editor and the build agent read and write it; a Deployment serves the Build Artifact built from it.
+The app's editable files in `app/`, including pages, styles, scripts, `schema.sql`, `actions.json`, optional `package.json` and binary assets. The editor and CLI read and write these files; a Deployment serves the Build Artifact built from them. Saved draft settings in `konae.json` can differ from the applied settings snapshot until release.
 _Avoid_: bundle, repo, the project files
 
 **Server Action**:
@@ -51,7 +51,7 @@ A named operation in `actions.json` and the only way a page reaches the database
 _Avoid_: raw SQL endpoint, database API
 
 **Validation Gate**:
-The editor's check of `schema.sql` and `actions.json`, in `src/agent/gate.ts`, that a change must pass before Apply. It and the Kernel refuse with the same code and sentence, which is what lets an app leave with its rules (ADR-0004).
+The editor checks `schema.sql`, `actions.json` and file access declarations against preview state. A proposal stays in a candidate preview with candidate rows, files and actor until Apply accepts it. Apply waits for a successful build and a ready preview, merges the proposal into the editable project and updates the preview. The normal autosave then saves the accepted files through `project_sources_save` without another Gate run. Hand edits autosave the same way. Discard drops candidate state without saving it. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004). A source save after release planning makes `release_apply` refuse the stale plan.
 _Avoid_: linter, preview
 
 **Refusal**:
@@ -89,7 +89,7 @@ A Deployment with any other visibility, or none. Its shell, assets and runtime e
 _Avoid_: password-protected app
 
 **Signup Policy**:
-The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. A public app starts Open and a private one Closed. The owner chooses it on the first release and changes it with `signup_policy_set`, which needs `manage_users` (ADR-0002, ADR-0003).
+The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. The editor preselects Invitation only for a private app, `konae init` writes Invitation only, and a release without a policy defaults public apps to Open and private apps to Closed. The owner chooses it on the first release and changes it with `signup_policy_set`, which needs `manage_users` (ADR-0002, ADR-0003).
 _Avoid_: invite list, access grant
 
 **Sign-in Methods**:
@@ -185,7 +185,7 @@ _Avoid_: bucket (one kind of store), storage
 ### Taking the app elsewhere
 
 **Export**:
-The app folder handed over: `konae.json`, `app/` and `dist/` in one download, and each part of `data/` (database, accounts, files, Usage) as its own download with a manifest of sizes and SHA-256. It carries no owner, credential, secret, session or `.konae/`, and its API keys arrive revoked. `project_export`, `konae export`, `konae pull` and the editor's Export are the one export, and downloading accounts and data needs `export_data`. Tool arguments call the manifest and its downloads a package (ADR-0008).
+The portable app folder: `konae.json`, `app/` and `dist/`, plus each published data component (database, accounts, files, Usage) as a separate download with sizes and SHA-256. Pull also stages the sources, artifact, settings and data locally, preserving edits when their saved digest differs. It carries no owner, credential, secret, session or `.konae/`, and its API keys arrive revoked. `project_export` and editor Export download the published app. `konae export` writes the local folder and rebuilds `dist/`; without `--with-data` it makes no MCP call. `konae pull` downloads the published sources, artifact, settings and data into `.konae/pull/`. Downloading published accounts and data needs `export_data`. Tool arguments call the manifest and its downloads a package (ADR-0008).
 _Avoid_: kit, dump, full backup
 
 **Import**:
@@ -195,6 +195,10 @@ _Avoid_: migration, sync, restore (that installs a copy)
 **Maintenance**:
 The state of a Deployment that takes no writes: its host shows a maintenance page, owner tools that would change it are refused except `maintenance_set` and `project_import`, and its email, calls and schedule wait. It lives in `.konae/maintenance.json`. An owner moves an app with no lost write by maintenance, export and import (ADR-0008).
 _Avoid_: downtime, read-only mode (reads stop too), migration
+
+**Test Mode**:
+An app author's local run, with its own accounts, rows and files. Outbound calls are captured, schedule timers pause, Google sign-in is refused, and browser connections to other origins are blocked. Shell commands still run as the current OS user. A rehearsal checks current sources against pulled data, while publishing plans against current Deployment rows and never uploads local rows.
+_Avoid_: sandbox, staging Deployment
 
 ## Words for running an installation
 
@@ -219,7 +223,7 @@ Konae's MCP on `/mcp`, which the editor, the build agent and an outside agent al
 _Avoid_: Admin Interface, admin API
 
 **Scratch Copy**:
-The copy of a Capsule the build agent edits in the browser. Its changes reach the Project only through the Validation Gate and the owner's Apply (ADR-0007).
+The candidate files the build agent edits in the browser. A proposal previews candidate rows, files and actor before Apply. Discard drops the candidate without saving it. Apply accepts the proposal into the editable project after the build and preview host are ready. The normal autosave saves it without running the Gate again. Hand edits also autosave without the Gate (ADR-0007).
 _Avoid_: Agent Workspace, sandbox
 
 **Project List**:

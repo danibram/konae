@@ -6,6 +6,7 @@ import type {
   ProviderConfig,
   ValidationResult,
   ValidationStage,
+  ValidationWarning,
 } from "../agent/contracts";
 import type { ProjectFile } from "../lib/types";
 
@@ -179,17 +180,17 @@ export type ProposalFooter =
   | { kind: "empty"; canApply: false }
   | { kind: "unvalidated"; changedFiles: ProjectFile[]; canApply: false }
   /** `detail` carries the reason, such as the Kernel's sentence for an action it would refuse. */
-  | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string; detail?: string }
+  | { kind: "blocked"; changedFiles: ProjectFile[]; canApply: false; stage: ValidationStage; message: string; detail?: string; code?: string; hint?: ValidationResult["errors"][number]["hint"]; remainingErrors: number }
   /**
    * `checked` is what the pass covers; the panel may not claim more than this.
    * `owner` is a release refusal only the owner clears: Apply stays open, Deploy refuses.
    */
-  | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal };
+  | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal; warnings: ValidationWarning[] };
 
 /** The Kernel's sentence for a refusal the owner clears in Access > Integrations, and who acts. */
 export type OwnerRefusal = { message: string; detail?: string };
 
-const stageOrder: ValidationStage[] = ["schema", "preview-rows", "actions"];
+const stageOrder: ValidationStage[] = ["sources", "schema", "preview-rows", "actions"];
 
 /**
  * What a passing gate is entitled to say. Naming the stages that ran is the
@@ -219,6 +220,7 @@ export function proposalFooter(state: AgentThreadState): ProposalFooter {
       changedFiles: gate.changedFiles,
       canApply: true,
       checked: gate.result.checked,
+      warnings: (gate.result.warnings ?? []).filter((warning) => !warning.owner),
       ...(owner ? { owner: { message: owner.message, ...(owner.detail ? { detail: owner.detail } : {}) } } : {}),
     };
   }
@@ -237,6 +239,9 @@ function blocked(changedFiles: ProjectFile[], result: ValidationResult): Proposa
     stage: first?.stage ?? "schema",
     message: first ? first.message : "Validation failed.",
     ...(first?.detail ? { detail: first.detail } : {}),
+    ...(first?.code ? { code: first.code } : {}),
+    ...(first?.hint ? { hint: first.hint } : {}),
+    remainingErrors: Math.max(0, result.errors.length - 1),
   };
 }
 
@@ -254,7 +259,7 @@ export function canSubmit(state: AgentThreadState, draft: string, busy: boolean,
  * only arrives after the draft was cleared and shown as if it had been sent.
  */
 export function submitBlocker(provider: ProviderConfig, hasKey: boolean, modelId: string): string {
-  if (keyState(provider, hasKey) === "missing") return `Add your ${provider.label} API key first.`;
+  if (keyState(hasKey) === "missing") return `Add your ${provider.label} API key first.`;
   if (modelId.trim().length === 0) return "Choose a model id first.";
   return "";
 }

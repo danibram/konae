@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -44,7 +45,7 @@ afterAll(async () => {
 
 /** The exported folder as the editor's Export writes it: project_export's folder and data, and the files every app folder carries. */
 async function exportFolder(kernel: Kernel, deploymentId: string): Promise<FolderEntry[]> {
-  const exported = await kernel.owner.call<{ manifest: { contents: { name: PackageComponentName }[] }; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { deploymentId });
+  const exported = await kernel.owner.call<{ manifest: { contents: { name: PackageComponentName }[] }; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: deploymentId });
   try {
     const entries = readTar(await kernel.owner.download(exported.folder));
     for (const { name } of exported.manifest.contents) entries.push(...dataEntries(name, await kernel.owner.download(exported.downloads[name])));
@@ -54,6 +55,7 @@ async function exportFolder(kernel: Kernel, deploymentId: string): Promise<Folde
       settings, actionsSource: text("app/actions.json"), schemaSource: text("app/schema.sql"),
       runtime: await readFile(path.join(repo, "src/mcp/runtime.js"), "utf8"),
       staticArtifact: await readFile(path.join(repo, "src/lib/static-artifact.js"), "utf8"),
+      localBuilder: await readFile(path.join(repo, "src/lib/local-builder.js"), "utf8"),
     }));
     return entries;
   } finally {
@@ -206,4 +208,118 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect(imported.error).toBe("");
   expect(JSON.parse(imported.output)).toMatchObject({ imported: true, replace: "data", backup: { holds: ["data"] } });
   expect(JSON.parse((await command("sql", "SELECT body FROM notes ORDER BY id LIMIT 5")).output)).toMatchObject({ rows: [{ body: "written on Konae" }] });
+}, 120_000);
+
+test("a legacy export starts on a fresh Kernel without its record, and distinguishes the first rebuilt artifact", async () => {
+  const originPort = 19700 + Math.floor(Math.random() * 90);
+  konae = await startKernel({ port: originPort, data: path.join(root, "legacy-origin"), setupKey: "kernel-export-setup-secret", ownerEmail: "owner@legacy.test" });
+  const id = "legacy_portable";
+  const appliedActions = JSON.stringify({ version: 1, actions: {
+    "applied.read": { kind: "query", access: "authenticated", statement: 'SELECT title FROM "live notes" ORDER BY id LIMIT 20', bindings: [] },
+  } });
+  const draftActions = JSON.stringify({ version: 1, actions: {
+    "draft.read": { kind: "query", access: "authenticated", statement: 'SELECT title FROM "live notes" ORDER BY id LIMIT 20', bindings: [] },
+  } });
+  const appliedSchema = 'CREATE TABLE IF NOT EXISTS "live notes"(id INTEGER PRIMARY KEY, title TEXT NOT NULL); CREATE INDEX IF NOT EXISTS "live notes by title" ON "live notes"(title);';
+  const draftSchema = `${appliedSchema} CREATE TABLE IF NOT EXISTS draft_marker(id INTEGER PRIMARY KEY);`;
+  const request = {
+    project: { id, name: "Applied legacy app", slug: "legacy-portable", manifest: { version: 1, visibility: "public" }, files: { "schema.sql": appliedSchema, "actions.json": appliedActions } },
+    visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<h1>Applied artifact</h1>" } },
+  };
+  await konae.owner.call("project_create", { projectId: id, name: "Applied legacy app" });
+  const { receipt } = await release(konae.owner, request, id);
+  const sourceCookie = await account(konae, receipt.hostname, "signup", "writer@legacy.test");
+  expect(sourceCookie).toBeTruthy();
+  const database = new Database(path.join(root, "legacy-origin", "apps", id, "data", "database.sqlite"));
+  database.exec('INSERT INTO "live notes"(title) VALUES(\'portable row\')');
+  database.close();
+
+  const folder = path.join(root, "legacy-origin", "apps", id);
+  const settingsPath = path.join(folder, "konae.json");
+  const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+  delete settings.released;
+  await writeFile(settingsPath, JSON.stringify(settings));
+  const recordPath = path.join(folder, ".konae", "deployment.json");
+  const installed = JSON.parse(await readFile(recordPath, "utf8"));
+  delete installed.released;
+  await writeFile(recordPath, JSON.stringify(installed));
+  await writeFile(path.join(folder, "app", "actions.json"), draftActions);
+  await writeFile(path.join(folder, "app", "schema.sql"), draftSchema);
+  await writeFile(path.join(folder, ".konae", "sources.json"), JSON.stringify({
+    name: "Draft legacy app", slug: "draft-legacy", directories: [], updatedAt: 8,
+    manifest: { version: 1, visibility: "private" },
+  }));
+
+  // The first ordinary operation must capture the old applied schema and artifact before export.
+  await konae.owner.call("signup_policy_set", { projectId: id, mode: "closed" });
+  const migratedSettings = JSON.parse(await readFile(settingsPath, "utf8"));
+  expect(migratedSettings.released.schemaSql).toContain('CREATE TABLE IF NOT EXISTS "live notes"');
+  expect(migratedSettings.released.schemaSql).toContain('CREATE INDEX IF NOT EXISTS "live notes by title"');
+  expect(migratedSettings.released.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+  const entries = await exportFolder(konae, id);
+  await konae.stop();
+  konae = undefined;
+
+  const install = async (destination: string, changeDist: boolean) => {
+    const appFolder = path.join(destination, "apps", id);
+    for (const entry of entries) {
+      const target = path.join(appFolder, entry.path);
+      await mkdir(path.dirname(target), { recursive: true });
+      const bytes = entry.path === "dist/index.html" && changeDist
+        ? new TextEncoder().encode("<h1>Rebuilt draft artifact</h1>")
+        : entry.contents;
+      await writeFile(target, bytes);
+    }
+    expect(existsSync(path.join(appFolder, ".konae", "deployment.json"))).toBe(false);
+  };
+  const runBareKernel = async (destination: string, port: number) => {
+    const url = `http://127.0.0.1:${port}`;
+    const env = {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_") && !key.startsWith("VITE_"))) as Record<string, string>,
+      KONAE_DATA_DIR: destination, KONAE_KERNEL_PORT: String(port), KONAE_BIND: "127.0.0.1", KONAE_PUBLIC_ORIGIN: url,
+      KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
+    };
+    const child = Bun.spawn([kernelBinary], { env, stdout: "pipe", stderr: "pipe" });
+    const output = new Response(child.stdout).text();
+    const errors = new Response(child.stderr).text();
+    for (let attempt = 0; attempt < 150; attempt++) {
+      try { if ((await fetch(`${url}/_konae/health`)).ok) return { process: child, url, output, errors }; } catch {}
+      if (child.exitCode !== null) throw new Error(`The fresh Kernel exited. ${await errors}`);
+      await Bun.sleep(100);
+    }
+    child.kill();
+    await child.exited;
+    throw new Error(`The fresh Kernel did not start. ${await errors}`);
+  };
+  const exercise = async (destination: string, port: number, rebuilt: boolean) => {
+    await install(destination, rebuilt);
+    const bare = await runBareKernel(destination, port);
+    alone = bare.process;
+    let kernelLog = "";
+    try {
+      const hostname = rebuilt ? "draft-legacy.localhost" : "legacy-portable.localhost";
+      const rootResponse = await fetch(`${bare.url}/`, { headers: { host: hostname } });
+      if (!rebuilt) {
+        expect(rootResponse.status).toBe(200);
+        const session = await account({ url: bare.url, data: destination } as Kernel, hostname, "login", "writer@legacy.test");
+        const app = { url: bare.url, data: destination } as Kernel;
+        expect(await runtime(app, hostname, session).call("actions_invoke", { name: "applied.read" })).toEqual([{ title: "portable row" }]);
+        await expect(runtime(app, hostname, session).call("actions_invoke", { name: "draft.read" })).rejects.toThrow();
+      } else {
+        expect(await rootResponse.text()).toContain("Sign in to this app");
+        const app = { url: bare.url, data: destination } as Kernel;
+        const session = await account(app, hostname, "login", "writer@legacy.test");
+        expect(await runtime(app, hostname, session).call("actions_invoke", { name: "draft.read" })).toEqual([{ title: "portable row" }]);
+        await expect(runtime(app, hostname, session).call("actions_invoke", { name: "applied.read" })).rejects.toThrow();
+      }
+    } finally {
+      bare.process.kill();
+      await bare.process.exited;
+      kernelLog = `${await bare.output}\n${await bare.errors}`;
+      alone = undefined;
+    }
+    expect(kernelLog).not.toContain("not idempotent");
+  };
+  await exercise(path.join(root, "fresh-unchanged"), originPort + 1, false);
+  await exercise(path.join(root, "fresh-rebuilt"), originPort + 2, true);
 }, 120_000);

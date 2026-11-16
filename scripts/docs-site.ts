@@ -216,8 +216,8 @@ async function seed(site: Site, folder: string) {
   const token = process.env.KONAE_MCP_TOKEN ?? saved.token;
   const client = new McpClient(`${saved.url.replace(/\/$/, "")}/mcp`, { token });
   const call = (name: string, args: object) => client.call<{ rows?: unknown[] }>(name, args);
-  for (const sql of seedStatements(site)) await call("database_execute", { deploymentId: deployment.id, operation: "sql", input: { sql } });
-  const count = await call("database_execute", { deploymentId: deployment.id, operation: "sql", input: { sql: "SELECT count(*) AS sections FROM sections LIMIT 1" } });
+  for (const sql of seedStatements(site)) await call("database_execute", { projectId: deployment.id, operation: "sql", input: { sql } });
+  const count = await call("database_execute", { projectId: deployment.id, operation: "sql", input: { sql: "SELECT count(*) AS sections FROM sections LIMIT 1" } });
   console.log("Search rows on the Deployment:", JSON.stringify(count.rows ?? count));
 }
 

@@ -1,3 +1,5 @@
+import { UPLOAD_BYTES, uploadRefused } from "../lib/size";
+
 export type Transfer = { transferId: string; size: number; sha256: string; chunkBytes: number };
 
 /** A Capsule refusal a tool answers beside its text (ADR-0004). */
@@ -49,14 +51,19 @@ export class McpClient {
    * upload reach that component's limit instead of 32 MiB; a release then
    * names the transfer in `initialPackage.components`.
    */
-  async upload(bytes: Uint8Array, projectId?: string, component?: string): Promise<Transfer> {
+  async upload(bytes: Uint8Array, projectId?: string, component?: string, signal?: AbortSignal): Promise<Transfer> {
+    if (!component && (bytes.length === 0 || bytes.length > UPLOAD_BYTES)) throw new McpError(uploadRefused(bytes.length));
     const sha256 = await checksum(bytes);
+    // Keep begin un-aborted so the transfer ID is known and can be canceled if
+    // the caller leaves while the server is creating it.
     const transfer = await this.call<Transfer>("transfer_begin", { size: bytes.length, sha256, ...(projectId ? { projectId } : {}), ...(component ? { component } : {}) });
     try {
+      signal?.throwIfAborted();
+      blockLimit(transfer);
       for (let offset = 0; offset < bytes.length; offset += transfer.chunkBytes) {
-        await this.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(bytes.subarray(offset, offset + transfer.chunkBytes)) });
+        await this.call("transfer_write", { transferId: transfer.transferId, offset, data: encodeBase64(bytes.subarray(offset, offset + transfer.chunkBytes)) }, signal);
       }
-      await this.call("transfer_complete", { transferId: transfer.transferId });
+      await this.call("transfer_complete", { transferId: transfer.transferId }, signal);
       return transfer;
     } catch (error) {
       await this.cancel(transfer.transferId).catch(() => {});
@@ -64,13 +71,14 @@ export class McpClient {
     }
   }
 
-  async download(transfer: Transfer): Promise<Uint8Array> {
-    if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || transfer.size > 32 * 1024 * 1024) throw new McpError("Invalid MCP download size.");
-    const bytes = new Uint8Array(transfer.size);
+  async download(transfer: Transfer, signal?: AbortSignal): Promise<Uint8Array> {
     try {
+      if (!Number.isSafeInteger(transfer.size) || transfer.size < 0 || transfer.size > 32 * 1024 * 1024) throw new McpError("Invalid MCP download size.");
+      blockLimit(transfer);
+      const bytes = new Uint8Array(transfer.size);
       let offset = 0;
       while (offset < transfer.size) {
-        const block = await this.call<{ data: string; offset: number; nextOffset: number }>("transfer_read", { transferId: transfer.transferId, offset });
+        const block = await this.call<{ data: string; offset: number; nextOffset: number }>("transfer_read", { transferId: transfer.transferId, offset }, signal);
         const data = decodeBase64(block.data);
         if (block.offset !== offset || !data.length || data.length > blockLimit(transfer) || block.nextOffset !== offset + data.length || block.nextOffset > bytes.length) throw new McpError("Invalid MCP download block.");
         bytes.set(data, offset);
@@ -85,10 +93,19 @@ export class McpClient {
 
   cancel(transferId: string) { return this.call("transfer_cancel", { transferId }); }
 
+  cancelSourceRead(projectId: string, requestId: string) {
+    const params = { name: "project_sources_read", arguments: { projectId, cancelRequestId: requestId } };
+    // A source read can only exist after initialize completed. Skip `call()`'s
+    // await here so pagehide dispatches the keepalive request before unload.
+    return this.connecting ? this.request("tools/call", params) : this.call("project_sources_read", params.arguments);
+  }
+
   private async request(method: string, params?: object, notification = false, signal?: AbortSignal): Promise<any> {
     const id = crypto.randomUUID();
+    const toolCall = params as { name?: string; arguments?: { cancelRequestId?: string } } | undefined;
     const response = await (this.options.fetch ?? globalThis.fetch)(this.endpoint, {
       method: "POST", credentials: "same-origin", signal,
+      keepalive: toolCall?.name === "transfer_cancel" || (toolCall?.name === "project_sources_read" && Boolean(toolCall.arguments?.cancelRequestId)),
       headers: {
         "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25",
         ...(this.options.token ? { authorization: `Bearer ${this.options.token}` } : {}),
@@ -128,5 +145,9 @@ export function encodeBase64(bytes: Uint8Array): string {
 }
 
 export function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+  // A plain loop, because Uint8Array.from with a callback takes about 90 ms for 2 MiB, and the editor decodes on every edit.
+  const text = atob(value);
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
+  return bytes;
 }

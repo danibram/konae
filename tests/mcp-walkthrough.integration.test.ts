@@ -331,8 +331,8 @@ describe("the MCP walkthrough", () => {
     const receipt = JSON.parse(await readFile(path.join(app(), ".konae/published.json"), "utf8"));
     Object.assign(s, { deploymentId: receipt.id, hostname: receipt.hostname });
     expect(receipt.hostname).toBe("orders.localhost");
-    const policy = await tool("signup_policy_read", { deploymentId: s.deploymentId });
-    expect((policy.result as any).mode).toBe("invitation");
+    const policy = await tool("project_inspect", { projectId: s.deploymentId }, { pick: (value) => value.deployment.signupPolicy });
+    expect((policy.result as any).deployment.signupPolicy.mode).toBe("invitation");
     await http("GET", a, "/about", { host: s.hostname });
   }, 120_000);
 
@@ -341,12 +341,12 @@ describe("the MCP walkthrough", () => {
     const publisher = await run(["login", "--dir", path.join(root, "publisher"), "--url", a.url], { KONAE_EMAIL: "agent@walkthrough.test", KONAE_PASSWORD: password });
     expect(publisher.code).toBe(0);
     const publishOnly = JSON.parse(await readFile(path.join(root, "publisher/.konae/credentials.json"), "utf8")).token;
-    const refused = await tool("app_invitations_create", { deploymentId: s.deploymentId, emails: ["member@walkthrough.test"], idempotencyKey: "walkthrough-invite-1" }, { token: publishOnly });
+    const refused = await tool("app_invitations_create", { projectId: s.deploymentId, emails: ["member@walkthrough.test"], idempotencyKey: "walkthrough-invite-1" }, { token: publishOnly });
     expect(refused.error).toBe("Unknown tool or insufficient permission. app_invitations_create needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.");
 
     r.step("invite");
     await tool("mail_status", {}, { pick: (value) => ({ transport: value.transport, sending: value.sending }) });
-    const invited = await tool("app_invitations_create", { deploymentId: s.deploymentId, emails: ["member@walkthrough.test"], idempotencyKey: "walkthrough-invite-1" });
+    const invited = await tool("app_invitations_create", { projectId: s.deploymentId, emails: ["member@walkthrough.test"], idempotencyKey: "walkthrough-invite-1" });
     r.name((invited.result as any).results[0].invitationId, "<invitation id>");
 
     r.step("accept");
@@ -410,7 +410,7 @@ describe("the MCP walkthrough", () => {
 
   test("10. an API key for the feed route", async () => {
     r.step("key");
-    const created = await tool("api_keys_create", { deploymentId: s.deploymentId, name: "Accounting export", actions: ["orders.feed"], files: [] });
+    const created = await tool("api_keys_create", { projectId: s.deploymentId, name: "Accounting export", actions: ["orders.feed"], files: [] });
     s.key = (created.result as any).key;
     r.name((created.result as any).keyId, "<key id>");
     expect((await http("GET", a, "/api/orders", { host: s.hostname, headers: { authorization: `Bearer ${s.key}` }, shownHeaders: { authorization: "Bearer <api key>" } })).response.status).toBe(200);
@@ -430,9 +430,9 @@ describe("the MCP walkthrough", () => {
     r.step("usage");
     const readDay = utcDay();
     r.name(readDay, "<today>");
-    await tool("usage_read", { deploymentId: s.deploymentId, from: today, to: readDay }, { pick: (value) => ({ from: value.from, to: value.to, totals: value.totals }) });
+    await tool("usage_summary", { projectId: s.deploymentId, from: today, to: readDay }, { pick: (value) => ({ from: value.usage.from, to: value.usage.to, totals: value.usage.totals }) });
     r.step("signals");
-    const signals = await tool("signals_read", { deploymentId: s.deploymentId });
+    const signals = await tool("signals_read", { projectId: s.deploymentId });
     // conform sends one generated order; name it so the document is the same on every run.
     const generated = (signals.result as any).signals.find((signal: any) => signal.name === "order.received" && signal.properties.id !== "A-1");
     r.name(generated?.properties.id, "<conform order>");
@@ -440,11 +440,11 @@ describe("the MCP walkthrough", () => {
 
   test("13. export the package, import it on a second Kernel", async () => {
     r.step("export-refused");
-    const refused = await tool("project_export", { deploymentId: s.deploymentId }, { token: s.oauth });
+    const refused = await tool("project_export", { projectId: s.deploymentId }, { token: s.oauth });
     expect(refused.error).toBe("Unknown tool or insufficient permission. project_export needs a credential with export_data. Run konae login with --export-data, or use a token from token_create that includes it.");
 
     r.step("export");
-    const exported = await tool("project_export", { deploymentId: s.deploymentId });
+    const exported = await tool("project_export", { projectId: s.deploymentId });
     const result = exported.result as { manifest: any; downloads: Record<string, Transfer>; folder: Transfer };
     r.name(result.manifest.packageId, "<package id>");
     r.name(result.folder.transferId, "<folder download>");
@@ -506,7 +506,7 @@ describe("the MCP walkthrough", () => {
     r.add("json", JSON.stringify({ ...payload, project: { ...payload.project, files: "<path: text of every source file>" }, artifact: "<version 1, entrypoint index.html, and the text of every file in dist/>", initialPackage: { manifest: "<the manifest project_export returned>", components: uploads } }, null, 2));
     const release = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), s.projectId);
     r.name(release.transferId, "<release upload>");
-    const plan = await tool("release_plan", { transferId: release.transferId }, { token: s.tokenB, kernel: b });
+    const plan = await tool("release_plan", { transferId: release.transferId, observedSourcesRevision: 0 }, { token: s.tokenB, kernel: b });
     r.name((plan.result as any).planId, "<plan id>");
     const applied = await tool("release_apply", { planId: (plan.result as any).planId }, { token: s.tokenB, kernel: b, pick: (value) => ({ id: value.id, hostname: value.hostname, url: value.url, signupPolicy: value.signupPolicy }) });
     Object.assign(s, { deploymentB: (applied.result as any).id, hostnameB: (applied.result as any).hostname });
@@ -520,7 +520,7 @@ describe("the MCP walkthrough", () => {
     r.name(cookie.split("=")[1], "<destination app session>");
     const listed = await runtimeTool(s.hostnameB, cookie, "actions_invoke", { name: "orders.list" }, b);
     expect((listed.result as any[]).map((row) => row.external_id)).toContain("A-1");
-    const keys = await tool("api_keys_list", { deploymentId: s.deploymentB }, { token: s.tokenB, kernel: b });
+    const keys = await tool("api_keys_list", { projectId: s.deploymentB }, { token: s.tokenB, kernel: b });
     expect((keys.result as any).keys[0].revokedReason).toBe("import");
   }, 180_000);
 

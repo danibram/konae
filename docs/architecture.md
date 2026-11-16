@@ -45,7 +45,7 @@ kernel-rs/
 
 `kernel` runs apps. Its binary opens every folder under `<KONAE_DATA_DIR>/apps/`, checks each as a release, applies the schema change `app/schema.sql` asks of `data/database.sqlite`, and serves it with every primitive: Server Actions, app accounts, files, schedules, notices, HTTP routes, calls and Usage. It answers the runtime endpoint `/_konae/mcp` that the browser SDK calls. It never opens an owner's records. Its commands on one app (`users`, `invite`, `suspend`, `resume`, `signup-policy`, `api-key`, `secret`, `sql`, `events`, `maintenance`, `enter`, `import`) live in `operator.rs`, and each calls the function the matching owner tool calls. It also runs the installation commands `restore`, `reconcile`, `files-migrate` and `files-reconcile`.
 
-`konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds the `creator-*` commands that admit and suspend owners.
+`konae` is the platform. It starts the same Kernel with an `Installation` that adds its own stores, and adds the owner's MCP on `/mcp`, OAuth for MCP clients, owner accounts and their admission, optional Clerk sign-in, the `platform_guide` topics, the project list and, when `KONAE_EDITOR_DIR` names it, the built editor on the editor host. It runs the same installation commands, and adds `owner-code-*` and `owner-account-*` commands that admit and suspend owners.
 
 The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the owner's MCP. Both publish through `publishProject` in `src/deployments/release.ts`, and `konae tool <name>` calls any owner tool by name, so a new tool needs no new command. `konae dev` talks to neither: it builds the folder and runs the `kernel` binary on it.
 
@@ -84,7 +84,7 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `artifact.rs` | Which artifact file answers a path, and binary files in an artifact |
 | `package.rs` | The export of one app and the import of its data |
 | `import.rs` | Import into an existing app, after a backup |
-| `sources.rs` | The editor's saved sources as the files of `app/` |
+| `sources.rs` | Saved text and binary source files in `app/`, with revision checks |
 | `maintenance.rs` | The maintenance state and its guard |
 | `hosts.rs` | The hosts an installation answers on |
 | `hostname.rs` | The generated hostname: the name a first publish takes and holds until it serves, `hostname_set`, and the redirect from the names it held |
@@ -111,7 +111,6 @@ The editor in `src/` and the CLI in `scripts/konae.ts` talk to Konae over the ow
 | `owner_page.rs` | The look of owner sign-in on `/_konae/owner/login` and of OAuth consent |
 | `editor.rs` | The built editor on the editor host, when `KONAE_EDITOR_DIR` names it |
 | `guide.rs` | What `platform_guide` answers |
-| `editor.rs` | The built editor, served on the editor host from `KONAE_EDITOR_DIR` |
 | `state.rs` | Konae's state beside the Kernel's: the setup key, the MCP origin and the owner verification mode |
 
 ## The app folder
@@ -120,26 +119,27 @@ An app is one folder, laid out the same way on a laptop, inside a Kernel and in 
 
 ```text
 apps/<id>/
-├── konae.json          name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
-├── app/                the Capsule: pages, scripts, schema.sql, actions.json, package.json
+├── konae.json          app settings, identity and manifest
+├── app/                sources, including text and binary assets
 ├── dist/               the Build Artifact the Kernel serves
 ├── data/
-│   ├── database.sqlite # the app's rows, in WAL mode
-│   ├── identity.sqlite # app accounts, sessions, challenges, invitations, API keys, accepted route signatures
-│   ├── usage.sqlite    # Usage, Signals, and the schedule's slots and runs
-│   ├── files/          # index.json, and the uploads unless a bucket holds them
+│   ├── database.sqlite # app rows
+│   ├── identity.sqlite # app accounts, sessions, challenges, invitations and API keys
+│   ├── usage.sqlite    # Usage, Signals and scheduled runs
+│   ├── files/          # file index and local uploads, unless a bucket holds bytes
 │   └── secrets.sqlite  # signing secrets and the Google client
-├── actions.d.ts, action-contract.md, AGENTS.md, compose.yaml, .env.example, .gitignore
-├── package.json, tsconfig.json, scripts/   # npm run build type-checks app/src/ and writes dist/
-└── .konae/             this installation's part, never exported
-    ├── deployment.json # hostname, release and the published actions.json
-    ├── sources.json    # the editor's name, manifest and folders of app/
-    ├── backups/        # snapshots before an import or on request
-    ├── hostname.json   # the generated hostnames the app held before, which redirect
-    ├── domain.json     # the custom domain and its proof
-    ├── path.json       # the path address
+└── .konae/             installation state, never exported
+    ├── deployment.json # project record and applied artifact metadata
+    ├── backups/        # snapshots before import or on request
+    ├── hostname.json   # generated hostname history
+    ├── domain.json     # custom domain and proof
+    ├── path.json       # path address
     └── maintenance.json # only while the app is in maintenance
 ```
+
+A folder from `konae init` also carries developer files beside `konae.json`: `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example`, `.gitignore`, `package.json`, `tsconfig.json`, `scripts/build.mjs`, `scripts/static-artifact.mjs`, `scripts/local-builder.mjs` and `scripts/runtime.js`. The Kernel opens a portable folder with `konae.json`, `app/`, `dist/` and `data/`; generated developer files are optional. It does not require `.konae/sources.json` or `manifest.runtime`.
+
+Inside Konae, `.konae/` keeps installation state and never leaves in an export. It contains the project record, applied artifact metadata, backups, address state and maintenance state.
 
 The `<id>` is the project's ID, and it names the Deployment too. An export hands over everything above except `.konae/` and `data/secrets.sqlite`. It carries the app's accounts and leaves its owner, sessions, email links and signing secrets behind, and its API keys arrive revoked ([ADR-0008](./adr/0008-an-app-leaves-by-export-and-returns-by-import.md)). The `kernel` binary starts an exported folder by writing its own `.konae/`.
 
@@ -162,6 +162,8 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 └── mcp.sqlite              Konae: the project list, agent credentials, OAuth and the audit log
 ```
 
+`konae dev` keeps test mail separately at `<app folder>/.konae/kernel/mail-testbox.jsonl`. The `mailbox.jsonl` above remains the live Kernel's development transport file.
+
 | Store | Owner | Leaves with an export | Leaves with a copy |
 | --- | --- | --- | --- |
 | `apps/<id>/data/database.sqlite`, `identity.sqlite`, `usage.sqlite`, `files/` | The app | Yes | Yes |
@@ -176,7 +178,7 @@ With `KONAE_S3_BUCKET` set, upload bytes live under `files/` in the installation
 
 ## Two doors, one set of refusals
 
-A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, and when the `kernel` binary starts a folder. Both refuse with the same code and sentence, and each rule has one case file in `kernel-rs/kernel/src` that both test suites run, such as `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json` ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other.
+A Capsule meets two checks. The Validation Gate (`src/agent/gate.ts`, with the parser in `src/kernel/actions.ts`) runs in the editor before Apply. The Kernel parses the same `actions.json` and `schema.sql` again at `release_plan`, and when the `kernel` binary starts a folder. Both refuse with the same code and sentence, and the shared rules have case files that both test suites run, such as `sql-rule-cases.json`, `action-cases.json`, `http-binding-cases.json`, `guard-cases.json`, `schedule-cases.json` and `call-cases.json`. Other case files cover one side only ([ADR-0004](./adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md)). The query bound is `src/lib/query-bound.ts` on one side and its port in `lib.rs` on the other.
 
 An artifact holds pages and the files they load. `src/lib/static-artifact.js` decides which Capsule files become the artifact, and the CLI, the editor and an app folder's `npm run build` all run it. It refuses a Capsule with an entry (`src/main.tsx`, `src/main.ts` or `app.js`) whose pages are all whole documents that load no script, because that entry would never run, and the Validation Gate refuses it with the same sentence. `kernel-rs/kernel/src/artifact.rs` decides which file answers a path: an exact file first, then `<path>.html` for a path with no extension and `<path>/index.html` for one that ends in `/`. Under the default `pages` routing anything else answers 404 with the artifact's `404.html` or a small Kernel page. Under `spa` it serves `index.html`.
 
@@ -191,7 +193,7 @@ flowchart TB
   H --> F[("Preview file store<br/>in the browser")]
 ```
 
-The preview iframe has `allow-scripts` and `allow-forms` but no same-origin access, so generated code cannot read the editor's storage or credentials. Each preview gets one private MessageChannel and calls the same runtime tools a published app calls. The build agent edits a scratch copy of the Capsule, and its changes reach the project only through the Validation Gate and the owner's Apply ([ADR-0007](./adr/0007-the-build-agent-edits-a-scratch-copy-and-operates-through-the-owners-mcp.md)).
+The preview iframe has `allow-scripts` and `allow-forms` but no same-origin access, so generated code cannot read the editor's storage or credentials. Each preview gets one private MessageChannel and calls the same runtime tools a published app calls. The build agent edits a candidate copy of the Capsule. It appears in Preview before Apply, with separate candidate rows, files and actor. Discard drops that state. Apply is available after the candidate builds and its preview host is ready. The Gate shows refusal details and remedies, and reports only the stages it checked. When PREVIEW_BEHIND skips row checks, the summary says so ([ADR-0007](./adr/0007-the-build-agent-edits-a-scratch-copy-and-operates-through-the-owners-mcp.md)).
 
 The preview is a development boundary, not a sandbox for hostile code. It applies no Content Security Policy and has no HTTP routes, schedule timer, notice email, Usage store or call outbox. [Named divergences](./divergences.md) lists every difference.
 

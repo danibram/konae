@@ -86,7 +86,8 @@ function release(id: string, files: Record<string, string>, initial: object = {}
       artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Orders</main>" } },
     })), id);
     try {
-      const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+      const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+      const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
       return await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     } finally { await owner.cancel(transfer.transferId); }
   })();
@@ -224,7 +225,7 @@ describe("HTTP routes", () => {
     // A retry in the same second with a new nonce is a new request.
     const retry = await json(await route("/hooks/orders", { method: "POST", body, headers: { "x-signature": await signed(body, now, secret, "retry") } }));
     expect(retry).toEqual({ status: 200, body: { result: { changes: 1, lastInsertId: 2 } } });
-    await owner.call("database_execute", { deploymentId, operation: "sql", input: { sql: "DELETE FROM orders WHERE id = 2" } });
+    await owner.call("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: "DELETE FROM orders WHERE id = 2" } });
     const second = JSON.stringify({ id: "B-2", total: 3 });
     expect((await refusedWith({ "x-signature": await signed(second) }, second)).status).toBe(200);
     const extra = JSON.stringify({ id: "C-3", total: 1, note: "x" });
@@ -233,7 +234,7 @@ describe("HTTP routes", () => {
   });
 
   test("a GET route maps its query string onto typed bindings", async () => {
-    const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Query reader", actions: ["orders.list"] });
+    const reader = await owner.call<{ key: string }>("api_keys_create", { projectId: deploymentId, name: "Query reader", actions: ["orders.list"] });
     const get = (pathname: string) => route(pathname, { headers: { authorization: `Bearer ${reader.key}` } });
     expect(await json(await get("/api/orders"))).toEqual({ status: 200, body: { result: [{ external_id: "A-1", total: 12.5 }, { external_id: "B-2", total: 3 }] } });
     expect(await json(await get("/api/orders?min=10"))).toEqual({ status: 200, body: { result: [{ external_id: "A-1", total: 12.5 }] } });
@@ -247,13 +248,13 @@ describe("HTTP routes", () => {
 
   test("an API key is a service actor bound to the actions it names", async () => {
     const issued = await owner.call<{ keyId: string; key: string }>("api_keys_create", {
-      deploymentId, name: "Order sync", actions: ["notes.add", "orders.receive"], files: ["private"],
+      projectId: deploymentId, name: "Order sync", actions: ["notes.add", "orders.receive"], files: ["private"],
     });
     expect(issued.key).toStartWith("lbk_");
     const bearer = { authorization: `Bearer ${issued.key}` };
     const note = await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "from a program" }), headers: bearer }));
     expect(note.status).toBe(200);
-    const rows = await owner.call<{ rows: { owner_id: string }[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: "SELECT owner_id FROM notes" } });
+    const rows = await owner.call<{ rows: { owner_id: string }[] }>("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: "SELECT owner_id FROM notes" } });
     expect(JSON.stringify(rows)).toContain(issued.keyId);
     // A key that names a signed action stands in for the signature.
     const unsigned = JSON.stringify({ id: "K-1", total: 1 });
@@ -267,16 +268,16 @@ describe("HTTP routes", () => {
     // A route whose callers leave out "key" refuses every key, before the action is checked.
     expect(await json(await route("/hooks/void", { method: "POST", body: JSON.stringify({ id: "K-1" }), headers: bearer })))
       .toEqual({ status: 403, body: { error: "This route does not accept API keys." } });
-    const listed = await owner.call<{ keys: Record<string, unknown>[] }>("api_keys_list", { deploymentId });
+    const listed = await owner.call<{ keys: Record<string, unknown>[] }>("api_keys_list", { projectId: deploymentId });
     expect(listed.keys.map(key => key.keyId)).toContain(issued.keyId);
     expect(JSON.stringify(listed)).not.toContain(issued.key);
-    await owner.call("api_keys_revoke", { deploymentId, keyId: issued.keyId });
+    await owner.call("api_keys_revoke", { projectId: deploymentId, keyId: issued.keyId });
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: bearer })).status).toBe(401);
-    await expect(owner.call("api_keys_create", { deploymentId, name: "Wrong", actions: ["notes.mine"] })).rejects.toThrow("Action notes.mine has no HTTP route, so a key cannot call it.");
+    await expect(owner.call("api_keys_create", { projectId: deploymentId, name: "Wrong", actions: ["notes.mine"] })).rejects.toThrow("Action notes.mine has no HTTP route, so a key cannot call it.");
   });
 
   test("unknown API keys use up the client's bucket, and then no key is looked up from that address", async () => {
-    const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Order reader", actions: ["orders.list"] });
+    const reader = await owner.call<{ key: string }>("api_keys_create", { projectId: deploymentId, name: "Order reader", actions: ["orders.list"] });
     const from = (address: string, key: string, pathname = "/api/orders") =>
       route(pathname, { headers: { authorization: `Bearer ${key}`, "x-forwarded-for": address } });
     const statuses: number[] = [];
@@ -293,7 +294,7 @@ describe("HTTP routes", () => {
   });
 
   test("a session cookie counts only from the app's own origin", async () => {
-    await owner.call("signup_policy_set", { deploymentId, mode: "open" });
+    await owner.call("signup_policy_set", { projectId: deploymentId, mode: "open" });
     const signup = await route("/_konae/auth/signup", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     expect(signup.status).toBe(200);
     const cookie = signup.headers.get("set-cookie")!.split(";")[0];
@@ -326,7 +327,7 @@ describe("HTTP routes", () => {
   });
 
   test("the runtime endpoint refuses an API key and says where it works", async () => {
-    const issued = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Misplaced", actions: ["orders.list"] });
+    const issued = await owner.call<{ key: string }>("api_keys_create", { projectId: deploymentId, name: "Misplaced", actions: ["orders.list"] });
     const response = await route("/_konae/mcp", {
       method: "POST", headers: { authorization: `Bearer ${issued.key}`, accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "orders.list", input: {} } } }),
@@ -348,8 +349,8 @@ describe("HTTP routes", () => {
     } });
     const transfer = await runtime.upload(png);
     const file = await runtime.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "badge.png", type: "image/png" });
-    const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Badge reader", files: ["private"] });
-    const publicOnly = await owner.call<{ key: string }>("api_keys_create", { deploymentId, name: "Public reader", files: ["public"] });
+    const reader = await owner.call<{ key: string }>("api_keys_create", { projectId: deploymentId, name: "Badge reader", files: ["private"] });
+    const publicOnly = await owner.call<{ key: string }>("api_keys_create", { projectId: deploymentId, name: "Public reader", files: ["public"] });
     const read = (headers: Record<string, string>) => route(`/_konae/files/${file.id}`, { headers });
 
     const byKey = await read({ authorization: `Bearer ${reader.key}` });
@@ -380,12 +381,12 @@ describe("HTTP routes", () => {
     const today = new Date().toISOString().slice(0, 10);
     const login = await route("/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
-    const ana = (await owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId })).users.find((user) => user.email === "ana@routes.test")!.userId;
+    const ana = (await owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { projectId: deploymentId })).users.find((user) => user.email === "ana@routes.test")!.userId;
     const member = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", host); headers.set("cookie", cookie);
       return fetch(input, { ...init, headers });
     } });
-    const [mine] = (await owner.call<{ rows: { id: number }[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: `SELECT id FROM notes WHERE owner_id = '${ana}' LIMIT 1` } })).rows;
+    const [mine] = (await owner.call<{ rows: { id: number }[] }>("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: `SELECT id FROM notes WHERE owner_id = '${ana}' LIMIT 1` } })).rows;
     // The runtime endpoint: a tool error with the guard, then a change that records the Signal with the actor.
     await expect(member.call("actions_invoke", { name: "notes.rename", input: { id: 999_999, body: "not mine" } })).rejects.toThrow("That note is not yours, or it does not exist.");
     expect(await member.call("actions_invoke", { name: "notes.rename", input: { id: mine.id, body: "renamed" } })).toMatchObject({ changes: 1 });
@@ -396,14 +397,14 @@ describe("HTTP routes", () => {
     expect(await json(await edit(999_999, "not mine"))).toEqual({ status: 403, body: { error: "That note is not yours, or it does not exist." } });
     expect((await json(await edit(mine.id, "edited"))).status).toBe(200);
 
-    const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId, from: today, to: today });
-    const total = (kind: string, name: string) => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
+    const usage = await owner.call<{ usage: { totals: { kind: string; name: string; count: number }[] } }>("usage_summary", { projectId: deploymentId, from: today, to: today });
+    const total = (kind: string, name: string) => usage.usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
     expect(total("refused", "notes.rename")).toBe(1);
     expect(total("refused", "notes.edit")).toBe(1);
     expect(total("action", "notes.rename")).toBe(1);
     expect(total("action", "notes.touch")).toBe(1);
     expect(total("route", "POST /api/notes/edit")).toBe(1);
-    const signals = async (name: string) => (await owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { deploymentId, name })).signals;
+    const signals = async (name: string) => (await owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { projectId: deploymentId, name })).signals;
     expect((await signals("note.renamed")).map((signal) => signal.properties)).toEqual([{ id: mine.id, actor: ana }]);
     expect((await signals("note.edited")).map((signal) => signal.properties)).toEqual([{ id: mine.id, actor: ana }]);
     expect(await signals("note.touched")).toEqual([]);
@@ -431,7 +432,7 @@ describe("HTTP routes", () => {
     await kernel.exited;
     await startKernel();
     expect(await send()).toEqual({ status: 409, body: { error: "replayed-signature" } });
-    const rows = await owner.call<{ rows: unknown[] }>("database_execute", { deploymentId, operation: "sql", input: { sql: "SELECT id FROM orders WHERE external_id = 'R-1'" } });
+    const rows = await owner.call<{ rows: unknown[] }>("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: "SELECT id FROM orders WHERE external_id = 'R-1'" } });
     expect(rows.rows).toHaveLength(1);
   });
 });

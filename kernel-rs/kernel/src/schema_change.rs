@@ -14,7 +14,7 @@
 //!   the indexes and checks the foreign keys.
 //! - A dropped table, a dropped column and a column whose type changed lose
 //!   something, so the change applies only with the confirmation that the
-//!   plan of those same statements carries.
+//!   plan of those statements and reported losses carries.
 //!
 //! An index loses no row, so a dropped or changed index applies without one.
 
@@ -35,28 +35,68 @@ pub struct Loss {
     pub sentence: String,
 }
 
-/// The statements the Kernel ran, or would run, and what they lose.
+/// The planned statements, transformation row counts, and data losses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Change {
     pub statements: Vec<String>,
     pub losses: Vec<Loss>,
+    pub transformations: Option<Vec<Transformation>>,
+    transformation_confirmation: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transformation {
+    pub id: String,
+    pub definition_sha256: String,
+    pub before: String,
+    pub after: String,
+    pub statements: Vec<String>,
+    pub max_rows: u64,
+    pub affected_rows: u64,
+    pub baseline_skipped: bool,
 }
 
 impl Change {
-    /// The confirmation a change that loses something needs. It is a digest
-    /// of the statements, so a confirmation fits only the plan it was given for.
+    /// Binds confirmation to statements, transformation definitions and row
+    /// counts, and reported losses.
     pub fn confirmation(&self) -> Option<String> {
-        (!self.losses.is_empty()).then(|| hex::encode(Sha256::digest(self.statements.join(";\n").as_bytes())))
+        (!self.losses.is_empty() || self.transformation_confirmation == Some(true)).then(|| {
+            let mut scope = json!({
+                "version": 1,
+                "statements": self.statements,
+                "losses": self.losses.iter().map(|loss| (&loss.table, &loss.column, &loss.sentence)).collect::<Vec<_>>(),
+            });
+            if let Some(transformations) = &self.transformations {
+                scope["transformations"] = json!(transformations.iter().map(|item| (
+                    &item.id, &item.definition_sha256, &item.before, &item.after,
+                    &item.statements, item.max_rows, item.affected_rows, item.baseline_skipped
+                )).collect::<Vec<_>>());
+            }
+            hex::encode(Sha256::digest(scope.to_string().as_bytes()))
+        })
     }
 
     /// `{ statements, losses, confirmation }` as `release_plan` answers it.
-    /// `confirmation` is null when the change loses nothing.
+    /// `confirmation` is null when no loss or data transformation needs approval.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut output = json!({
             "statements": self.statements,
             "losses": self.losses.iter().map(|loss| json!({"table": loss.table, "column": loss.column, "sentence": loss.sentence})).collect::<Vec<_>>(),
             "confirmation": self.confirmation(),
-        })
+        });
+        if let Some(transformations) = &self.transformations {
+            output["transformations"] = json!(transformations.iter().map(|item| json!({
+                "id": item.id,
+                "definitionSha256": item.definition_sha256,
+                "before": item.before,
+                "after": item.after,
+                "statements": item.statements,
+                "maxRows": item.max_rows,
+                "affectedRows": item.affected_rows,
+                "baselineSkipped": item.baseline_skipped,
+            })).collect::<Vec<_>>());
+        }
+        output
     }
 }
 
@@ -71,6 +111,11 @@ pub enum Mode<'a> {
 }
 
 const NEEDS_CONFIRMATION: &str = "schema.confirmation-required";
+const INTERNAL_TABLES: [&str; 2] = ["__konae_schema_state", "__konae_schema_history"];
+
+pub(crate) fn is_internal_table(name: &str) -> bool {
+    INTERNAL_TABLES.iter().any(|internal| name.eq_ignore_ascii_case(internal))
+}
 
 /// Changes the database at `path` to the one `schema` states, in one
 /// transaction, and checks that every action of `program` prepares against
@@ -130,6 +175,104 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
     }
     transaction.commit()?;
     connection.execute_batch("PRAGMA foreign_keys=ON")?;
+    Ok(change)
+}
+
+/// Applies an explicit transformation chain and validates the resulting app
+/// schema and actions in the same transaction. A transformation document
+/// with no transitions keeps the legacy schema-diff path.
+pub fn apply_with_transforms(
+    path: &Path,
+    schema: &str,
+    program: &ActionProgram,
+    document: Option<&str>,
+    mode: Mode<'_>,
+) -> Result<Change> {
+    let Some(document) = document else {
+        let connection = Connection::open(path)?;
+        super::schema_transform::check_document_presence(&connection, false).map_err(anyhow::Error::new)?;
+        drop(connection);
+        return apply(path, schema, program, mode);
+    };
+    let definition = super::schema_transform::parse(document).map_err(anyhow::Error::new)?;
+    if definition.transitions.is_empty() {
+        let connection = Connection::open(path)?;
+        super::schema_transform::check_document_presence(&connection, true).map_err(anyhow::Error::new)?;
+        super::schema_transform::plan(&connection, &definition).map_err(anyhow::Error::new)?;
+        drop(connection);
+        return apply(path, schema, program, mode);
+    }
+    if let Some(refusal) = super::sql_rules::schema_refusal(schema) {
+        anyhow::bail!(refusal);
+    }
+    // Parse schema.sql up front so invalid syntax fails before opening the
+    // caller's database transaction.
+    Scratch::connection(schema)?;
+    let mut connection = Connection::open(path)?;
+    limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
+    connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
+    connection.execute_batch("PRAGMA foreign_keys=ON")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let transaction = connection.transaction()?;
+    transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    let is_fresh = transaction.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history')",
+        [], |row| row.get::<_, i64>(0),
+    )? == 0 && super::schema_transform::load_history(&transaction).map_err(anyhow::Error::new)?.entries.is_empty();
+    let plan = if is_fresh {
+        None
+    } else {
+        Some(super::schema_transform::plan(&transaction, &definition).map_err(anyhow::Error::new)?)
+    };
+    let applied = if is_fresh {
+        super::schema_transform::initialize_fresh_baseline(&transaction, &definition, schema).map_err(anyhow::Error::new)?
+    } else {
+        super::schema_transform::apply_in_transaction(&transaction, plan.as_ref().expect("existing database has a plan"), schema).map_err(anyhow::Error::new)?
+    };
+    transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    let change = Change {
+        transformations: Some(applied.transitions.iter().filter_map(|applied_transition| {
+            let transition = definition.transitions.iter().find(|transition| transition.id == applied_transition.id)?;
+            Some(Transformation {
+                id: transition.id.clone(),
+                definition_sha256: applied_transition.definition_sha256.clone(),
+                before: transition.before.clone(),
+                after: transition.after.clone(),
+                statements: transition.statements.clone(),
+                max_rows: transition.max_rows,
+                affected_rows: applied_transition.affected_rows,
+                baseline_skipped: applied_transition.baseline_skipped,
+            })
+        }).collect()),
+        transformation_confirmation: Some(plan.is_some_and(|plan| plan.requires_confirmation)),
+        ..Change::default()
+    };
+    let final_fingerprint = super::schema_transform::fingerprint(&transaction).map_err(anyhow::Error::new)?;
+    anyhow::ensure!(final_fingerprint == super::schema_transform::fingerprint_schema(schema).map_err(anyhow::Error::new)?, "schema transformation chain did not produce schema.sql");
+    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+    for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
+        let statement = transaction.prepare(&action.statement).map_err(|error| anyhow::anyhow!("action {name} does not match the deployed schema: {error}"))?;
+        if action.kind == "mutation" && statement.column_count() > 0 {
+            anyhow::bail!("Action {name} cannot use RETURNING. Mutations return changes and lastInsertId; use a query to read rows.");
+        }
+        drop(statement);
+        notify::check_columns(&transaction, name, action)?;
+    }
+    let violations: i64 = transaction.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?;
+    anyhow::ensure!(violations == 0, "schema transformations leave rows that do not match a foreign key.");
+    let integrity: String = transaction.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    anyhow::ensure!(integrity == "ok", "schema transformations fail SQLite integrity_check: {integrity}");
+    if let Mode::Apply(confirmation) = mode {
+        if let Some(expected) = change.confirmation() {
+            if confirmation != Some(expected.as_str()) {
+                let lead = if confirmation.is_some() { "The schema transformation differs from the plan that was confirmed." } else { "The schema transformation writes existing data." };
+                anyhow::bail!(refuse(NEEDS_CONFIRMATION, format!("{lead} Confirm the plan release_plan returns to apply it.")));
+            }
+        }
+        transaction.commit()?;
+    }
+    // Plan mode drops the transaction, so schema/action/fk failures and all
+    // planned writes leave the scratch database at its original state.
     Ok(change)
 }
 
@@ -299,13 +442,42 @@ fn foreign_key_violations(connection: &Connection) -> Result<HashMap<(String, St
 /// `schema.sql` run into an empty database in memory, under the rules the
 /// Kernel always held it to, so it holds tables and indexes and calls no
 /// denied function.
-struct Scratch {
+pub(crate) struct Scratch {
     connection: Connection,
     schema: Schema,
 }
 
 impl Scratch {
     fn load(schema: &str) -> Result<Self> {
+        let connection = schema_connection(schema)?;
+        let schema = Schema::read(&connection)?;
+        Ok(Self { connection, schema })
+    }
+
+    pub(crate) fn connection(schema: &str) -> Result<Connection> {
+        schema_connection(schema)
+    }
+
+    /// The CREATE TABLE of `name` under the name `to`. SQLite renames it,
+    /// with every reference the table makes to itself, and the rename rolls back.
+    fn renamed(&self, name: &str, to: &str) -> Result<String> {
+        self.connection.execute_batch("SAVEPOINT konae_rename")?;
+        let renamed = self
+            .connection
+            .execute_batch(&format!("ALTER TABLE {} RENAME TO {}", quote(name), quote(to)))
+            .map_err(anyhow::Error::from)
+            .and_then(|()| {
+                self.connection
+                    .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name=?1", [to], |row| row.get::<_, String>(0))
+                    .optional()?
+                    .ok_or_else(|| anyhow::anyhow!("SQLite did not rename table {name}."))
+            });
+        self.connection.execute_batch("ROLLBACK TO konae_rename; RELEASE konae_rename")?;
+        renamed
+    }
+}
+
+fn schema_connection(schema: &str) -> Result<Connection> {
         let connection = Connection::open_in_memory()?;
         connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
         connection.authorizer(Some(|context: AuthContext<'_>| match context.action {
@@ -329,28 +501,14 @@ impl Scratch {
             .execute_batch(schema)
             .map_err(|error| anyhow::anyhow!("schema.sql is not idempotent: it fails when it is run a second time. {error}"))?;
         connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
-        let schema = Schema::read(&connection)?;
-        Ok(Self { connection, schema })
-    }
-
-    /// The CREATE TABLE of `name` under the name `to`. SQLite renames it,
-    /// with every reference the table makes to itself, and the rename is
-    /// rolled back.
-    fn renamed(&self, name: &str, to: &str) -> Result<String> {
-        self.connection.execute_batch("SAVEPOINT konae_rename")?;
-        let renamed = self
-            .connection
-            .execute_batch(&format!("ALTER TABLE {} RENAME TO {}", quote(name), quote(to)))
-            .map_err(anyhow::Error::from)
-            .and_then(|()| {
-                self.connection
-                    .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name=?1", [to], |row| row.get::<_, String>(0))
-                    .optional()?
-                    .ok_or_else(|| anyhow::anyhow!("SQLite did not rename table {name}."))
-            });
-        self.connection.execute_batch("ROLLBACK TO konae_rename; RELEASE konae_rename")?;
-        renamed
-    }
+        let reserved: Option<String> = connection.query_row(
+            "SELECT name FROM sqlite_schema WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history') ORDER BY lower(name), name LIMIT 1",
+            [], |row| row.get(0),
+        ).optional()?;
+        if let Some(name) = reserved {
+            anyhow::bail!(refuse("schema.statement-refused", format!("schema.sql cannot create the reserved name {name}.")));
+        }
+        Ok(connection)
 }
 
 #[derive(Debug)]
@@ -386,7 +544,7 @@ impl Schema {
     fn read(connection: &Connection) -> Result<Self> {
         let mut schema = Schema::default();
         let mut statement = connection.prepare(
-            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY rowid",
+            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY rowid",
         )?;
         let entries = statement
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
@@ -433,6 +591,7 @@ fn type_name(declared: &str) -> &str {
 #[derive(Debug)]
 struct Token {
     text: String,
+    quote: Option<char>,
     start: usize,
     end: usize,
 }
@@ -474,15 +633,15 @@ fn tokens(sql: &str) -> Vec<Token> {
             }
             index = (index + 1).min(chars.len());
             let text = if char == '\'' { format!("'{text}'") } else { text.to_lowercase() };
-            tokens.push(Token { text, start, end: end_of(index) });
+            tokens.push(Token { text, quote: Some(char), start, end: end_of(index) });
         } else if char.is_alphanumeric() || char == '_' || char == '$' {
             let begin = index;
-            while index < chars.len() && (chars[index].1.is_alphanumeric() || matches!(chars[index].1, '_' | '$' | '.') && index > begin) { index += 1; }
+            while index < chars.len() && (chars[index].1.is_alphanumeric() || chars[index].1 == '_' || chars[index].1 == '$' || chars[index].1 == '.' && index > begin) { index += 1; }
             let text: String = chars[begin..index].iter().map(|(_, c)| *c).collect();
-            tokens.push(Token { text: text.to_lowercase(), start, end: end_of(index) });
+            tokens.push(Token { text: text.to_lowercase(), quote: None, start, end: end_of(index) });
         } else {
             index += 1;
-            tokens.push(Token { text: char.to_string(), start, end: end_of(index) });
+            tokens.push(Token { text: char.to_string(), quote: None, start, end: end_of(index) });
         }
     }
     tokens
@@ -491,17 +650,37 @@ fn tokens(sql: &str) -> Vec<Token> {
 /// Whether two CREATE statements define the same thing. They do when their
 /// tokens match once whitespace, comments, quoting, letter case and IF NOT
 /// EXISTS are set aside.
-fn same_sql(a: &str, b: &str) -> bool {
-    fn normal(sql: &str) -> Vec<String> {
-        let mut words: Vec<String> = tokens(sql).into_iter().map(|token| token.text).collect();
-        if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
-            if at <= 3 {
-                words.drain(at..at + 3);
-            }
+pub(crate) fn canonical_tokens(sql: &str) -> Vec<String> {
+    let mut words: Vec<String> = tokens(sql).into_iter().map(|token| token.text).collect();
+    if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
+        if at <= 3 {
+            words.drain(at..at + 3);
         }
-        words
     }
-    normal(a) == normal(b)
+    words
+}
+
+/// Fingerprint tokens that preserve ambiguous double-quoted values. SQLite
+/// accepts double-quoted string literals for compatibility. The fingerprint
+/// caller supplies identifiers resolved for this object and default-value
+/// tokens reported by SQLite, so ALTER quoting still normalizes by name.
+pub(crate) fn fingerprint_tokens(sql: &str, identifiers: &std::collections::HashSet<String>, defaults: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut words: Vec<String> = tokens(sql).into_iter().map(|token| {
+        let raw = &sql[token.start..token.end];
+        if token.quote == Some('"') && (defaults.contains(raw) || !identifiers.contains(&token.text)) { raw.to_owned() } else { token.text }
+    }).collect();
+    if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
+        if at <= 3 { words.drain(at..at + 3); }
+    }
+    words
+}
+
+pub(crate) fn double_quoted_tokens(sql: &str) -> std::collections::HashSet<String> {
+    tokens(sql).into_iter().filter(|token| token.quote == Some('"')).map(|token| sql[token.start..token.end].to_owned()).collect()
+}
+
+fn same_sql(a: &str, b: &str) -> bool {
+    canonical_tokens(a) == canonical_tokens(b)
 }
 
 /// The text of one column's definition in a CREATE TABLE, as written there.
@@ -535,6 +714,15 @@ fn column_definition(sql: &str, column: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{ActionDefinition, ActionProgram};
+
+    #[test]
+    fn reserved_schema_names_match_the_gate() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("schema-reserved-cases.json")).unwrap();
+        for case in cases {
+            let error = schema_connection(case["schema"].as_str().unwrap()).unwrap_err();
+            crate::refusal::assert_case::<()>(&case, Err(crate::refusal::of(&error).expect("coded schema refusal").clone()));
+        }
+    }
 
     fn program(statements: &[(&str, &str)]) -> ActionProgram {
         let actions = statements
@@ -658,6 +846,131 @@ mod tests {
         assert_eq!(rows(&path, "SELECT name FROM pragma_table_info('tasks')"), vec![vec!["Text(\"id\")".to_owned()], vec!["Text(\"title\")".to_owned()]]);
         assert_eq!(apply(&path, wanted, &program(&[]), Mode::Apply(None)).unwrap(), Change::default());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_confirmation_refuses_new_values_that_were_not_in_the_reported_loss() {
+        let (root, path) = seeded();
+        let wanted = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
+        let copy = root.join("before.sqlite");
+        Connection::open(&path).unwrap().execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()]).unwrap();
+        let plan = apply(&copy, wanted, &program(&[]), Mode::Plan).unwrap();
+        let confirmation = plan.confirmation().unwrap();
+
+        Connection::open(&path).unwrap().execute("INSERT INTO tasks(title, done) VALUES ('Arrived after planning', 1)", []).unwrap();
+        let refused = apply(&path, wanted, &program(&[]), Mode::Apply(Some(&confirmation))).unwrap_err();
+        let refusal = crate::refusal::of(&refused).unwrap();
+        assert_eq!(refusal.code, NEEDS_CONFIRMATION);
+        assert!(refusal.message.contains("4 values"), "{refusal:?}");
+        assert_eq!(rows(&path, "SELECT count(done) FROM tasks"), vec![vec!["Integer(4)".to_owned()]]);
+
+        let updated_copy = root.join("after.sqlite");
+        Connection::open(&path).unwrap().execute("VACUUM INTO ?1", [updated_copy.to_string_lossy().as_ref()]).unwrap();
+        let updated = apply(&updated_copy, wanted, &program(&[]), Mode::Plan).unwrap();
+        assert_eq!(plan.statements, updated.statements);
+        assert_ne!(plan.confirmation(), updated.confirmation());
+        apply(&path, wanted, &program(&[]), Mode::Apply(updated.confirmation().as_deref())).unwrap();
+        assert_eq!(rows(&path, "SELECT count(*) FROM tasks"), vec![vec!["Integer(4)".to_owned()]]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn transform_document(before: &str, after: &str, statements: &[&str]) -> String {
+        serde_json::json!({
+            "version": 1,
+            "transitions": [{
+                "id": "add-note",
+                "predecessor": null,
+                "before": super::super::schema_transform::fingerprint_schema(before).unwrap(),
+                "after": super::super::schema_transform::fingerprint_schema(after).unwrap(),
+                "maxRows": 10,
+                "statements": statements
+            }]
+        }).to_string()
+    }
+
+    #[test]
+    fn transformations_plan_actual_rows_and_bind_confirmation_to_them() {
+        let (_root, path) = seeded();
+        let before = TASKS;
+        let after = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, note TEXT); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
+        let document = transform_document(before, after, &["ALTER TABLE tasks ADD COLUMN note TEXT", "UPDATE tasks SET note='checked'"]);
+        let plan = apply_with_transforms(&path, after, &program(&[]), Some(&document), Mode::Plan).unwrap();
+        assert_eq!(plan.to_json()["transformations"][0]["affectedRows"], 3);
+        assert_eq!(plan.to_json()["transformations"][0]["baselineSkipped"], false);
+        let confirmation = plan.confirmation().unwrap();
+        assert!(apply_with_transforms(&path, after, &program(&[]), Some(&document), Mode::Apply(Some("stale"))).is_err());
+        assert!(crate::table_columns(&Connection::open(&path).unwrap(), "tasks").unwrap().iter().all(|column| column["name"] != "note"));
+        apply_with_transforms(&path, after, &program(&[]), Some(&document), Mode::Apply(Some(&confirmation))).unwrap();
+        assert_eq!(rows(&path, "SELECT note FROM tasks ORDER BY id"), vec![vec![String::from("Text(\"checked\")")]; 3]);
+        assert_eq!(super::super::schema_transform::load_history(&Connection::open(&path).unwrap()).unwrap().entries.len(), 1);
+        let empty = serde_json::json!({"version": 1, "transitions": []}).to_string();
+        assert!(apply_with_transforms(&path, after, &program(&[]), Some(&empty), Mode::Apply(None)).is_err());
+        assert_eq!(super::super::schema_transform::load_history(&Connection::open(&path).unwrap()).unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn transformations_roll_back_when_actions_do_not_match_final_schema() {
+        let (_root, path) = seeded();
+        let after = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, note TEXT); CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
+        let document = transform_document(TASKS, after, &["ALTER TABLE tasks ADD COLUMN note TEXT"]);
+        let invalid_actions = program(&[("tasks.read", "SELECT absent FROM tasks LIMIT 10")]);
+        assert!(apply_with_transforms(&path, after, &invalid_actions, Some(&document), Mode::Apply(None)).is_err());
+        let connection = Connection::open(&path).unwrap();
+        assert!(crate::table_columns(&connection, "tasks").unwrap().iter().all(|column| column["name"] != "note"));
+        assert!(super::super::schema_transform::load_history(&connection).unwrap().entries.is_empty());
+        assert_eq!(rows(&path, "SELECT title FROM tasks ORDER BY id"), vec![vec![String::from("Text(\"first\")")], vec![String::from("Text(\"second\")")], vec![String::from("Text(\"third\")")]]);
+    }
+
+    #[test]
+    fn transformations_keep_foreign_key_cascades_and_count_them_for_the_bound() {
+        let (_root, path) = database();
+        let schema = "CREATE TABLE IF NOT EXISTS parents(id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS children(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE);";
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE parents(id INTEGER PRIMARY KEY); CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE); INSERT INTO parents VALUES(1); INSERT INTO children VALUES(1,1),(2,1),(3,1);").unwrap();
+        let fingerprint = super::super::schema_transform::fingerprint(&db).unwrap();
+        drop(db);
+        let document = serde_json::json!({
+            "version": 1,
+            "transitions": [{
+                "id": "move-parent",
+                "predecessor": null,
+                "before": fingerprint,
+                "after": super::super::schema_transform::fingerprint_schema(schema).unwrap(),
+                "maxRows": 4,
+                "statements": ["UPDATE parents SET id=2 WHERE id=1"]
+            }]
+        }).to_string();
+        let plan = apply_with_transforms(&path, schema, &program(&[]), Some(&document), Mode::Plan).unwrap();
+        assert_eq!(plan.to_json()["transformations"][0]["affectedRows"], 4);
+        let confirmation = plan.confirmation().unwrap();
+        apply_with_transforms(&path, schema, &program(&[]), Some(&document), Mode::Apply(Some(&confirmation))).unwrap();
+        let db = Connection::open(&path).unwrap();
+        let parent_id: i64 = db.query_row("SELECT parent_id FROM children WHERE id=1", [], |row| row.get(0)).unwrap();
+        assert_eq!(parent_id, 2);
+        assert_eq!(db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_fresh_database_marks_every_transformation_as_baseline_skipped() {
+        let (_root, path) = database();
+        let schema = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);";
+        let document = serde_json::json!({
+            "version": 1,
+            "transitions": [{
+                "id": "v4",
+                "predecessor": null,
+                "before": format!("sha256:{}", "0".repeat(64)),
+                "after": super::super::schema_transform::fingerprint_schema(schema).unwrap(),
+                "maxRows": 10,
+                "statements": ["CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"]
+            }]
+        }).to_string();
+        let change = apply_with_transforms(&path, schema, &program(&[]), Some(&document), Mode::Apply(None)).unwrap();
+        assert_eq!(change.to_json()["transformations"][0]["baselineSkipped"], true);
+        assert_eq!(change.to_json()["transformations"][0]["affectedRows"], 0);
+        let history = super::super::schema_transform::load_history(&Connection::open(&path).unwrap()).unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert!(history.entries[0].baseline_skipped);
     }
 
     #[test]

@@ -60,7 +60,8 @@ async function release(id: string, artifact: object, manifest: Record<string, un
   const files = { "schema.sql": capsule["schema.sql"], "actions.json": capsule["actions.json"] };
   const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project: { ...project, files }, visibility: "public", artifact })), id);
   try {
-    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId });
+    const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     const receipt = await owner.call<{ hostname: string }>("release_apply", { planId: plan.planId });
     hosts[id] = receipt.hostname;
     return receipt;

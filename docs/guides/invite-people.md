@@ -17,9 +17,9 @@ An invitation is the owner's offer of an account in one app to one email, sent a
 
 ## Over MCP
 
-A project published from a folder with the CLI shows on the project list with the others, marked "Edited in a folder". Its card opens its data, its Users view and what it did, without the app's files, and its owner can also invite people over MCP.
+Apps created with `konae init` open in the editor with the same sources as folder-created apps. The project card loads metadata; opening it loads the app files.
 
-1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `signup_policy_read` needs only `read`.
+1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `project_inspect` reads the Signup Policy with `read`.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
@@ -27,17 +27,17 @@ A project published from a folder with the CLI shows on the project list with th
     ```
 
     To sign in through the browser without putting the password in the shell, run `login --browser` with the same flags instead. The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
-2. Set the policy if the app needs another one. Call `signup_policy_set` with `deploymentId` and a `mode` of `open`, `invitation`, `closed` or `allowlist`, plus the allowlist entries for `allowlist`. The Deployment's ID is the `id` in `konae.json`.
+2. Set the policy if the app needs another one. Call `signup_policy_set` with `projectId` and a `mode` of `open`, `invitation`, `closed` or `allowlist`, plus the allowlist entries for `allowlist`. The Deployment's ID is the `id` in `konae.json`.
 
     ```sh
-    bun run konae -- tool signup_policy_set '{"deploymentId":"<id>","mode":"invitation"}' --dir <folder>
+    bun run konae -- tool signup_policy_set '{"projectId":"<id>","mode":"invitation"}' --dir <folder>
     ```
 
 3. Call `mail_status` with `bun run konae -- tool mail_status --dir <folder>` and look for `sending: true`. Without a mail transport, `app_invitations_create` refuses and creates nothing.
-4. Call `app_invitations_create` with `deploymentId`, `emails` and an `idempotencyKey`. It emails each address a link to `/_konae/invitation#invitation=<token>` on the app's host. Call it only when the owner asked for those invitations.
+4. Call `app_invitations_create` with `projectId`, `emails` and an `idempotencyKey`. It emails each address a link to `/_konae/invitation#invitation=<token>` on the app's host. Call it only when the owner asked for those invitations.
 
     ```sh
-    bun run konae -- tool app_invitations_create '{"deploymentId":"<id>","emails":["ana@example.com"],"idempotencyKey":"invite-ana-1"}' --dir <folder>
+    bun run konae -- tool app_invitations_create '{"projectId":"<id>","emails":["ana@example.com"],"idempotencyKey":"invite-ana-1"}' --dir <folder>
     ```
 
 5. The person opens the link and chooses a password, and the page signs them in.
@@ -46,7 +46,7 @@ A project published from a folder with the CLI shows on the project list with th
 ## Where the email lands while you try it
 
 - On `bun run dev:local`, every account and invitation email lands in `data/kernel-local/mailbox.jsonl` and goes to no provider.
-- On `bun run konae -- dev --dir <folder>`, it lands in `<folder>/.konae/kernel/mailbox.jsonl`. When the policy is not Open and the app holds no account yet, `dev` invites `test@example.com` and prints `Test account: open <link> and choose a password.` To invite another address, run the `kernel invite <email> --app <id>` command that `dev` prints. `bun run konae -- events --dir <folder>` lists each email with its link.
+- On `bun run konae -- dev --dir <folder>`, it lands in `<folder>/.konae/kernel/mail-testbox.jsonl`. When the policy is not Open and the app holds no account yet, `dev` invites `test@example.com` and prints `Test account: open <link> and choose a password.` To invite another address, run the `kernel invite <email> --app <id>` command that `dev` prints. `bun run konae -- events --dir <folder>` lists each email with its link.
 
 The editor preview sends no email, so try invitations on one of these or on a Deployment.
 
@@ -62,7 +62,7 @@ Run it in the editor's Data panel, or with `bun run konae -- sql --dir <folder> 
 
 ## Check it worked
 
-- After `signup_policy_set`, read the policy back with `signup_policy_read`.
+- After `signup_policy_set`, read the policy back with `project_inspect`, under `deployment.signupPolicy`.
 - After `app_invitations_create`, `app_invitation_resend` or `app_invitation_revoke`, read each invitation's state with `app_invitations_list`.
 - After `app_user_suspend` or `app_user_resume`, read the account back with `app_users_list`.
 

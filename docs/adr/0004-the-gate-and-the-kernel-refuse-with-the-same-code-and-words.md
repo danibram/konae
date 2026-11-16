@@ -8,7 +8,7 @@ A person who does not write SQL and a person who does both produce an app. If on
 
 ### Two doors, one set of rules
 
-The Validation Gate in the editor (`src/agent/gate.ts`, TypeScript) and the Kernel (Rust) check `actions.json` and `schema.sql` with the same rules, in the same order, with the same sentences. Each rule has a case file under `kernel-rs/kernel/src/`, such as `action-cases.json`, `sql-rule-cases.json`, `call-cases.json` or `notify-cases.json`, and both test suites run every case. A Kernel unpacked from an export runs the same checks when it starts an app folder.
+The Validation Gate in the editor (`src/agent/gate.ts`, TypeScript) and the Kernel (Rust) check `actions.json` and `schema.sql` with the same rules, in the same order, with the same sentences. Shared rule cases live under `kernel-rs/kernel/src/`; each side also has one-sided case suites. A Kernel unpacked from an export runs the same checks when it starts an app folder.
 
 ### A query names its bound
 

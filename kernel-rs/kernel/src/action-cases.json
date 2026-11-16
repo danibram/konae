@@ -2431,5 +2431,31 @@
   },
   "error": "Action a.a reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
   "code": "query.limit-missing"
+ },
+ {
+  "case": "a query cannot read the transformation journal",
+  "actions": {
+   "audit.read": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT * FROM __konae_schema_state LIMIT 1",
+    "bindings": []
+   }
+  },
+  "error": "Action audit.read cannot read or write a reserved Kernel table.",
+  "code": "schema-transform.statement-refused"
+ },
+ {
+  "case": "an update conflict clause cannot write the qualified journal",
+  "actions": {
+   "audit.write": {
+    "kind": "mutation",
+    "access": "anonymous",
+    "statement": "UPDATE OR REPLACE main.\"__konae_schema_history\" SET id = 'x'",
+    "bindings": []
+   }
+  },
+  "error": "Action audit.write cannot read or write a reserved Kernel table.",
+  "code": "schema-transform.statement-refused"
  }
 ]

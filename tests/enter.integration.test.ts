@@ -38,11 +38,11 @@ test("an owner enters as an app user once per link, and the audit log names both
   await kernel.owner.call("project_create", { projectId: id, name: "Entered" });
   const { receipt } = await release(kernel.owner, payload(id), id);
   const cookie = await account(kernel, receipt.hostname, "signup", "ana@enter.test");
-  const ana = (await kernel.owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { deploymentId: receipt.id })).users[0];
+  const ana = (await kernel.owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { projectId: receipt.id })).users[0];
   await runtime(kernel, receipt.hostname, cookie).call("auth_session");
   await runtime(kernel, receipt.hostname, cookie).call("actions_invoke", { name: "notes.add", input: { body: "Ana's own note" } });
 
-  const link = await kernel.owner.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { deploymentId: receipt.id, userId: ana.userId });
+  const link = await kernel.owner.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { projectId: receipt.id, userId: ana.userId });
   expect(link).toMatchObject({ userId: ana.userId, email: "ana@enter.test" });
   expect(link.url).toStartWith(`${receipt.url}/_konae/enter#entry=`);
   const token = new URL(link.url).hash.replace("#entry=", "");
@@ -61,16 +61,16 @@ test("an owner enters as an app user once per link, and the audit log names both
   expect(await as.call<{ body: string }[]>("actions_invoke", { name: "notes.mine", input: {} })).toHaveLength(2);
 
   const today = new Date().toISOString().slice(0, 10);
-  const usage = await kernel.owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: receipt.id, from: today, to: today });
-  const total = (kind: string, name: string) => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
+  const usage = await kernel.owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_summary", { projectId: receipt.id, from: today, to: today });
+  const total = (kind: string, name: string) => usage.usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
   expect(total("action", "notes.add")).toBe(1);
   expect(total("action", "notes.mine")).toBe(0);
   expect(total("login", "")).toBe(0);
-  const summary = await kernel.owner.call<UsageSummary>("usage_summary", { deploymentId: receipt.id, from: today, to: today });
+  const summary = await kernel.owner.call<UsageSummary>("usage_summary", { projectId: receipt.id, from: today, to: today });
   expect(summary.accounts).toMatchObject({ active: 1, opens: 1, actions: 1, top: [
     { account: ana.userId, email: ana.email, opens: 1, actions: 1, activeDays: 1 },
   ] });
-  const signals = await kernel.owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { deploymentId: receipt.id, name: "note.added" });
+  const signals = await kernel.owner.call<{ signals: { properties: Record<string, unknown> }[] }>("signals_read", { projectId: receipt.id, name: "note.added" });
   expect(signals.signals.map((signal) => signal.properties)).toEqual([{ actor: ana.userId }]);
 
   const audit = new Database(path.join(kernel.data, "mcp.sqlite"));
@@ -81,6 +81,6 @@ test("an owner enters as an app user once per link, and the audit log names both
   } finally { audit.close(); }
 
   // A suspended account cannot be entered.
-  await kernel.owner.call("app_user_suspend", { deploymentId: receipt.id, userId: ana.userId });
-  await expect(kernel.owner.call("app_user_enter", { deploymentId: receipt.id, userId: ana.userId })).rejects.toThrow("Only an active account can be entered.");
+  await kernel.owner.call("app_user_suspend", { projectId: receipt.id, userId: ana.userId });
+  await expect(kernel.owner.call("app_user_enter", { projectId: receipt.id, userId: ana.userId })).rejects.toThrow("Only an active account can be entered.");
 }, 120_000);

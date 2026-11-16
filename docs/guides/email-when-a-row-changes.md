@@ -52,8 +52,8 @@ The Kernel queues a notice only when the statement changed a row. A guard's refu
 
 ## Check it worked
 
-- Call the mutation, then read the notice's state with `notices_read` and the Deployment's `deploymentId`. It lists the app's notices, newest first, 50 at a time. `mail_status` counts them per state under `queue.notices`.
-- On `konae dev`, the email lands in `<folder>/.konae/kernel/mailbox.jsonl` and goes to no provider. `bun run konae -- events --dir <folder>` lists it with its recipient, subject and text, and `dev` serves the same list as a page on the next port.
+- Call the mutation, then read the notice's state with `notices_read` and the project's `projectId`. It lists the app's notices, newest first, 50 at a time. `mail_status` counts them per state under `queue.notices`.
+- On `konae dev`, the email lands in `<folder>/.konae/kernel/mail-testbox.jsonl` and goes to no provider. `bun run konae -- events --dir <folder>` lists it with its recipient, subject and text, and `dev` serves the same list as a page on the next port.
 - On `bun run dev:local`, the email lands in `data/kernel-local/mailbox.jsonl`.
 - After `release_apply`, read the Deployment back with `project_inspect`. Delivered means a mail server took the message, not that a person read it.
 

@@ -4,23 +4,23 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Before you start
 
-`init` needs a checkout of the repository and Bun. `dev` also compiles the Kernel with Cargo, which takes about a minute the first time. To publish you need a Konae installation to talk to, and an account on it. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, and asks for either one that is unset when it runs in a terminal. To create the account in the same step, also set `KONAE_SETUP_KEY` for the installation's first owner, or `KONAE_INVITATION_CODE`, the code the operator issued, for a later one. The commands below run from a checkout of the repository.
+Build the compiled CLI with `bun run scripts/build-konae-binary.ts`, then copy `out/konae-<version>-<os>-<arch>` to a directory on PATH. The published v0.8.0 release includes four Kernel binaries and `SHA256SUMS`, but no CLI binary. The CLI downloads its matching Kernel and verifies the checksum. The compiled macOS arm64 CLI was verified without Bun, Rust or repository reads, and requires macOS 13.0. The other CLI platforms and release workflow remain unverified. To publish you need a Konae installation to talk to, and an account on it. `login` reads `KONAE_EMAIL` and `KONAE_PASSWORD`, and asks for either one that is unset when it runs in a terminal. Required verification asks for email first and the verification page asks the person to choose a password. To create the account in the same step, also set `KONAE_SETUP_KEY` for the installation's first owner, or `KONAE_INVITATION_CODE`, the code the operator issued, for a later one. The examples below run from a repository checkout, so `bun run konae -- dev` uses the checkout Kernel and builds it with Cargo if its binary is absent. The compiled CLI instead downloads its version-matched Kernel and verifies the `SHA256SUMS` entry. Set `KONAE_KERNEL_BIN` to select a local binary with either form.
 
 ## Steps
 
-1. Create the app folder. `init` needs an empty folder and no credential. It writes the template into `app/`, a `konae.json` with a project ID it makes itself, `AGENTS.md` for a coding agent, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example` and a `package.json` whose `npm run build` writes `dist/` with the scripts in `scripts/`. The Signup Policy is Invitation only. The app is private unless its template is made for visitors, as `tasks`, `form` and `gallery` are. Without `--template`, `init` writes `notes`, which is private, so its first `dev` serves a sign-in page, and it invites a test account for you, as step 2 says. `tasks` is public, so anyone with the link can use it.
+1. Create the app folder. `init` needs an empty folder and no credential. It writes the template into `app/`, `konae.json`, `.gitignore`, `AGENTS.md`, `action-contract.md`, `actions.d.ts`, `compose.yaml`, `.env.example`, `package.json`, `tsconfig.json` and build scripts under `scripts/`. The local builder runs `npm run build` when the folder has a package build script and `node_modules/`; otherwise it uses the built-in builder. An imported npm package must be installed before either path. `build` creates `dist/`; `init` does not create `data/`. The Signup Policy is Invitation only. The app is private unless its template is made for visitors, as `tasks`, `form` and `gallery` are. Without `--template`, `init` writes `notes`, which is private, so its first `dev` serves a sign-in page, and it invites a test account for you, as step 2 says. `tasks` is public, so anyone with the link can use it.
 
     ```sh
     bun run konae -- init --dir /tmp/my-app --name 'My app' --template tasks
     ```
 
-2. Run it locally. `dev` builds `dist/` and runs the `kernel` binary on the folder, with the folder's `data/`, and starts it again each time you save a file in `app/`. It never proxies production. It prints the app's address, `http://<slug>.localhost:8796` by default, and a page of what the app did on the next port. When the app is not open and holds no account, `dev` invites `test@example.com` and prints `Test account: open <link> and choose a password.` Open that link to create the account. The first run compiles the Kernel and says so.
+2. Run it locally. `dev` builds `dist/` with the shared local builder and runs the matching `kernel` binary on the folder, with the folder's `data/`. From a repository checkout it uses that checkout's Kernel and builds it with Cargo only if the binary is absent. The compiled CLI downloads the version-matched Kernel and verifies it against `SHA256SUMS`, unless `KONAE_KERNEL_BIN` names a local binary. It never proxies production. It prints the app address, `http://<slug>.localhost:8796` by default, and an events page on the next port. When the app has no account and its Signup Policy is not Open, `dev` invites `test@example.com` and prints the invitation link.
 
     ```sh
     bun run konae -- dev --dir /tmp/my-app
     ```
 
-3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, invitations and notices included, goes to `.konae/kernel/mailbox.jsonl`, and `bun run konae -- events --dir /tmp/my-app` lists it.
+3. Edit the Capsule files in `app/`. Open the URL `dev` prints and reload after each change. Email, invitations and notices included, goes to `.konae/kernel/mail-testbox.jsonl`, and `bun run konae -- events --dir /tmp/my-app` lists it.
 4. Optional. Write the Action Contract and, against a test Deployment, check every action's answers.
 
     ```sh
@@ -36,7 +36,7 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
     bun run konae -- login --dir /tmp/my-app --url http://localhost:4173 --manage-users --export-data
     ```
 
-6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL. The project appears on the editor's project list marked **Edited in a folder**, because its files live in this folder. Its card opens its database, its app accounts and what it did. New project in the editor shows these commands under **Work from a folder instead**. The editor keeps the sources it saved and does not see the folder's changes. When it holds other files than the published app runs, its Deploy dialog says so, and Deploy from there publishes the editor's sources over the folder's release. To bring the folder back into the editor, choose Import in App settings, under **More**, with a tar of the folder's export, or call `project_import` with `replace` set to `sources`.
+6. Publish. This builds the folder and publishes it with the credential from `login`, to the installation `login` saved. The first publish registers the project there. It prints the Deployment URL. The project opens in the editor with the same `app/` files the folder uses. The project card reads metadata without downloading file bytes; opening it fetches that project's sources. After a folder publish, the editor reads back the released files and advances the observed revision. A later publish refuses if the source revision changed, including a save after release planning.
 
     ```sh
     bun run konae -- publish --dir /tmp/my-app
@@ -46,11 +46,11 @@ Create a folder with `init`, run it locally with `dev`, then log in and send it 
 
 ## Visibility and signup
 
-`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` in the same file names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Both tools below are owner tools that need `manage_users`, so log in with `--manage-users`. `deploymentId` is the `id` in `konae.json`. `mode` is `open`, `invitation`, `closed` or `allowlist`, and `allowlist` takes exact emails or `@domain` entries.
+`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` in the same file names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Both operations below are owner tools that need `manage_users`, so log in with `--manage-users`. `projectId` is the `id` in `konae.json`. `mode` is `open`, `invitation`, `closed` or `allowlist`, and `allowlist` takes exact emails or `@domain` entries.
 
 ```sh
-bun run konae -- tool signup_policy_set '{"deploymentId":"app_...","mode":"open"}' --dir /tmp/my-app
-bun run konae -- tool app_invitations_create '{"deploymentId":"app_...","emails":["ana@example.com"],"idempotencyKey":"first-invite"}' --dir /tmp/my-app
+bun run konae -- tool signup_policy_set '{"projectId":"app_...","mode":"open"}' --dir /tmp/my-app
+bun run konae -- tool app_invitations_create '{"projectId":"app_...","emails":["ana@example.com"],"idempotencyKey":"first-invite"}' --dir /tmp/my-app
 ```
 
 `idempotencyKey` is 8 to 128 characters, and a retry with the same key sends nothing again.

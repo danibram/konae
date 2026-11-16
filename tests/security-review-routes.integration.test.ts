@@ -124,7 +124,7 @@ describe("route-only actions and API keys", () => {
 
   test("a key reaches only the actions and files it names, only on its own Deployment, and never the runtime endpoint", async () => {
     const { inbox, habits, gallery } = lab.apps;
-    const feed = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { deploymentId: inbox.id, name: "Feed", actions: ["events.feed"] });
+    const feed = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { projectId: inbox.id, name: "Feed", actions: ["events.feed"] });
     const bearer = { authorization: `Bearer ${feed.key}` };
     expect((await hostFetch(lab, inbox.hostname, "/api/events", { headers: bearer })).status).toBe(200);
     expect(await (await hostFetch(lab, inbox.hostname, "/hooks/events", { method: "POST", headers: bearer, body: "{}" })).json())
@@ -135,14 +135,14 @@ describe("route-only actions and API keys", () => {
     }
     const runtime = await rawCall(lab, "/_konae/mcp", inbox.hostname, "actions_invoke", { name: "events.list", input: {} }, bearer);
     expect(runtime.status).toBe(403);
-    expect(await lab.kernel.owner.call("api_keys_list", { deploymentId: inbox.id }).then(JSON.stringify)).not.toContain(feed.key);
+    expect(await lab.kernel.owner.call("api_keys_list", { projectId: inbox.id }).then(JSON.stringify)).not.toContain(feed.key);
     // An owner credential is not a key either.
     expect((await hostFetch(lab, inbox.hostname, "/api/events", { headers: { authorization: `Bearer ${lab.kernel.ownerCookie.split("=")[1]}` } })).status).toBe(401);
   });
 
   test("guessing keys from one address stops at the bucket, even with a valid key afterwards", async () => {
     const { habits } = lab.apps;
-    const real = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { deploymentId: habits.id, name: "Import", actions: ["habits.mine"] });
+    const real = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { projectId: habits.id, name: "Import", actions: ["habits.mine"] });
     const client = freshClient();
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 12; attempt++) {

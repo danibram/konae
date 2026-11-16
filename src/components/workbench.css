@@ -97,6 +97,7 @@
 .workshop .code-panel > details.action-readout-block .action-readout { margin: 0; padding: 0 12px 10px 28px; list-style: disc; color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
 .workshop .code-panel > .ui-alert.action-readout-block, .workshop .code-panel > .code-refusal { border: 0; border-left: var(--ds-bar) solid var(--ds-danger); border-bottom: 1px solid var(--ds-border); }
 .workshop .code-panel > .ui-alert p { overflow-wrap: anywhere; }
+.workshop .code-panel > .code-not-text { align-self: start; margin: 12px; }
 
 /* ---- Deploy dialog ---- */
 .ui-dialog.deploy-dialog { width: min(560px, 100%); }
@@ -128,15 +129,11 @@
 .receipt-policy { margin: 0; font: 400 14px/1.5 var(--ds-font); }
 .receipt-self-invite { margin: 0; padding: 10px 12px; border-left: 3px solid var(--ds-accent); background: var(--ds-subtle); color: var(--ds-text); font: 500 14px/1.5 var(--ds-font); overflow-wrap: anywhere; }
 .receipt-self-invite:focus { outline: none; }
-.receipt-code { padding: 10px 12px; border: 1px dashed var(--ds-border); background: var(--ds-subtle); }
-.receipt-code small { display: block; color: var(--ds-muted); font: 600 12px var(--ds-font); }
-.receipt-code code { display: block; margin-top: 4px; font: 14px var(--ds-mono); }
-.receipt-code p { margin: 4px 0 0; color: var(--ds-muted); font-size: 12px; }
 .receipt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .deploy-dialog .deploy-contact-missing { margin: 0; color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
 
 /* ---- Data and Access on the design system ---- */
-.workshop .database-studio-header, .published-app .database-studio-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; height: auto; padding: 0 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); }
+.workshop .database-studio-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; height: auto; padding: 0 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); }
 .database-studio-header .ui-tabbar.data-views { flex: 1 1 auto; border-bottom: 0; }
 .database-studio-header .ui-segmented { order: 2; margin: 6px 0; }
 .test-rows-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--ds-border); border-bottom: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 400 13px/1.45 var(--ds-font); }

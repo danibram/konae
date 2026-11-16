@@ -300,7 +300,7 @@ describe("konae agent", () => {
 
     // One from validate_capsule, one from the gate that re-runs after the last edit.
     expect(gate.facts.length).toBe(2);
-    expect(gate.facts.every((facts) => facts === known)).toBe(true);
+    expect(gate.facts).toEqual([known, known]);
   });
 
   test("a gate that cannot run blocks apply instead of waiting forever", async () => {
@@ -390,6 +390,18 @@ describe("konae agent", () => {
     await session.agent.send("otra vez");
     // The capsule is seeded again, because the transcript the model had is gone.
     expect(session.harness.requests[session.harness.requests.length - 1].messageCount).toBe(1);
+  });
+
+  test("a file that is not text stays out of the agent's copy, and the first message names it", async () => {
+    const { agent, harness } = agentFor([call(cssEdit), say("Hecho.")]);
+    const logo = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAAC";
+    agent.retarget({ ...starterProject, files: { ...starterProject.files, "public/logo.png": logo }, encodings: { "public/logo.png": "base64" } });
+
+    await agent.send("ponlo azul");
+    const seeded = harness.requests[0].lastMessage;
+    expect(seeded).toContain("Files that are not text, which you cannot read or change and the build publishes as they are: /workspace/public/logo.png.");
+    expect(seeded).not.toContain(logo);
+    expect(Object.keys(agent.proposal()!.files)).not.toContain("public/logo.png");
   });
 
   test("a file changed outside the agent re-seeds the capsule instead of trusting the transcript", async () => {
@@ -571,8 +583,8 @@ describe("konae agent", () => {
 
 describe("agent platform binding", () => {
   const domainTools = [
-    { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { deploymentId: { type: "string" } }, required: ["deploymentId"] } },
-    { name: "domain_clear", description: "Clear a domain.", inputSchema: { type: "object", properties: { deploymentId: { type: "string" } }, required: ["deploymentId"] } },
+    { name: "domain_read", description: "Read a domain.", inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] } },
+    { name: "domain_clear", description: "Clear a domain.", inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] } },
   ];
 
   test("retarget resolves the new project's deployment on the next turn", async () => {
@@ -580,8 +592,8 @@ describe("agent platform binding", () => {
     const calls: unknown[] = [];
     const platform = {
       listTools: async () => domainTools,
-      call: async (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return { deploymentId: args.deploymentId, hostname: null }; },
-      deploymentForProject: (projectId: string) => { seen.push(projectId); return `deployment-${projectId}`; },
+      call: async (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return { projectId: args.projectId, hostname: null }; },
+      deploymentForProject: (projectId: string) => { seen.push(projectId); return projectId; },
       confirm: async () => { throw new Error("Unexpected confirmation"); },
     };
     const { agent, events } = agentFor([
@@ -593,8 +605,8 @@ describe("agent platform binding", () => {
     await agent.send("Read this domain");
     expect(seen).toEqual([starterProject.id, "other-project"]);
     expect(calls).toEqual([
-      { name: "domain_read", args: { deploymentId: `deployment-${starterProject.id}` } },
-      { name: "domain_read", args: { deploymentId: "deployment-other-project" } },
+      { name: "domain_read", args: { projectId: starterProject.id } },
+      { name: "domain_read", args: { projectId: "other-project" } },
     ]);
     expect(events.filter((event) => event.type === "tool-end" && event.name === "domain_read").every((event) => event.type === "tool-end" && event.ok)).toBe(true);
     expect(agent.proposal()).toBeNull();
@@ -611,7 +623,7 @@ describe("agent platform binding", () => {
       platform: {
         listTools: async () => domainTools,
         call: async (name) => { calls.push(name); return {}; },
-        deploymentForProject: (projectId) => `deployment-${projectId}`,
+        deploymentForProject: (projectId) => `projectId`,
         confirm: () => { entered(); return new Promise<boolean>((resolve) => { confirm = resolve; }); },
       },
     });
