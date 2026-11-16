@@ -188,16 +188,12 @@ pub async fn decide_files_module(root: &Path, id: &str) -> Result<Option<bool>> 
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let raw_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(root, id)).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?)?;
     ensure!(raw_settings["id"].as_str() == Some(id), "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", raw_settings["id"].as_str().unwrap_or(""));
-    if !raw_settings["modules"]["files"].is_null() {
-        if raw_settings["manifest"]["fileAccess"].is_null() && raw_settings["released"]["manifest"]["fileAccess"].is_null() { return Ok(None); }
-        let settings = Settings::read(root, id)?;
-        settings.write(root).await?;
-        return Ok(None);
-    }
     let legacy_file_access = raw_settings["released"]["manifest"]["fileAccess"].as_str();
     let used = crate::modules::uses_files(root, id, &json!({"fileAccess": legacy_file_access}));
     let mut settings = Settings::read(root, id)?;
     let files_state = settings.modules.get_mut("files").expect("files is switchable");
+    if raw_settings["modules"]["files"]["on"] == true { return Ok(None); }
+    if !raw_settings["modules"]["files"].is_null() && !used && legacy_file_access.is_none() { return Ok(None); }
     files_state["on"] = json!(used);
     if legacy_file_access == Some("app-users") { files_state["fileAccess"] = json!("app-users"); }
     settings.write(root).await?;

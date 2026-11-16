@@ -299,6 +299,13 @@ impl Settings {
         let bytes = std::fs::read(layout::settings(root, id))?;
         let raw: Value = serde_json::from_slice(&bytes)?;
         let mut settings: Self = serde_json::from_slice(&bytes)?;
+        if let Some(raw_modules) = raw["modules"].as_object() {
+            let raw_modules = raw_modules.iter().map(|(name, state)| (name.clone(), state.clone())).collect();
+            if let Err(refusal) = modules::validate_state(&raw_modules) {
+                eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
+                anyhow::bail!("{}", refusal.message);
+            }
+        }
         modules::complete(&mut settings.modules);
         if let Err(refusal) = modules::validate_state(&settings.modules) {
             eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
