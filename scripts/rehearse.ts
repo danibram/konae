@@ -26,7 +26,7 @@ export async function bootLocalKernel(kernel: { binary: string; env: Record<stri
       if (server.exitCode !== null) break;
       await Bun.sleep(100);
     }
-    if (!/listening on/.test(output)) throw Error(`The scratch Kernel did not serve the candidate app.\n${output.trim()}`);
+    if (!/listening on/.test(output) || !/Serving .+ at /.test(output)) throw Error(`The scratch Kernel did not serve the candidate app.\n${output.trim()}`);
   } finally {
     server.kill();
     await server.exited;
