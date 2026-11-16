@@ -21,6 +21,8 @@ beforeAll(async () => {
     ...JSON.parse(files["actions.json"]).actions,
     "posts.route": { kind: "query", access: "anonymous", statement: "SELECT 'route' AS source LIMIT 1", bindings: [], http: { method: "GET", path: "/posts/route" } },
     "posts.ping": { kind: "query", access: "anonymous", statement: "SELECT 1 AS ok LIMIT 1", bindings: [], http: { method: "GET", path: "/api/ping" } },
+    "posts.archive": { kind: "query", access: "anonymous", statement: "SELECT title FROM posts WHERE ?1 = 1 LIMIT 1", bindings: [{ source: "input", key: "year", type: "number" }], page: { path: "/archive/:year", file: "post.html" } },
+    "posts.failure": { kind: "query", access: "anonymous", statement: "SELECT CASE WHEN ?1 = 'explode' THEN abs(-9223372036854775808) ELSE title END AS title FROM posts WHERE slug = 'hello' LIMIT 1", bindings: [{ source: "input", key: "slug", type: "string" }], page: { path: "/errors/:slug", file: "post.html" } },
   } });
   await kernel.owner.call("project_create", { projectId: id, name: "Blog" });
   payload = { project: { id, name: "Blog", slug: "blog", manifest: { version: 1, visibility: "public" }, files }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: {
@@ -82,7 +84,28 @@ test("page paths answer rows, refresh their validator and feed the sitemap", asy
 test("release refuses a page whose file is absent from the Build Artifact", async () => {
   const broken = JSON.parse(JSON.stringify(payload));
   delete broken.artifact.files["post.html"];
-  await expect(release(kernel.owner, broken, deployment.id)).rejects.toThrow("Action posts.head names post.html as its page file, but the Build Artifact does not contain it.");
+  await expect(release(kernel.owner, broken, deployment.id)).rejects.toThrow(/names post\.html as its page file, but the Build Artifact does not contain it\./);
+});
+
+test("invalid bindings are missing pages, and untitled rows leave the file alone", async () => {
+  const tooLong = await appFetch(kernel, deployment.hostname, `/posts/${"x".repeat(121)}`);
+  expect(tooLong.status).toBe(404);
+  const invalidNumber = await appFetch(kernel, deployment.hostname, "/archive/nope");
+  expect(invalidNumber.status).toBe(404);
+  await kernel.owner.call("database_execute", { projectId: deployment.id, operation: "sql", input: { sql: "INSERT INTO posts VALUES ('untitled', NULL, 'Summary', 'cover.png', 'Body', 1, 1)" } });
+  const untitled = await appFetch(kernel, deployment.hostname, "/posts/untitled");
+  expect(untitled.status).toBe(200);
+  expect(untitled.headers.get("x-robots-tag")).toBe("noindex");
+  expect(await untitled.text()).toBe(payload.artifact.files["post.html"]);
+  const empty = await appFetch(kernel, deployment.hostname, "/posts/empty");
+  await kernel.owner.call("database_execute", { projectId: deployment.id, operation: "sql", input: { sql: "INSERT INTO posts VALUES ('empty', '', 'Summary', 'cover.png', 'Body', 1, 1)" } });
+  expect(empty.status).toBe(404);
+  const emptyTitle = await appFetch(kernel, deployment.hostname, "/posts/empty");
+  expect(emptyTitle.headers.get("x-robots-tag")).toBe("noindex");
+  expect(await emptyTitle.text()).toBe(payload.artifact.files["post.html"]);
+  const failure = await appFetch(kernel, deployment.hostname, "/errors/explode");
+  expect(failure.status).toBe(500);
+  expect(await failure.text()).toBe("The page query failed.");
 });
 
 test("page queries do not spend the anonymous action limit or stall another caller", async () => {

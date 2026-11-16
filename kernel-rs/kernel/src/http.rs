@@ -726,6 +726,7 @@ fn peer(request: &Request) -> Option<std::net::SocketAddr> {
 pub struct RouteTable {
     program: ActionProgram,
     routes: HashMap<String, (String, HttpBinding)>,
+    pages: Vec<(String, String)>,
 }
 
 impl RouteTable {
@@ -740,11 +741,31 @@ impl RouteTable {
                 _ => None,
             })
             .collect();
-        Self { program, routes }
+        let mut pages = program.actions.iter().filter_map(|(name, action)| {
+            action.page.as_ref()?.get("path")?.as_str().map(|path| (name.clone(), path.to_owned()))
+        }).collect::<Vec<_>>();
+        pages.sort_by(|(left_name, left), (right_name, right)| {
+            let literals = |path: &str| path.split('/').filter(|segment| !segment.starts_with(':')).count();
+            literals(right).cmp(&literals(left)).then_with(|| left_name.cmp(right_name))
+        });
+        Self { program, routes, pages }
     }
 
     fn find(&self, method: &str, path: &str) -> Option<&(String, HttpBinding)> {
         self.routes.get(&format!("{method} {path}"))
+    }
+
+    fn find_page(&self, path: &str) -> Option<(&ActionDefinition, &Value, serde_json::Map<String, Value>)> {
+        self.pages.iter().find_map(|(name, pattern)| {
+            let action = self.program.actions.get(name)?;
+            let page = action.page.as_ref()?;
+            let params = match_page(pattern, path)?;
+            Some((action, page, params))
+        })
+    }
+
+    fn has_pages(&self) -> bool {
+        !self.pages.is_empty()
     }
 
     fn allowed(&self, path: &str) -> &'static str {
@@ -823,37 +844,14 @@ pub async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPa
             }
             return response;
         }
-        if !artifact_path_exists(&state, &deployment, &relative).await {
-            let path = format!("/{}", relative.trim_start_matches('/'));
-            if let Some(response) = serve_page_path(&state, &deployment, &path, request.headers()).await {
-                return response;
-            }
-        }
+        return crate::serve_key_with_routes(state, request.headers().clone(), relative, Some(table)).await;
     }
     serve_artifact(State(state), AxumPath(relative), request.headers().clone()).await
 }
 
-async fn artifact_path_exists(state: &AppState, deployment: &Deployment, relative: &str) -> bool {
-    let routing = artifact::routing(&deployment.manifest);
-    for candidate in artifact::candidates(relative, routing) {
-        if read_artifact(state, deployment, &candidate).await.is_ok() { return true; }
-    }
-    false
-}
-
-async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, headers: &HeaderMap) -> Option<Response> {
-    let table = route_table(deployment);
-    let mut actions = table.program.actions.iter().collect::<Vec<_>>();
-    actions.sort_by(|(left_name, left), (right_name, right)| {
-        let literal_count = |action: &ActionDefinition| action.page.as_ref().and_then(|page| page["path"].as_str()).map(|path| path.split('/').filter(|segment| !segment.starts_with(':')).count()).unwrap_or(0);
-        literal_count(right).cmp(&literal_count(left)).then_with(|| left_name.cmp(right_name))
-    });
-    let (definition, page, params) = actions.into_iter().find_map(|(_, action)| {
-        let page = action.page.as_ref()?;
-        let pattern = page.get("path")?.as_str()?;
-        let params = match_page(pattern, path)?;
-        Some((action, page, params))
-    })?;
+pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, table: &RouteTable, path: &str, headers: &HeaderMap) -> Option<Response> {
+    if !table.has_pages() { return None }
+    let (definition, page, params) = table.find_page(path)?;
     if is_private(deployment) {
         match authenticate_deployment(state, deployment, headers) {
             Ok(Some(_)) => {}
@@ -864,7 +862,7 @@ async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, 
     let input = Value::Object(page_query_input(definition, &params));
     let bindings = match resolve_bindings(definition, &input, None) {
         Ok(bindings) => bindings,
-        Err(message) => return Some(error(StatusCode::BAD_REQUEST, &message)),
+        Err(_) => return Some(page_not_found(state, deployment).await),
     };
     let permit = match state.guards.statement_permit(&deployment.id).await {
         Ok(permit) => permit,
@@ -872,7 +870,11 @@ async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, 
     };
     let result = match run_action_in_slot(database_path(state, &deployment.id), definition, bindings, permit).await {
         Ok(result) => result,
-        Err(error_value) => return Some(error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string())),
+        Err(_) => {
+            let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "The page query failed.").into_response();
+            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            return Some(response);
+        }
     };
     let Some(rows) = result.answer.as_array() else {
         return Some(error(StatusCode::INTERNAL_SERVER_ERROR, "The page query did not return rows."));
@@ -882,9 +884,6 @@ async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, 
     }
     let Some(row) = rows.first().and_then(Value::as_object) else {
         return Some(page_not_found(state, deployment).await);
-    };
-    let Some(title) = row.get("title").and_then(Value::as_str) else {
-        return Some(error(StatusCode::INTERNAL_SERVER_ERROR, "A page query must return a string title."));
     };
     let Some(file) = page.get("file").and_then(Value::as_str) else { return Some(page_not_found(state, deployment).await) };
     let bytes = match read_artifact(state, deployment, file).await {
@@ -899,7 +898,12 @@ async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, 
         if image.starts_with("http://") || image.starts_with("https://") { image.to_owned() }
         else { format!("{}/{}", address.as_ref().map_or(deployment.url.as_str(), |address| address.url.as_str()).trim_end_matches('/'), image.trim_start_matches('/')) }
     });
-    let html = seo::page_html(&bytes, &Value::Object(params), title, description, image.as_deref(), canonical.as_deref());
+    let title = row.get("title").and_then(Value::as_str).filter(|title| !title.is_empty());
+    let html = if let Some(title) = title {
+        seo::page_html(&bytes, &Value::Object(params), title, description, image.as_deref(), canonical.as_deref())
+    } else {
+        bytes
+    };
     let row_bytes = serde_json::to_vec(row).unwrap_or_default();
     let seo_state = serde_json::to_vec(&deployment.modules["seo"]).unwrap_or_default();
     let digest = sha2::Sha256::digest([deployment.artifact_version.as_bytes(), row_bytes.as_slice(), canonical.as_deref().unwrap_or("").as_bytes(), seo_state.as_slice()].concat());
@@ -914,7 +918,7 @@ async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, 
     let mut response = artifact_response(html, file);
     response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));
-    if !seo_on { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
+    if !seo_on || title.is_none() { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
     Some(response)
 }
 

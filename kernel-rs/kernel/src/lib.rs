@@ -2178,6 +2178,15 @@ pub async fn serve_artifact(
 }
 
 pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Response {
+    serve_key_with_routes(state, headers, path, None).await
+}
+
+pub(crate) async fn serve_key_with_routes(
+    state: AppState,
+    headers: HeaderMap,
+    path: String,
+    routes: Option<Arc<http::RouteTable>>,
+) -> Response {
     let deployment = match deployment_for(&state, &headers).await {
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Konae deployment not found."),
@@ -2231,6 +2240,13 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
                 }
             }
             return cache.respond(&headers, bytes, &candidate);
+        }
+    }
+
+    if let Some(routes) = routes.as_ref() {
+        let page_path = format!("/{}", path.trim_start_matches('/'));
+        if let Some(response) = http::serve_page_path(&state, &deployment, routes, &page_path, &headers).await {
+            return response;
         }
     }
 
