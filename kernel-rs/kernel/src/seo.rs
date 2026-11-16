@@ -483,7 +483,11 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
             let Some(template) = page.get("path").and_then(serde_json::Value::as_str) else { continue };
             let Some(list_name) = page.get("list").and_then(serde_json::Value::as_str) else { continue };
             let Some(list) = program.actions.get(list_name) else { continue };
-            let Ok(rows) = crate::run_query(&crate::layout::database(root, &deployment.id), list, Vec::new()) else { continue };
+            let bindings = match crate::resolve_bindings(list, &serde_json::Value::Object(serde_json::Map::new()), None) {
+                Ok(bindings) => bindings,
+                Err(_) => continue,
+            };
+            let Ok(rows) = crate::run_query(&crate::layout::database(root, &deployment.id), list, bindings) else { continue };
             let segments = template.trim_start_matches('/').split('/').collect::<Vec<_>>();
             for row in rows {
                 let Some(row) = row.as_object() else { continue };

@@ -5233,7 +5233,7 @@ pub mod tests {
         let (host, deployment) = {
             let mut deployments = state.deployments.write().await;
             let (host, deployment) = deployments.iter_mut().next().unwrap();
-            deployment.actions = r#"{"version":1,"actions":{"posts.by":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html"}}}}"#.into();
+            deployment.actions = r#"{"version":1,"actions":{"posts.by":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html","list":"posts.list"}},"posts.list":{"kind":"query","access":"anonymous","statement":"SELECT 'listed' AS slug, ?1 AS updated LIMIT 1","bindings":[{"source":"kernel","field":"now"}]}}}"#.into();
             (host.clone(), deployment.clone())
         };
         if let Err(error_value) = action_shape::read(&deployment.actions) { panic!("{error_value}"); }
@@ -5268,7 +5268,8 @@ pub mod tests {
         let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
         let sitemap = String::from_utf8(axum::body::to_bytes(sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
         assert!(sitemap.contains("/about"));
-        assert!(!sitemap.contains("/post"));
+        assert!(sitemap.contains("/posts/listed"));
+        assert!(!sitemap.contains("/post</loc>"));
         assert!(!sitemap.contains("untitled"));
         let template = serve_key(state.clone(), headers.clone(), "post.html".into()).await;
         assert_eq!(template.headers()["x-robots-tag"], "noindex");
