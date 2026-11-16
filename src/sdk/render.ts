@@ -81,7 +81,7 @@ export function renderPromptSection(contract: SdkContract = sdkContract): string
 /** The generated TypeScript module that holds the prompt section. */
 export function renderPromptModule(contract: SdkContract = sdkContract): string {
   const escaped = renderPromptSection(contract).replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
-  return `// ${generatedNotice}\n\nexport const sdkPromptSection = \`${escaped}\`;\n`;
+  return `export const sdkPromptSection = \`${escaped}\`;\n`;
 }
 
 function guideError({ message, when, source }: SdkError) {
