@@ -208,6 +208,7 @@ pub async fn from_app_origin(state: &AppState, headers: &HeaderMap) -> bool {
 pub async fn headers(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let deployment = deployment_for_request(&state, request.headers(), request.uri().path()).await;
     let app = deployment.is_some();
+    let private = deployment.as_ref().is_some_and(super::is_private);
     if state.execution_mode.is_test() && app {
         request.headers_mut().remove(header::IF_NONE_MATCH);
     }
@@ -228,7 +229,13 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     } else if html {
         let (hashes, body) = match axum::body::to_bytes(body, MAX_HASHED_HTML).await {
             Ok(bytes) => (inline_script_hashes(&bytes), Body::from(bytes)),
-            Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "Page is too large to serve."),
+            Err(_) => {
+                let mut response = error(StatusCode::INTERNAL_SERVER_ERROR, "Page is too large to serve.");
+                if private {
+                    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
+                }
+                return response;
+            }
         };
         let policy = if app { app_policy(&hashes, &connects) } else { platform_page_policy(&hashes) };
         parts.headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&policy).unwrap());
@@ -240,6 +247,9 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     };
     parts.headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if private {
+        parts.headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
+    }
     if let Some(hsts) = hsts {
         parts.headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(hsts));
     }

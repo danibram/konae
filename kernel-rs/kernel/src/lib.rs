@@ -2151,6 +2151,9 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Konae deployment not found."),
     };
+    if is_private(&deployment) && path == "robots.txt" {
+        return ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "User-agent: *\nAllow: /\n").into_response();
+    }
     if is_private(&deployment) {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
@@ -2289,6 +2292,7 @@ pub fn private_login_page(policy: &SignupPolicy, verification: auth::Verificatio
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 

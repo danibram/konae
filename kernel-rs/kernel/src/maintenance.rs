@@ -149,6 +149,7 @@ h1{{font-size:1.4rem}}\
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::RETRY_AFTER, HeaderValue::from_static("300"));
+    headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 

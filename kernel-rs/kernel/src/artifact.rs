@@ -120,6 +120,7 @@ pub fn not_found_page() -> Response {
     *response.status_mut() = StatusCode::NOT_FOUND;
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 

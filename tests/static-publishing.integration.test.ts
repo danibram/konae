@@ -58,7 +58,7 @@ async function release(id: string, artifact: object, manifest: Record<string, un
   const project = { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public", ...manifest } };
   await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const files = { "schema.sql": capsule["schema.sql"], "actions.json": capsule["actions.json"] };
-  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project: { ...project, files }, visibility: "public", artifact })), id);
+  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project: { ...project, files }, visibility: project.manifest.visibility, artifact })), id);
   try {
     const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
@@ -138,6 +138,29 @@ describe("a multi-page artifact under pages routing", () => {
     }
   });
 
+  test("Kernel and private app pages tell crawlers not to list them", async () => {
+    expect((await get("static_pages", "/")).headers.get("x-robots-tag")).toBeNull();
+    const { artifact } = await buildLocal(await capsuleOnDisk("private", capsule));
+    await release("static_private", artifact, { visibility: "private" });
+    const home = await get("static_private", "/");
+    expect(home.headers.get("x-robots-tag")).toBe("noindex");
+
+    const robots = await get("static_private", "/robots.txt");
+    expect(robots.status).toBe(200);
+    expect(robots.headers.get("content-type")).toContain("text/plain");
+    const robotsBody = await robots.text();
+    expect(robotsBody).toContain("User-agent: *");
+    expect(robotsBody).toContain("Allow: /");
+    expect(robotsBody).not.toContain("Disallow");
+    expect(robots.headers.get("x-robots-tag")).toBe("noindex");
+
+    expect((await get("static_pages", "/_konae/login")).headers.get("x-robots-tag")).toBe("noindex");
+    await owner.call("maintenance_set", { projectId: "static_pages", on: true });
+    const maintenance = await get("static_pages", "/");
+    expect(maintenance.headers.get("x-robots-tag")).toBe("noindex");
+    await owner.call("maintenance_set", { projectId: "static_pages", on: false });
+  });
+
   test("a path under /_konae is never an app file", async () => {
     const response = await get("static_pages", "/_konae/about.html");
     expect(response.status).not.toBe(200);
@@ -204,6 +227,7 @@ describe("other answers for a missing path", () => {
     const body = await response.text();
     expect(body).toContain("<title>Page not found</title>");
     expect(body).not.toContain("Bare home");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
   });
 
   test('"routing": "spa" serves index.html for every path the artifact does not hold', async () => {
