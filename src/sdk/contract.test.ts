@@ -54,10 +54,11 @@ describe("the SDK contract", () => {
       ],
     });
     expect(seo?.uses).toBeDefined();
-    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["seo"]);
+    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["files", "seo"]);
     expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
     const modules = JSON.parse(renderAll()["kernel-rs/kernel/src/modules.json"]);
     expect(modules.modules.actions.switch).toBe(false);
+    expect(modules.modules.files.switch).toBe(true);
     expect(modules.modules.seo.switch).toBe(true);
     expect(modules.modules.seo.options).toEqual(seo?.options);
   });

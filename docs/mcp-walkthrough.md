@@ -346,6 +346,10 @@ cat /tmp/orders/konae.json
   ],
   "kernel": "<Kernel version>",
   "modules": {
+    "files": {
+      "on": false,
+      "fileAccess": null
+    },
     "seo": {
       "on": false,
       "canonical": null,
@@ -928,6 +932,120 @@ The app user claims order 1. The second claim changes no row, so the Kernel answ
 An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. In a page, `miniapp.files.upload` sends the bytes in one `PUT /_konae/transfers/<id>` in place of the `transfer_write` blocks shown here. The file is private to the app user who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which that app user reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
 
 <!-- walkthrough:file -->
+```json
+{
+  "name": "modules_read",
+  "arguments": {
+    "projectId": "<project id>"
+  }
+}
+```
+
+```json
+{
+  "result": {
+    "files": {
+      "agentRule": "never",
+      "message": null,
+      "options": [
+        {
+          "default": null,
+          "help": "Let every signed-in user read all files in this app.",
+          "key": "fileAccess",
+          "label": "File access",
+          "type": "enum",
+          "values": [
+            "app-users"
+          ]
+        }
+      ],
+      "permission": "publish",
+      "requires": [],
+      "state": {
+        "fileAccess": null,
+        "on": false
+      },
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
+      "uses": [
+        "miniapp.files"
+      ]
+    }
+  }
+}
+```
+
+```json
+{
+  "name": "module_set",
+  "arguments": {
+    "projectId": "<project id>",
+    "module": "files",
+    "on": true,
+    "expected": {
+      "fileAccess": null,
+      "on": false
+    }
+  }
+}
+```
+
+```json
+{
+  "result": {
+    "module": "files",
+    "projectId": "<project id>",
+    "state": {
+      "fileAccess": null,
+      "on": true
+    }
+  }
+}
+```
+
+```json
+{
+  "name": "modules_read",
+  "arguments": {
+    "projectId": "<project id>"
+  }
+}
+```
+
+```json
+{
+  "result": {
+    "files": {
+      "agentRule": "never",
+      "message": null,
+      "options": [
+        {
+          "default": null,
+          "help": "Let every signed-in user read all files in this app.",
+          "key": "fileAccess",
+          "label": "File access",
+          "type": "enum",
+          "values": [
+            "app-users"
+          ]
+        }
+      ],
+      "permission": "publish",
+      "requires": [],
+      "state": {
+        "fileAccess": null,
+        "on": true
+      },
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
+      "uses": [
+        "miniapp.files"
+      ]
+    }
+  }
+}
+```
+
 ```json
 {
   "name": "transfer_begin",

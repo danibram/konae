@@ -34,9 +34,16 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 ### An app made before a module keeps working
 
-- When a Kernel opens an app whose `konae.json` does not name a module, it decides once: on when the app uses the module, off when it does not, and on when the folder cannot tell. It writes the answer and logs it. An import does the same.
+- When a Kernel opens an app whose `konae.json` does not name a module, it decides once. It turns the module on when the app uses it, off when it does not, and on when the folder cannot tell. It writes the answer and logs it. An import does the same.
+- For `files`, the Kernel decides on when `data/files/index.json` lists a file, the old `manifest.fileAccess` option is set, or a built file names `miniapp.files`. An unreadable file index or artifact means on. An empty or missing index plus a readable artifact with no `miniapp.files` means off.
+- On a first release with no saved module state, the Kernel makes the same decision from the sources and artifact. It turns `files` on when the sources use `miniapp.files` or name a `/_konae/files/` URL.
 - The operator reads what each app got with `kernel modules`, before and after the upgrade.
 - The `kernel` field of `konae.json` cannot answer this. Every release rewrites it with the running version.
+
+### The files module owns file access
+
+- `fileAccess` is an option of `files`, not the Capsule manifest. Setting it takes effect at once, including on files already uploaded. The option keeps the prior access rule that every signed-in app user may read every file.
+- `files` does not require `auth`. A public app may list and read public files without an account. Upload, update and delete still require a signed-in app user.
 
 ### Modules move one at a time
 

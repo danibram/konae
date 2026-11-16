@@ -290,7 +290,7 @@ Editor preview: Always returns an empty object because the editor preview has no
 
 ## miniapp.files
 
-Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
+Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.
 
 - By default, only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
@@ -299,7 +299,7 @@ Small files stored by the Kernel for one Deployment. The manifest can require an
 - The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 - A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
-Declared with `fileAccess` in `manifest`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.
+Declared with `fileAccess` in `module`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.
 
 ### miniapp.files.list()
 

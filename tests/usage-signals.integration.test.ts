@@ -56,8 +56,9 @@ const schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, topic T
 
 async function release(id: string, files: Record<string, string>) {
   const project = { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" } };
+  const initialModules = (await owner.call<any>("project_inspect", { projectId: id })).deployment ? undefined : { files: { on: true } };
   const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({
-    project: { ...project, files }, visibility: "public",
+    project: { ...project, files }, visibility: "public", ...(initialModules ? { initialModules } : {}),
     artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Usage</main>" } },
   })), id);
   try {

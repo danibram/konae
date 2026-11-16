@@ -92,7 +92,7 @@ try {
   };
   const publicBadge = await uploadFile("public");
   const privateBadge = await uploadFile("private");
-  await owner.call("database_execute", { deploymentId: receipts.feed.id, operation: "sql", input: { sql: `INSERT INTO badge(file_id) VALUES('${publicBadge.id}')` } });
+  await owner.call("database_execute", { projectId: receipts.feed.id, operation: "sql", input: { sql: `INSERT INTO badge(file_id) VALUES('${publicBadge.id}')` } });
 
   if (process.env.KONAE_PRODUCT_FIT_BROWSER !== "0") {
     const browser = await chromium.launch({ channel: "chrome" });
@@ -146,7 +146,7 @@ try {
     return runtime(name, response.headers.get("set-cookie")?.split(";")[0]);
   }
   const action = <T = any>(client: McpClient, name: string, input: object = {}) => client.call<T>("actions_invoke", { name, input });
-  const sql = (name: string, statement: string) => owner.call("database_execute", { deploymentId: receipts[name].id, operation: "sql", input: { sql: statement } });
+  const sql = (name: string, statement: string) => owner.call("database_execute", { projectId: receipts[name].id, operation: "sql", input: { sql: statement } });
   const getPage = (name: string, route = "/") => fetch(url + route, { headers: { host: receipts[name].hostname }, redirect: "manual" });
 
   const launch = runtime("launch");
@@ -169,7 +169,7 @@ try {
   check("Private journal rows", "A second account cannot read the first account's entry, and its delete is refused with the guard.");
 
   assert.match(await (await getPage("board")).text(), /<title>Sign in<\/title>/);
-  await owner.call("signup_policy_set", { deploymentId: receipts.board.id, mode: "allowlist", allowlist: ["@team.example"] });
+  await owner.call("signup_policy_set", { projectId: receipts.board.id, mode: "allowlist", allowlist: ["@team.example"] });
   const lead = await signupApp("board", "lead@team.example");
   const member = await signupApp("board", "member@team.example");
   const dev = await signupApp("board", "dev@team.example");
@@ -195,7 +195,7 @@ try {
   assert.equal((await action(member, "cards.delete", { id: card.id })).changes, 1);
   check("Team board", "Four users obey SQL role checks with each guard's sentence, an outsider cannot sign up, the owner seeds the first admin, and promotion names a member's row, so a second member who picks the same display name is not promoted with it.");
 
-  await owner.call("signup_policy_set", { deploymentId: receipts.portfolio.id, mode: "allowlist", allowlist: ["potter@example.test"] });
+  await owner.call("signup_policy_set", { projectId: receipts.portfolio.id, mode: "allowlist", allowlist: ["potter@example.test"] });
   const potter = await signupApp("portfolio", "potter@example.test");
   const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8ioAAAAASUVORK5CYII="), (c) => c.charCodeAt(0));
   const transfer = await potter.upload(png);
@@ -260,7 +260,7 @@ try {
   const incidents = await fetch(`${url}/api/incidents`, { headers: { host: receipts.feed.hostname, "x-forwarded-for": freshAddress() } });
   assert.equal(incidents.headers.get("content-type"), "application/json");
   assert.equal((await incidents.json()).result[0].title, "Maintenance");
-  const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId: receipts.feed.id, name: "Badge mirror", files: ["private"] });
+  const reader = await owner.call<{ key: string }>("api_keys_create", { projectId: receipts.feed.id, name: "Badge mirror", files: ["private"] });
   const byKey = await fetch(`${url}/_konae/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname, authorization: `Bearer ${reader.key}` } });
   assert.equal(byKey.status, 200);
   assert.equal(byKey.headers.get("content-type"), "image/png");

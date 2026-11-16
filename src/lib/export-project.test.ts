@@ -45,7 +45,7 @@ test("a draft export writes the full module state into konae.json", async () => 
   });
   const entry = readTar(new Uint8Array(await result.blob.arrayBuffer())).find((item) => item.path === `notes/${SETTINGS_FILE}`)!;
   const exported = JSON.parse(new TextDecoder().decode(entry.contents));
-  expect(Object.keys(exported.modules).sort()).toEqual(["seo"]);
+  expect(Object.keys(exported.modules).sort()).toEqual(["files", "seo"]);
   expect(exported.modules.seo).toEqual({ on: true, canonical: "path", image: "social.png" });
 });
 
