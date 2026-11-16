@@ -32,4 +32,4 @@ A blog keeps its posts in rows, and each post needs an address a person can shar
 - Both parsers of `actions.json` learn `page`, the Kernel gains a path matcher between its routes and its files, and the SDK gains `miniapp.page`.
 - A sitemap holds at most 1000 addresses for each page declaration.
 - The builder rewrites the relative URLs in a page file to account for the depth of its declared page path. It does not add a `<base>` tag, which the app's Content Security Policy refuses (ADR-0014).
-- A local probe sent 20 page requests to one Deployment. All returned 200 in 6.1 ms. A concurrent route call took 5.2 ms, compared with a 2.0 ms baseline call. The probe is small and does not set a capacity limit.
+- A local probe sent 20 page requests to one Deployment. All returned 200 in 4.8 ms. A concurrent route call took 3.9 ms, compared with a 2.3 ms baseline call. The probe is small and does not set a capacity limit.
