@@ -168,6 +168,17 @@ fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> 
     Ok(())
 }
 
+pub fn validate_state(modules: &BTreeMap<String, Value>) -> std::result::Result<(), crate::refusal::Refusal> {
+    for (module, state) in modules {
+        let description = &registry()["modules"][module];
+        check_known(module, !description.is_null())?;
+        let Some(object) = state.as_object() else { return Err(crate::refusal::refuse("module.option-invalid", format!("Module {module} state must be an object."))); };
+        if !object.get("on").is_some_and(Value::is_boolean) { return Err(crate::refusal::refuse("module.option-invalid", format!("Module {module} option on must be a boolean."))); }
+        for (key, value) in object.iter().filter(|(key, _)| key.as_str() != "on") { check_option(module, description, key, value)?; }
+    }
+    Ok(())
+}
+
 pub fn preserve_release_state(
     next: &mut Settings,
     previous: Option<Settings>,
@@ -176,7 +187,7 @@ pub fn preserve_release_state(
     if let Some(previous) = previous {
         next.updated_at = previous.updated_at;
         next.modules = if previous.released.is_none() {
-            initial.cloned().unwrap_or(previous.modules)
+            next.modules.clone()
         } else {
             previous.modules
         };
@@ -332,6 +343,14 @@ mod tests {
     }
 
     #[test]
+    fn persisted_module_state_rejects_non_object_values_and_invalid_options() {
+        let invalid = BTreeMap::from([("seo".to_owned(), json!(true))]);
+        assert!(validate_state(&invalid).is_err());
+        let invalid_option = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"../secret"}))]);
+        assert!(validate_state(&invalid_option).is_err());
+    }
+
+    #[test]
     fn a_first_release_turns_on_files_when_its_artifact_uses_the_sdk() {
         let inferred = initial_for_release(None, true);
         assert_eq!(inferred["files"]["on"], true);
@@ -355,6 +374,7 @@ mod tests {
         let mut before = Settings::new("app", "App", "app", &json!({"visibility":"public"}));
         before.modules.get_mut("seo").unwrap()["on"] = json!(true);
         before.modules.get_mut("seo").unwrap()["canonical"] = json!("path");
+        before.modules.get_mut("files").unwrap()["on"] = json!(true);
         before.updated_at = 42;
         before.write(&source).await.unwrap();
 
@@ -379,6 +399,7 @@ mod tests {
         assert_eq!(next.updated_at, 42);
         assert_eq!(next.modules["seo"]["on"], true);
         assert_eq!(next.modules["seo"]["canonical"], "path");
+        assert_eq!(next.modules["files"]["on"], true);
         next.write(&source).await.unwrap();
 
         let exported = crate::sources::settings_for_export(&source, "app")

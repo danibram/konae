@@ -707,7 +707,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
         tool("modules_read", "Read every module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
     ]);
-    if owner.scopes.iter().any(|scope| ["publish", "write", "manage_users"].contains(&scope.as_str())) {
+    let module_registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json")).expect("module registry is valid JSON");
+    if owner.scopes.iter().any(|scope| module_registry["modules"].as_object().into_iter().flatten().any(|(_, module)| module["switch"] == true && module["permission"] == scope.as_str())) {
         tools.push(tool("module_set", "Turn a module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
     }
     if owner.scopes.iter().any(|s| s == "export_data") {
@@ -1731,7 +1732,7 @@ async fn admin_call(
 
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
-            super::refusal::check_setting_expected(a.get("expected"), json!(current.contact_email))?;
+            super::refusal::check_setting_expected_read(a.get("expected"), json!(current.contact_email), owner.scopes.iter().any(|scope| scope == "read"))?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
@@ -1897,7 +1898,7 @@ async fn admin_call(
                 } else {
                     Value::Null
                 };
-                super::refusal::check_setting_expected(a.get("expected"), current)?;
+                super::refusal::check_setting_expected_read(a.get("expected"), current, owner.scopes.iter().any(|scope| scope == "read"))?;
             }
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
@@ -1956,15 +1957,15 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 "encodings": input.artifact.encodings,
             });
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
-            anyhow::ensure!(
-                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none(),
-                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
-            );
             let against = match &package {
                 Some(package) => super::package::component_paths(state, &project, package)?.into_iter().find(|(name, _)| name == "database").map(|(_, path)| path),
                 None => None,
             };
             let change = validate_release(state, &input, against.as_deref()).await?;
+            anyhow::ensure!(
+                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
+                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
+            );
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
                 return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
             }
@@ -2042,7 +2043,7 @@ async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Optio
         return Ok(given);
     }
     let kept = deployment.and_then(|deployment| deployment.contact_email);
-    Ok(kept.or_else(|| owner_email(state, &owner.id)))
+    Ok(kept.or(given).or_else(|| owner_email(state, &owner.id)))
 }
 
 
@@ -2548,6 +2549,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setting_changed_redacts_current_value_without_read_permission() {
+        let root = std::env::temp_dir().join(format!("konae-setting-redaction-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let body = json!({"project":{"id":"app_redact","name":"Redact","slug":"redact","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Redact</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_redact','o','{}')", []).unwrap();
+        let publish = Owner { id:"o".into(), display:None, scopes:vec!["publish".into()], projects:vec![], session:false };
+        let publish_and_read = Owner { scopes:vec!["publish".into(),"read".into()], ..publish.clone() };
+        for (owner, contains_value) in [(&publish, false), (&publish_and_read, true)] {
+            let error = admin_call(&state, owner, "owner:o", "contact_email_set", json!({"projectId":"app_redact","email":"new@example.test","expected":"stale@example.test"})).await.unwrap_err();
+            let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, "setting.changed");
+            assert_eq!(refusal.message.contains("current value is null"), contains_value);
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn module_tools_read_back_changes_and_refuse_stale_or_unauthorized_writes() {
         let root = std::env::temp_dir().join(format!("konae-module-tools-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
@@ -2581,6 +2601,122 @@ mod tests {
         assert_eq!(refusal.code, "module.changed");
         let denied = admin_call(&state, &reader, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false})).await.unwrap_err().to_string();
         assert_eq!(denied, "Permission denied for publish.");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn first_release_persists_inferred_files_state_for_missing_and_partial_initial_modules() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-first-files-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        for (id, initial_modules) in [("app_first_files_none", None), ("app_first_files_partial", Some(json!({"seo":{"on":false}})))] {
+            admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+            let mut payload = json!({
+                "project":{"id":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<script>miniapp.files.upload()</script>"}}
+            });
+            if let Some(modules) = initial_modules { payload["initialModules"] = modules; }
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+            let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+            assert_eq!(deployment.modules["files"]["on"], true, "{id}");
+            let settings = crate::Settings::read(&state.data_root, id).unwrap();
+            assert_eq!(settings.modules["files"]["on"], true, "{id}");
+            let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["files"]["on"], true, "{id}");
+            let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+            let expected = read["modules"]["seo"]["state"].clone();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"seo","on":true,"expected":expected})).await.unwrap();
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn project_create_normalizes_legacy_file_access_on_both_metadata_inputs() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-create-file-access-{}", Uuid::new_v4()));
+        let (kernel_state, _) = kernel::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(kernel_state);
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into()], projects:vec![], session:false };
+        let source = json!({"id":"app_legacy_access","name":"Legacy access","slug":"legacy-access","files":{"index.html":"<main>Legacy</main>"},"directories":[],"manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"updatedAt":1});
+        let bytes = serde_json::to_vec(&source).unwrap();
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
+        let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":null,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+        let transfer_id = transfer["transferId"].as_str().unwrap();
+        transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+        transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":"app_legacy_access","name":"Legacy access","slug":"legacy-access","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"sourcesTransferId":transfer_id})).await.unwrap();
+        let saved = super::super::sources::read(&state.data_root, "app_legacy_access").await.unwrap().unwrap();
+        assert!(saved["manifest"].get("fileAccess").is_none());
+        assert_eq!(saved["files"]["index.html"], "<main>Legacy</main>");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_file_access_survives_release_apply_and_project_import_for_other_users() {
+        async fn upload_release(state: &Konae, payload: &Value, project: &str) -> String {
+            let bytes = serde_json::to_vec(payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":project,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            transfer_id.to_owned()
+        }
+        use axum::{http::{Request, header}, Router};
+        use base64::Engine;
+        use sha2::Digest;
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("konae-file-access-doors-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        let id = "app_file_access_doors";
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"File access","slug":"file-access","manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+        let payload = json!({"project":{"id":id,"name":"File access","slug":"file-access","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>File access</title>"}}});
+        let transfer_id = upload_release(&state, &payload, id).await;
+        let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+        let deployment = state.kernel.deployments.read().await.values().find(|item| item.id == id).unwrap().clone();
+        assert_eq!(deployment.modules["files"]["fileAccess"], "app-users");
+
+        let auth = kernel::auth::AuthService::open(kernel::layout::identity(&state.data_root, id)).unwrap();
+        let uploader = auth.signup("uploader@example.test", "correct horse battery").unwrap();
+        let other = auth.signup("other@example.test", "correct horse battery").unwrap();
+        let file_id = "018f2b2c-4a10-7a01-8000-000000000001";
+        let file_dir = kernel::layout::files(&state.data_root, id);
+        tokio::fs::create_dir_all(&file_dir).await.unwrap();
+        tokio::fs::write(file_dir.join(format!("{file_id}.blob")), b"door proof\n").await.unwrap();
+        let file = json!([{"id":file_id,"name":"proof.txt","type":"text/plain","size":11,"visibility":"private","ownerId":uploader.user.user_id,"createdAt":1}]);
+        tokio::fs::write(file_dir.join("index.json"), serde_json::to_vec(&file).unwrap()).await.unwrap();
+        let read_as = |token: &str| {
+            let request = Request::builder().uri(format!("/_konae/files/{file_id}")).header(header::HOST, deployment.hostname.as_str()).header(header::COOKIE, format!("konae_app_session={token}")).body(axum::body::Body::empty()).unwrap();
+            kernel::stack(state.kernel.clone(), Router::new()).oneshot(request)
+        };
+        let first_read = read_as(&other.token).await.unwrap();
+        assert_eq!(first_read.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(first_read.into_body(), 1024).await.unwrap().as_ref(), b"door proof\n");
+
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"files","options":{"fileAccess":null},"expected":current["modules"]["files"]["state"]})).await.unwrap();
+        assert_ne!(read_as(&other.token).await.unwrap().status(), StatusCode::OK);
+        let import_transfer = upload_release(&state, &payload, id).await;
+        admin_call(&state, &owner, "owner:o", "project_import", json!({"projectId":id,"replace":"sources","transferId":import_transfer})).await.unwrap();
+        let final_deployment = state.kernel.deployments.read().await.values().find(|item| item.id == id).unwrap().clone();
+        assert_eq!(final_deployment.modules["files"]["fileAccess"], "app-users");
+        let final_read = read_as(&other.token).await.unwrap();
+        assert_eq!(final_read.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(final_read.into_body(), 1024).await.unwrap().as_ref(), b"door proof\n");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

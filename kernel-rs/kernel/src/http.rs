@@ -1265,6 +1265,7 @@ fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
 
 async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str, headers: &HeaderMap) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "files") { return error(StatusCode::FORBIDDEN, &refused.message); }
     if app_user_files(deployment) || !valid_file_id(id) {
         return not_found();
     }
@@ -1519,6 +1520,24 @@ mod tests {
         assert!(!key_reads(&key(&["public"]), "private", true));
         assert!(key_reads(&key(&["private"]), "private", true));
         assert!(!key_reads(&key(&["private"]), "public", true));
+    }
+
+    #[tokio::test]
+    async fn an_api_key_gets_the_module_off_refusal_for_a_file_url() {
+        let root = std::env::temp_dir().join(format!("konae-key-files-off-{}", uuid::Uuid::new_v4()));
+        let mut state = AppState::for_test(&root);
+        let mut deployment = crate::Settings::new("app", "App", "app", &json!({"visibility":"public"})).deployment(
+            crate::Installed { hostname:"app.localhost".into(), created_at:1, released_at:Some(2), source_digest:None, actions:"{}".into(), artifact_version:"v1".into(), released:None },
+            "http://localhost",
+        );
+        deployment.modules.get_mut("files").unwrap()["on"] = json!(false);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::from([(deployment.hostname.clone(), deployment.clone())])));
+        let key = ApiKey { id:"key".into(), actions:Vec::new(), files:vec!["public".into()] };
+        let response = read_file_as_key(&state, &deployment, &key, "018f2b2c-4a10-7a01-8000-000000000001", &HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "Module files is off. Turn it on with module_set.");
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

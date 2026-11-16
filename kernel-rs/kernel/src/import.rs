@@ -186,10 +186,10 @@ pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &P
     .await;
     let _ = tokio::fs::remove_dir_all(&stage).await;
     let change = result?;
-    if let Some(on) = crate::folder::decide_files_module(&state.data_root, &deployment.id).await? {
+    if let Some(modules) = crate::folder::decide_app_modules(&state.data_root, &deployment.id).await? {
         let mut deployments = state.deployments.write().await;
         if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
-            current.modules.get_mut("files").expect("files is switchable")["on"] = serde_json::json!(on);
+            current.modules = modules;
         }
     }
     Ok(change)
@@ -484,6 +484,44 @@ mod tests {
         assert_eq!(history.entries[0].id, "baseline");
         assert!(history.entries[0].baseline_skipped);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn importing_folder_files_turns_on_the_files_module_and_returns_that_state() {
+        let root = std::env::temp_dir().join(format!("konae-import-files-module-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut state = AppState::for_test(&root);
+        let id = "import_files";
+        let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "id":id,"projectId":id,"projectName":"Import files","slug":"import-files","url":"http://import-files.localhost",
+            "createdAt":1,"releasedAt":1,"manifest":{"visibility":"public"},"hostname":"import-files.localhost","actions":"{}","artifactVersion":"v1",
+            "signupPolicy":{"mode":"open","allowlist":[]},"signInMethods":["password"]
+        })).unwrap();
+        deployment.modules = crate::modules::defaults();
+        deployment.modules.get_mut("files").unwrap()["on"] = serde_json::json!(false);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::from([(deployment.hostname.clone(), deployment.clone())])));
+        crate::Settings::of(&deployment).write(&root).await.unwrap();
+        let live = layout::database(&root, id);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        initialize_database(&live).unwrap();
+
+        let folder = root.join("incoming");
+        let data = folder.join("data");
+        let files = data.join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-files-0.9.0");
+        std::fs::copy(fixture.join("files-index.json"), files.join("index.json")).unwrap();
+        std::fs::copy(fixture.join("files-018f2b2c-4a10-7a01-8000-000000000001.blob"), files.join("018f2b2c-4a10-7a01-8000-000000000001.blob")).unwrap();
+        let incoming_db = data.join("database.sqlite");
+        std::fs::create_dir_all(&data).unwrap();
+        initialize_database(&incoming_db).unwrap();
+        let target = Target { sql:String::new(), program:serde_json::from_str(r#"{"version":1,"actions":{}}"#).unwrap(), schema_transforms:None };
+        import_folder(&state, &deployment, &folder, &target, None).await.unwrap();
+        let current = state.deployments.read().await.values().next().unwrap().clone();
+        assert_eq!(current.modules["files"]["on"], true);
+        assert_eq!(crate::Settings::read(&root, id).unwrap().modules["files"]["on"], true);
+        assert!(layout::files(&root, id).join("018f2b2c-4a10-7a01-8000-000000000001.blob").exists());
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

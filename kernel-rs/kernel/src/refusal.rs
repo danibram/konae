@@ -23,6 +23,18 @@ pub fn check_setting_expected(expected: Option<&Value>, current: Value) -> std::
     Ok(())
 }
 
+pub fn check_setting_expected_read(expected: Option<&Value>, current: Value, can_read: bool) -> std::result::Result<(), Refusal> {
+    if expected.is_some_and(|expected| expected != &current) {
+        let message = if can_read {
+            format!("The setting changed since you read it. Its current value is {current}. Read it again before changing it.")
+        } else {
+            "The setting changed since you read it. Read it again before changing it.".to_owned()
+        };
+        return Err(refuse("setting.changed", message));
+    }
+    Ok(())
+}
+
 impl Refusal {
     /// Several refusals named at once, such as every wrong key of a route's
     /// signature, are one refusal: their sentences joined by a space, under

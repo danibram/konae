@@ -299,7 +299,18 @@ impl Settings {
         let bytes = std::fs::read(layout::settings(root, id))?;
         let raw: Value = serde_json::from_slice(&bytes)?;
         let mut settings: Self = serde_json::from_slice(&bytes)?;
+        if let Some(raw_modules) = raw["modules"].as_object() {
+            let raw_modules = raw_modules.iter().map(|(name, state)| (name.clone(), state.clone())).collect();
+            if let Err(refusal) = modules::validate_state(&raw_modules) {
+                eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
+                anyhow::bail!("{}", refusal.message);
+            }
+        }
         modules::complete(&mut settings.modules);
+        if let Err(refusal) = modules::validate_state(&settings.modules) {
+            eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
+            anyhow::bail!("{}", refusal.message);
+        }
         let old_file_access = raw["manifest"]["fileAccess"] == "app-users" || raw["released"]["manifest"]["fileAccess"] == "app-users";
         if raw["modules"]["files"].is_null() && old_file_access {
             let files = settings.modules.get_mut("files").expect("files is switchable");
@@ -1012,6 +1023,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let released_schema = input.project.files.get("schema.sql").cloned().unwrap_or_default();
     let released_transforms = input.project.files.get("schema-transforms.json").cloned();
     let mut manifest = input.project.manifest;
+    let legacy_file_access = manifest["fileAccess"] == "app-users";
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
     let deployment = Deployment {
@@ -1040,8 +1052,14 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         modules: {
             let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
-                || modules::sources_use_files(input.project.files.values().map(String::as_bytes));
+                || modules::sources_use_files(input.project.files.values().map(String::as_bytes))
+                || legacy_file_access;
             let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+            if legacy_file_access {
+                let files = modules.get_mut("files").expect("files is switchable");
+                files["on"] = json!(true);
+                files["fileAccess"] = json!("app-users");
+            }
             modules::complete(&mut modules);
             modules
         },
@@ -3706,6 +3724,7 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
         let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
+        crate::folder::decide_app_modules(root, &id).await?;
         let settings = Settings::read(root, &id).with_context(|| format!("{} is not readable.", layout::settings(root, &id).display()))?;
         let deployment = settings.deployment(installed, public_origin);
         result.insert(deployment.hostname.clone(), deployment);
@@ -5480,6 +5499,23 @@ pub mod tests {
         assert_eq!(record["releasedAt"], second["releasedAt"]);
         let loaded = load_deployments(&root, "http://localhost").await.unwrap();
         assert_eq!(json!(loaded.values().next().unwrap().released_at), second["releasedAt"]);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn deployment_loading_recovers_legacy_files_after_an_operator_settings_write() {
+        let root = std::env::temp_dir().join(format!("konae-load-legacy-files-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html":"<script>miniapp.files.list()</script>"})).await;
+        let id = state.deployments.read().await.values().next().unwrap().id.clone();
+        let path = layout::settings(&root, &id);
+        let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw.as_object_mut().unwrap().remove("modules");
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        Settings::read(&root, &id).unwrap().write(&root).await.unwrap();
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert!(loaded.values().next().unwrap().modules["files"]["on"] == true);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

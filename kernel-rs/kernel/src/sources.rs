@@ -104,6 +104,7 @@ pub fn normalize_document(source: &Value) -> Result<Value> {
     let mut normalized = source.clone();
     let manifest = normalized["manifest"].as_object_mut().context("The sources' manifest must be an object.")?;
     manifest.remove("runtime");
+    manifest.remove("fileAccess");
     let directories = normalized["directories"].as_array().context("Invalid project directories. Send each app/ directory path once.")?;
     let directory_names = directories.iter().map(|value| value.as_str().context("Invalid project directories. Send each app/ directory path once.")).collect::<Result<Vec<_>>>()?;
     normalized["directories"] = json!(canonical_directories(directory_names)?);
@@ -674,6 +675,7 @@ mod tests {
         assert_eq!(opened["files"]["index.html"], "folder edit");
         assert_eq!(opened["files"]["actions.json"], "draft actions");
         assert_eq!(opened["manifest"]["routing"], "spa");
+        assert!(opened["manifest"].get("fileAccess").is_none());
         assert!(opened["directories"].as_array().unwrap().contains(&json!("custom/empty")));
         let export_settings = settings_for_export(&root, id).await.unwrap();
         assert_eq!(export_settings.name, "Saved draft");
