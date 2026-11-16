@@ -1,11 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import * as esbuild from "esbuild";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildLocal } from "../../scripts/konae";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
+import { sourcesUseFiles } from "./module-use";
 import type { MiniAppProject } from "./types";
 import { assembleStaticArtifact, basePath, checkRouting, isDocument, pathPrefixPattern, resolveReference, routingMessage, runtimeFile, runtimeLoaderScript, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
@@ -15,13 +16,13 @@ const { buildProjectInBrowser } = await import("../runtime/browser-build");
 const runtime = "window.miniapp = {};";
 const page = (title: string, body = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
-function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; bundle?: (path: string) => { script: string; styles: string } } = {}) {
+function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; runtime?: string; bundle?: (path: string) => { script: string; styles: string } } = {}) {
   return assembleStaticArtifact({
     paths: Object.keys(files),
     read: async (file) => files[file],
     compile: async () => ({ styles: typeof files["styles.css"] === "string" ? files["styles.css"] : "", script: "console.log('app')" }),
     bundle: async (file) => options.bundle?.(file) ?? { script: `/* bundled ${file} */`, styles: "" },
-    runtime,
+    runtime: options.runtime ?? runtime,
     routing: options.routing,
   });
 }
@@ -130,6 +131,13 @@ describe("which Capsule files become pages", () => {
       expect(resolveReference(outside, "index.html")).toBeNull();
     }
   });
+});
+
+test("a bracketed miniapp.files source misses detection while the release runtime contains files", async () => {
+  const source = 'window["miniapp"].files.list();';
+  expect(sourcesUseFiles([source])).toBe(false);
+  const artifact = await assemble({ "index.html": '<script type="module" src="app.js"></script>', "app.js": source }, { runtime: await readFile(new URL("../mcp/runtime.js", import.meta.url), "utf8") });
+  expect(artifact.files["index.html"]).toContain("files: {");
 });
 
 describe("the artifact", () => {
