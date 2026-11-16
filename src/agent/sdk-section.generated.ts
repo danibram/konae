@@ -250,6 +250,10 @@ Limits:
 - the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
 - 50 live API keys per Deployment
 
+## The seo module, declared, with no browser call
+
+Search listing and page cards, once the Kernel implements this module.
+
 Any call that reaches the Kernel can also refuse with:
 - "Sign in to use Konae MCP." when the Deployment is private and the visitor has no session; actions.call then sends the browser to /_konae/login and auth.session returns the anonymous state instead
 - "Deployment not found." when the host name matches no Deployment

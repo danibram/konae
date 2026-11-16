@@ -11,6 +11,7 @@ export type MiniAppProject = {
   encodings?: Record<ProjectFile, "base64">;
   directories: string[];
   manifest: CapsuleManifest;
+  modules?: Record<string, { on: boolean; [option: string]: unknown }>;
   updatedAt: number;
 };
 

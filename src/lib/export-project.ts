@@ -7,7 +7,7 @@ import type { MiniAppProject } from "./types";
 import { sourceContents } from "./source-files";
 import type { PackageComponentName } from "./portable-package";
 import {
-  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, generatedFiles,
+  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, defaultModuleStates, generatedFiles,
   type AppSettings, type FolderEntry,
 } from "./app-folder";
 
@@ -44,7 +44,7 @@ export async function createProjectExport(
     settings = {
       id: project.id, name: project.name, slug: project.slug, visibility,
       signupPolicy: { mode: visibility === "public" ? "open" : "closed", allowlist: [] }, signInMethods: ["password"],
-      kernel: KERNEL_VERSION, manifest,
+      kernel: KERNEL_VERSION, modules: defaultModuleStates(project.modules), manifest,
     };
     entries = [
       { path: SETTINGS_FILE, contents: `${JSON.stringify(settings, null, 2)}\n` },

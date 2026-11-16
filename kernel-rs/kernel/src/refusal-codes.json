@@ -164,6 +164,15 @@
   "signature.timestamp-prefix-invalid": { "fix": "capsule", "remedy": "Set the timestamp prefix to the field's name and \"=\", such as \"t=\"." },
   "signature.window-invalid": { "fix": "capsule", "remedy": "Set the signature window to a whole number of seconds from 1 to 3600." },
 
+  "module.changed": { "fix": "owner", "remedy": "Read the current module state with modules_read, then retry module_set.", "tool": "modules_read" },
+  "module.in-use": { "fix": "capsule", "remedy": "Remove the module's use from the published app before turning it off." },
+  "module.not-switch": { "fix": "owner", "remedy": "This module's switch is not available yet." },
+  "module.option-invalid": { "fix": "owner", "remedy": "Set the module option to one of its allowed values." },
+  "module.option-unknown": { "fix": "owner", "remedy": "Use an option listed by modules_read." },
+  "module.off": { "fix": "owner", "remedy": "Turn the module on with module_set before publishing its use.", "tool": "module_set" },
+  "module.requires": { "fix": "owner", "remedy": "Turn on each required module before enabling this module.", "tool": "module_set" },
+  "module.unknown": { "fix": "owner", "remedy": "Use a module listed by modules_read." },
+
   "sources.file-count": { "fix": "capsule", "remedy": "Keep app/ at 1000 files or fewer. Move files the app does not serve out of app/." },
   "sources.path-invalid": { "fix": "capsule", "remedy": "Rename the file, or move it out of app/. Dot files and node_modules stay outside the sources." },
   "sources.size": { "fix": "capsule", "remedy": "Move files the app does not serve out of app/, or make the largest ones smaller, until app/ holds 20 MiB or less." },

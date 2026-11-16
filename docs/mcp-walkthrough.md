@@ -345,6 +345,13 @@ cat /tmp/orders/konae.json
     "password"
   ],
   "kernel": "<Kernel version>",
+  "modules": {
+    "seo": {
+      "on": false,
+      "canonical": null,
+      "image": null
+    }
+  },
   "manifest": {
     "version": 1
   }

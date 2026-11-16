@@ -49,6 +49,7 @@ pub mod layout;
 pub mod limits;
 pub mod mail;
 pub mod maintenance;
+pub mod modules;
 pub mod notify;
 pub mod operator;
 pub mod package;
@@ -153,6 +154,8 @@ pub struct Deployment {
     pub signup_policy: SignupPolicy,
     /// How people sign in. Password always; Google when the owner turned it on.
     pub sign_in_methods: Vec<SignInMethod>,
+    #[serde(default = "modules::defaults")]
+    pub modules: std::collections::BTreeMap<String, Value>,
     /// Where `"notify": { "to": "owner" }` sends. A publish from Konae fills
     /// it with the owner's email; the Kernel keeps no record of owners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -178,6 +181,8 @@ pub struct Settings {
     pub kernel: String,
     /// The Capsule manifest without its visibility: routing, connects and the declared actions.
     pub manifest: Value,
+    #[serde(default = "modules::defaults")]
+    pub modules: std::collections::BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub directories: Vec<String>,
     #[serde(default)]
@@ -268,6 +273,7 @@ impl Settings {
             contact_email: None,
             kernel: KERNEL_VERSION.into(),
             manifest,
+            modules: modules::defaults(),
             directories: Vec::new(),
             updated_at: 0,
             released: None,
@@ -286,7 +292,8 @@ impl Settings {
     }
 
     pub fn read(root: &Path, id: &str) -> Result<Self> {
-        let settings: Self = serde_json::from_slice(&std::fs::read(layout::settings(root, id))?)?;
+        let mut settings: Self = serde_json::from_slice(&std::fs::read(layout::settings(root, id))?)?;
+        modules::complete(&mut settings.modules);
         artifact::check_file_access(&settings.manifest).map_err(anyhow::Error::msg)?;
         Ok(settings)
     }
@@ -324,6 +331,7 @@ impl Settings {
             signup_policy,
             sign_in_methods,
             contact_email,
+            modules: self.modules,
             released_schema: released.as_ref().map(|r| r.schema_sql.clone()).unwrap_or_default(),
         }
     }
@@ -475,6 +483,8 @@ pub struct DeployInput {
     pub initial_signup_policy: Option<SignupPolicy>,
     #[serde(default)]
     pub initial_sign_in_methods: Option<Vec<SignInMethod>>,
+    #[serde(default)]
+    pub initial_modules: Option<std::collections::BTreeMap<String, Value>>,
     /// A chunked package whose components were uploaded as transfers.
     #[serde(default)]
     pub initial_package: Option<package::InitialPackage>,
@@ -931,6 +941,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if existing.is_some()
         && (input.initial_signup_policy.is_some()
             || input.initial_sign_in_methods.is_some()
+            || input.initial_modules.is_some()
             || input.initial_package.is_some())
     {
         return error(
@@ -1001,6 +1012,11 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         sign_in_methods: match existing.as_ref() {
             Some(item) => item.sign_in_methods.clone(),
             None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
+        },
+        modules: {
+            let mut modules = existing.as_ref().map(|item| item.modules.clone()).or_else(|| input.initial_modules.clone()).unwrap_or_else(modules::defaults);
+            modules::complete(&mut modules);
+            modules
         },
         contact_email: input.contact_email.clone(),
         released_schema,
@@ -1126,7 +1142,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             }
         }
     };
-    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref())
+    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref(), input.initial_modules.as_ref())
         .await
         .and_then(|()| release_step(&id, "persist_deployment"))
     {
@@ -3531,9 +3547,9 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
 }
 
 /// Persists the new source and artifact state after a successful release.
-pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String], schema_transforms: Option<&str>) -> Result<()> {
+pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String], schema_transforms: Option<&str>, initial_modules: Option<&std::collections::BTreeMap<String, Value>>) -> Result<()> {
     let mut settings = Settings::of(deployment);
-    if let Ok(previous) = Settings::read(&state.data_root, &deployment.id) { settings.updated_at = previous.updated_at; }
+    modules::preserve_release_state(&mut settings, Settings::read(&state.data_root, &deployment.id).ok(), initial_modules);
     settings.directories = directories.to_vec();
     let mut released = settings.released.clone().expect("Settings::of records released settings");
     released.artifact_digest = Some(artifact_digest.to_owned());
@@ -4297,6 +4313,7 @@ pub mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
+            modules: modules::defaults(),
             released_schema: String::new(),
         };
         tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))

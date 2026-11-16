@@ -15,6 +15,7 @@ import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
 import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
 import { version } from "../../package.json";
+import { sdkContract } from "../sdk/contract";
 
 export type FolderEntry = { path: string; contents: string | Uint8Array };
 
@@ -29,6 +30,7 @@ export type AppSettings = {
   signupPolicy: SignupPolicy;
   signInMethods: ("password" | "google")[];
   contactEmail?: string;
+  modules?: Record<string, { on: boolean; [option: string]: unknown }>;
   /** The version of the Kernel that wrote the file. */
   kernel: string;
   /** The Capsule manifest without its visibility: routing, connects and the declared actions. */
@@ -41,6 +43,14 @@ export const DIST_FOLDER = "dist";
 export const DATA_FOLDER = "data";
 /** The Kernel this checkout builds. package.json names its version, and kernel-rs/Cargo.toml repeats it. */
 export const KERNEL_VERSION: string = version;
+
+export function defaultModuleStates(existing: AppSettings["modules"] = {}): AppSettings["modules"] {
+  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, {
+    on: false,
+    ...Object.fromEntries(module.options.map((option) => [option.key, option.default])),
+    ...existing?.[module.name],
+  }]));
+}
 
 /** Where each part of an export's data lands in the folder. */
 export const dataPaths: Record<PackageComponentName, string> = {

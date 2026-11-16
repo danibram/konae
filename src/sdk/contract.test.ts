@@ -4,6 +4,7 @@ import path from "node:path";
 import { sdkPromptSection } from "../agent/sdk-section.generated";
 import { buildSystemPrompt } from "../agent/system-prompt";
 import { cloneStarter } from "../lib/starter";
+import { checkModuleChange } from "../lib/module-state";
 import { runtimeClient } from "../runtime/preview";
 import { contractCalls, sdkContract, type SdkContract, type SdkError } from "./contract";
 import { renderAll, renderedPaths, renderPromptSection } from "./render";
@@ -44,6 +45,34 @@ function withExtraCall(): SdkContract {
 }
 
 describe("the SDK contract", () => {
+  test("describes module settings and renders the Kernel reader", () => {
+    const seo = sdkContract.modules.find((module) => module.name === "seo");
+    expect(seo).toMatchObject({
+      permission: "publish",
+      switch: true,
+      agentRule: "after-owner-confirms",
+      requires: [],
+      options: [
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], default: null },
+        { key: "image", type: "path", default: null },
+      ],
+    });
+    expect(seo?.uses).toBeDefined();
+    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["seo"]);
+    expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
+    const modules = JSON.parse(renderAll()["kernel-rs/kernel/src/modules.json"]);
+    expect(modules.modules.actions.switch).toBe(false);
+    expect(modules.modules.seo.switch).toBe(true);
+    expect(modules.modules.seo.options).toEqual(seo?.options);
+  });
+
+  test("the shared module cases keep editor answers aligned with the Kernel", () => {
+    const cases = JSON.parse(read("kernel-rs/kernel/src/module-cases.json")) as Array<Record<string, any>>;
+    for (const item of cases) {
+      expect(checkModuleChange(item), item.case).toEqual(item.error === null ? null : { code: item.code, message: item.error });
+    }
+  });
+
   test("lists each module and call once, with a signature and an example that name it", () => {
     const calls = contractCalls();
     expect(new Set(calls).size).toBe(calls.length);
@@ -144,10 +173,14 @@ describe("the rendered readers", () => {
   test("editing the contract changes every reader", () => {
     const before = renderAll();
     const after = renderAll(withExtraCall());
-    for (const file of Object.values(renderedPaths)) {
+    for (const file of Object.values(renderedPaths).filter((file) => file !== renderedPaths.modules)) {
       expect(after[file]).not.toBe(before[file]);
       expect(after[file]).toContain("miniapp.auth.refresh()");
     }
+    expect(after[renderedPaths.modules]).toBe(before[renderedPaths.modules]);
+    const changedMetadata = structuredClone(sdkContract) as unknown as SdkContract;
+    changedMetadata.modules.find((module) => module.name === "seo")!.permission = "manage_users";
+    expect(renderAll(changedMetadata)[renderedPaths.modules]).not.toBe(before[renderedPaths.modules]);
   });
 
   test("the build agent's prompt carries the rendered section and names no other call", () => {

@@ -2,7 +2,7 @@
  * The miniapp SDK contract: every module on `window.miniapp`, every call, its
  * arguments, what it returns, what it refuses and the limits that apply.
  *
- * This file is the single source. `bun run sdk:render` writes three readers
+ * This file is the single source. `bun run sdk:render` writes four readers
  * from it: the SDK section of the build agent's prompt
  * (src/agent/sdk-section.generated.ts), the `sdk` topic of `platform_guide`
  * (kernel-rs/konae/src/sdk-guide.json) and docs/sdk.md. src/sdk/contract.test.ts
@@ -69,9 +69,25 @@ export type SdkDeclaration = {
 export type SdkModule = {
   name: string;
   summary: string;
+  /** Whether the owner can turn this module on yet. */
+  switch: boolean;
+  options: SdkModuleOption[];
+  permission: string;
+  agentRule: "after-owner-confirms" | "never";
+  requires: string[];
+  uses: string[];
   calls: SdkCall[];
   declarations: SdkDeclaration[];
   notes: string[];
+};
+
+export type SdkModuleOption = {
+  key: string;
+  type: "boolean" | "enum" | "path" | "string" | "number";
+  values?: string[];
+  default: string | number | boolean | null;
+  label: string;
+  help: string;
 };
 
 export type SdkContract = {
@@ -124,6 +140,7 @@ export const sdkContract = {
     {
       name: "auth",
       summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
+      switch: false, options: [], permission: "manage_users", agentRule: "never", requires: [], uses: ["manifest.signupPolicy", "manifest.visibility"],
       declarations: [],
       notes: [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
@@ -195,6 +212,7 @@ export const sdkContract = {
     {
       name: "actions",
       summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
       declarations: [
         {
           file: "actions.json",
@@ -353,6 +371,7 @@ export const sdkContract = {
     {
       name: "files",
       summary: "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["manifest.fileAccess", "miniapp.files"],
       declarations: [{ key: "fileAccess", file: "manifest", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.' }],
       notes: [
         "By default, only the uploader can list or read a private file.",
@@ -476,6 +495,7 @@ export const sdkContract = {
     {
       name: "calls",
       summary: "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json kind=call"],
       calls: [],
       declarations: [
         {
@@ -549,6 +569,7 @@ export const sdkContract = {
     {
       name: "http",
       summary: "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json http"],
       calls: [],
       declarations: [
         {
@@ -624,6 +645,22 @@ export const sdkContract = {
         "GET /_konae/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
         "The editor preview serves no routes. Run them on konae dev, or on a Deployment.",
       ],
+    },
+    {
+      name: "seo",
+      summary: "Search listing and page cards, once the Kernel implements this module.",
+      switch: true,
+      options: [
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },
+        { key: "image", type: "path", default: null, label: "Card image", help: "Choose an image path from the app's published files." },
+      ],
+      permission: "publish",
+      agentRule: "after-owner-confirms",
+      requires: [],
+      uses: ["HTML pages with a title"],
+      calls: [],
+      declarations: [],
+      notes: [],
     },
   ],
 } as const satisfies SdkContract;

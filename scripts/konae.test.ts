@@ -10,6 +10,7 @@ import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templa
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
 import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testControls, testReply } from "./local-test";
 import { usageRange } from "../src/lib/usage";
+import { defaultModuleStates } from "../src/lib/app-folder";
 import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
 import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
@@ -121,6 +122,8 @@ test("init keeps existing .gitignore entries and adds required entries once", as
   try {
     await writeFile(path.join(folder, ".gitignore"), "private.txt\nnode_modules/\n");
     await initLocal(folder, { template: "tasks" });
+    const modules = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).modules;
+    expect(Object.keys(modules).sort()).toEqual(["seo"]);
     const lines = (await readFile(path.join(folder, ".gitignore"), "utf8")).split(/\r?\n/);
     expect(lines.filter((line) => line === "private.txt")).toHaveLength(1);
     expect(lines.filter((line) => line === "node_modules/")).toHaveLength(1);
@@ -669,13 +672,16 @@ describe("konae CLI", () => {
   test("a first release sends konae.json's signup policy and keeps it out of the project manifest", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     const manifest = { visibility: "private", signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } };
-    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest } };
+    const modules = defaultModuleStates()!;
+    modules.seo = { on: true, canonical: "path", image: null };
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest }, modules };
     const warnings: string[] = [];
 
     await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
     const payload = releaseUpload();
     expect(payload.initialSignupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
+    expect(payload.initialModules).toEqual(modules);
     expect(payload.project.manifest).toEqual({ visibility: "private" });
     expect(calls.find((call) => call.name === "project_create")!.arguments.manifest).toEqual({ visibility: "private" });
     expect(calls.map((call) => call.name)).not.toContain("signup_policy_read");
@@ -1010,6 +1016,7 @@ setInterval(() => {}, 1000);
 
     expect(receipt.url).toBe("http://test.localhost/");
     expect(releaseUpload()).not.toHaveProperty("initialSignupPolicy");
+    expect(releaseUpload()).not.toHaveProperty("initialModules");
     expect(calls.find((call) => call.name === "project_inspect")!.arguments).toEqual({ projectId: "app_test" });
     expect(warnings).toEqual([
       "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",

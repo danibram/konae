@@ -1,4 +1,12 @@
 import { expect, test } from "bun:test";
+import { defaultModuleStates } from "./app-folder";
+
+test("module defaults include only modules whose switch is available", () => {
+  expect(defaultModuleStates()).toEqual({ seo: { on: false, canonical: null, image: null } });
+  expect(defaultModuleStates({ seo: { on: true, canonical: "path", image: "social.png" }, actions: { on: false } })).toEqual({
+    seo: { on: true, canonical: "path", image: "social.png" },
+  });
+});
 import { generatedFiles, type AppSettings } from "./app-folder";
 
 const settings: AppSettings = {
