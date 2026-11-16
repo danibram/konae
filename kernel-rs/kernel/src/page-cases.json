@@ -14,6 +14,20 @@
     "error": "Action posts.head has an invalid page binding."
   },
   {
+    "case": "a null page on a mutation is still a page declaration",
+    "actions": {
+      "posts.update": {
+        "kind": "mutation",
+        "access": "anonymous",
+        "statement": "UPDATE posts SET title = 'x' LIMIT 1",
+        "bindings": [],
+        "page": null
+      }
+    },
+    "code": "page.query",
+    "error": "Action posts.update declares a page path, so it must be an anonymous query."
+  },
+  {
     "case": "page declaration has an invalid shape",
     "actions": {
       "posts.head": {
