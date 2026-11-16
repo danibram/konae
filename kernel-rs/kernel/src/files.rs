@@ -186,7 +186,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-file-publish-{}", Uuid::new_v4()));
         let state = AppState::for_test(&root);
         let release = |project: &str, shared: bool| json!({
-            "initialModules": {"files":{"on":true,"fileAccess":if shared { json!("app-users") } else { Value::Null }}},
+            "initialModules": {"auth":{"on":true},"files":{"on":true,"fileAccess":if shared { json!("app-users") } else { Value::Null }}},
             "project": {"id": project, "name": project, "slug": project, "manifest": {},
                 "files": {"actions.json": json!({"version":1,"actions":{"items.count":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}).to_string(), "schema.sql":""}},
             "visibility":"public", "artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>attachments</main>"}}

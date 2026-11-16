@@ -6,7 +6,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange } from "../lib/module-state";
-import { sourcesUseFiles } from "../lib/module-use";
+import { sourcesUseAuth, sourcesUseFiles } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -65,6 +65,15 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
     if (filesCall && filesOff) {
       return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code as "module.off") }, ["sources"]);
+    }
+    const authState = facts.modules?.auth;
+    if (facts.visibility === "private" && authState && authState.on !== true) {
+      const required = checkModuleChange({ rule: "requires", module: "private Deployment", required: "auth", requiredState: authState });
+      if (required) return failure({ stage: "actions", message: required.message, code: required.code as "module.requires", hint: hintOf(required.code as "module.requires") }, ["sources"]);
+    }
+    const authOff = authState ? checkModuleChange({ rule: "on", module: "auth", state: authState }) : null;
+    if (sourcesUseAuth(Object.values(files)) && authOff) {
+      return failure({ stage: "actions", message: authOff.message, code: authOff.code as "module.off", hint: hintOf(authOff.code as "module.off") }, ["sources"]);
     }
     const errors: ValidationError[] = [];
     const checked: ValidationStage[] = ["sources"];

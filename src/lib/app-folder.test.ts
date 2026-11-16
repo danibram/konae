@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { defaultModuleStates } from "./app-folder";
 
 test("module defaults include only modules whose switch is available", () => {
-  expect(defaultModuleStates()).toEqual({ files: { on: false, fileAccess: null }, seo: { on: false, canonical: null, image: null } });
+  expect(defaultModuleStates()).toEqual({ auth: { on: false, signupPolicy: null, signInMethods: ["password"] }, files: { on: false, fileAccess: null }, seo: { on: false, canonical: null, image: null } });
   expect(defaultModuleStates({ seo: { on: true, canonical: "path", image: "social.png" }, actions: { on: false } })).toEqual({
+    auth: { on: false, signupPolicy: null, signInMethods: ["password"] },
     seo: { on: true, canonical: "path", image: "social.png" },
     files: { on: false, fileAccess: null },
   });

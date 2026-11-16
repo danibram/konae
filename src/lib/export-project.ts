@@ -34,10 +34,11 @@ export async function createProjectExport(
   } else {
     const artifact = await door.build(project);
     const { visibility, ...manifest } = project.manifest;
+    const modules = defaultModuleStates(project.modules);
+    if (modules?.auth) modules.auth.signupPolicy = { mode: visibility === "public" ? "open" : "closed", allowlist: [] };
     settings = {
       id: project.id, name: project.name, slug: project.slug, visibility,
-      signupPolicy: { mode: visibility === "public" ? "open" : "closed", allowlist: [] }, signInMethods: ["password"],
-      kernel: KERNEL_VERSION, modules: defaultModuleStates(project.modules), manifest,
+      kernel: KERNEL_VERSION, modules, manifest,
     };
     entries = [
       { path: SETTINGS_FILE, contents: `${JSON.stringify(settings, null, 2)}\n` },

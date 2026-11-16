@@ -51,7 +51,7 @@ rm -rf /tmp/habits/app && mkdir /tmp/habits/app
 cp examples/showcase/habits/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/habits/app/
 ```
 
-Set `"visibility": "public"` and `"signupPolicy": { "mode": "open" }` in `/tmp/habits/konae.json`, then run `bun run konae -- publish --dir /tmp/habits`. To try it on your machine without a credential, run `bun run konae -- dev --dir /tmp/habits` instead.
+Set `"visibility": "public"` and `"modules": { "auth": { "on": true, "signupPolicy": { "mode": "open", "allowlist": [] } } }` in `/tmp/habits/konae.json`, then run `bun run konae -- publish --dir /tmp/habits`. To try it on your machine without a credential, run `bun run konae -- dev --dir /tmp/habits` instead.
 
 The replay runs in this order:
 

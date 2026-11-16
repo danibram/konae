@@ -8,7 +8,7 @@ import { dataEntries, generatedFiles, type AppSettings, type FolderEntry } from 
 import type { PackageComponentName } from "../src/lib/portable-package";
 import { readTar } from "../src/lib/tar";
 import type { Transfer } from "../src/mcp/client";
-import { account, appFetch, buildKernel, freshClient, password, release, runtime, startKernel, type Kernel } from "./kernel-harness";
+import { account, appFetch, buildKernel, freshClient, password, release, runtime, setSignupPolicy, startKernel, type Kernel } from "./kernel-harness";
 
 const repo = path.resolve(import.meta.dir, "..");
 const kernelBinary = path.join(repo, "kernel-rs/target/debug/kernel");
@@ -148,7 +148,7 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect(twice.error).toContain("This account is not suspended.");
 
   expect(JSON.parse((await command("signup-policy", "closed")).output)).toMatchObject({ mode: "closed", previousMode: "open" });
-  expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).signupPolicy.mode).toBe("closed");
+  expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).modules.auth.signupPolicy.mode).toBe("closed");
   let refused = 0;
   for (let attempt = 0; attempt < 30 && refused === 0; attempt++) {
     const response = await appFetch(app, hostname, "/_konae/auth/signup", { method: "POST", headers: { "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: `late${attempt}@carried.test`, password }) });
@@ -231,7 +231,7 @@ test("a legacy export starts on a fresh Kernel without its record, and distingui
     manifest: { version: 1, visibility: "private" },
   }));
 
-  await konae.owner.call("signup_policy_set", { projectId: id, mode: "closed" });
+  await setSignupPolicy(konae.owner, id, { mode: "closed" });
   const migratedSettings = JSON.parse(await readFile(settingsPath, "utf8"));
   expect(migratedSettings.released.schemaSql).toContain('CREATE TABLE IF NOT EXISTS "live notes"');
   expect(migratedSettings.released.schemaSql).toContain('CREATE INDEX IF NOT EXISTS "live notes by title"');

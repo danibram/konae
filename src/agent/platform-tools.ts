@@ -43,13 +43,10 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   database_execute: "read",
   usage_summary: "read",
   notices_read: "read",
-  sign_in_methods_read: "read",
   app_users_list: "read",
   domain_read: "read",
   path_read: "read",
   modules_read: "read",
-  signup_policy_set: "confirm",
-  sign_in_methods_set: "confirm",
   app_invitations_create: "confirm",
   hostname_set: "confirm",
   domain_set: "confirm",
@@ -78,8 +75,6 @@ function needsConfirmation(name: string, args: Record<string, unknown>): boolean
 
 export function describeCall(name: string, args: Record<string, unknown>): string {
   switch (name) {
-    case "signup_policy_set": return `The agent will change who may create an account on this app to ${String(args.mode)}.`;
-    case "sign_in_methods_set": return `The agent will set how people sign in to this app to ${Array.isArray(args.methods) ? args.methods.join(" and ") : String(args.methods)}.`;
     case "app_invitations_create": {
       const emails = Array.isArray(args.emails) ? args.emails.map(String) : [];
       return `The agent will email an invitation to ${emails.join(", ") || "nobody"}.`;
@@ -114,8 +109,8 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
 const pinned = ["projectId"] as const;
 const publishedProjectTools = new Set([
   "database_execute", "api_keys_list", "domain_read", "path_read", "maintenance_read", "contact_email_read",
-  "project_export", "calls_read", "notices_read", "usage_summary", "signals_read", "sign_in_methods_read",
-  "sign_in_methods_set", "signup_policy_set", "app_user_enter", "app_users_list", "app_user_suspend",
+  "project_export", "calls_read", "notices_read", "usage_summary", "signals_read",
+  "app_user_enter", "app_users_list", "app_user_suspend",
   "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend",
   "app_invitation_revoke", "api_keys_create", "api_keys_revoke", "project_import", "contact_email_set",
   "maintenance_set", "hostname_set", "domain_set", "domain_clear", "path_set", "path_clear",

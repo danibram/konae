@@ -150,7 +150,7 @@ try {
 
   const receipt = await release(capsule, { initialSignupPolicy: { mode: "closed", allowlist: [] } });
   const host = receipt.hostname;
-  const policy = await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
+  const policy = (await owner.call<any>("modules_read", { projectId: receipt.id })).modules.auth.state.signupPolicy;
   assert.equal(policy.mode, "closed");
   pass("Publish", `${receipt.url} is public with signup ${policy.mode}.`);
 
@@ -189,7 +189,7 @@ try {
   const accepted = await post("/_konae/auth/accept", { token: invitationToken, password: curatorPassword });
   assert.equal(accepted.status, 200, await accepted.clone().text());
   const curatorCookie = accepted.headers.get("set-cookie")!.split(";")[0];
-  const policyAfter = await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
+  const policyAfter = (await owner.call<any>("modules_read", { projectId: receipt.id })).modules.auth.state.signupPolicy;
   assert.equal(policyAfter.mode, "closed", "the policy never left Closed");
   const strangerAgain = await post("/_konae/auth/signup", { email: "second@example.test", password: crypto.randomUUID() });
   assert.equal(strangerAgain.status, 403);

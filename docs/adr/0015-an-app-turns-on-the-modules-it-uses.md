@@ -16,7 +16,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 - `konae.json` holds state only for modules whose switch is available: `"modules": { "<name>": { "on": true, "<option>": <value> } }`. An export carries it. A secret never goes there.
 - A switchable module is off until someone turns it on. `konae init` and the editor's templates turn on what the template uses.
-- The first release carries module state alongside the Signup Policy. Later changes apply at once and have no draft.
+- The first release carries auth options in `modules.auth` beside the module switch. Signup Policy keeps its structured mode and allowlist there. A public app defaults to Open and a private app to Closed. A private first release turns auth on. Later changes apply at once and have no draft.
 - A module that `konae.json` does not name has never been decided for that app. Only an app made before the module existed is in that state.
 
 ### The published app never uses a module that is off
@@ -36,6 +36,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 - When a Kernel opens an app whose `konae.json` does not name a module, it decides once. It turns the module on when the app uses it, off when it does not, and on when the folder cannot tell. It writes the answer and logs it. An import does the same.
 - For `files`, the Kernel decides on when `data/files/index.json` lists a file, the old `manifest.fileAccess` option is set, or a built file names `miniapp.files`. An unreadable file index or artifact means on. An empty or missing index plus a readable artifact with no `miniapp.files` means off.
+- For `auth`, the Kernel decides on when the old folder is private, its identity database has accounts or invitations, its old file policy admits all app users, or its sources or artifact use auth. Otherwise a readable public static app with no accounts decides off. An unreadable folder or database means on.
 - On a first release with no saved module state, the Kernel makes the same decision from the sources and artifact. It turns `files` on when the sources use `miniapp.files` or name a `/_konae/files/` URL.
 - The operator reads what each app got with `kernel modules`, before and after the upgrade.
 - The `kernel` field of `konae.json` cannot answer this. Every release rewrites it with the running version.

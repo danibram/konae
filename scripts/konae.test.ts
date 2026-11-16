@@ -13,7 +13,7 @@ import { usageRange } from "../src/lib/usage";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
-import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, pendingPull, pipedSecret, policyInModules, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
@@ -120,7 +120,7 @@ test("init keeps existing .gitignore entries and adds required entries once", as
     await writeFile(path.join(folder, ".gitignore"), "private.txt\nnode_modules/\n");
     await initLocal(folder, { template: "tasks" });
     const modules = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).modules;
-    expect(Object.keys(modules).sort()).toEqual(["files", "seo"]);
+      expect(Object.keys(modules).sort()).toEqual(["auth", "files", "seo"]);
     expect(modules.files.on).toBe(true);
     const lines = (await readFile(path.join(folder, ".gitignore"), "utf8")).split(/\r?\n/);
     expect(lines.filter((line) => line === "private.txt")).toHaveLength(1);
@@ -671,8 +671,9 @@ describe("konae CLI", () => {
 
   test("a first release sends konae.json's signup policy and keeps it out of the project manifest", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
-    const manifest = { visibility: "private", signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } };
+    const manifest = { visibility: "private" };
     const modules = defaultModuleStates()!;
+    modules.auth.signupPolicy = { mode: "allowlist", allowlist: ["@example.test"] };
     modules.seo = { on: true, canonical: "path", image: null };
     const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest }, modules };
     const warnings: string[] = [];
@@ -680,7 +681,7 @@ describe("konae CLI", () => {
     await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
     const payload = releaseUpload();
-    expect(payload.initialSignupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
+    expect(payload.initialModules.auth.signupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
     expect(payload.initialModules).toEqual(modules);
     expect(payload.project.manifest).toEqual({ visibility: "private" });
     expect(calls.find((call) => call.name === "project_create")!.arguments.manifest).toEqual({ visibility: "private" });
@@ -754,7 +755,8 @@ describe("konae CLI", () => {
     const folder = path.join(directory, "restart-app");
     await initLocal(folder, { name: "Restart app", template: "tasks" });
     const settings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
-    settings.signupPolicy = { mode: "open" };
+    settings.modules.auth.on = true;
+    settings.modules.auth.signupPolicy = { mode: "open", allowlist: [] };
     await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings));
     const binary = path.join(directory, "kernel-stub.js");
     const marker = path.join(folder, ".konae/kernel/stub-started");
@@ -872,7 +874,7 @@ setInterval(() => {}, 1000);
       output = track(child);
       await waitFor(async () => await stat(started).then(() => true, () => false), child, output);
       await waitFor(async () => await stat(path.join(folder, ".konae/dev.json")).then(() => true, () => false), child, output);
-      await Bun.sleep(150);
+      await Bun.sleep(2000);
       expect((await readFile(path.join(folder, ".konae/build-runs"), "utf8")).trim().split("\n")).toHaveLength(1);
 
       await writeFile(path.join(folder, "app/index.html"), "<main>changed</main>");
@@ -1008,23 +1010,26 @@ setInterval(() => {}, 1000);
 
   test("a republish sends no policy and warns, without failing, when the app has another", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
-    answers.project_inspect = { deployment: { id: "dep_1", signupPolicy: { mode: "closed", allowlist: [] } } };
-    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: { mode: "invitation" } } } };
+    answers.project_inspect = { deployment: { id: "dep_1" } };
+    answers.modules_read = { modules: { auth: { state: { signupPolicy: { mode: "closed", allowlist: [] } } } } };
+    const modules = defaultModuleStates()!;
+    modules.auth.signupPolicy = { mode: "invitation", allowlist: [] };
+    const config = { url: origin(), modules, project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
     const warnings: string[] = [];
 
     const receipt = await publishLocal(directory, config, "token", (message) => warnings.push(message));
 
     expect(receipt.url).toBe("http://test.localhost/");
-    expect(releaseUpload()).not.toHaveProperty("initialSignupPolicy");
+      expect(releaseUpload()).not.toHaveProperty("initialSignupPolicy");
     expect(releaseUpload()).not.toHaveProperty("initialModules");
     expect(calls.find((call) => call.name === "project_inspect")!.arguments).toEqual({ projectId: "app_test" });
     expect(warnings).toEqual([
-      "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",
+      "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Users view, or call module_set on auth with a credential that holds manage_users.",
     ]);
 
     for (const answer of [{ mode: "invitation", allowlist: ["kept@example.test"] }, undefined]) {
       warnings.length = 0;
-      answers.project_inspect = { deployment: { id: "dep_1", ...(answer ? { signupPolicy: answer } : {}) } };
+      answers.modules_read = { modules: { auth: { state: { ...(answer ? { signupPolicy: answer } : {}) } } } };
       expect((await publishLocal(directory, config, "token", (message) => warnings.push(message))).url).toBe("http://test.localhost/");
       expect(warnings).toEqual([]);
     }
@@ -1036,15 +1041,16 @@ setInterval(() => {}, 1000);
     expect(signupPolicyWarning(wanted, { mode: "allowlist", allowlist: ["@team.test"] })).toContain("but this app has Allowlist (@team.test)");
   });
 
-  test("a signup policy konae.json cannot hold is refused before anything is sent", async () => {
-    expect(manifestSignupPolicy({})).toBeUndefined();
-    expect(manifestSignupPolicy({ signupPolicy: { mode: "closed" } })).toEqual({ mode: "closed", allowlist: [] });
-    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).toThrow('konae.json signupPolicy.mode must be "open", "invitation", "closed" or "allowlist"');
-    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "members" } })).not.toThrow("project.manifest");
-    expect(() => manifestSignupPolicy({ signupPolicy: { mode: "allowlist", allowlist: "@example.test" } })).toThrow("must be a list of emails and @domains");
+  test("an invalid signup policy in modules.auth is refused before anything is sent", async () => {
+    expect(policyInModules()).toBeUndefined();
+    expect(policyInModules({ auth: { on: true, signupPolicy: { mode: "closed" } } })).toEqual({ mode: "closed", allowlist: [] });
+    expect(() => policyInModules({ auth: { on: true, signupPolicy: { mode: "members" } } })).toThrow('konae.json modules.auth.signupPolicy.mode must be "open", "invitation", "closed" or "allowlist"');
+    expect(() => policyInModules({ auth: { on: true, signupPolicy: { mode: "allowlist", allowlist: "@example.test" } } })).toThrow("must be a list of emails and @domains");
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
-    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: { signupPolicy: "invitation" } } };
-    await expect(publishLocal(directory, config, "token")).rejects.toThrow("signupPolicy.mode");
+    const modules = defaultModuleStates()!;
+    modules.auth.signupPolicy = "invitation" as any;
+    const config = { url: origin(), modules, project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    await expect(publishLocal(directory, config, "token")).rejects.toThrow("modules.auth.signupPolicy.mode");
     expect(calls).toEqual([]);
   });
 
@@ -1053,7 +1059,7 @@ setInterval(() => {}, 1000);
     const run = cli("init", "--dir", directory);
     expect(await run.exited).toBe(0);
     const written = JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"));
-    expect(written).toMatchObject({ visibility: "private", signupPolicy: { mode: "invitation" }, signInMethods: ["password"] });
+    expect(written).toMatchObject({ visibility: "private", modules: { auth: { on: true, signupPolicy: { mode: "invitation" }, signInMethods: ["password"] } } });
   });
 
   test("init writes the app folder and needs no Kernel and no credential", async () => {

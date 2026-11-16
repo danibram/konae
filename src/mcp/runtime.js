@@ -89,7 +89,7 @@
         try { return await call('auth_session'); }
         catch (error) { if (error.status === 401) return { userId: 'anonymous', name: 'Anonymous', role: 'anonymous' }; throw error; }
       },
-      signIn: () => { location.assign(base + '/_konae/login'); },
+      signIn: async () => { await call('auth_session'); location.assign(base + '/_konae/login'); },
       signInWithGoogle: () => { location.assign(base + '/_konae/auth/google/start'); },
       signOut: async () => {
         const result = await call('auth_logout');

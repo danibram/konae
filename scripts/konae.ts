@@ -32,6 +32,7 @@ import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
 import { defaultModuleStates } from "../src/lib/app-folder";
+import { sourcesUseAuth } from "../src/lib/module-use";
 import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
@@ -56,16 +57,16 @@ const MODE_LABELS: Record<SignupMode, string> = { open: "Open", invitation: "Inv
 export const INIT_SIGNUP_POLICY = { mode: "invitation" } as const;
 
 
-export function manifestSignupPolicy(manifest: Record<string, unknown>): SignupPolicy | undefined {
-  const value = manifest.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || !SIGNUP_MODES.includes(value.mode as SignupMode)) {
-    throw Error('konae.json signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
-  }
+export function policyInModules(modules?: AppSettings["modules"], legacy?: AppSettings["signupPolicy"]): SignupPolicy | undefined {
+  const value = modules?.auth?.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
+  if (value) return parseSignupPolicy(value);
+  return legacy ? parseSignupPolicy(legacy) : undefined;
+}
+
+function parseSignupPolicy(value: { mode?: unknown; allowlist?: unknown }): SignupPolicy {
+  if (!SIGNUP_MODES.includes(value.mode as SignupMode)) throw Error('konae.json modules.auth.signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
   const allowlist = value.allowlist ?? [];
-  if (!Array.isArray(allowlist) || !allowlist.every((entry) => typeof entry === "string")) {
-    throw Error("konae.json signupPolicy.allowlist must be a list of emails and @domains.");
-  }
+  if (!Array.isArray(allowlist) || !allowlist.every((entry) => typeof entry === "string")) throw Error("konae.json modules.auth.signupPolicy.allowlist must be a list of emails and @domains.");
   return { mode: value.mode as SignupMode, allowlist };
 }
 
@@ -81,7 +82,7 @@ function describePolicy(policy: SignupPolicy) {
 export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy): string | undefined {
   const entries = (policy: SignupPolicy) => policy.allowlist.map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join("\n");
   if (wanted.mode === current.mode && (wanted.mode !== "allowlist" || entries(wanted) === entries(current))) return undefined;
-  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.`;
+  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Users view, or call module_set on auth with a credential that holds manage_users.`;
 }
 
 
@@ -480,11 +481,14 @@ export async function readSettings(root: string): Promise<AppSettings> {
 
 /** The project a release names, from konae.json. The Signup Policy rides in the manifest until the release reads it. */
 export function configOf(settings: AppSettings, url?: string): Config {
+  const modules = defaultModuleStates(settings.modules);
+  if (modules?.auth && !modules.auth.signupPolicy && settings.signupPolicy) modules.auth.signupPolicy = settings.signupPolicy;
+  if (modules?.auth && !modules.auth.signInMethods && settings.signInMethods) modules.auth.signInMethods = settings.signInMethods;
   return {
     ...(url ? { url } : {}),
     ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
-    modules: defaultModuleStates(settings.modules),
-    project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
+    modules,
+    project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility } },
   };
 }
 
@@ -622,11 +626,6 @@ function typecheckApp(root: string) {
   }
 }
 
-/**
- * Builds and publishes. On a first release `project.manifest.signupPolicy`
- * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
- * policy and `warn` gets one line when konae.json names another.
- */
 async function productionRequirements(root: string, confirmation?: string | null) {
   const requirements = confirmation ? [`Pass --confirm-schema ${confirmation} when applying this database change.`] : [];
   try {
@@ -645,11 +644,11 @@ export async function publishLocal(root: string, config: Config, token: string, 
   if (!config.url) throw Error(NO_INSTALLATION);
   const initialModules = config.modules ?? defaultModuleStates();
   const client = new McpClient(endpoint(config.url), { token });
-  const wanted = manifestSignupPolicy(config.project.manifest);
-  // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
-  const { signupPolicy: _, runtime: _runtime, ...manifest } = config.project.manifest;
+  const wanted = policyInModules(initialModules);
+  const { runtime: _runtime, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
   const prepared = await buildLocal(root);
+  if (initialModules.auth && (manifest.visibility === "private" || wanted || sourcesUseAuth(Object.values(prepared.source.files)))) initialModules.auth.on = true;
   const sourcePayload = {
     files: prepared.source.files,
     ...(prepared.source.encodings && Object.keys(prepared.source.encodings).length ? { encodings: prepared.source.encodings } : {}),
@@ -719,8 +718,8 @@ export async function publishLocal(root: string, config: Config, token: string, 
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
   if (!first && wanted) {
     // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
-    const inspected = await client.call<{ deployment?: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId: project.id }).catch(() => undefined);
-    const current = inspected?.deployment?.signupPolicy;
+    const inspected = await client.call<{ modules: { auth: { state: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } } } }>("modules_read", { projectId: project.id }).catch(() => undefined);
+    const current = inspected?.modules.auth.state.signupPolicy;
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
   }
@@ -973,9 +972,12 @@ export async function initLocal(root: string, options: { name?: string; template
   // The template says who may open the app. Only people the owner invites can create an account.
   const modules = defaultModuleStates();
   modules.files.on = Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source));
+  modules.auth.on = born.visibility === "private" || sourcesUseAuth(Object.values(born.files));
+  modules.auth.signupPolicy = { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] };
+  modules.auth.signInMethods = ["password"];
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
-    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
+    kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
   };
   await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
   await writeEntries(root, await folderFiles(root, settings));
@@ -1710,7 +1712,7 @@ export async function main() {
       if (shuttingDown) return;
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
       if (shuttingDown) return;
-      const policy = settings.signupPolicy.mode;
+      const policy = String(settings.modules?.auth?.signupPolicy && (settings.modules.auth.signupPolicy as { mode?: unknown }).mode || settings.signupPolicy?.mode || "closed");
       if (policy !== "open") {
         // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
         const envFile = path.join(root, ".konae/kernel.env");

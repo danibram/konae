@@ -316,7 +316,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
     }
 }
 
-/// `signup_policy_set` as Konae's tool runs it. The entries stay when none are given.
+/// `module_set` on `auth` as Konae's tool runs it. The entries stay when none are given.
 async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arguments) -> Result<Value> {
     let mode: SignupMode = serde_json::from_value(json!(words.required("open, invitation, closed or allowlist")?))
         .map_err(|_| anyhow!("The Signup Policy is open, invitation, closed or allowlist."))?;

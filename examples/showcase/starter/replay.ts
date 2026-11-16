@@ -266,14 +266,15 @@ try {
   const [initCode, initOut, initErr] = await cli(["init", "--dir", cliDir, "--name", "Starter"]);
   assert.equal(initCode, 0, initOut + initErr);
   const config = JSON.parse(await readFile(path.join(cliDir, "konae.json"), "utf8"));
-  const initPolicy = config.signupPolicy.mode;
+  const initPolicy = config.modules.auth.signupPolicy.mode;
   const initVisibility = config.visibility;
   await rm(appDir(cliDir), { recursive: true });
   await mkdir(appDir(cliDir));
   for (const name of capsuleFiles) await cp(path.join(import.meta.dir, name), path.join(appDir(cliDir), name));
   await writeFile(path.join(appDir(cliDir), "actions.json"), sources["actions.json"]);
   config.visibility = "public";
-  config.signupPolicy = { mode: "open", allowlist: [] };
+  config.modules.auth.on = true;
+  config.modules.auth.signupPolicy = { mode: "open", allowlist: [] };
   await writeFile(path.join(cliDir, "konae.json"), JSON.stringify(config, null, 2));
   const projectId: string = config.id;
   const [unsetCode, , unsetErr] = await cli(["publish", "--dir", cliDir]);
@@ -292,7 +293,7 @@ try {
   const receipt = JSON.parse(await readFile(path.join(cliDir, ".konae/published.json"), "utf8")) as Receipt;
   assert.equal(publishOut.trim().split("\n").at(-1), receipt.url);
   const S = app(A, receipt);
-  const policy = await A.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
+  const policy = (await A.owner.call<any>("modules_read", { projectId: receipt.id })).modules.auth.state.signupPolicy;
   assert.equal(policy.mode, "open");
   check("CLI publish", `konae login, init, build and publish ran against the local Kernel. init wrote a ${initVisibility} app with signup ${initPolicy}; with konae.json set to public and open, publish was refused until secret_set, then served ${receipt.url} with signup ${policy.mode}.`);
 
@@ -688,7 +689,7 @@ try {
   await B.owner.cancel(importUpload.transferId).catch(() => {});
   for (const id of Object.values(components)) await B.owner.cancel(id).catch(() => {});
   const I = app(B, imported);
-  assert.equal((await B.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: imported.id })).mode, "open");
+  assert.equal((await B.owner.call<any>("modules_read", { projectId: imported.id })).modules.auth.state.signupPolicy.mode, "open");
 
   const anaWithOriginCookie = I.runtime(cookies.ana);
   assert.equal((await anaWithOriginCookie.call<{ role: string }>("auth_session")).role, "anonymous");

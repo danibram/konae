@@ -196,7 +196,7 @@ try {
   } finally { await owner.cancel(releaseUpload.transferId).catch(() => {}); }
   const host = receipt.hostname;
   const appOrigin = new URL(receipt.url).origin;
-  assert.equal((await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id })).mode, "open");
+  assert.equal((await owner.call<any>("modules_read", { projectId: receipt.id })).modules.auth.state.signupPolicy.mode, "open");
   check("Editor publish", `Saved sources reach revision 1 and the editor-shaped release serves ${receipt.url} as a public app with Open signup.`);
 
   const appPost = (route: string, body: unknown, headers: Record<string, string> = {}) => post(route, body, { host, ...headers });
@@ -416,7 +416,7 @@ try {
   for (const name of appFiles) await writeFile(path.join(appDir(folder), name), sources[name]);
   const { visibility: _, ...folderManifest } = manifest;
   const settings: AppSettings = {
-    id: projectId, name: "Habits", slug: "habits", visibility: "public", signupPolicy: { mode: "open", allowlist: [] },
+    id: projectId, name: "Habits", slug: "habits", visibility: "public", modules: { auth: { on: true, signupPolicy: { mode: "open", allowlist: [] } } },
     signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: folderManifest,
   };
   await writeFile(path.join(folder, "konae.json"), JSON.stringify(settings, null, 2));

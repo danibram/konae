@@ -69,6 +69,12 @@ export function runtime(kernel: Kernel, hostname: string, cookie?: string) {
   } });
 }
 
+export async function setSignupPolicy(owner: McpClient, projectId: string, policy: { mode: string; allowlist?: string[] }) {
+  const before = await owner.call<any>("modules_read", { projectId });
+  const next = await owner.call<any>("module_set", { projectId, module: "auth", options: { signupPolicy: { mode: policy.mode, allowlist: policy.mode === "allowlist" ? policy.allowlist ?? [] : [] } }, expected: before.modules.auth.state });
+  return next.state.signupPolicy;
+}
+
 export function appFetch(kernel: Kernel, hostname: string, route: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("host", hostname);

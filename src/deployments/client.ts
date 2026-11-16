@@ -4,6 +4,7 @@ import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
 import { defaultModuleStates } from "../lib/app-folder";
+import { sourcesUseAuth } from "../lib/module-use";
 import { McpError, platformMcp, type Transfer } from "../mcp/client";
 import { publishProject, type ConfirmSchema } from "./release";
 
@@ -40,7 +41,12 @@ export async function setModule(projectId: string, name: string, state: Record<s
 
 
 export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number, initialModules?: MiniAppProject["modules"]): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
-  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, ...(initialModules ? { initialModules: defaultModuleStates(initialModules) } : {}) }), confirmSchema, () => {}, undefined, observedSourcesRevision);
+  const moduleStates = initialModules ? defaultModuleStates(initialModules) : undefined;
+  if (moduleStates?.auth) {
+    moduleStates.auth.signupPolicy = initialSignupPolicy ?? { mode: visibility === "public" ? "open" : "closed", allowlist: [] };
+    if (visibility === "private" || initialSignupPolicy || sourcesUseAuth(Object.values(project.files ?? {}))) moduleStates.auth.on = true;
+  }
+  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, ...(moduleStates ? { initialModules: moduleStates } : {}) }), confirmSchema, () => {}, undefined, observedSourcesRevision);
   return { receipt, sourcesRevision: plan.expectedSourcesRevision + 1 };
 }
 
@@ -52,14 +58,18 @@ export type SignupMode = (typeof signupModes)[number];
 export type SignupPolicy = { projectId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
 
 export async function readSignupPolicy(projectId: string) {
-  const inspected = await platformMcp.call<{ deployment: { id: string; manifest: { visibility: DeploymentVisibility }; signupPolicy: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId });
-  if (!inspected.deployment) throw new Error("Publish this project before reading its Signup Policy.");
-  return { projectId, visibility: inspected.deployment.manifest.visibility, mode: inspected.deployment.signupPolicy.mode, allowlist: inspected.deployment.signupPolicy.allowlist ?? [] };
+  const read = await readModules(projectId);
+  const policy = read.modules.auth?.state.signupPolicy as { mode?: SignupMode; allowlist?: string[] } | null;
+  const inspected = await platformMcp.call<{ deployment: { manifest: { visibility: DeploymentVisibility } } | null }>("project_inspect", { projectId });
+  if (!inspected.deployment || !policy?.mode) throw new Error("Publish this project before reading its Signup Policy.");
+  return { projectId, visibility: inspected.deployment.manifest.visibility, mode: policy.mode, allowlist: policy.allowlist ?? [] };
 }
 
 
 export async function saveSignupPolicy(projectId: string, mode: SignupMode, allowlist: string[]) {
-  await platformMcp.call("signup_policy_set", { projectId, mode, allowlist });
+  const current = await readModules(projectId);
+  const policy = { mode, allowlist: mode === "allowlist" ? allowlist : [] };
+  await setModule(projectId, "auth", current.modules.auth.state, undefined, { signupPolicy: policy });
   return readSignupPolicy(projectId);
 }
 
@@ -75,12 +85,18 @@ export type SignInMethods = {
 };
 
 export function readSignInMethods(deploymentId: string) {
-  return platformMcp.call<SignInMethods>("sign_in_methods_read", { projectId: deploymentId });
+  return readModules(deploymentId).then((read) => {
+    const current = read.modules.auth?.current as Omit<SignInMethods, "deploymentId" | "methods"> | undefined;
+    const methods = read.modules.auth?.state.signInMethods as SignInMethod[] | undefined;
+    return { deploymentId, methods: methods ?? ["password"], offered: current?.offered ?? ["password"], googleClient: current?.googleClient ?? { clientIdSet: false, clientSecretSet: false }, redirectUris: current?.redirectUris ?? [], notice: current?.notice };
+  });
 }
 
-export function saveSignInMethods(deploymentId: string, google: boolean) {
+export async function saveSignInMethods(deploymentId: string, google: boolean) {
   const methods: SignInMethod[] = google ? ["password", "google"] : ["password"];
-  return platformMcp.call<SignInMethods>("sign_in_methods_set", { projectId: deploymentId, methods });
+  const current = await readModules(deploymentId);
+  await setModule(deploymentId, "auth", current.modules.auth.state, undefined, { signInMethods: methods });
+  return readSignInMethods(deploymentId);
 }
 
 

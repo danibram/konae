@@ -23,7 +23,7 @@ An invitation is an `invitation` challenge on a pending account, answered by the
 
 Closed refuses what a person does alone, which is a signup and the verification that completes it. An invitation is the owner choosing one person, so Open, Invitation only and Closed all accept it. An Allowlist still has to list the address. Closing signup does not end pending invitations. The owner revokes the ones that should end.
 
-Listing accounts, suspending them, inviting and changing the Signup Policy need `manage_users`. `signup_policy_set` is the one way to change the policy of an app that already runs, so a credential that may only publish cannot widen who joins.
+Listing accounts, suspending them, inviting and changing the Signup Policy need `manage_users`. `module_set` on `auth` changes the policy of an app that already runs, so a credential that may only publish cannot widen who joins.
 
 ### Owners are admitted by Konae
 
@@ -31,13 +31,13 @@ Konae admits owners with invitation codes that the operator issues, lists and re
 
 ### An app account may sign in with the app's own Google client
 
-- Each app has its own Google client. The owner creates a Web application client in their own Google Cloud console and sets it as the secrets `google_client_id` and `google_client_secret` with `use: "google"`. The installation has no Google client. `sign_in_methods_set` refuses `google` until both halves are set, and `secret_delete` refuses either half while Google is on.
-- The whole flow stays on the app's host. The owner registers `/_konae/auth/google/callback` on the generated hostname, on a verified custom domain and, while the path is on, on `<domain>/p/<id>`. `sign_in_methods_read` returns these as `redirectUris`, and `start` refuses a host that is not among them. The home address offers no Google sign-in.
+- Each app has its own Google client. The owner creates a Web application client in their own Google Cloud console and sets it as the secrets `google_client_id` and `google_client_secret` with `use: "google"`. The installation has no Google client. `module_set` refuses `google` until both halves are set, and `secret_delete` refuses either half while Google is on.
+- The whole flow stays on the app's host. The owner registers `/_konae/auth/google/callback` on the generated hostname, on a verified custom domain and, while the path is on, on `<domain>/p/<id>`. `modules_read` returns these as `auth.current.redirectUris`, and `start` refuses a host that is not among them. The home address offers no Google sign-in.
 - The Kernel fetches Google's keys only from `https://www.googleapis.com/oauth2/v3/certs`, never from a URL a token names. The token must name Google as issuer, the app's client as audience, an unexpired time, the flow's nonce and a verified email.
 - A Google sign-in reaches the app account that holds the same email, compared without case. Google proves an address only where it is the authority, which is an `@gmail.com` address or one whose domain the token's `hd` claim names. Any other address signs in with email and password.
 - Under local verification anyone can create an active account for an address they do not hold. A Google sign-in for that address replaces its password with an unusable one, ends its sessions and marks the email proven.
 - The Signup Policy still decides whether an email without an account gets one. Password sign-in stays on beside Google, so every account keeps a way back in.
-- `signInMethods` travels in `konae.json`. The client's secrets do not, so on another installation the app offers email and password, and `sign_in_methods_read` says so, until the owner sets the client there and registers that host.
+- `signInMethods` travels in the `auth` module state in `konae.json`. The client's secrets do not, so on another installation the app offers email and password until the owner sets the client there and registers that host.
 
 ## Rejected options
 

@@ -20,6 +20,11 @@ const secret = "orders-webhook-secret-0123456789";
 let address = 0;
 const freshAddress = () => `198.18.1.${++address}`;
 
+async function setSignupPolicy(projectId: string) {
+  const before = await owner.call<any>("modules_read", { projectId });
+  await owner.call("module_set", { projectId, module: "auth", options: { signupPolicy: { mode: "open", allowlist: [] } }, expected: before.modules.auth.state });
+}
+
 const actions = {
   version: 1,
   actions: {
@@ -283,7 +288,7 @@ describe("HTTP routes", () => {
   });
 
   test("a session cookie counts only from the app's own origin", async () => {
-    await owner.call("signup_policy_set", { projectId: deploymentId, mode: "open" });
+    await setSignupPolicy(deploymentId);
     const signup = await route("/_konae/auth/signup", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     expect(signup.status).toBe(200);
     const cookie = signup.headers.get("set-cookie")!.split(";")[0];

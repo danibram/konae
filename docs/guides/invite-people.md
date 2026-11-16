@@ -19,7 +19,7 @@ An invitation is the owner's offer of an account in one app to one email, sent a
 
 Apps created with `konae init` open in the editor with the same sources as folder-created apps. The project card loads metadata; opening it loads the app files.
 
-1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `project_inspect` reads the Signup Policy with `read`.
+1. Log in with the `manage_users` permission. Every `app_` tool needs it, and `modules_read` reads the Signup Policy with `read`.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... \
@@ -27,10 +27,11 @@ Apps created with `konae init` open in the editor with the same sources as folde
     ```
 
     To sign in through the browser without putting the password in the shell, run `login --browser` with the same flags instead. The token lands in `<folder>/.konae/credentials.json` for an MCP client to use. Decide what it may call from `session_inspect`'s `can` map. A tool the credential lacks names the permission it needs.
-2. Set the policy if the app needs another one. Call `signup_policy_set` with `projectId` and a `mode` of `open`, `invitation`, `closed` or `allowlist`, plus the allowlist entries for `allowlist`. The Deployment's ID is the `id` in `konae.json`.
+2. Set the policy if the app needs another one. Call `module_set` on `auth` with a `signupPolicy` option whose `mode` is `open`, `invitation`, `closed` or `allowlist`. Keep allowlist entries as an array. The Deployment's ID is the `id` in `konae.json`.
 
     ```sh
-    bun run konae -- tool signup_policy_set '{"projectId":"<id>","mode":"invitation"}' --dir <folder>
+    bun run konae -- tool modules_read '{"projectId":"<id>"}' --dir <folder>
+    bun run konae -- tool module_set '{"projectId":"<id>","module":"auth","options":{"signupPolicy":{"mode":"invitation","allowlist":[]}}}' --dir <folder>
     ```
 
 3. Call `mail_status` with `bun run konae -- tool mail_status --dir <folder>` and look for `sending: true`. Without a mail transport, `app_invitations_create` refuses and creates nothing.
@@ -62,7 +63,7 @@ Run it in the editor's Data panel, or with `bun run konae -- sql --dir <folder> 
 
 ## Check it worked
 
-- After `signup_policy_set`, read the policy back with `project_inspect`, under `deployment.signupPolicy`.
+- After `module_set`, read the policy back with `modules_read` under `modules.auth.state.signupPolicy`.
 - After `app_invitations_create`, `app_invitation_resend` or `app_invitation_revoke`, read each invitation's state with `app_invitations_list`.
 - After `app_user_suspend` or `app_user_resume`, read the account back with `app_users_list`.
 

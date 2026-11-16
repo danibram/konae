@@ -6,7 +6,6 @@ import path from "node:path";
 import { McpClient, checksum, encodeBase64 } from "../src/mcp/client";
 import { ProjectSources, SaveSupersededError } from "../src/lib/project-sources";
 import { createWorkspaceProject } from "../src/lib/workspace";
-import { signupModes } from "../src/deployments/client";
 import { publishProject } from "../src/deployments/release";
 import { provideLocalAppDependencies } from "./local-app-deps";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -25,6 +24,12 @@ const password = "integration-password-2026";
 setDefaultTimeout(30_000);
 let nextClient = 0;
 const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient / 250)}.${nextClient % 250 + 1}`; };
+
+async function setPolicy(client: McpClient, projectId: string, policy: { mode: string; allowlist: string[] }) {
+  const before = await client.call<any>("modules_read", { projectId });
+  const after = await client.call<any>("module_set", { projectId, module: "auth", options: { signupPolicy: policy }, expected: before.modules.auth.state });
+  return after.state.signupPolicy;
+}
 
 function invitationCode() {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: root };
@@ -83,9 +88,11 @@ function payload(id: string, visibility: "public" | "private" = "public") {
   };
 }
 
-async function release(id: string, visibility: "public" | "private" = "public") {
+async function release(id: string, visibility: "public" | "private" = "public", initialModules?: Record<string, unknown>, files?: Record<string, string>) {
   await alice.call("project_create", { projectId: id, name: "MCP proof" });
   const request = payload(id, visibility);
+  if (initialModules) request.initialModules = initialModules;
+  if (files) request.project.files = files;
   if ((await alice.call<any>("project_inspect", { projectId: id })).deployment) delete (request as any).initialModules;
   const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
   const observed = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
@@ -777,7 +784,7 @@ describe("authenticated MCP", () => {
       const member = await appUser(source.hostname, "existing@app.test");
       await member.call("actions_invoke", { name: "notes.create", input: { title: `Kept ${mode}` } });
       const policy = { mode, allowlist: mode === "allowlist" ? ["allowed@app.test"] : [] };
-      await alice.call("signup_policy_set", { projectId: source.id, ...policy });
+      await setPolicy(alice, source.id, policy);
       const exported = await exportApp(source.id);
       expect(exported.manifest.signupPolicy).toEqual(policy);
       expect(exported.manifest.visibility).toBe("public");
@@ -927,7 +934,8 @@ describe("authenticated MCP", () => {
     expect(read.tools.map((tool) => tool.name)).not.toContain("signup_policy_read");
     expect(read.tools.map((tool) => tool.name)).not.toContain("usage_read");
     expect(publish.tools.map((tool) => tool.name)).toContain("release_apply");
-    expect(users.tools.map((tool) => tool.name)).toContain("signup_policy_set");
+    expect(users.tools.map((tool) => tool.name)).toContain("module_set");
+    expect(users.tools.map((tool) => tool.name)).not.toContain("signup_policy_set");
     expect(exportData.tools.map((tool) => tool.name)).toContain("project_export");
     await expect(read.request("tools/call", { name: "project_inspect", arguments: { projectId: otherProjectId } })).resolves.toMatchObject({ result: { isError: true, content: [expect.objectContaining({ text: expect.stringContaining("outside this token's grants") })] } });
     await expect(write.request("tools/call", { name: "project_create", arguments: { projectId: "new_from_scoped_token", name: "No grant" } })).resolves.toMatchObject({ result: { isError: true, content: [expect.objectContaining({ text: expect.stringContaining("outside this token's grants") })] } });
@@ -950,7 +958,7 @@ describe("authenticated MCP", () => {
     const { receipt: privateReceipt } = await release("private_action_session_proof", "private");
     const visitor = runtimeClient(privateReceipt.hostname);
     await expect(visitor.call("actions_invoke", { name: "notes.list" })).rejects.toThrow("Sign in to use Konae MCP.");
-    await alice.call("signup_policy_set", { projectId: privateReceipt.id, mode: "open" });
+    await setPolicy(alice, privateReceipt.id, { mode: "open", allowlist: [] });
     const privateMember = await appUser(privateReceipt.hostname, "private-session@app.test");
     await privateMember.call("actions_invoke", { name: "notes.create", input: { title: "Session required" } });
     expect(await privateMember.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Session required" }]);
@@ -1174,21 +1182,21 @@ describe("authenticated MCP", () => {
     const member = await appUser(receipt.hostname, "first@app.test");
     expect(await loginPage(receipt.hostname)).toContain("/_konae/auth/signup");
 
-    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "closed" });
+    await setPolicy(alice, receipt.id, { mode: "closed", allowlist: [] });
     expect(await alice.call<any>("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "closed" } } });
     expect((await signup(receipt.hostname, "late@app.test")).status).toBe(403);
     const closedPage = await loginPage(receipt.hostname);
     expect(closedPage).not.toContain("/_konae/auth/signup");
     expect(closedPage).not.toContain("Account creation is open");
 
-    const policy = await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["Carol@Example.test", "@Team.test"] });
+    const policy = await setPolicy(alice, receipt.id, { mode: "allowlist", allowlist: ["Carol@Example.test", "@Team.test"] });
     expect(policy).toMatchObject({ mode: "allowlist", allowlist: ["carol@example.test", "@team.test"] });
     expect(await alice.call<any>("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist", allowlist: ["carol@example.test", "@team.test"] } } });
     expect((await signup(receipt.hostname, "carol@EXAMPLE.TEST")).status).toBe(200);
     expect((await signup(receipt.hostname, "anyone@team.test")).status).toBe(200);
     expect((await signup(receipt.hostname, "dave@example.test")).status).toBe(403);
     expect((await signup(receipt.hostname, "anyone@sub.team.test")).status).toBe(403);
-    await expect(alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["not an email"] })).rejects.toThrow("not an email address");
+    await expect(setPolicy(alice, receipt.id, { mode: "allowlist", allowlist: ["not an email"] })).rejects.toThrow("not an email address");
 
     await expect(member.call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
     await expect(member.call("project_inspect", { projectId: receipt.id })).rejects.toThrow("Unknown tool");
@@ -1201,10 +1209,19 @@ describe("authenticated MCP", () => {
     expect((await fetch(`${url}/mcp`, { method: "POST", headers: { host: receipt.hostname }, body: "{}" })).status).toBe(403);
   });
 
+  test("an app with auth off has no sign-in route, session or people operations", async () => {
+    await expect(release("private_auth_disabled", "private", { auth: { on: false }, files: { on: false } }, { "schema.sql": "", "actions.json": JSON.stringify({ version: 1, actions: {} }) })).rejects.toMatchObject({ refusal: { code: "module.requires" } });
+    const { receipt } = await release("auth_disabled_app", "public", { auth: { on: false }, files: { on: false } }, { "schema.sql": "", "actions.json": JSON.stringify({ version: 1, actions: {} }) });
+    expect((await fetch(`${url}/_konae/auth/login`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ email: "none@app.test", password }) })).status).toBe(404);
+    await expect(runtimeClient(receipt.hostname).call("auth_session")).rejects.toMatchObject({ refusal: { code: "module.off" } });
+    await expect(alice.call("app_users_list", { projectId: receipt.id })).rejects.toMatchObject({ refusal: { code: "module.off" } });
+    await expect(alice.call("app_invitations_create", { projectId: receipt.id, emails: ["none@app.test"], idempotencyKey: crypto.randomUUID() })).rejects.toMatchObject({ refusal: { code: "module.off" } });
+  });
+
   test("an invited person enters an Invitation only app, and only manage_users decides who may join", async () => {
     const tools = await (await fetch(`${url}/mcp`, { method: "POST", headers: { cookie: aliceCookie, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })).json();
-    const policyTool = tools.result.tools.find((tool: { name: string }) => tool.name === "signup_policy_set");
-    expect(policyTool.inputSchema.properties.mode.enum).toEqual([...signupModes]);
+    const moduleTool = tools.result.tools.find((tool: { name: string }) => tool.name === "module_set");
+    expect(moduleTool.inputSchema.properties.options.type).toBe("object");
 
     const id = "invitation_proof";
     await alice.call("project_create", { projectId: id, name: "Invites" });
@@ -1275,7 +1292,7 @@ describe("authenticated MCP", () => {
     expect((await manager.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { projectId: receipt.id })).invitations[0].status).toBe("accepted");
     await manager.call("app_user_suspend", { projectId: receipt.id, userId: users.users[0].userId });
     await expect(member.call("auth_session")).rejects.toThrow();
-    expect(await manager.call("signup_policy_set", { projectId: receipt.id, mode: "closed" })).toMatchObject({ mode: "closed", previousMode: "invitation" });
+    expect(await setPolicy(manager, receipt.id, { mode: "closed", allowlist: [] })).toMatchObject({ mode: "closed" });
 
     const audit = new Database(path.join(root, "mcp.sqlite"));
     const rows = audit.query("SELECT tool, target, ok FROM audit WHERE tool LIKE 'app_%' AND target = ?1").all(receipt.id) as Array<{ tool: string; ok: number }>;
@@ -1319,7 +1336,7 @@ describe("authenticated MCP", () => {
     const anonymous = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     expect(anonymous.status).toBe(401);
     await expect(runtimeClient(receipt.hostname).call("actions_invoke", { name: "notes.count" })).rejects.toThrow("Sign in");
-    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["visitor@app.test"] });
+    await setPolicy(alice, receipt.id, { mode: "allowlist", allowlist: ["visitor@app.test"] });
     const visitor = await appUser(receipt.hostname, "visitor@app.test");
     expect(await visitor.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 0 }]);
   });
@@ -1334,7 +1351,7 @@ describe("authenticated MCP", () => {
 
   test("signup answers the same for closed and unlisted addresses", async () => {
     const { receipt } = await release("signup_oracle_proof");
-    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["listed@app.test"] });
+    await setPolicy(alice, receipt.id, { mode: "allowlist", allowlist: ["listed@app.test"] });
     const attempt = async (email: string, pw: string) => {
       const response = await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password: pw }) });
       return { status: response.status, body: await response.json() };
@@ -1344,7 +1361,7 @@ describe("authenticated MCP", () => {
     expect(await attempt("unlisted@app.test", "x")).toEqual(listedWeak);
     const unlisted = await attempt("unlisted@app.test", password);
     expect(unlisted.status).toBe(403);
-    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "closed" });
+    await setPolicy(alice, receipt.id, { mode: "closed", allowlist: [] });
     expect(await attempt("listed@app.test", password)).toEqual(unlisted);
   });
 
@@ -1380,8 +1397,8 @@ describe("authenticated MCP", () => {
       expect(db.query("SELECT COUNT(*) AS n, SUM(ok) AS ok FROM audit WHERE actor LIKE 'runtime:%' AND tool = 'files_delete' AND target = ?1").get(receipt.id)).toEqual({ n: 1, ok: 1 });
       const applied = db.query("SELECT target, detail FROM audit WHERE tool='release_apply' AND target='rate_limit_proof'").get() as { detail: string };
       expect(applied.detail).toBe(`deployment ${receipt.id}`);
-      const changed = db.query("SELECT detail FROM audit WHERE tool='signup_policy_set' AND detail IS NOT NULL ORDER BY id LIMIT 1").get() as { detail: string };
-      expect(changed.detail).toMatch(/^(open|allowlist|closed) to (open|allowlist|closed)$/);
+      const changed = db.query("SELECT tool FROM audit WHERE tool='module_set' ORDER BY id LIMIT 1").get() as { tool: string };
+      expect(changed.tool).toBe("module_set");
     } finally { db.close(); }
   });
 
@@ -1442,7 +1459,7 @@ describe("authenticated MCP", () => {
 
   test("the signup policy survives a Kernel restart", async () => {
     const { receipt } = await release("restart_proof");
-    await alice.call("signup_policy_set", { projectId: receipt.id, mode: "allowlist", allowlist: ["@kept.test"] });
+    await setPolicy(alice, receipt.id, { mode: "allowlist", allowlist: ["@kept.test"] });
     kernel.kill();
     await kernel.exited;
     await startKernel();
@@ -1583,7 +1600,7 @@ describe("app accounts under required verification", () => {
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
     const receipt = await owner.call<{ id: string; hostname: string }>("release_apply", { planId: plan.planId });
     host = receipt.hostname;
-    await owner.call("signup_policy_set", { projectId: receipt.id, mode: "open" });
+    await setPolicy(owner, receipt.id, { mode: "open", allowlist: [] });
   }, 60_000);
 
   afterAll(async () => {
@@ -1640,7 +1657,7 @@ describe("app accounts under required verification", () => {
     await owner.cancel(transfer.transferId);
     const inspected = await owner.call<{ deployment: { contactEmail?: string } }>("project_inspect", { projectId: id });
     expect(inspected.deployment.contactEmail).toBe(ownerEmail);
-    await owner.call("signup_policy_set", { projectId: receipt.id, mode: "open" });
+    await setPolicy(owner, receipt.id, { mode: "open", allowlist: [] });
     const at = (route: string, body: unknown, cookie?: string) => post(route, body, { host: receipt.hostname, ...(cookie ? { cookie } : {}) });
     const runtimeAs = (cookie?: string) => new McpClient(`${strictUrl}/_konae/mcp`, { fetch: (input, init) => {
       const headers = new Headers(init?.headers); headers.set("host", receipt.hostname); headers.set("x-forwarded-for", freshClient()); if (cookie) headers.set("cookie", cookie);

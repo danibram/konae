@@ -89,11 +89,11 @@ A Deployment with any other visibility, or none. Its shell, assets and runtime e
 _Avoid_: password-protected app
 
 **Signup Policy**:
-The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. The editor preselects Invitation only for a private app, `konae init` writes Invitation only, and a release without a policy defaults public apps to Open and private apps to Closed. The owner chooses it on the first release and changes it with `signup_policy_set`, which needs `manage_users` (ADR-0002, ADR-0003).
+The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. It is the `signupPolicy` option of `auth`, changed with `module_set` and the `manage_users` permission (ADR-0002, ADR-0003, ADR-0015).
 _Avoid_: invite list, access grant
 
 **Sign-in Methods**:
-The ways an app account signs in: `password` always, and `google` once the owner sets the app's Google client and turns it on with `sign_in_methods_set`. `konae.json` carries the list; the client stays behind (ADR-0003).
+The ways an app account signs in: `password` always, and `google` once the owner sets the app's Google client and includes it in the `auth` module's `signInMethods` option. `konae.json` carries the list; the client stays behind (ADR-0003, ADR-0015).
 _Avoid_: social login, SSO
 
 **Google Client**:

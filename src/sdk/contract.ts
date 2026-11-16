@@ -69,12 +69,12 @@ export type SdkModule = {
 
 export type SdkModuleOption = {
   key: string;
-  type: "boolean" | "enum" | "path" | "string" | "number";
+  type: "boolean" | "enum" | "path" | "string" | "number" | "signup-policy" | "sign-in-methods";
   values?: string[];
   valueLabels?: Record<string, string>;
   defaultLabel?: string;
   valuesFrom?: "app-images";
-  default: string | number | boolean | null;
+  default: unknown;
   label: string;
   help: string;
 };
@@ -128,15 +128,18 @@ export const sdkContract = {
   modules: [
     {
       name: "auth",
-      title: "Accounts",
+      title: "App accounts",
       summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
-      switch: false, options: [], permission: "manage_users", agentRule: "never", requires: [], uses: ["manifest.signupPolicy", "manifest.visibility"],
+      switch: true, options: [
+        { key: "signupPolicy", type: "signup-policy", values: ["open", "allowlist", "invitation", "closed"], valueLabels: { open: "Open", allowlist: "Allowlist", invitation: "Invitation only", closed: "Closed" }, default: null, label: "Who can create an account", help: "Choose who may create an app account. Allowlist entries stay as separate email addresses or domains." },
+        { key: "signInMethods", type: "sign-in-methods", values: ["password", "google"], valueLabels: { password: "Email and password", google: "Continue with Google" }, default: ["password"], label: "Sign-in methods", help: "Password stays on. Google needs this app's Google client set as signing secrets." },
+      ], permission: "manage_users", agentRule: "never", requires: [], uses: ["private deployment", "app accounts or invitations", "authenticated actions", "actor bindings"],
       declarations: [],
       notes: [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
         "An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.",
-        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.",
-        "The owner may add Continue with Google to the sign-in page in the editor's Access > Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.",
+        "The Deployment's Signup Policy decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.",
+        "The owner may add Continue with Google to the sign-in page in the Users view, once the app's own Google client ID and secret are set as signing secrets. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.",
       ],
       calls: [
         {

@@ -46,6 +46,16 @@ describe("validation gate", () => {
     expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set." });
     expect((await validator.validate(files, { state: "absent" }, { modules: { files: { on: true } } })).ok).toBe(true);
   });
+  test("requires auth when actions name an authenticated caller or actor binding", async () => {
+    const files = capsule({ "app.js": "await miniapp.auth.session();" });
+    expect((await validator.validate(files)).ok).toBe(true);
+    const result = await validator.validate(files, undefined, { modules: { files: { on: true }, auth: { on: false } } });
+    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module auth is off. Turn it on with module_set." });
+  });
+  test("a private first release refuses an explicitly off auth module", async () => {
+    const result = await validator.validate(capsule(), { state: "absent" }, { visibility: "private", modules: { auth: { on: false } } });
+    expect(result.errors[0]).toMatchObject({ code: "module.requires", message: "Module private Deployment requires auth, which is off. Turn auth on first." });
+  });
   test("passes the starter capsule", async () => {
     const result = await validator.validate(capsule());
     expect(result.errors).toEqual([]);

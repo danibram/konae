@@ -23,7 +23,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | --- | --- | --- |
 | Public landing | Public Deployment, actions declared `anonymous` | `status.list`, `updates.list`, `downloads.list` |
 | Public read API | An unsigned `GET` route on a public app, with pagination and search under a `LIMIT` | `updates.list` at `GET /api/updates?before=&q=` |
-| Accounts | Signup Policy Open, `KONAE_ACCOUNT_VERIFICATION=required` | `konae.json` `signupPolicy`, the Kernel's sign-in page |
+| Accounts | Signup Policy Open, `KONAE_ACCOUNT_VERIFICATION=required` | `konae.json` `modules.auth.signupPolicy`, the Kernel's sign-in page |
 | Member area | `actor` bindings on `authenticated` actions | `me.*`, `notes.*`, `attachments.*` |
 | Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish` |
 | Admin area for the owner | Guards that find the caller's `profiles` row with role `'owner'` through `{ "source": "actor", "field": "id" }` | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
@@ -56,7 +56,7 @@ rm -rf /tmp/starter/app && mkdir /tmp/starter/app
 cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,actions.json} /tmp/starter/app/
 ```
 
-1. In `/tmp/starter/konae.json` set `"visibility": "public"` and `"signupPolicy": { "mode": "open" }`.
+1. In `/tmp/starter/konae.json` set `"visibility": "public"` and `"modules": { "auth": { "on": true, "signupPolicy": { "mode": "open", "allowlist": [] } } }`.
 2. `status.escalate` calls a team inbox. Publish the [inbox](../inbox/README.md) first, and put its URL with `/hooks/events` in place of `http://inbox.localhost/hooks/events` in `actions.json`.
 3. Run `bun run konae -- publish --dir /tmp/starter`. The first run registers the project and is refused, naming an unset signing secret, `status_webhook` or the call's `inbox_events`.
 4. Over MCP, with the `id` from `konae.json` as `projectId`, set `secret_set { "projectId": "<id>", "name": "status_webhook", "value": "<16 to 512 printable characters>" }` and `secret_set { "projectId": "<id>", "name": "inbox_events", "value": "<the inbox's events_webhook value>", "use": "call" }`.
@@ -113,7 +113,7 @@ Each row is a limit the app met, with the exact answer. None was worked around.
 | Call action | Ana writes `status.escalated` herself | `Action status.escalated runs only after the call status.escalate answers.` | None. Only the Kernel records what the inbox answered |
 | Signing secret | `secret_set` of the inbox's `events_webhook` value as the starter's `inbox_events` | `Another of your projects already uses this secret value. ...` without `"use": "call"`; accepted with it | One owner's two apps need the call-only use to share a value |
 | Signed route | `konae publish` before `secret_set` | `Action status.report signs with the secret status_webhook, which is not set for this project. Set it with secret_set before publishing.` | Each Kernel and each project needs `secret_set` before its first release can pass: the CLI project, the editor's project and the import, for `status_webhook` and `inbox_events` both |
-| CLI | `konae init` | Writes `"visibility": "private"` and `{ "mode": "invitation" }`, plus the template's own files | A public, open app takes a hand edit of `konae.json`, and the template's own files have to be deleted before the Capsule goes in |
+| CLI | `konae init` | Writes `"visibility": "private"` and `{ "mode": "invitation", "allowlist": [] } } }`, plus the template's own files | A public, open app takes a hand edit of `konae.json`, and the template's own files have to be deleted before the Capsule goes in |
 | Signed webhook | A signed delivery with state "on fire" | `400 {"error":"CHECK constraint failed: state IN ('operational', 'degraded', 'down')"}` | The sender sees SQLite's words; an action has no way to state an allowed list as an input rule |
 | Import | The origin's Release bot key on the destination | `401 invalid-api-key`; `api_keys_list` shows both keys with `revokedReason: "import"` | Every program needs a new key after a move, as documented |
 | Import | Ana's origin session cookie on the destination, calling `notes.list` | `authentication-required` | People sign in again, as documented |

@@ -48,6 +48,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let root = &state.data_root;
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     decide_files_module(root, id).await?;
+    decide_auth_module(root, id).await?;
     let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
     let sources = layout::sources(root, id);
@@ -193,13 +194,80 @@ pub async fn decide_files_module(root: &Path, id: &str) -> Result<Option<bool>> 
     }
     let legacy_file_access = raw_settings["manifest"]["fileAccess"].as_str().or(raw_settings["released"]["manifest"]["fileAccess"].as_str());
     let used = crate::modules::uses_files(root, id, &json!({"fileAccess": legacy_file_access}));
+    let legacy_auth_missing = raw_settings["modules"]["auth"].is_null();
+    let auth_used = legacy_auth_missing && crate::modules::uses_auth(root, id);
     let mut settings = Settings::read(root, id)?;
     let files_state = settings.modules.get_mut("files").expect("files is switchable");
     files_state["on"] = json!(used);
     if legacy_file_access == Some("app-users") { files_state["fileAccess"] = json!("app-users"); }
+    if legacy_auth_missing {
+        settings.modules.get_mut("auth").expect("auth is switchable")["on"] = json!(auth_used);
+        eprintln!("konae: decided auth module for {id}: {}", if auth_used { "on" } else { "off" });
+    }
     settings.write(root).await?;
     eprintln!("konae: decided files module for {id}: {}", if used { "on" } else { "off" });
     Ok(Some(used))
+}
+
+pub async fn decide_auth_module(root: &Path, id: &str) -> Result<Option<bool>> {
+    let raw_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(root, id)).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?)?;
+    if !raw_settings["modules"]["auth"].is_null() { return Ok(None); }
+    let used = crate::modules::uses_auth(root, id);
+    let mut settings = Settings::read(root, id)?;
+    let policy = serde_json::to_value(&settings.signup_policy)?;
+    let methods = serde_json::to_value(&settings.sign_in_methods)?;
+    let auth_state = settings.modules.get_mut("auth").expect("auth is switchable");
+    auth_state["on"] = json!(used);
+    auth_state["signupPolicy"] = policy;
+    auth_state["signInMethods"] = methods;
+    settings.write(root).await?;
+    eprintln!("konae: decided auth module for {id}: {}", if used { "on" } else { "off" });
+    Ok(Some(used))
+}
+
+#[cfg(test)]
+mod auth_module_tests {
+    use super::*;
+
+    fn copy_tree(source: &Path, target: &Path) {
+        std::fs::create_dir_all(target).unwrap();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let destination = target.join(entry.file_name());
+            if path.is_dir() { copy_tree(&path, &destination); } else { std::fs::copy(path, destination).unwrap(); }
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_auth_folders_keep_accounts_and_policy_and_decide_private_and_static_apps() {
+        let root = std::env::temp_dir().join(format!("konae-auth-module-fixtures-{}", Uuid::new_v4()));
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-auth-0.9.0");
+        for (fixture, id, expected) in [("accounts", "legacy_accounts", true), ("private", "legacy_private", true), ("public", "legacy_public_static", false)] {
+            let target = layout::folder(&root, id);
+            copy_tree(&fixtures.join(fixture), &target);
+            std::fs::create_dir_all(layout::dist(&root, id)).unwrap();
+            std::fs::write(layout::dist(&root, id).join("index.html"), "<!doctype html><main>Legacy app</main>").unwrap();
+            if fixture == "accounts" {
+                let identity = layout::data(&root, id).join("identity.sqlite");
+                std::fs::create_dir_all(identity.parent().unwrap()).unwrap();
+                let connection = Connection::open(identity).unwrap();
+                connection.execute("CREATE TABLE app_users (id TEXT PRIMARY KEY, email TEXT NOT NULL)", []).unwrap();
+                connection.execute("INSERT INTO app_users VALUES ('user-1', 'person@example.test')", []).unwrap();
+            }
+            assert_eq!(decide_files_module(&root, id).await.unwrap(), Some(false));
+            assert_eq!(decide_auth_module(&root, id).await.unwrap(), None);
+            let settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
+            assert_eq!(settings["modules"]["auth"]["on"], expected);
+            if fixture == "accounts" {
+                assert_eq!(settings["modules"]["auth"]["signupPolicy"]["mode"], "allowlist");
+                assert_eq!(settings["modules"]["auth"]["signupPolicy"]["allowlist"][0], "person@example.test");
+                let count: i64 = Connection::open(layout::data(&root, id).join("identity.sqlite")).unwrap().query_row("SELECT COUNT(*) FROM app_users", [], |row| row.get(0)).unwrap();
+                assert_eq!(count, 1);
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 async fn optional_text(path: &Path) -> Result<Option<String>> {
@@ -361,7 +429,7 @@ mod tests {
         assert_eq!(listed["modules"]["actions"]["state"]["on"], true);
         let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
         assert_eq!(rewritten["modules"]["files"]["on"], false);
-        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["files".to_owned(), "seo".to_owned()].into());
+        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["auth".to_owned(), "files".to_owned(), "seo".to_owned()].into());
         assert_eq!(rewritten["modules"]["seo"]["on"], false);
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -47,6 +47,8 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
       : option.type === "string" ? typeof input.value === "string"
       : option.type === "number" ? typeof input.value === "number"
       : option.type === "enum" ? option.values?.includes(String(input.value)) === true
+      : option.type === "signup-policy" ? isSignupPolicy(input.value)
+      : option.type === "sign-in-methods" ? JSON.stringify(input.value) === JSON.stringify(["password"]) || JSON.stringify(input.value) === JSON.stringify(["password", "google"])
       : option.type === "path" ? input.value === null || (typeof input.value === "string" && input.value.length > 0 && !input.value.startsWith("/") && !input.value.includes("\\") && input.value.split("/").every((part) => part !== "" && part !== "." && part !== ".."))
       : false);
     if (!valid) {
@@ -59,4 +61,10 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
     }
   }
   return null;
+}
+
+function isSignupPolicy(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as { mode?: unknown; allowlist?: unknown };
+  return ["open", "invitation", "closed", "allowlist"].includes(String(policy.mode)) && Array.isArray(policy.allowlist) && policy.allowlist.every((entry) => typeof entry === "string");
 }

@@ -27,8 +27,8 @@ export type AppSettings = {
   name: string;
   slug: string;
   visibility: "public" | "private";
-  signupPolicy: SignupPolicy;
-  signInMethods: ("password" | "google")[];
+  signupPolicy?: SignupPolicy;
+  signInMethods?: ("password" | "google")[];
   contactEmail?: string;
   modules?: Record<string, { on: boolean; [option: string]: unknown }>;
 
@@ -186,7 +186,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Layout
 
-- \`konae.json\`: the app's name, visibility (${settings.visibility}), Signup Policy, sign-in methods, contact email and the Kernel version.
+- \`konae.json\`: the app's name, visibility (${settings.visibility}), module state, contact email and the Kernel version.
 - \`app/\`: the editable sources. It may also hold binary assets. Konae checks the same path, count and decoded-size limits before saving and publishing them.
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.

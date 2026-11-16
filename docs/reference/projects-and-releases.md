@@ -69,7 +69,7 @@ sequenceDiagram
 
 A published app runs under the Kernel's Content Security Policy ([the architecture](../architecture.md#isolation-of-hosted-code)). The inline scripts of each HTML page run because the Kernel allows each by its hash. Inline event handler attributes, scripts from other origins and requests to other origins do not.
 
-`signupPolicy` in `konae.json` names who may create an app account when the first release goes out, and `publish` sends it as `initialSignupPolicy`. `init` writes the template's visibility, which is private except for `tasks`, `form` and `gallery`, and `{ "mode": "invitation" }`. On a later release `publish` sends no policy; when the app's policy differs from the file, it prints one warning and still publishes, such as `konae.json asks for signup Open, but this app has Invitation only. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.`
+`modules.auth.signupPolicy` in `konae.json` names who may create an app account on the first release. `init` writes it under auth, and private templates turn auth on. Public apps default to Open and private apps default to Closed when they have no policy. Later releases keep the installed policy. The CLI warns when the folder's policy differs, then publishes without changing it. Change the policy in the editor's Users view or call `module_set` on auth with a credential that holds `manage_users`.
 
 ### The schema change
 

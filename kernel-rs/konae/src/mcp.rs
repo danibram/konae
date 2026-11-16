@@ -79,7 +79,7 @@ fn remember_import(state: &Konae, package_id: &str, project: &str, plan: &str) -
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 19] = [
+const OPEN_TOOLS: [&str; 18] = [
     "platform_guide",
     "platform_describe",
     "mail_status",
@@ -96,7 +96,6 @@ const OPEN_TOOLS: [&str; 19] = [
     "api_keys_list",
     "usage_summary",
     "signals_read",
-    "sign_in_methods_read",
     "project_export",
     "release_plan",
 ];
@@ -724,28 +723,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools.extend(usage_tools());
     tools.extend(calls_tools());
     tools.extend(mail_tools());
-    tools.push(tool(
-        "sign_in_methods_read",
-        "Read how people sign in to a deployment: password, and google when the owner turned it on. googleClient says whether the app's google_client_id and google_client_secret are set, without their values, and redirectUris lists the callbacks to register in the app's Google OAuth client.",
-        json!({"projectId":text}),
-        &["projectId"],
-        true,
-    ));
     if owner.scopes.iter().any(|s| s == "manage_users") {
-        tools.push(tool(
-            "sign_in_methods_set",
-            "Choose how people sign in to a deployment: [\"password\"] or [\"password\",\"google\"]. Password cannot be turned off. Google needs the app's own Google client: set google_client_id and google_client_secret with secret_set use google first. Read back with sign_in_methods_read.",
-            json!({"projectId":text,"methods":{"type":"array","items":{"type":"string","enum":["password","google"]},"minItems":1,"maxItems":2}}),
-            &["projectId", "methods"],
-            false,
-        ));
-        tools.push(tool(
-            "signup_policy_set",
-            "Choose who may create an account on a deployment: open, invitation (only people invited with app_invitations_create), closed, or allowlist (exact emails or @domain entries). Omitting allowlist keeps the current entries.",
-            json!({"projectId":text,"mode":{"type":"string","enum":["open","invitation","closed","allowlist"]},"allowlist":{"type":"array","items":{"type":"string","minLength":1,"maxLength":254}}}),
-            &["projectId", "mode"],
-            false,
-        ));
         tools.extend(invitations_tools());
         if owner.session {
             tools.push(tool(
@@ -759,7 +737,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
-            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends, or, with use google, the app's Google OAuth client as google_client_id and google_client_secret. The value is never returned. Read back with secrets_list, and the Google client with sign_in_methods_read.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call","google"]}}), &["projectId","name","value"], false),
+            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends, or, with use google, the app's Google OAuth client as google_client_id and google_client_secret. The value is never returned. Read back with secrets_list, and read Google client state with modules_read.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call","google"]}}), &["projectId","name","value"], false),
             tool("secret_delete", "Delete a signing secret no published action uses. A Google client secret is refused while Google sign-in is on.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
             tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["projectId","name"], false),
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"projectId":text,"keyId":text}), &["projectId","keyId"], false),
@@ -1062,18 +1040,6 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
             }
-            let previous_mode = if name == "signup_policy_set" {
-                let deployments = state.deployments.read().await;
-                deployments
-                    .values()
-                    .find(|d| Some(d.id.as_str()) == arguments["projectId"].as_str())
-                    .map(|d| d.signup_policy.mode)
-            } else {
-                None
-            };
-
-
-
             let package_transfer = (name.starts_with("transfer_") && name != "transfer_begin")
                 .then(|| transfer(&state, &principal, &arguments).ok())
                 .flatten();
@@ -1156,12 +1122,12 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 // 64 blocks does not push the rest out of the log.
                 Some(t) if arguments["offset"] == 0 || result.is_err() => {
                     let target = json!({"projectId":t["projectId"],"component":t["component"]});
-                    audit(&state, &principal, "package_download", &target, None, &result);
+                    audit(&state, &principal, "package_download", &target, &result);
                 }
                 Some(_) => {}
                 // An upload of a part of an export is audited at its first block.
                 None if component_upload && arguments["offset"] != 0 && result.is_ok() => {}
-                None => audit(&state, &principal, name, &arguments, previous_mode, &result),
+                None => audit(&state, &principal, name, &arguments, &result),
             }
             Ok(tool_result(result))
         }
@@ -1177,10 +1143,8 @@ fn audit(
     principal: &str,
     name: &str,
     arguments: &Value,
-    previous_mode: Option<SignupMode>,
     result: &Result<Value>,
 ) {
-    let mode = |value: &Value| value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
     let (target, detail): (Option<String>, Option<String>) = match name {
         "release_apply" => {
             let project = store(state).ok().and_then(|db| {
@@ -1218,17 +1182,6 @@ fn audit(
             arguments["projectId"].as_str().map(str::to_owned),
             arguments["component"].as_str().map(str::to_owned),
         ),
-        "signup_policy_set" => {
-            let before = previous_mode.map(|m| mode(&json!(m))).unwrap_or_else(|| "unknown".into());
-            let after = match result {
-                Ok(value) => mode(&value["mode"]),
-                Err(_) => format!("{} (refused)", mode(&arguments["mode"])),
-            };
-            (
-                arguments["projectId"].as_str().map(str::to_owned),
-                Some(format!("{before} to {after}")),
-            )
-        }
         _ => (
             arguments["projectId"].as_str().map(str::to_owned),
             None,
@@ -1678,27 +1631,6 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
             super::usage::admin_call(&state.data_root, &deployment, name, &a).await
         }
-        "sign_in_methods_read" => {
-            let id = a["projectId"].as_str().unwrap();
-            let deployment = owned_deployment(state, owner, id, "read").await?;
-            Ok(sign_in_methods_value(state, &deployment))
-        }
-        "sign_in_methods_set" => {
-            let id = a["projectId"].as_str().unwrap();
-            let found = owned_deployment(state, owner, id, "manage_users").await?;
-
-
-            let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
-            let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
-            let methods = requested_sign_in_methods(state, &updated, &a["methods"])?;
-            let previous = updated.sign_in_methods.clone();
-            updated.sign_in_methods = methods;
-            persist_deployment(state, &updated).await?;
-            state.deployments.write().await.insert(updated.hostname.clone(), updated.clone());
-            let mut value = sign_in_methods_value(state, &updated);
-            value["previousMethods"] = json!(previous);
-            Ok(value)
-        }
         "maintenance_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::maintenance::read(&state.data_root, &deployment.id))
@@ -1709,7 +1641,9 @@ async fn admin_call(
         }
         "modules_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
-            Ok(kernel::modules::read(&state, &deployment))
+            let mut value = kernel::modules::read(&state, &deployment);
+            value["modules"]["auth"]["current"] = sign_in_methods_value(state, &deployment);
+            Ok(value)
         }
         "module_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
@@ -1718,10 +1652,20 @@ async fn admin_call(
             let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::Error::new(kernel::refusal::refuse("module.unknown", format!("Unknown module {module}."))))?;
             let deployment = owned_deployment(state, owner, id, scope).await?;
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
+            if module == "auth" {
+                if let Some(methods) = a.get("options").and_then(|options| options.get("signInMethods")) {
+                    requested_sign_in_methods(state, &deployment, methods)?;
+                }
+            }
             let result = kernel::modules::set(&state.data_root, &deployment.id, module, a["on"].as_bool(), a.get("options"), a.get("expected")).await?;
             let mut deployments = state.deployments.write().await;
             if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
                 current.modules.insert(module.to_owned(), result["state"].clone());
+                if module == "auth" {
+                    if let Some(policy) = result["state"].get("signupPolicy").filter(|value| !value.is_null()) { current.signup_policy = serde_json::from_value(policy.clone())?; }
+                    if let Some(methods) = result["state"].get("signInMethods") { current.sign_in_methods = serde_json::from_value(methods.clone())?; }
+                    persist_deployment(state, current).await?;
+                }
             }
             Ok(result)
         }
@@ -1743,12 +1687,6 @@ async fn admin_call(
             let current = super::maintenance::read(&state.data_root, &deployment.id)["maintenance"].clone();
             super::refusal::check_setting_expected(a.get("expected"), current)?;
             super::maintenance::set(&state.data_root, &deployment.id, on)
-        }
-        "signup_policy_set" => {
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "manage_users").await?;
-            let mode: SignupMode = serde_json::from_value(a["mode"].clone())?;
-            let entries: Option<Vec<String>> = a.get("allowlist").map(|list| serde_json::from_value(list.clone())).transpose()?;
-            set_signup_policy(state, &deployment.id, mode, entries).await
         }
         "database_execute" => {
             let id = a["projectId"].as_str().unwrap();
@@ -2744,7 +2682,7 @@ mod tests {
         let (state, _) = kernel::tests::login_test_state(&root, "public").await;
         let state = Konae::for_test(state);
         let ok: Result<Value> = Ok(json!({}));
-        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, &ok);
+        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), &ok);
         let rows = AUDIT_MAX_ROWS + 3 * AUDIT_PRUNE_INTERVAL;
         {
             let db = store(&state).unwrap();
@@ -2805,14 +2743,14 @@ mod tests {
         for definition in admin_tools(&reader) {
             assert!(definition["inputSchema"]["properties"].get("deploymentId").is_none(), "owner tool {} uses deploymentId", definition["name"]);
         }
-        assert!(!names(&reader).contains(&"signup_policy_set".to_owned()));
-        assert!(names(&reader).contains(&"sign_in_methods_read".to_owned()));
-        assert!(!names(&reader).contains(&"sign_in_methods_set".to_owned()));
+        for removed in ["signup_policy_set", "sign_in_methods_set", "sign_in_methods_read"] { assert!(!names(&reader).contains(&removed.to_owned())); }
         let publisher = Owner { scopes: vec!["read".into(), "publish".into()], ..reader.clone() };
-        assert!(!names(&publisher).contains(&"signup_policy_set".to_owned()), "publish alone does not change who may sign up");
+        assert!(names(&publisher).contains(&"module_set".to_owned()));
         assert!(!names(&publisher).iter().any(|name| name.starts_with("app_")));
         let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
-        for tool in ["signup_policy_set", "sign_in_methods_set", "app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
+        assert!(names(&manager).contains(&"module_set".to_owned()));
+        for removed in ["signup_policy_set", "sign_in_methods_set", "sign_in_methods_read"] { assert!(!names(&manager).contains(&removed.to_owned())); }
+        for tool in ["app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
             assert!(names(&manager).contains(&tool.to_owned()), "{tool}");
         }
     }
@@ -2844,7 +2782,7 @@ mod tests {
                 deployment.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
             }
             let answer = match case["tool"].as_str().unwrap() {
-                "sign_in_methods_set" => requested_sign_in_methods(&state, &deployment, &case["input"]["methods"]).map(|_| json!(null)),
+                "module_set" => requested_sign_in_methods(&state, &deployment, &case["input"]["methods"]).map(|_| json!(null)),
                 tool => super::super::http::secrets_call(&db, "p1", Some(&deployment), tool, &case["input"]),
             };
             match (case["error"].as_str(), answer) {
@@ -2862,7 +2800,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_methods_set_keeps_password_and_refuses_google_without_the_apps_client() {
+    fn auth_sign_in_methods_keep_password_and_refuse_google_without_the_apps_client() {
         let root = std::env::temp_dir().join(format!("konae-methods-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state = Konae::for_test(AppState {

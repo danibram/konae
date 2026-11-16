@@ -655,6 +655,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
     let sizes = artifact.iter().map(|(path, bytes)| (path.as_str(), bytes.len()));
     anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= super::size::ARTIFACT_BYTES, "{}", super::size::artifact_refused(sizes));
+    let artifact_uses_auth = super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
     drop(artifact);
     super::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let program = super::action_shape::read(
@@ -664,6 +665,20 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
             .get("actions.json")
             .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
     )?;
+    let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
+    let mut candidate_modules = existing_modules.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+    let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes)) || artifact_uses_auth;
+    if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
+        && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
+        && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
+        candidate_modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
+    }
+    if input.visibility != "public" && !super::modules::is_on(&candidate_modules, "auth") {
+        return Err(anyhow::Error::new(super::modules::check_requires("private Deployment", "auth", false).unwrap_err()));
+    }
+    if uses_auth && !super::modules::is_on(&candidate_modules, "auth") {
+        return Err(anyhow::Error::new(super::refusal::refuse("module.off", "Module auth is off. Turn it on with module_set.")));
+    }
     super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
@@ -720,6 +735,13 @@ pub async fn runtime_call(
     name: &str,
     a: Value,
 ) -> Result<Value> {
+    if name.starts_with("auth_") {
+        if let Some(id) = app {
+            if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
+                super::modules::require_on(&deployment.modules, "auth")?;
+            }
+        }
+    }
     match name {
         "auth_session" => {
             let result = response_value(session(State(state.clone()), headers.clone()).await).await;

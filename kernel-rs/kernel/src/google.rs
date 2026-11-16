@@ -33,7 +33,7 @@ pub fn is_client_name(name: &str) -> bool {
 /// The refusal for a Deployment whose owner has not turned Google on, or
 /// whose Google client is not set on this installation.
 pub const NOT_ON: &str = "Google sign-in is not turned on for this app.";
-/// `sign_in_methods_set` refuses google with this while either secret is unset.
+/// `module_set` refuses google with this while either secret is unset.
 pub const NEEDS_CLIENT: &str = "Set this app's Google client ID and client secret before turning Google on.";
 pub const NAMES_RESERVED: &str = "google_client_id and google_client_secret hold this app's Google client. Set them with use google.";
 pub const NAMES_ONLY: &str = "A secret with use google is named google_client_id or google_client_secret.";
@@ -891,7 +891,7 @@ mod tests {
                 signup_policy: SignupPolicy::from_input(mode, &["@practice.example".into()]).unwrap(),
                 sign_in_methods: vec![SignInMethod::Password, SignInMethod::Google],
                 contact_email: None,
-                modules: crate::modules::defaults(),
+                modules: crate::modules::auth_enabled_defaults(),
                 released_schema: String::new(),
             };
             std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();

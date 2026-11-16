@@ -87,6 +87,30 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
         <header><div><h3>{contract.title}</h3><small className="module-settings-key">{contract.name}</small><p>{live?.summary ?? contract.summary}</p></div><Badge tone={state.on ? "success" : "neutral"}>{state.on ? "On" : "Off"}</Badge></header>
         {(contract.options as readonly SdkModuleOption[]).map((option) => {
           const value = values[option.key] ?? null;
+          if (option.type === "signup-policy") {
+            const policy = isRecord(value) ? value : { mode: "closed", allowlist: [] };
+            const allowlist = Array.isArray(policy.allowlist) ? policy.allowlist.map(String) : [];
+            const updatePolicy = (next: Record<string, unknown>) => change(contract.name, option.key, next);
+            return <div key={option.key} className="module-option-group">
+              <Field label={option.label} help={live?.options.find((item) => item.key === option.key)?.help ?? option.help}>
+                <Select value={String(policy.mode ?? "closed")} onChange={(event) => updatePolicy({ mode: event.target.value, allowlist })} disabled={busy || reading || !switchable || !projectId}>
+                  {(option.values ?? []).map((item) => <option key={item} value={item}>{option.valueLabels?.[item] ?? item}</option>)}
+                </Select>
+              </Field>
+              {policy.mode === "allowlist" && <fieldset className="module-option-list"><legend>Allowed emails and domains</legend>
+                {allowlist.map((entry, index) => <Field key={index} label={`Address ${index + 1}`}>
+                  <div className="module-option-list-row"><Input type="text" value={entry} onChange={(event) => updatePolicy({ mode: policy.mode, allowlist: allowlist.map((item, at) => at === index ? event.target.value : item) })} disabled={busy || reading || !switchable || !projectId} /><Button size="sm" onClick={() => updatePolicy({ mode: policy.mode, allowlist: allowlist.filter((_, at) => at !== index) })} disabled={busy || reading || !switchable}>Remove</Button></div>
+                </Field>)}
+                <Button size="sm" onClick={() => updatePolicy({ mode: policy.mode, allowlist: [...allowlist, ""] })} disabled={busy || reading || !switchable}>Add address</Button>
+              </fieldset>}
+            </div>;
+          }
+          if (option.type === "sign-in-methods") {
+            const methods = Array.isArray(value) ? value.map(String) : ["password"];
+            return <Field key={option.key} label={option.label} help={live?.options.find((item) => item.key === option.key)?.help ?? option.help}>
+              <label className="module-option-choice"><input type="checkbox" checked={methods.includes("google")} onChange={(event) => change(contract.name, option.key, event.target.checked ? ["password", "google"] : ["password"])} disabled={busy || reading || !switchable || !projectId} /> {option.valueLabels?.google ?? "Google"}</label>
+            </Field>;
+          }
           if (option.type === "boolean") return <Switch key={option.key} checked={value === true} onChange={(next) => change(contract.name, option.key, next)} label={option.label} disabled={busy || reading || !switchable || !projectId} />;
           if (option.type === "enum") return <Field key={option.key} label={option.label} help={live?.options.find((item) => item.key === option.key)?.help ?? option.help}>
             <Select value={String(value ?? "")} onChange={(event) => change(contract.name, option.key, event.target.value || null)} disabled={busy || reading || !switchable || !projectId}>

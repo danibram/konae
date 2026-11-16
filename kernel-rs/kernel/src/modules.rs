@@ -26,6 +26,20 @@ pub fn defaults() -> BTreeMap<String, Value> {
     modules
 }
 
+pub fn auth_enabled_defaults() -> BTreeMap<String, Value> {
+    let mut modules = defaults();
+    modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
+    modules
+}
+
+pub fn sources_use_auth<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
+    files.into_iter().any(|bytes| contains(bytes, b"miniapp.auth") || contains(bytes, b"authenticated") || contains(bytes, b"\"source\":\"actor\"") || contains(bytes, b"\"source\": \"actor\""))
+}
+
+pub fn artifact_uses_auth<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
+    files.into_iter().any(|bytes| contains(bytes, b"miniapp.auth"))
+}
+
 pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files: bool) -> BTreeMap<String, Value> {
     let mut modules = initial.cloned().unwrap_or_else(defaults);
     complete(&mut modules);
@@ -151,6 +165,8 @@ fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> 
         Some("string") => value.is_string(),
         Some("number") => value.is_number(),
         Some("enum") => option["values"].as_array().into_iter().flatten().any(|candidate| candidate == value),
+        Some("signup-policy") => value.is_null() || (matches!(value["mode"].as_str(), Some("open" | "invitation" | "closed" | "allowlist")) && value["allowlist"].as_array().is_some_and(|items| items.iter().all(Value::is_string))),
+        Some("sign-in-methods") => value.as_array().is_some_and(|items| items.len() == 1 && items[0] == "password" || items.len() == 2 && items[0] == "password" && items[1] == "google"),
         Some("path") => value.is_null() || value.as_str().is_some_and(|path| !path.is_empty() && !path.starts_with('/') && !path.contains('\\') && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")),
         _ => false,
     };
@@ -160,7 +176,7 @@ fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> 
             format!("Module {module} option {key} must be one of {}.", values.join(", "))
         } else if option["type"] == "path" {
             format!("Module {module} option {key} must be a relative app path or null.")
-        } else {
+    } else {
             format!("Module {module} option {key} must be a {}.", option["type"].as_str().unwrap_or("valid value"))
         };
         return Err(crate::refusal::refuse("module.option-invalid", message));
@@ -171,17 +187,11 @@ fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> 
 pub fn preserve_release_state(
     next: &mut Settings,
     previous: Option<Settings>,
-    initial: Option<&BTreeMap<String, Value>>,
+    _initial: Option<&BTreeMap<String, Value>>,
 ) {
     if let Some(previous) = previous {
         next.updated_at = previous.updated_at;
-        next.modules = if previous.released.is_none() {
-            initial.cloned().unwrap_or(previous.modules)
-        } else {
-            previous.modules
-        };
-    } else if let Some(initial) = initial {
-        next.modules = initial.clone();
+        if previous.released.is_some() { next.modules = previous.modules; }
     }
     complete(&mut next.modules);
 }
@@ -267,7 +277,19 @@ pub async fn set(
             .ok_or_else(|| anyhow!("Module options must be an object."))?;
         for (key, value) in incoming {
             check_option(module, &description, key, value)?;
-            current[key] = value.clone();
+            let value = if module == "auth" && key == "signupPolicy" && !value.is_null() {
+                let policy: crate::SignupPolicy = serde_json::from_value(value.clone())?;
+                serde_json::to_value(crate::SignupPolicy::from_input(policy.mode, &policy.allowlist).map_err(anyhow::Error::msg)?)?
+            } else { value.clone() };
+            current[key] = value;
+        }
+    }
+    if module == "auth" {
+        if let Some(policy) = current.get("signupPolicy").filter(|value| !value.is_null()) {
+            settings.signup_policy = serde_json::from_value(policy.clone())?;
+        }
+        if let Some(methods) = current.get("signInMethods") {
+            settings.sign_in_methods = serde_json::from_value(methods.clone())?;
         }
     }
     settings.modules.insert(module.to_owned(), current.clone());
@@ -278,8 +300,36 @@ pub async fn set(
 fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value) -> bool {
     match module {
         "files" => uses_files(root, id, state),
+        "auth" => uses_auth(root, id),
         _ => false,
     }
+}
+
+pub fn uses_auth(root: &std::path::Path, id: &str) -> bool {
+    let settings_path = crate::layout::settings(root, id);
+    if let Ok(bytes) = std::fs::read(settings_path) {
+        if let Ok(settings) = serde_json::from_slice::<Value>(&bytes) {
+            if settings["visibility"] != "public" || settings["released"].get("visibility").is_some_and(|visibility| visibility != "public") { return true; }
+            if settings["manifest"]["fileAccess"] == "app-users" || settings["released"]["manifest"]["fileAccess"] == "app-users" { return true; }
+        } else { return true; }
+    } else { return true; }
+    let identity = crate::layout::data(root, id).join("identity.sqlite");
+    if identity.exists() {
+        if let Ok(connection) = rusqlite::Connection::open(identity) {
+            let has_table = |name: &str| connection.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(())).is_ok();
+            if has_table("app_users") {
+                let accounts = connection.query_row("SELECT COUNT(*) FROM app_users", [], |row| row.get::<_, i64>(0)).unwrap_or(1);
+                if accounts > 0 { return true; }
+            }
+            if has_table("app_invitations") {
+                let invitations = connection.query_row("SELECT COUNT(*) FROM app_invitations", [], |row| row.get::<_, i64>(0)).unwrap_or(1);
+                if invitations > 0 { return true; }
+            }
+        } else { return true; }
+    }
+    let sources = crate::layout::sources(root, id);
+    let dist = crate::layout::dist(root, id);
+    walk(&sources, &|bytes| sources_use_auth([bytes])) || walk(&dist, &|bytes| artifact_uses_auth([bytes]))
 }
 
 #[cfg(test)]
@@ -313,14 +363,17 @@ mod tests {
             let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
             let artifact = case["artifact"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
             let used = sources_use_files(sources) || artifact_uses_files(artifact);
-            assert_eq!(used, case["usesFiles"], "{}", case["case"]);
+            if let Some(expected) = case.get("usesFiles") { assert_eq!(used, *expected, "{}", case["case"]); }
+            let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            let artifact = case["artifact"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            if let Some(expected) = case.get("usesAuth") { assert_eq!(sources_use_auth(sources) || artifact_uses_auth(artifact), *expected, "{}", case["case"]); }
         }
     }
 
     #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["files", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["auth", "files", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);
@@ -344,6 +397,16 @@ mod tests {
         assert!(!artifact_uses_files([b"/_konae/files/id".as_slice()]));
         assert!(sources_use_files([b"/_konae/files/id".as_slice()]));
         assert!(!artifact_uses_files([b"no file API".as_slice()]));
+    }
+
+    #[test]
+    fn auth_use_cases_match_the_kernel_rule() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        for case in cases.into_iter().filter(|case| case.get("usesAuth").is_some()) {
+            let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            let artifact = case["artifact"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            assert_eq!(sources_use_auth(sources) || artifact_uses_auth(artifact), case["usesAuth"], "{}", case["case"]);
+        }
     }
 
     #[tokio::test]

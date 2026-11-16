@@ -74,7 +74,7 @@ async function publishPublic(app: Awaited<ReturnType<typeof installation>>, id: 
   const upload = await app.owner.upload(new TextEncoder().encode(JSON.stringify({
     project: { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" }, files: {
       "schema.sql": "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY);", "actions.json": '{"version":1,"actions":{}}',
-    } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": `<!doctype html><main>${id}</main>` } },
+    } }, visibility: "public", initialModules: { auth: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": `<!doctype html><main>${id}</main>` } },
   })), id);
   try {
     const observed = await app.owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
@@ -105,7 +105,7 @@ describe("authentication cookie isolation", () => {
     const upload = await app.owner.upload(new TextEncoder().encode(JSON.stringify({
       project: { id, name: "Cookie test", slug: "cookie-test", manifest: { version: 1, visibility: "public" }, files: {
         "schema.sql": "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY);", "actions.json": '{"version":1,"actions":{}}',
-      } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Cookie test</main>" } },
+      } }, visibility: "public", initialModules: { auth: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Cookie test</main>" } },
     })), id);
     let deployment: { hostname: string };
     try {

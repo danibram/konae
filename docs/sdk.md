@@ -35,16 +35,21 @@ Error messages below are the exact text a published app receives as `error.messa
 | `MCP request exceeds 200 KB.` | one request body is larger than 200,000 bytes | Kernel | Never refuses |
 | `Invalid MCP response.` | the response does not answer the request the SDK sent | SDK | Never refuses |
 
-### Accounts (`auth`)
+### App accounts (`auth`)
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
 
-Owner control: on and not switchable yet. Permission: `manage_users`. Build agent: cannot change it.
+Owner control: the owner can change this module with module_set. Permission: `manage_users`. Build agent: cannot change it.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `signupPolicy` (Who can create an account) | `signup-policy`: `open` (Open), `allowlist` (Allowlist), `invitation` (Invitation only), `closed` (Closed) | Default | Choose who may create an app account. Allowlist entries stay as separate email addresses or domains. |
+| `signInMethods` (Sign-in methods) | `sign-in-methods`: `password` (Email and password), `google` (Continue with Google) | `password` | Password stays on. Google needs this app's Google client set as signing secrets. |
 
 - Visibility decides who may open the app shell. It never grants data access on its own.
 - An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.
-- The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.
-- The owner may add Continue with Google to the sign-in page in the editor's Access > Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.
+- The Deployment's Signup Policy decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.
+- The owner may add Continue with Google to the sign-in page in the Users view, once the app's own Google client ID and secret are set as signing secrets. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.
 
 ### miniapp.auth.session()
 

@@ -305,6 +305,7 @@ async fn off<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'stati
 /// Runs one of the app user and invitation tools on a Deployment the caller
 /// already authorized.
 pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, name: &str, a: &Value) -> Result<Value> {
+    crate::modules::require_on(&deployment.modules, "auth")?;
     let inviter = sender.id.as_str();
     let limit = a["limit"].as_u64().map_or(50, |value| value as usize).clamp(1, MAX_PAGE);
     let cursor = a["cursor"].as_str().map(str::to_owned);
@@ -779,7 +780,7 @@ mod tests {
                 signup_policy: SignupPolicy::from_input(mode, &[]).unwrap(),
                 sign_in_methods: default_sign_in_methods(),
                 contact_email: None,
-                modules: crate::modules::defaults(),
+                modules: crate::modules::auth_enabled_defaults(),
                 released_schema: String::new(),
             };
             std::fs::create_dir_all(crate::layout::data(&root, &item.id)).unwrap();

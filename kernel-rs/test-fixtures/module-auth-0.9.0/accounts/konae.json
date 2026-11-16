@@ -1,0 +1,10 @@
+{
+  "id": "legacy_accounts",
+  "name": "Legacy accounts",
+  "slug": "legacy-accounts",
+  "visibility": "public",
+  "signupPolicy": { "mode": "allowlist", "allowlist": ["person@example.test"] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

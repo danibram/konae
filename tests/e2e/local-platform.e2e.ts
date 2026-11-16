@@ -661,7 +661,7 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
   expect(bounds?.width).toBeLessThanOrEqual(390);
 });
 
-test("Modules settings show fixed modules and read back seo after reload", async ({ page }) => {
+test("Modules settings show auth and read back seo after reload", async ({ page }) => {
   const projectPath = await createProject(page, "Module settings");
   const projectId = projectPath.split("/").at(-1)!;
   await seedRetainedBinary(page, projectId);
@@ -670,12 +670,11 @@ test("Modules settings show fixed modules and read back seo after reload", async
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
   await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
-  await expect(settings.locator(".module-settings-card")).toHaveCount(2);
-  await expect(settings.locator(".module-settings-card").first()).toContainText("File storage");
-  await expect(settings.locator(".module-settings-card").first()).toContainText("files");
-  await expect(settings.locator(".module-settings-card").nth(1)).toContainText("Search listing");
-  await expect(settings.locator(".module-settings-card").nth(1)).toContainText("seo");
-  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(4);
+  await expect(settings.locator(".module-settings-card")).toHaveCount(3);
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "File storage" })).toContainText("files");
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "App accounts" })).toContainText("auth");
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "Search listing" })).toContainText("seo");
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(3);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");

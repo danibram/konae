@@ -54,9 +54,9 @@ describe("the SDK contract", () => {
       ],
     });
     expect(seo?.uses).toBeDefined();
-    expect(sdkContract.modules.map((module) => module.title)).toEqual(["Accounts", "App actions", "File storage", "Calls to other services", "HTTP routes", "Search listing"]);
+    expect(sdkContract.modules.map((module) => module.title)).toEqual(["App accounts", "App actions", "File storage", "Calls to other services", "HTTP routes", "Search listing"]);
     expect(seo?.options[0].valueLabels).toEqual({ domain: "Custom domain", hostname: "Generated hostname", path: "Path address" });
-    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["files", "seo"]);
+    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["auth", "files", "seo"]);
     const files = sdkContract.modules.find((module) => module.name === "files");
     expect(files).toMatchObject({ title: "File storage", switch: true, options: [{ key: "fileAccess", label: "Who can read every file", valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader" }] });
     expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
@@ -222,9 +222,11 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
     const location = { pathname, assign: (url: string) => assigned.push(url) };
     const window: { miniapp?: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>> } = {};
     const original = globalThis.fetch;
-    globalThis.fetch = (async (url: string) => {
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
       requested.push(String(url));
-      return new Response("{}", { status: 500 });
+      const call = JSON.parse(String(init.body));
+      if (call.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: "2.0", id: call.id, result: { structuredContent: { result: {} }, isError: false } });
     }) as typeof fetch;
     try {
       new Function("window", "location", "addEventListener", publishedSdk)(window, location, () => {});
@@ -239,21 +241,25 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
 
   test("the home and a generated hostname use the root paths", async () => {
     const home = await sdkOn("/");
-    expect(home).toEqual({ fileUrl: "/_konae/files/file-1", requested: ["/_konae/mcp"], assigned: ["/_konae/login"] });
+    expect(home.fileUrl).toBe("/_konae/files/file-1");
+    expect(home.requested.length).toBeGreaterThan(0);
+    expect(home.requested.every((url) => url === "/_konae/mcp")).toBe(true);
+    expect(home.assigned).toEqual(["/_konae/login"]);
   });
 
   test("a path address uses its /p/<segment> prefix for the endpoint, the file address and sign-in", async () => {
     for (const pathname of ["/p/notes", "/p/notes/", "/p/notes/about/deep.html"]) {
       const onPath = await sdkOn(pathname);
       expect(onPath.fileUrl).toBe("/p/notes/_konae/files/file-1");
-      expect(onPath.requested).toEqual(["/p/notes/_konae/mcp"]);
+      expect(onPath.requested.length).toBeGreaterThan(0);
+      expect(onPath.requested.every((url) => url === "/p/notes/_konae/mcp")).toBe(true);
       expect(onPath.assigned).toEqual(["/p/notes/_konae/login"]);
     }
   });
 
   test("a path that only looks like a prefix keeps the root paths", async () => {
     expect((await sdkOn("/pages/notes")).fileUrl).toBe("/_konae/files/file-1");
-    expect((await sdkOn("/p/")).requested).toEqual(["/_konae/mcp"]);
+    expect((await sdkOn("/p/")).requested.every((url) => url === "/_konae/mcp")).toBe(true);
   });
 });
 

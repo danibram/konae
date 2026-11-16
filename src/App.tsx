@@ -788,9 +788,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               const current = projectRef.current;
               const deploymentId = deploymentsRef.current[current.id]?.id;
               const facts = await readReleaseFacts(current.id, deploymentId);
-              if (!deploymentId) return { ...facts, modules: current.modules };
+              if (!deploymentId) return { ...facts, visibility: current.manifest.visibility === "private" ? "private" : "public", modules: current.modules };
               const read = await platformMcp.call<{ modules: Record<string, { state: { on: boolean; [option: string]: unknown } }> }>("modules_read", { projectId: deploymentId });
-              return { ...facts, modules: Object.fromEntries(Object.entries(read.modules).map(([name, module]) => [name, module.state])) };
+              return { ...facts, visibility: current.manifest.visibility === "private" ? "private" : "public", modules: Object.fromEntries(Object.entries(read.modules).map(([name, module]) => [name, module.state])) };
             },
             platform: {
               listTools: (signal) => platformMcp.listTools(signal),

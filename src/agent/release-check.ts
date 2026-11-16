@@ -5,6 +5,7 @@ import { hintOf, type Refusal, type RefusalCode } from "../kernel/refusal";
 export type ReleaseFacts = {
   secrets?: { name: string; use?: string; svixKey?: boolean }[];
   rules?: DomainRules;
+  visibility?: "public" | "private";
 };
 
 export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts): Refusal | null {

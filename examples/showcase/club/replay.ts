@@ -154,21 +154,22 @@ try {
   const root = path.join(scratch, "club");
   await cp(import.meta.dir, appDir(root), { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private" } };
-  const cliProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "invitation" } } };
+  const cliProject = { ...project, modules: { auth: { on: true, signupPolicy: { mode: "invitation", allowlist: [] } } } };
   const publishToken = await origin.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
   const receiptA = await publishLocal(root, { url: origin.url, project: cliProject }, publishToken.token) as Receipt;
   const A = app(origin, receiptA);
-  const firstPolicy = await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id });
+  const firstModules = await origin.owner.call<any>("modules_read", { projectId: receiptA.id });
+  const firstPolicy = firstModules.modules.auth.state.signupPolicy as { mode: string };
   assert.equal(firstPolicy.mode, "invitation");
   const warnings: string[] = [];
-  const openProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "open" } } };
+  const openProject = { ...project, modules: { auth: { on: true, signupPolicy: { mode: "open", allowlist: [] } } } };
   await publishLocal(root, { url: origin.url, project: openProject }, publishToken.token, (line) => warnings.push(line));
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /asks for signup Open, but this app has Invitation only\..*Auth > Users.*signup_policy_set/);
-  assert.equal((await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id })).mode, "invitation");
-  const publishOnlySet = await message(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("signup_policy_set", { deploymentId: receiptA.id, mode: "open" }));
-  assert.equal(publishOnlySet, "Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.");
-  refused("Signup policy", "signup_policy_set with the CLI's publish token", publishOnlySet);
+  assert.match(warnings[0], /asks for signup Open, but this app has Invitation only\..*Users.*module_set on auth/);
+  assert.equal((await origin.owner.call<any>("modules_read", { projectId: receiptA.id })).modules.auth.state.signupPolicy.mode, "invitation");
+  const publishOnlySet = await message(new McpClient(`${origin.url}/mcp`, { token: publishToken.token }).call("module_set", { projectId: receiptA.id, module: "auth", options: { signupPolicy: { mode: "open", allowlist: [] } } }));
+  assert.match(publishOnlySet, /module_set needs a credential with manage_users/);
+  refused("Signup policy", "module_set on auth with the CLI publish token", publishOnlySet);
   check("Publish", `konae publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from konae.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
 
   const shell = await A.http("/");
@@ -419,7 +420,7 @@ try {
     for (const id of Object.values(components)) await destination.owner.cancel(id).catch(() => {});
   }
   const B = app(destination, receiptB);
-  assert.equal((await destination.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptB.id })).mode, "invitation");
+  assert.equal((await destination.owner.call<any>("modules_read", { projectId: receiptB.id })).modules.auth.state.signupPolicy.mode, "invitation");
   const anaB = await B.login(people.ana, password);
   const benB = await B.login(people.ben, password);
   const cyB = await B.login(people.cy, newPassword);

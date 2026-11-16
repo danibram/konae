@@ -1759,7 +1759,7 @@ mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: Some("owner@example.test".into()),
-            modules: crate::modules::defaults(),
+            modules: crate::modules::auth_enabled_defaults(),
             released_schema: String::new(),
         }
     }

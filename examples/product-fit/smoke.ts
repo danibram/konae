@@ -60,6 +60,10 @@ try {
     const headers = new Headers(init?.headers); headers.set("cookie", ownerCookie);
     return fetch(input, { ...init, headers });
   } });
+  const setSignupPolicy = async (projectId: string, mode: string, allowlist: string[]) => {
+    const before = await owner.call<any>("modules_read", { projectId });
+    await owner.call("module_set", { projectId, module: "auth", options: { signupPolicy: { mode, allowlist } }, expected: before.modules.auth.state });
+  };
   const receipts: Record<string, { id: string; hostname: string; url: string }> = {};
   for (const name of ["launch", "journal", "board", "portfolio", "poll", "feed", "docs", "probe"]) {
     const root = path.join(scratch, name);
@@ -169,7 +173,7 @@ try {
   check("Private journal rows", "A second account cannot read the first account's entry, and its delete is refused with the guard.");
 
   assert.match(await (await getPage("board")).text(), /<title>Sign in<\/title>/);
-  await owner.call("signup_policy_set", { projectId: receipts.board.id, mode: "allowlist", allowlist: ["@team.example"] });
+  await setSignupPolicy(receipts.board.id, "allowlist", ["@team.example"]);
   const lead = await signupApp("board", "lead@team.example");
   const member = await signupApp("board", "member@team.example");
   const dev = await signupApp("board", "dev@team.example");
@@ -195,7 +199,7 @@ try {
   assert.equal((await action(member, "cards.delete", { id: card.id })).changes, 1);
   check("Team board", "Four users obey SQL role checks with each guard's sentence, an outsider cannot sign up, the owner seeds the first admin, and promotion names a member's row, so a second member who picks the same display name is not promoted with it.");
 
-  await owner.call("signup_policy_set", { projectId: receipts.portfolio.id, mode: "allowlist", allowlist: ["potter@example.test"] });
+  await setSignupPolicy(receipts.portfolio.id, "allowlist", ["potter@example.test"]);
   const potter = await signupApp("portfolio", "potter@example.test");
   const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8ioAAAAASUVORK5CYII="), (c) => c.charCodeAt(0));
   const transfer = await potter.upload(png);

@@ -1,5 +1,9 @@
 [
   {"case":"window SDK file call","sources":["window.miniapp.files.upload(file)"],"artifact":["window.miniapp.files.upload(file)"],"usesFiles":true},
   {"case":"file URL in HTML","sources":["<img src=\"/_konae/files/file-id\">"],"artifact":["<img src=\"/_konae/files/file-id\">"],"usesFiles":true},
-  {"case":"page without file access","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesFiles":false}
+  {"case":"page without file access","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesFiles":false},
+  {"case":"authenticated action","sources":["{\"actions\":[{\"name\":\"read\",\"access\":\"authenticated\"}] }"],"artifact":[],"usesAuth":true},
+  {"case":"actor binding","sources":["{\"actor\":{\"source\":\"actor\",\"field\":\"id\"}}"],"artifact":[],"usesAuth":true},
+  {"case":"public static page","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesAuth":false},
+  {"case":"auth SDK call","sources":["await miniapp.auth.session()"],"artifact":["await miniapp.auth.session()"],"usesAuth":true}
 ]

@@ -29,7 +29,7 @@ Build the compiled CLI with `bun run scripts/build-konae-binary.ts`, then copy `
     ```
 
     `conform` runs each mutation once, so point it at a test Deployment.
-5. Log in. This saves a 24-hour token with `read`, `write` and `publish` in `<folder>/.konae/credentials.json`, and the installation's address. `--url` is the editor's origin. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE`. A token cannot widen itself, so ask for `--manage-users` and `--export-data` now, or a second login comes before `pull`, `export --with-data`, `signup_policy_set` or `app_invitations_create`. Keep `.konae` out of Git. `KONAE_MCP_TOKEN` overrides the file. In a terminal, `login` asks for `KONAE_EMAIL` or `KONAE_PASSWORD` when it is unset, and does not echo the password. The form below is for scripts, which have no terminal and fail without both. `login --browser` instead prints an address the owner opens in a browser on the same machine, so no password passes through the terminal or an agent.
+5. Log in. This saves a 24-hour token with `read`, `write` and `publish` in `<folder>/.konae/credentials.json`, and the installation's address. `--url` is the editor's origin. On a fresh local install, `KONAE_SETUP_KEY=local-development-key` creates the first owner. A reachable installation needs its operator's key, or an invitation code in `KONAE_INVITATION_CODE`. A token cannot widen itself, so ask for `--manage-users` and `--export-data` now, or a second login comes before `pull`, `export --with-data`, `module_set on `auth`` or `app_invitations_create`. Keep `.konae` out of Git. `KONAE_MCP_TOKEN` overrides the file. In a terminal, `login` asks for `KONAE_EMAIL` or `KONAE_PASSWORD` when it is unset, and does not echo the password. The form below is for scripts, which have no terminal and fail without both. `login --browser` instead prints an address the owner opens in a browser on the same machine, so no password passes through the terminal or an agent.
 
     ```sh
     KONAE_EMAIL=you@example.com KONAE_PASSWORD=... KONAE_SETUP_KEY=local-development-key \
@@ -46,10 +46,11 @@ Build the compiled CLI with `bun run scripts/build-konae-binary.ts`, then copy `
 
 ## Visibility and signup
 
-`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` in the same file names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Both operations below are owner tools that need `manage_users`, so log in with `--manage-users`. `projectId` is the `id` in `konae.json`. `mode` is `open`, `invitation`, `closed` or `allowlist`, and `allowlist` takes exact emails or `@domain` entries.
+`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `modules.auth.signupPolicy` names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Both operations below are owner tools that need `manage_users`, so log in with `--manage-users`. `projectId` is the `id` in `konae.json`. `mode` is `open`, `invitation`, `closed` or `allowlist`, and `allowlist` takes exact emails or `@domain` entries.
 
 ```sh
-bun run konae -- tool signup_policy_set '{"projectId":"app_...","mode":"open"}' --dir /tmp/my-app
+bun run konae -- tool modules_read '{"projectId":"app_..."}' --dir /tmp/my-app
+bun run konae -- tool module_set '{"projectId":"app_...","module":"auth","options":{"signupPolicy":{"mode":"open","allowlist":[]}}}' --dir /tmp/my-app
 bun run konae -- tool app_invitations_create '{"projectId":"app_...","emails":["ana@example.com"],"idempotencyKey":"first-invite"}' --dir /tmp/my-app
 ```
 

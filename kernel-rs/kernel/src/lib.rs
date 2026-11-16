@@ -174,7 +174,9 @@ pub struct Settings {
     pub name: String,
     pub slug: String,
     pub visibility: String,
+    #[serde(default)]
     pub signup_policy: SignupPolicy,
+    #[serde(default = "default_sign_in_methods")]
     pub sign_in_methods: Vec<SignInMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
@@ -265,7 +267,7 @@ impl Settings {
             object.remove("runtime");
             object.remove("fileAccess");
         }
-        Self {
+        let mut settings = Self {
             id: id.into(),
             name: name.into(),
             slug: slug.into(),
@@ -279,7 +281,9 @@ impl Settings {
             directories: Vec::new(),
             updated_at: 0,
             released: None,
-        }
+        };
+        settings.sync_auth_options();
+        settings
     }
 
     pub fn of(deployment: &Deployment) -> Self {
@@ -291,7 +295,14 @@ impl Settings {
             ..Self::new(&deployment.id, &deployment.project_name, &deployment.slug, &deployment.manifest)
         };
         settings.released = Some(released_settings(deployment));
+        settings.sync_auth_options();
         settings
+    }
+
+    fn sync_auth_options(&mut self) {
+        let auth = self.modules.get_mut("auth").expect("auth is switchable");
+        auth["signupPolicy"] = serde_json::to_value(&self.signup_policy).expect("Signup Policy serializes");
+        auth["signInMethods"] = serde_json::to_value(&self.sign_in_methods).expect("sign-in methods serialize");
     }
 
     pub fn read(root: &Path, id: &str) -> Result<Self> {
@@ -299,6 +310,19 @@ impl Settings {
         let raw: Value = serde_json::from_slice(&bytes)?;
         let mut settings: Self = serde_json::from_slice(&bytes)?;
         modules::complete(&mut settings.modules);
+        let auth = settings.modules.get_mut("auth").expect("auth is switchable");
+        settings.signup_policy = if !auth["signupPolicy"].is_null() {
+            serde_json::from_value(auth["signupPolicy"].clone())?
+        } else if raw.get("signupPolicy").is_some() {
+            settings.signup_policy.clone()
+        } else {
+            SignupPolicy::initial(&settings.visibility)
+        };
+        auth["signupPolicy"] = serde_json::to_value(&settings.signup_policy)?;
+        if auth["signInMethods"].is_array() {
+            settings.sign_in_methods = serde_json::from_value(auth["signInMethods"].clone())?;
+        }
+        auth["signInMethods"] = serde_json::to_value(&settings.sign_in_methods)?;
         let old_file_access = raw["manifest"]["fileAccess"] == "app-users" || raw["released"]["manifest"]["fileAccess"] == "app-users";
         if raw["modules"]["files"].is_null() && old_file_access {
             let files = settings.modules.get_mut("files").expect("files is switchable");
@@ -311,8 +335,19 @@ impl Settings {
     }
 
     pub async fn write(&self, root: &Path) -> Result<()> {
-        write_atomic(&layout::settings(root, &self.id), &serde_json::to_vec_pretty(self)?).await?;
+        write_atomic(&layout::settings(root, &self.id), &self.folder_bytes()?).await?;
         Ok(())
+    }
+
+    fn folder_bytes(&self) -> Result<Vec<u8>> {
+        let mut settings = self.clone();
+        settings.sync_auth_options();
+        let mut value = serde_json::to_value(settings)?;
+        if let Some(object) = value.as_object_mut() {
+            object.remove("signupPolicy");
+            object.remove("signInMethods");
+        }
+        Ok(serde_json::to_vec_pretty(&value)?)
     }
 
     pub fn deployment(self, installed: Installed, public_origin: &str) -> Deployment {
@@ -972,6 +1007,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         None => None,
     };
+    let has_initial_signup_policy = initial_signup_policy.is_some();
 
 
 
@@ -1004,6 +1040,32 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
+    let signup_policy = match existing.as_ref() {
+        Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
+        None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
+    };
+    let sign_in_methods = match existing.as_ref() {
+        Some(item) => item.sign_in_methods.clone(),
+        None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
+    };
+    let mut module_states = {
+        let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
+            || modules::sources_use_files(input.project.files.values().map(String::as_bytes));
+        let mut states = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+        modules::complete(&mut states);
+        if existing.is_none() && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
+            && (modules::sources_use_auth(input.project.files.values().map(String::as_bytes)) || modules::artifact_uses_auth(artifact_files.values().map(Vec::as_slice))) {
+            states.get_mut("auth").expect("auth is switchable")["on"] = Value::Bool(true);
+        }
+        states
+    };
+    if existing.is_none() {
+        let auth = module_states.get_mut("auth").expect("auth is switchable");
+        auth["signupPolicy"] = serde_json::to_value(&signup_policy).unwrap_or(Value::Null);
+        auth["signInMethods"] = serde_json::to_value(&sign_in_methods).unwrap_or(Value::Null);
+        if (input.visibility != "public" || has_initial_signup_policy || package_policy.is_some())
+            && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth")) { auth["on"] = Value::Bool(true); }
+    }
     let deployment = Deployment {
         id: id.clone(),
         project_id: input.project.id,
@@ -1020,21 +1082,9 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         hostname: hostname.clone(),
         actions,
         artifact_version: artifact_version.clone(),
-        signup_policy: match existing.as_ref() {
-            Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
-            None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
-        },
-        sign_in_methods: match existing.as_ref() {
-            Some(item) => item.sign_in_methods.clone(),
-            None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
-        },
-        modules: {
-            let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
-                || modules::sources_use_files(input.project.files.values().map(String::as_bytes));
-            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
-            modules::complete(&mut modules);
-            modules
-        },
+        signup_policy,
+        sign_in_methods,
+        modules: module_states,
         contact_email: input.contact_email.clone(),
         released_schema,
     };
@@ -1091,7 +1141,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         }
     }
     let identity_path = layout::identity(&state.data_root, &id);
-    let identity = if identity_path.exists() {
+    let identity = if identity_path.exists() || !modules::is_on(&deployment.modules, "auth") {
         Ok(())
     } else {
         open_auth(&state, &deployment).map(drop).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))
@@ -1553,6 +1603,7 @@ pub async fn auth_request(
     let Some(deployment) = deployment_for(state, headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if !modules::is_on(&deployment.modules, "auth") { return error(StatusCode::NOT_FOUND, "Not found."); }
     let peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -1702,6 +1753,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if !modules::is_on(&deployment.modules, "auth") { return error(StatusCode::NOT_FOUND, "Not found."); }
     let token = headers.get(header::AUTHORIZATION).and_then(|v|v.to_str().ok()).and_then(|v|v.strip_prefix("Bearer ")).map(str::to_owned)
         .or_else(|| cookie_value(&headers, &app_cookie_name(&state, &deployment.id, &headers)));
     let _identity_guard = database_lock(&state, &format!("identity:{}", deployment.id)).await;
@@ -2143,6 +2195,7 @@ pub async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Re
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
+    if !modules::is_on(&deployment.modules, "auth") { return error(StatusCode::NOT_FOUND, "Not found."); }
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
         Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
@@ -3577,6 +3630,7 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
     settings.signup_policy = deployment.signup_policy.clone();
     settings.sign_in_methods = deployment.sign_in_methods.clone();
     settings.contact_email = deployment.contact_email.clone();
+    settings.sync_auth_options();
     settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
     let mut released = released_settings(deployment);
     if released.schema_sql.trim().is_empty() { released.schema_sql = recovered.schema_sql; }
@@ -3616,7 +3670,7 @@ async fn persist_settings_and_record(state: &AppState, deployment: &Deployment, 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let settings_bytes = serde_json::to_vec_pretty(&settings)?;
+    let settings_bytes = settings.folder_bytes()?;
     let installed = Installed {
         hostname: deployment.hostname.clone(), created_at: deployment.created_at,
         released_at: Some(deployment.released_at), source_digest: deployment.source_digest.clone(),
@@ -3660,7 +3714,7 @@ pub fn write_record_for_test(root: &Path, deployment: &Deployment) {
         released: Some(released_settings(deployment)),
     };
     std::fs::create_dir_all(layout::private(root, &deployment.id)).unwrap();
-    std::fs::write(layout::settings(root, &deployment.id), serde_json::to_vec(&Settings::of(deployment)).unwrap()).unwrap();
+    std::fs::write(layout::settings(root, &deployment.id), Settings::of(deployment).folder_bytes().unwrap()).unwrap();
     std::fs::write(layout::record(root, &deployment.id), serde_json::to_vec(&installed).unwrap()).unwrap();
 }
 
@@ -3763,7 +3817,7 @@ pub fn signup_policy_value(deployment: &Deployment) -> Value {
 }
 
 /// Sets who may create an account in the app `id`, as Konae's
-/// `signup_policy_set` and the `kernel` binary's `signup-policy` both do.
+/// `module_set` on `auth` and the `kernel` binary's `signup-policy` both do.
 /// The entries stay as they are when `entries` is `None`. The change lands
 /// in `konae.json`, which a running `kernel` binary follows, and the answer
 /// is `signup_policy_value` with `previousMode`.
@@ -3808,6 +3862,7 @@ pub fn authenticate_deployment(
     deployment: &Deployment,
     headers: &HeaderMap,
 ) -> std::result::Result<Option<AuthUser>, Response> {
+    if !modules::is_on(&deployment.modules, "auth") { return Ok(None); }
     let auth = open_auth(state, deployment)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer ")).map(str::to_owned)
@@ -4361,6 +4416,7 @@ pub mod tests {
             modules: {
                 let mut modules = modules::defaults();
                 modules.get_mut("files").unwrap()["on"] = json!(true);
+                modules.get_mut("auth").unwrap()["on"] = json!(true);
                 modules
             },
             released_schema: String::new(),
@@ -4511,6 +4567,7 @@ pub mod tests {
         let entries = allowlist.iter().map(|e| e.to_string()).collect::<Vec<_>>();
         for deployment in state.deployments.write().await.values_mut() {
             deployment.signup_policy = SignupPolicy::from_input(mode, &entries).unwrap();
+            deployment.modules.get_mut("auth").unwrap()["signupPolicy"] = serde_json::to_value(&deployment.signup_policy).unwrap();
         }
     }
 
@@ -5118,6 +5175,7 @@ pub mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
+        assert!(!crate::layout::identity(&root, first["id"].as_str().unwrap()).exists());
         assert_eq!(first["hostname"], "republish.localhost");
         assert_eq!(first["url"], "http://republish.localhost");
         let again = deploy_files(&state, json!({"index.html": "<p>two</p>"})).await;
@@ -5394,11 +5452,15 @@ pub mod tests {
             let state = test_state(&root);
             let first = deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), visibility).await;
             assert_eq!(first["signupPolicy"]["mode"], json!(expected), "visibility={visibility}");
+            let id = first["id"].as_str().unwrap();
+            let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
+            assert_eq!(folder_settings["modules"]["auth"]["signupPolicy"]["mode"], json!(expected));
+            assert!(folder_settings.get("signupPolicy").is_none());
+            assert!(folder_settings.get("signInMethods").is_none());
 
             set_policy(&state, SignupMode::Allowlist, &["@example.test"]).await;
             let second = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), visibility).await;
             assert_eq!(second["signupPolicy"], json!({"mode": "allowlist", "allowlist": ["@example.test"]}));
-            let id = second["id"].as_str().unwrap();
             let stored = Settings::read(&root, id).unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
             let mut legacy = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
@@ -5466,6 +5528,11 @@ pub mod tests {
             if let Some((mode, entry)) = chosen {
                 let entries: Vec<&str> = if entry.is_empty() { vec![] } else { vec![entry] };
                 set_policy(&state, mode, &entries).await;
+            }
+            if second == "private" {
+                let deployment = state.deployments.read().await.values().find(|item| item.project_id == "app_republish").unwrap().clone();
+                let changed = modules::set(&root, &deployment.id, "auth", Some(true), None, None).await.unwrap();
+                *state.deployments.write().await.values_mut().find(|item| item.project_id == "app_republish").unwrap().modules.get_mut("auth").unwrap() = changed["state"].clone();
             }
             let republished = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), second).await;
             assert_eq!(republished["signupPolicy"], expected, "{first} {chosen:?} -> {second}");

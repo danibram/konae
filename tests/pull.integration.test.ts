@@ -17,6 +17,11 @@ const password = "pull-integration-password";
 let nextClient = 0;
 const freshClient = () => { nextClient++; return `198.19.${Math.floor(nextClient / 250)}.${nextClient % 250 + 1}`; };
 
+async function setSignupPolicy(client: McpClient, projectId: string, mode: string) {
+  const before = await client.call<any>("modules_read", { projectId });
+  await client.call("module_set", { projectId, module: "auth", options: { signupPolicy: { mode, allowlist: [] } }, expected: before.modules.auth.state });
+}
+
 async function start(name: string, port: number): Promise<Kernel> {
   const url = `http://127.0.0.1:${port}`;
   const setupKey = `pull-integration-${name}-setup-secret`;
@@ -140,7 +145,7 @@ describe("init, publish, pull, dev --reset", () => {
 
     const published = await publishLocal(app, { ...config, url: origin.url }, origin.token);
     expect(published.first).toBe(true);
-    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    await setSignupPolicy(origin.owner, published.id, "open");
     const ana = await member(origin, hostOf(published), "signup");
     await ana.call("actions_invoke", { name: "notes.create", input: { title: "Written on the origin" } });
 
@@ -178,7 +183,7 @@ describe("init, publish, pull, dev --reset", () => {
     const born = configOf(await initLocal(next, { name: "Next version" }));
     await provideLocalAppDependencies(next);
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
-    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    await setSignupPolicy(origin.owner, published.id, "open");
     await (await member(origin, hostOf(published), "signup")).call("actions_invoke", { name: "notes.create", input: { title: "Before the column" } });
     const pulled = await pullLocal(next, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
 
@@ -248,7 +253,7 @@ describe("a file of app/ that is not text", () => {
     await mkdir(path.join(folder, "app/public"), { recursive: true });
     await writeFile(path.join(folder, "app/public/logo.png"), png);
     const published = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
-    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    await setSignupPolicy(origin.owner, published.id, "open");
     const ana = await member(origin, hostOf(published), "signup");
     await ana.call("actions_invoke", { name: "notes.create", input: { title: "Kept through source changes" } });
 
