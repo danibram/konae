@@ -1270,7 +1270,7 @@ fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
 
 async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str, headers: &HeaderMap) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
-    if crate::modules::require_on(&deployment.modules, "files").is_err() { return not_found(); }
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "files") { return error(StatusCode::FORBIDDEN, &refused.message); }
     if app_user_files(deployment) || !valid_file_id(id) {
         return not_found();
     }
