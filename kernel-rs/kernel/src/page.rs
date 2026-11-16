@@ -28,6 +28,10 @@ pub fn validate_action(name: &str, action: &ActionDefinition) -> Result<(), crat
         return Err(crate::refusal::refuse("page.path-invalid", format!("Action {name} has an invalid page path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", with parameters such as \":slug\" after the first segment.")));
     }
     let parts = path[1..].split('/').collect::<Vec<_>>();
+    let first = parts.first().copied().unwrap_or("").to_ascii_lowercase();
+    if ["_konae", "oauth", ".well-known", "mcp"].contains(&first.as_str()) {
+        return Err(crate::refusal::refuse("page.path-reserved", format!("Action {name} binds the reserved path {path}. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.")));
+    }
     let mut params = Vec::new();
     for (index, part) in parts.iter().enumerate() {
         if part.starts_with(':') {
@@ -52,17 +56,16 @@ pub fn validate_action(name: &str, action: &ActionDefinition) -> Result<(), crat
 }
 
 pub fn check_program(program: &ActionProgram) -> Result<(), crate::refusal::Refusal> {
-    let mut paths = std::collections::HashMap::new();
+    let mut paths: Vec<(String, String)> = Vec::new();
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     for name in &names {
         let Some(page) = program.actions[*name].page.as_ref() else { continue };
         let Some(path) = page.get("path").and_then(Value::as_str) else { continue };
-        let key = path.split('/').map(|segment| if segment.starts_with(':') { ":" } else { segment }).collect::<Vec<_>>().join("/");
-        if let Some(earlier) = paths.get(&key) {
+        if let Some((earlier, _)) = paths.iter().find(|(_, prior)| page_paths_overlap(prior, path)) {
             return Err(crate::refusal::refuse("page.duplicate", format!("Actions {earlier} and {name} both bind page path {path}.")));
         }
-        paths.insert(key, name.as_str());
+        paths.push((name.to_string(), path.to_owned()));
     }
     for (name, action) in &program.actions {
         let Some(list) = action.page.as_ref().and_then(|page| page.get("list")).and_then(Value::as_str) else { continue };
@@ -81,6 +84,12 @@ pub fn check_program(program: &ActionProgram) -> Result<(), crate::refusal::Refu
         }
     }
     Ok(())
+}
+
+fn page_paths_overlap(left: &str, right: &str) -> bool {
+    let left = left.split('/').skip(1).collect::<Vec<_>>();
+    let right = right.split('/').skip(1).collect::<Vec<_>>();
+    left.len() == right.len() && left.iter().zip(right).all(|(left, right)| left.starts_with(':') || right.starts_with(':') || left == &right)
 }
 
 fn selected_columns(statement: &str) -> Option<HashSet<String>> {
