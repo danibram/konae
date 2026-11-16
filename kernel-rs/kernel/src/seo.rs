@@ -170,18 +170,14 @@ fn enrich_html_with(
 pub fn page_html(html: &[u8], params: &serde_json::Value, title: &str, description: &str, image: Option<&str>, canonical: Option<&str>) -> Vec<u8> {
     let Ok(mut html) = String::from_utf8(html.to_vec()) else { return html.to_vec() };
     let escaped_title = escape_all(title);
-    let lower = html.to_ascii_lowercase();
-    let title_start = lower.find("<title").and_then(|start| lower[start..].find('>').map(|end| start + end + 1));
-    let title_end = title_start.and_then(|start| lower[start..].find("</title").map(|end| start + end));
-    if let (Some(start), Some(end)) = (title_start, title_end) {
+    if let Some((start, end)) = title_span(&html) {
         html.replace_range(start..end, &escaped_title);
     } else {
         let at = head_end(&html);
         html.insert_str(at, &format!("<title>{escaped_title}</title>"));
     }
-    let encoded = serde_json::to_string(params).unwrap_or_else(|_| "{}".into());
-    let meta = format!("<meta name=\"konae-page-params\" content=\"{}\">", escape_all(&encoded));
-    html.insert_str(head_end(&html), &meta);
+    let html = page_params_html(html.as_bytes(), params);
+    let Ok(mut html) = String::from_utf8(html) else { return Vec::new() };
     if let Some(canonical) = canonical {
         for (element, key, value) in [
             ("link", "rel", "canonical"),
@@ -198,6 +194,14 @@ pub fn page_html(html: &[u8], params: &serde_json::Value, title: &str, descripti
     } else {
         html.into_bytes()
     }
+}
+
+pub fn page_params_html(html: &[u8], params: &serde_json::Value) -> Vec<u8> {
+    let Ok(mut html) = String::from_utf8(html.to_vec()) else { return html.to_vec() };
+    let encoded = serde_json::to_string(params).unwrap_or_else(|_| "{}".into());
+    let meta = format!("<meta name=\"konae-page-params\" content=\"{}\">", escape_all(&encoded));
+    html.insert_str(head_end(&html), &meta);
+    html.into_bytes()
 }
 
 fn remove_head_tag(html: &mut String, element: &str, key: &str, value: &str) {
@@ -327,13 +331,29 @@ pub fn sitemap_response(
 
 pub fn title(html: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(html);
-    let head = head_content(&text);
-    let lower = head.to_ascii_lowercase();
-    let start = lower.find("<title")?;
-    let open = head[start..].find('>')? + start + 1;
-    let end = lower[open..].find("</title")? + open;
-    let value = head[open..end].trim();
+    let (start, end) = title_span(&text)?;
+    let value = text[start..end].trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn title_span(html: &str) -> Option<(usize, usize)> {
+    let (head_start, head_end) = head_range(html);
+    let mut cursor = head_start;
+    let (open, close) = loop {
+        let tag = next_tag(html, cursor)?;
+        cursor = tag.end;
+        if tag.start >= head_end { return None }
+        if tag.comment { continue }
+        if !tag.closing && matches!(tag.name.as_str(), "script" | "style") {
+            cursor = raw_text_end(html, tag.end, &tag.name).unwrap_or(head_end).min(head_end);
+            continue;
+        }
+        if !tag.closing && tag.name == "title" {
+            let close = next_tag(html, tag.end)?;
+            if close.closing && close.name == "title" { break (tag.end, close.start) }
+        }
+    };
+    Some((open, close))
 }
 
 pub fn description(html: &[u8]) -> String {
@@ -356,16 +376,63 @@ pub fn description(html: &[u8]) -> String {
 }
 
 fn head_content(html: &str) -> &str {
-    let start = html.to_ascii_lowercase().find("<head").and_then(|start| {
-        html[start..].find('>').map(|end| start + end + 1)
-    }).unwrap_or(0);
-    let end = head_end(html);
-    if start <= end { &html[start..end] } else { "" }
+    let (start, end) = head_range(html);
+    &html[start..end]
 }
 
 fn head_end(html: &str) -> usize {
-    let lower = html.to_ascii_lowercase();
-    lower.find("</head>").unwrap_or_else(|| lower.find("<body").unwrap_or(html.len()))
+    head_range(html).1
+}
+
+struct HtmlTag {
+    start: usize,
+    end: usize,
+    name: String,
+    closing: bool,
+    comment: bool,
+}
+
+fn next_tag(html: &str, from: usize) -> Option<HtmlTag> {
+    let start = from + html.get(from..)?.find('<')?;
+    let rest = &html[start..];
+    if rest.starts_with("<!--") {
+        return Some(HtmlTag { start, end: start + rest.find("-->").map_or(rest.len(), |end| end + 3), name: String::new(), closing: false, comment: true });
+    }
+    let end = start + rest.find('>')? + 1;
+    let body = html[start + 1..end - 1].trim_start();
+    let closing = body.starts_with('/');
+    let body = body.trim_start_matches('/').trim_start();
+    let name = body.chars().take_while(|character| character.is_ascii_alphanumeric() || *character == ':' || *character == '-').collect::<String>().to_ascii_lowercase();
+    Some(HtmlTag { start, end, name, closing, comment: false })
+}
+
+fn raw_text_end(html: &str, from: usize, name: &str) -> Option<usize> {
+    let lower = html[from..].to_ascii_lowercase();
+    let start = from + lower.find(&format!("</{name}"))?;
+    Some(start + html[start..].find('>')? + 1)
+}
+
+fn head_range(html: &str) -> (usize, usize) {
+    let mut cursor = 0;
+    let mut start = 0;
+    let mut found = false;
+    while let Some(tag) = next_tag(html, cursor) {
+        cursor = tag.end;
+        if tag.comment { continue }
+        if !tag.closing && matches!(tag.name.as_str(), "script" | "style") {
+            cursor = raw_text_end(html, tag.end, &tag.name).unwrap_or(html.len());
+            continue;
+        }
+        if !found && !tag.closing && tag.name == "head" {
+            start = tag.end;
+            found = true;
+        } else if found && tag.closing && tag.name == "head" {
+            return (start, tag.start);
+        } else if !found && !tag.closing && tag.name == "body" {
+            return (0, tag.start);
+        }
+    }
+    (start, html.len())
 }
 
 pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
@@ -601,6 +668,20 @@ mod tests {
     fn page_path_canonical_uses_the_sitemap_segment_encoder() {
         let params = serde_json::from_value(serde_json::json!({"slug": "c# 100%"})).unwrap();
         assert_eq!(page_path_canonical("https://app.example/", "/posts/:slug", &params), "https://app.example/posts/c%23%20100%25");
+    }
+
+    #[test]
+    fn page_title_search_ignores_svg_titles_and_head_end_strings_in_scripts() {
+        let html = br#"<html><head><script>const marker = "</head>"; window.value = "${value}";</script></head><body><svg><title>Icon</title></svg></body></html>"#;
+        let output = String::from_utf8(page_html(html, &serde_json::json!({}), "Row", "", None, None)).unwrap();
+        assert!(output.contains("const marker = \"</head>\"; window.value = \"${value}\";"));
+        assert!(output.contains("<title>Icon</title>"));
+        assert!(output.contains("<head><script>const marker = \"</head>\"; window.value = \"${value}\";</script><title>Row</title>"));
+    }
+
+    #[test]
+    fn title_in_svg_does_not_count_as_a_document_title() {
+        assert_eq!(title(br#"<html><head></head><body><svg><title>Icon</title></svg></body></html>"#), None);
     }
 
     #[test]
