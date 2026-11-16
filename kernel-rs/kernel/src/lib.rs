@@ -5380,6 +5380,23 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn deployment_loading_recovers_legacy_files_after_an_operator_settings_write() {
+        let root = std::env::temp_dir().join(format!("konae-load-legacy-files-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html":"<script>miniapp.files.list()</script>"})).await;
+        let id = state.deployments.read().await.values().next().unwrap().id.clone();
+        let path = layout::settings(&root, &id);
+        let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw.as_object_mut().unwrap().remove("modules");
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        Settings::read(&root, &id).unwrap().write(&root).await.unwrap();
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert!(loaded.values().next().unwrap().modules["files"]["on"] == true);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn a_release_names_the_digest_of_the_sources_it_carried() {
         let root = std::env::temp_dir().join(format!("konae-source-digest-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
