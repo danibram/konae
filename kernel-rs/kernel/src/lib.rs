@@ -1055,8 +1055,10 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
                 || modules::sources_use_files(input.project.files.values().map(String::as_bytes))
                 || legacy_file_access;
             let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
-            if existing.is_none() && legacy_file_access {
-                modules.get_mut("files").expect("files is switchable")["fileAccess"] = json!("app-users");
+            if legacy_file_access {
+                let files = modules.get_mut("files").expect("files is switchable");
+                files["on"] = json!(true);
+                files["fileAccess"] = json!("app-users");
             }
             modules::complete(&mut modules);
             modules

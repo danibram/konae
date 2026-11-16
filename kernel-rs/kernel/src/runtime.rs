@@ -651,7 +651,12 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         || input.project.manifest["fileAccess"] == "app-users";
     if uses_files {
         let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-        let modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+        let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+        if input.project.manifest["fileAccess"] == "app-users" {
+            let files = modules.get_mut("files").expect("files is switchable");
+            files["on"] = serde_json::json!(true);
+            files["fileAccess"] = serde_json::json!("app-users");
+        }
         if let Err(refused) = super::modules::require_on(&modules, "files") { return Err(anyhow::Error::new(refused)); }
     }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
