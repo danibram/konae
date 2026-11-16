@@ -168,9 +168,16 @@ describe("the artifact", () => {
   });
 
   test("metadata moves from the fragment lead while a title after body content stays there", () => {
-    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<link rel="stylesheet" href="x.css"><title>A</title>', body: '<main></main>' });
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<title>A</title>', body: '<link rel="stylesheet" href="x.css"><main></main>' });
     expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
     expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
+  });
+
+  test("fragment head split leaves stylesheets and http-equiv metadata in the body", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><meta http-equiv="Content-Security-Policy" content="default-src none"><meta name="description" content="Details"><main/>')).toEqual({
+      head: '<meta name="description" content="Details">',
+      body: '<link rel="stylesheet" href="x.css"><meta http-equiv="Content-Security-Policy" content="default-src none"><main/>',
+    });
   });
 
   test("a fragment moves description metadata and JSON-LD into the document head", () => {

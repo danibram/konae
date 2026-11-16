@@ -134,7 +134,7 @@ export function renderCapsuleDocument(input) {
 
 
 export function splitFragmentHead(fragment) {
-  const lead = /^\s*(?:<!--[\s\S]*?-->|<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link)\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[\s\S]*?<\/script\s*>)/i;
+  const lead = /^\s*(?:<!--[\s\S]*?-->|<title\b[^>]*>[\s\S]*?<\/title\s*>|<meta\b(?=[^>]*\b(?:name|property)\s*=)[^>]*>|<link\b(?=[^>]*\brel\s*=\s*["'][^"']*(?:canonical|alternate|icon|apple-touch-icon))[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[\s\S]*?<\/script\s*>)/i;
   const moved = [];
   let rest = fragment;
   for (let match = lead.exec(rest); match; match = lead.exec(rest)) {
