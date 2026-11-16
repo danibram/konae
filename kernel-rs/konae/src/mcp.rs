@@ -183,17 +183,6 @@ fn source_revision_refusal(observed: u64) -> anyhow::Error {
     super::refusal::refuse("sources.revision-conflict", format!("Sources changed since revision {observed}. Run konae pull --dir <folder>, then publish again.")).into()
 }
 
-fn setting_refusal(current: &Value) -> anyhow::Error {
-    super::refusal::refuse("setting.changed", format!("The setting changed since you read it. Its current value is {}. Read it again before changing it.", current)).into()
-}
-
-fn check_setting_expected(arguments: &Value, current: Value) -> Result<()> {
-    if arguments.get("expected").is_some_and(|expected| expected != &current) {
-        return Err(setting_refusal(&current));
-    }
-    Ok(())
-}
-
 fn store_at(root: &Path) -> Result<Connection> {
     let db = Connection::open(root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -1722,7 +1711,7 @@ async fn admin_call(
             // Releases hold the same lock, so a publish cannot put back the email it read before.
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
-            check_setting_expected(&a, json!(current.contact_email))?;
+            super::refusal::check_setting_expected(a.get("expected"), json!(current.contact_email))?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
@@ -1732,7 +1721,7 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, id, "publish").await?;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
             let current = super::maintenance::read(&state.data_root, &deployment.id)["maintenance"].clone();
-            check_setting_expected(&a, current)?;
+            super::refusal::check_setting_expected(a.get("expected"), current)?;
             super::maintenance::set(&state.data_root, &deployment.id, on)
         }
         "signup_policy_set" => {
@@ -1889,7 +1878,7 @@ async fn admin_call(
                 } else {
                     Value::Null
                 };
-                check_setting_expected(&a, current)?;
+                super::refusal::check_setting_expected(a.get("expected"), current)?;
             }
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
@@ -2362,18 +2351,6 @@ mod tests {
         for case in fixture["cases"].as_array().unwrap() {
             let refusal = source_revision_refusal(case["observed"].as_u64().unwrap());
             let refusal = refusal.downcast_ref::<super::super::refusal::Refusal>().unwrap();
-            assert_eq!(refusal.code, case["code"].as_str().unwrap());
-            assert_eq!(refusal.message, case["error"].as_str().unwrap());
-        }
-    }
-
-    #[test]
-    fn setting_conflicts_match_the_shared_case() {
-        let fixture: Value = serde_json::from_str(include_str!("../../kernel/src/setting-cases.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
-            let arguments = json!({"expected":case["expected"]});
-            let error = check_setting_expected(&arguments, case["current"].clone()).unwrap_err();
-            let refusal = error.downcast_ref::<super::super::refusal::Refusal>().unwrap();
             assert_eq!(refusal.code, case["code"].as_str().unwrap());
             assert_eq!(refusal.message, case["error"].as_str().unwrap());
         }

@@ -279,9 +279,7 @@ async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&V
     let _project = database_lock(state, &format!("project:{}", found.project_id)).await;
     let _names = database_lock(state, "hostnames").await;
     let current = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
-    if expected.is_some_and(|expected| expected != &json!(current.hostname)) {
-        return Err(refuse("setting.changed", format!("The setting changed since you read it. Its current value is {}. Read it again before changing it.", json!(current.hostname))).into());
-    }
+    super::refusal::check_setting_expected(expected, json!(current.hostname))?;
     if current.hostname == hostname {
         return Ok(view(state, &current, false));
     }
