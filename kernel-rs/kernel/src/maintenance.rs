@@ -149,6 +149,7 @@ h1{{font-size:1.4rem}}\
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::RETRY_AFTER, HeaderValue::from_static("300"));
+    headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 
@@ -172,18 +173,26 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
         return next.run(request).await;
     };
     let Some(message) = pause(&state.data_root, &deployment.id) else {
-        return next.run(request).await;
+        let mut response = next.run(request).await;
+        if super::is_private(&deployment) {
+            response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
+        }
+        return response;
     };
     let wants_page = request
         .headers()
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|accept| accept.contains("text/html"));
-    if matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_konae/") || wants_page) {
+    let mut response = if matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_konae/") || wants_page) {
         maintenance_page(&deployment.project_name, &message)
     } else {
         refusal(&message)
+    };
+    if super::is_private(&deployment) {
+        response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     }
+    response
 }
 
 #[cfg(test)]
