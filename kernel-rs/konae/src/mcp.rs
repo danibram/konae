@@ -2040,13 +2040,13 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
 
 /// The first release may take the folder's contact email. Later releases keep
 /// the Deployment value so a stale app folder cannot replace an owner change.
+/// A malformed address is refused either way, before a release or an import
+/// changes anything.
 async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
+    let given = given.map(|given| super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))).transpose()?;
     let deployment = find_project_deployment(&*state.deployments.read().await, project);
-    if deployment.is_none() {
-        if let Some(given) = given {
-            let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
-            return Ok(Some(email));
-        }
+    if deployment.is_none() && given.is_some() {
+        return Ok(given);
     }
     let kept = deployment.and_then(|deployment| deployment.contact_email);
     Ok(kept.or_else(|| owner_email(state, &owner.id)))

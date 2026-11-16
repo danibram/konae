@@ -51,6 +51,8 @@ test("the owner sets the app's contact email in konae.json, and a later publish 
   // An app with no address gets the owner's again from the next publish.
   await release(kernel.owner, payload(id), id);
   expect((await read()).contactEmail).toBe("owner@contact.test");
+  await expect(release(kernel.owner, payload(id, { contactEmail: "nobody" }), id)).rejects.toThrow("The contact email is not a valid email address.");
+  expect((await read()).contactEmail).toBe("owner@contact.test");
 }, 120_000);
 
 test("a first release refuses an invalid contact email", async () => {
