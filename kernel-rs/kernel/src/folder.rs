@@ -348,12 +348,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_folder_with_a_missing_page_template_is_refused() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!("page-release-cases.json")).unwrap();
+        let expected = cases[0]["error"].as_str().unwrap();
         let root = scratch();
         let state = AppState::for_test(&root);
         write_folder(&root, "notes_app", "CREATE TABLE notes(id INTEGER PRIMARY KEY);");
         std::fs::write(layout::sources(&root, "notes_app").join("actions.json"), r#"{"version":1,"actions":{"posts.head":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts LIMIT 1","bindings":[],"page":{"path":"/posts","file":"post.html"}}}}"#).unwrap();
         let error = refused(open(&state, "notes_app", None).await);
-        assert!(error.contains("Action posts.head names post.html as its page file, but the Build Artifact does not contain it."), "{error}");
+        assert!(error.contains(expected), "{error}");
         let _ = std::fs::remove_dir_all(root);
     }
 

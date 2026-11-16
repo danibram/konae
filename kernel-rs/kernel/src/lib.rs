@@ -4349,6 +4349,33 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn a_release_with_a_missing_page_template_uses_the_shared_case() {
+        let cases: Value = serde_json::from_str(include_str!("page-release-cases.json")).unwrap();
+        let case = &cases[0];
+        let root = std::env::temp_dir().join(format!("konae-release-page-file-{}", Uuid::new_v4()));
+        let state = test_state(&root);
+        let body = release_body(
+            "app_missing_page_file",
+            "CREATE TABLE IF NOT EXISTS posts(id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+            json!({
+                "posts.head": {
+                    "kind": "query", "access": "anonymous",
+                    "statement": "SELECT title FROM posts LIMIT 10", "bindings": [],
+                    "page": {"path": "/posts", "file": "post.html"}
+                }
+            }),
+            "<main>posts</main>",
+            None,
+        );
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let text = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains(case["error"].as_str().unwrap()), "{text}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn a_stored_deployment_on_the_editor_host_does_not_capture_the_owner_door() {
         let root = std::env::temp_dir().join(format!("konae-editor-host-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
