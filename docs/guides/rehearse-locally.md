@@ -20,7 +20,7 @@ Stop any running `dev` process, then reset local data from the snapshot:
 bun run konae -- dev --dir ./my-app --reset
 ```
 
-Reset takes a lifecycle lock, backs up `data/` and the local call and mail queues, imports the snapshot, then retires unfinished local effects. Its output gives the execution and snapshot IDs, backup path, and retired counts. If it fails, reset restores the saved data and queues. Start `dev` without `--reset` to keep working with that local data.
+Reset takes a lifecycle lock, backs up `data/` and the local call and mail queues, imports the snapshot, then retires unfinished local effects. Its output gives the execution and snapshot IDs, backup path, and retired counts. If it fails, reset restores the saved data and queues. Reset and CLI replies or schedule runs share `.konae/control.lock`, so they cannot change local state at the same time. Reads remain available. After a crash, a stale lock requires checking that no control or reset process is running before removing it. Direct Kernel operator commands do not use this CLI lock. Start `dev` without `--reset` to keep working with that local data.
 
 The local Kernel binds to loopback and uses its own accounts, rows and files. Email goes to `.konae/kernel/mail-testbox.jsonl`. Call actions are captured without DNS, secret-based authentication, app dispatch or HTTP. Schedule timers pause; run a declared schedule manually with `konae test schedule`. Google sign-in is refused. Browser connections to external origins are blocked. This does not sandbox npm build scripts or other shell commands.
 
