@@ -1958,7 +1958,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
             });
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
             anyhow::ensure!(
-                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none(),
+                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
                 "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
             );
             let against = match &package {

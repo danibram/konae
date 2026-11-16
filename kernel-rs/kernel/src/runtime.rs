@@ -618,6 +618,9 @@ pub fn tool_error(error: &anyhow::Error) -> Value {
 /// database an import puts in place first; without it the change is planned
 /// against the live database, or a package's or an empty one for a first release.
 pub async fn validate_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+    if let Some(initial_modules) = input.initial_modules.as_ref() {
+        crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
+    }
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"

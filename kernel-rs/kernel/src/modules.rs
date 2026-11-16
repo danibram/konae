@@ -187,7 +187,7 @@ pub fn preserve_release_state(
     if let Some(previous) = previous {
         next.updated_at = previous.updated_at;
         next.modules = if previous.released.is_none() {
-            initial.cloned().unwrap_or_else(|| next.modules.clone())
+            next.modules.clone()
         } else {
             previous.modules
         };
