@@ -11,6 +11,7 @@
     "const rows = await miniapp.actions.call(\"tasks.list\");",
     "await miniapp.actions.call(\"tasks.create\", { title });",
     "await miniapp.actions.call(\"lesson.finish\", { lesson });",
+    "const { slug } = miniapp.page.params;",
     "const files = await miniapp.files.list();",
     "const stored = await miniapp.files.upload(file);",
     "const shared = await miniapp.files.upload(file, { visibility: \"public\" });",
@@ -153,6 +154,48 @@
         "To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner, the person who called the action, or the verified accounts a column of the changed rows names, nobody else."
       ],
       "declarations": [
+        {
+          "file": "actions.json",
+          "key": "page",
+          "summary": "{ path, file, list? } on an anonymous query. The Kernel binds path parameters to the query's input bindings, serves the named file with the row's title and card, and exposes parameters as miniapp.page.params. list names an anonymous query with no inputs for the sitemap.",
+          "limits": [
+            "The first path segment is literal.",
+            "The page query returns at most one row.",
+            "The list query returns at most 1000 rows."
+          ],
+          "errors": [
+            {
+              "message": "Action <name> declares a page path, so it must be an anonymous query.",
+              "when": "page is set on any other action or an authenticated query",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> declares page parameters that do not match its input bindings.",
+              "when": "the named parameters and input binding keys differ",
+              "source": "kernel"
+            },
+            {
+              "message": "Actions <name> and <name> both bind page path <key>.",
+              "when": "two page declarations have the same literal and parameter pattern",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names <key> as its page file, but the Build Artifact does not contain it.",
+              "when": "the named file is absent from the Build Artifact at release",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> has a page query that does not return a title column.",
+              "when": "the query does not select a column named title",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated.",
+              "when": "the list query's selected columns differ",
+              "source": "kernel"
+            }
+          ]
+        },
         {
           "file": "actions.json",
           "key": "kind",
@@ -501,6 +544,26 @@
             "string inputs default to a maxLength of 10,000 UTF-16 code units",
             "256 MiB per app database"
           ]
+        }
+      ]
+    },
+    {
+      "name": "page",
+      "summary": "Values from the page address. The Kernel fills params when a declared page path answers.",
+      "switch": false,
+      "notes": [],
+      "declarations": [],
+      "calls": [
+        {
+          "call": "miniapp.page.params",
+          "signature": "miniapp.page.params",
+          "summary": "Read the values captured by the page path, or an empty object on a file page.",
+          "signedOut": true,
+          "tools": [],
+          "args": [],
+          "returns": "An object keyed by page path parameter, such as { slug: \"hello\" }",
+          "errors": [],
+          "limits": []
         }
       ]
     },

@@ -56,6 +56,16 @@
         },
         "call": { "$ref": "#/$defs/call" },
         "thenOf": { "type": "string" },
+        "page": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "file"],
+          "properties": {
+            "path": { "type": "string" },
+            "file": { "type": "string" },
+            "list": { "type": "string" }
+          }
+        },
         "runtime": {
           "type": "object",
           "required": ["endpoint", "tool", "sdk", "callers"],

@@ -1,5 +1,5 @@
 use crate::{AppState, ArtifactCache, Deployment};
-use axum::{http::{HeaderMap, HeaderValue, header}, response::Response};
+use axum::{http::{HeaderMap, HeaderValue}, response::Response};
 use sha2::Digest;
 use std::path::Path;
 
@@ -77,12 +77,23 @@ pub fn enrich_html(
     description: &str,
     image: Option<&str>,
 ) -> Vec<u8> {
+    enrich_html_with(html, canonical, title, description, image, false)
+}
+
+fn enrich_html_with(
+    html: &[u8],
+    canonical: &str,
+    title: &str,
+    description: &str,
+    image: Option<&str>,
+    escape_entities: bool,
+) -> Vec<u8> {
     let Ok(mut html) = String::from_utf8(html.to_vec()) else {
         return html.to_vec();
     };
     let head_end = head_end(&html);
     let head = html[..head_end].to_ascii_lowercase();
-    let escaped = |value: &str| escape(value);
+    let escaped = |value: &str| if escape_entities { escape_all(value) } else { escape(value) };
     let mut tags = String::new();
     if !has_value(&head, "link", "rel", "canonical") {
         tags.push_str(&format!(
@@ -154,6 +165,60 @@ pub fn enrich_html(
     }
     html.insert_str(head_end, &tags);
     html.into_bytes()
+}
+
+pub fn page_html(html: &[u8], params: &serde_json::Value, title: &str, description: &str, image: Option<&str>, canonical: Option<&str>) -> Vec<u8> {
+    let Ok(mut html) = String::from_utf8(html.to_vec()) else { return html.to_vec() };
+    let escaped_title = escape_all(title);
+    let lower = html.to_ascii_lowercase();
+    let title_start = lower.find("<title").and_then(|start| lower[start..].find('>').map(|end| start + end + 1));
+    let title_end = title_start.and_then(|start| lower[start..].find("</title").map(|end| start + end));
+    if let (Some(start), Some(end)) = (title_start, title_end) {
+        html.replace_range(start..end, &escaped_title);
+    } else {
+        let at = head_end(&html);
+        html.insert_str(at, &format!("<title>{escaped_title}</title>"));
+    }
+    let encoded = serde_json::to_string(params).unwrap_or_else(|_| "{}".into());
+    let meta = format!("<meta name=\"konae-page-params\" content=\"{}\">", escape_all(&encoded));
+    html.insert_str(head_end(&html), &meta);
+    if let Some(canonical) = canonical {
+        for (element, key, value) in [
+            ("link", "rel", "canonical"),
+            ("meta", "property", "og:url"),
+            ("meta", "property", "og:title"),
+            ("meta", "property", "og:description"),
+            ("meta", "property", "og:type"),
+            ("meta", "property", "og:image"),
+            ("meta", "name", "twitter:card"),
+        ] {
+            remove_head_tag(&mut html, element, key, value);
+        }
+        enrich_html_with(html.as_bytes(), canonical, title, description, image, true)
+    } else {
+        html.into_bytes()
+    }
+}
+
+fn remove_head_tag(html: &mut String, element: &str, key: &str, value: &str) {
+    let boundary = head_end(html);
+    let head = html[..boundary].to_ascii_lowercase();
+    let marker = format!("<{element}");
+    let mut cursor = 0;
+    while let Some(offset) = head[cursor..].find(&marker) {
+        let start = cursor + offset;
+        let Some(end) = head[start..].find('>').map(|end| start + end) else { return };
+        let matches = attribute(&html[start..=end], key).is_some_and(|actual| actual.eq_ignore_ascii_case(value));
+        cursor = end + 1;
+        if matches {
+            html.replace_range(start..cursor, "");
+            return;
+        }
+    }
+}
+
+fn escape_all(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 pub fn page_canonical(base: &str, file: &str) -> String {
@@ -237,9 +302,10 @@ pub fn sitemap_response(
 ) -> Option<Response> {
     if candidate != "sitemap.xml" { return None; }
     if let Some(bytes) = bytes { return Some(cache.respond(headers, bytes, candidate)); }
-    let mut response = crate::artifact_response(sitemap(root, deployment, &address.url), candidate);
-    response.headers_mut().insert(header::CACHE_CONTROL, cache.control());
-    Some(response)
+    let body = sitemap(root, deployment, &address.url);
+    let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes()].concat());
+    let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
+    Some(tagged.respond(headers, body, candidate))
 }
 
 pub fn title(html: &[u8]) -> Option<String> {
@@ -313,8 +379,50 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
             }
         }
     }
+    if let Ok(program) = crate::action_shape::read(&deployment.actions) {
+        for action in program.actions.values() {
+            let Some(page) = action.page.as_ref() else { continue };
+            let Some(template) = page.get("path").and_then(serde_json::Value::as_str) else { continue };
+            let Some(list_name) = page.get("list").and_then(serde_json::Value::as_str) else { continue };
+            let Some(list) = program.actions.get(list_name) else { continue };
+            let Ok(rows) = crate::run_query(&crate::layout::database(root, &deployment.id), list, Vec::new()) else { continue };
+            let segments = template.trim_start_matches('/').split('/').collect::<Vec<_>>();
+            for row in rows {
+                let Some(row) = row.as_object() else { continue };
+                let mut path = String::new();
+                let mut complete = true;
+                for segment in &segments {
+                    path.push('/');
+                    if let Some(key) = segment.strip_prefix(':') {
+                        let Some(value) = row.get(key) else { complete = false; break };
+                        path.push_str(&encode_path_value(&match value {
+                            serde_json::Value::String(value) => value.clone(),
+                            _ => value.to_string(),
+                        }));
+                    } else {
+                        path.push_str(segment);
+                    }
+                }
+                if complete {
+                    xml.push_str(&format!("<url><loc>{}</loc></url>", escape(&format!("{}{}", base.trim_end_matches('/'), path))));
+                }
+            }
+        }
+    }
     xml.push_str("</urlset>");
     xml.into_bytes()
+}
+
+fn encode_path_value(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 fn collect_html(root: &Path, dir: &Path, out: &mut Vec<String>) {

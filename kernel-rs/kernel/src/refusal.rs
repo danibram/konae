@@ -97,7 +97,7 @@ mod tests {
     use serde_json::Value;
 
     const GROUPS: &[&str] = &[
-        "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
+        "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "page", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
         "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module",
     ];
 

@@ -17,7 +17,7 @@ function exposedCalls(source: string): string[] {
   const window: { miniapp?: Record<string, Record<string, unknown>> } = {};
   new Function("window", "location", "addEventListener", "parent", "document", source)(window, { pathname: "/" }, () => {}, undefined, undefined);
   return Object.entries(window.miniapp ?? {}).flatMap(([module, calls]) =>
-    Object.entries(calls).filter(([, value]) => typeof value === "function").map(([call]) => `${module}.${call}`));
+    Object.entries(calls).filter(([call, value]) => typeof value === "function" || module === "page" && call === "params" && Boolean(value && typeof value === "object")).map(([call]) => `${module}.${call}`));
 }
 
 function drift(named: string[], contract: SdkContract = sdkContract) {
@@ -72,12 +72,12 @@ describe("the SDK contract", () => {
   test("lists each module and call once, with a signature and an example that name it", () => {
     const calls = contractCalls();
     expect(new Set(calls).size).toBe(calls.length);
-    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
+    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "page.params", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
     for (const module of sdkContract.modules) {
       for (const call of module.calls) {
         const name = `miniapp.${module.name}.${call.name}`;
-        expect(call.signature.startsWith(`${name}(`)).toBe(true);
-        expect(call.examples.some((example) => example.code.includes(`${name}(`))).toBe(true);
+        expect(call.signature === name || call.signature.startsWith(`${name}(`)).toBe(true);
+        expect(call.examples.some((example) => example.code.includes(name) && (call.signature === name || example.code.includes(`${call.name}(`)))).toBe(true);
       }
     }
   });

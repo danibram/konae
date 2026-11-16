@@ -1,0 +1,162 @@
+[
+  {
+    "case": "page declaration has an invalid shape",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": []
+      }
+    },
+    "code": "page.invalid",
+    "error": "Action posts.head has an invalid page binding."
+  },
+  {
+    "case": "page list names an undeclared action",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts", "file": "post.html", "list": "posts.published" }
+      }
+    },
+    "code": "page.list-undeclared",
+    "error": "Action posts.head names posts.published as its page list, which is not declared."
+  },
+  {
+    "case": "page list is not an anonymous query without inputs",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts", "file": "post.html", "list": "posts.published" }
+      },
+      "posts.published": {
+        "kind": "mutation",
+        "access": "anonymous",
+        "statement": "UPDATE posts SET title = 'x' LIMIT 1",
+        "bindings": []
+      }
+    },
+    "code": "page.list-invalid",
+    "error": "Action posts.head has an invalid page list. Name an anonymous query with no input bindings."
+  },
+  {
+    "case": "page requires an anonymous query",
+    "actions": {
+      "posts.head": {
+        "kind": "mutation",
+        "access": "anonymous",
+        "statement": "UPDATE posts SET title = 'x' LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts/:slug", "file": "post.html" }
+      }
+    },
+    "code": "page.query",
+    "error": "Action posts.head declares a page path, so it must be an anonymous query."
+  },
+  {
+    "case": "page parameters match input bindings",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts/:slug", "file": "post.html" }
+      }
+    },
+    "code": "page.bindings",
+    "error": "Action posts.head declares page parameters that do not match its input bindings."
+  },
+  {
+    "case": "page cannot declare an HTTP route",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [{ "source": "input", "key": "slug", "type": "string", "maxLength": 120 }],
+        "http": { "method": "GET", "path": "/posts/slug" },
+        "page": { "path": "/posts/:slug", "file": "post.html" }
+      }
+    },
+    "code": "page.route-conflict",
+    "error": "Action posts.head declares both http and page. Declare one."
+  },
+  {
+    "case": "page query returns title",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT id FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts/slug", "file": "post.html" }
+      }
+    },
+    "code": "page.title",
+    "error": "Action posts.head has a page query that does not return a title column."
+  },
+  {
+    "case": "page path starts with a literal segment",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [{ "source": "input", "key": "slug", "type": "string" }],
+        "page": { "path": "/:slug", "file": "post.html" }
+      }
+    },
+    "code": "page.path-invalid",
+    "error": "Action posts.head has an invalid page path. Use a leading \"/\" and segments of letters, digits, \".\", \"_\", \"~\" or \"-\", with parameters such as \":slug\" after the first segment."
+  },
+  {
+    "case": "page list columns match its parameters",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts WHERE slug = ?1 LIMIT 1",
+        "bindings": [{ "source": "input", "key": "slug", "type": "string" }],
+        "page": { "path": "/posts/:slug", "file": "post.html", "list": "posts.published" }
+      },
+      "posts.published": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT id FROM posts LIMIT 1000",
+        "bindings": []
+      }
+    },
+    "code": "page.list-columns",
+    "error": "Action posts.head names posts.published as its page list, whose columns must match the page parameters and optional updated."
+  },
+  {
+    "case": "page paths do not overlap",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts WHERE slug = ?1 LIMIT 1",
+        "bindings": [{ "source": "input", "key": "slug", "type": "string" }],
+        "page": { "path": "/posts/:slug", "file": "post.html" }
+      },
+      "posts.byname": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts WHERE slug = ?1 LIMIT 1",
+        "bindings": [{ "source": "input", "key": "name", "type": "string" }],
+        "page": { "path": "/posts/:name", "file": "post.html" }
+      }
+    },
+    "code": "page.duplicate",
+    "error": "Actions posts.byname and posts.head both bind page path /posts/:slug."
+  }
+]

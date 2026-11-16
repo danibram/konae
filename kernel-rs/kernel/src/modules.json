@@ -23,6 +23,17 @@
         "actions.json"
       ]
     },
+    "page": {
+      "summary": "Values from the page address. The Kernel fills params when a declared page path answers.",
+      "switch": false,
+      "options": [],
+      "permission": "publish",
+      "agentRule": "never",
+      "requires": [],
+      "uses": [
+        "actions.json"
+      ]
+    },
     "files": {
       "summary": "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
       "switch": false,

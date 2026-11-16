@@ -12,6 +12,7 @@ await miniapp.auth.signOut();                                    // revoke this 
 const rows = await miniapp.actions.call("tasks.list");           // array of row objects
 await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
 await miniapp.actions.call("lesson.finish", { lesson });         // a signal action: { recorded: true }
+const { slug } = miniapp.page.params;
 const files = await miniapp.files.list();                        // files visible to the current visitor or app user
 const stored = await miniapp.files.upload(file);                 // uses the app's file policy
 const shared = await miniapp.files.upload(file, { visibility: "public" });
@@ -117,6 +118,23 @@ The only door to the database. A call names a Server Action declared in actions.
 - To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.
 - A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.
 - To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner, the person who called the action, or the verified accounts a column of the changed rows names, nobody else.
+
+Declared with `page` in `actions.json`. { path, file, list? } on an anonymous query. The Kernel binds path parameters to the query's input bindings, serves the named file with the row's title and card, and exposes parameters as miniapp.page.params. list names an anonymous query with no inputs for the sitemap.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> declares a page path, so it must be an anonymous query.` | page is set on any other action or an authenticated query | Kernel | Same |
+| `Action <name> declares page parameters that do not match its input bindings.` | the named parameters and input binding keys differ | Kernel | Same |
+| `Actions <name> and <name> both bind page path <key>.` | two page declarations have the same literal and parameter pattern | Kernel | Same |
+| `Action <name> names <key> as its page file, but the Build Artifact does not contain it.` | the named file is absent from the Build Artifact at release | Kernel | Same |
+| `Action <name> has a page query that does not return a title column.` | the query does not select a column named title | Kernel | Same |
+| `Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated.` | the list query's selected columns differ | Kernel | Same |
+
+Limits:
+
+- The first path segment is literal.
+- The page query returns at most one row.
+- The list query returns at most 1000 rows.
 
 Declared with `kind` in `actions.json`. Each kind takes its own top-level keys. A query takes kind, access, statement, bindings and http. A mutation takes kind, access, statement, bindings, http, signal, guard, notify and schedule. A signal action takes kind, access, bindings, signal and an empty statement. A call takes kind, access, bindings, url, method, body, headers, auth, then and an empty statement. Any other key is refused, so a misspelled or misplaced key cannot pass and do nothing. A key set to null counts as absent. A key with its own refusal, such as a guard on a query, gets that refusal instead. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 
@@ -253,6 +271,22 @@ Limits:
 - 256 MiB per app database
 
 Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or on konae dev. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.
+
+## miniapp.page
+
+Values from the page address. The Kernel fills params when a declared page path answers.
+
+### miniapp.page.params
+
+Read the values captured by the page path, or an empty object on a file page.
+
+Signed-out visitors on a public Deployment: allowed.
+
+Runtime MCP tools: none.
+
+Returns An object keyed by page path parameter, such as { slug: "hello" }.
+
+Editor preview: Always returns an empty object because the editor preview has no page URL.
 
 ## miniapp.files
 

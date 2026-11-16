@@ -80,6 +80,13 @@
   }
 
   window.miniapp = {
+    page: {
+      params: (() => {
+        const value = typeof document === 'undefined' ? undefined : document.querySelector?.('meta[name="konae-page-params"]')?.getAttribute("content");
+        if (!value) return {};
+        try { return JSON.parse(value); } catch { return {}; }
+      })()
+    },
     actions: { call: async (name, input = {}) => {
       try { return await call('actions_invoke', { name, input }); }
       catch (error) { if (error.status === 401) location.assign(base + '/_konae/login'); throw error; }

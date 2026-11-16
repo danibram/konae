@@ -53,6 +53,7 @@ pub mod modules;
 pub mod notify;
 pub mod operator;
 pub mod package;
+pub mod page;
 pub mod path;
 pub mod path_name;
 pub mod provider;
@@ -574,6 +575,9 @@ pub struct ActionDefinition {
     pub http: Option<Value>,
 
     #[serde(default)]
+    pub page: Option<Value>,
+
+    #[serde(default)]
     pub signal: Option<Value>,
 
     #[serde(default)]
@@ -909,6 +913,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             None => return error(StatusCode::BAD_REQUEST, &error_value.to_string()),
         },
     };
+    for (name, action) in &program.actions {
+        let Some(file) = action.page.as_ref().and_then(|page| page.get("file")).and_then(Value::as_str) else { continue };
+        if !input.artifact.files.contains_key(file) {
+            return refusal_error(&refusal::refuse("page.file-missing", format!("Action {name} names {file} as its page file, but the Build Artifact does not contain it.")));
+        }
+    }
     if !runtime::valid_app_id(&input.project.id) {
         return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
     }
@@ -3120,6 +3130,7 @@ pub fn resolve_bindings(
 
 pub fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), refusal::Refusal> {
     validate_declarations(name, action)?;
+    page::validate_action(name, action)?;
     action_shape::check_keys(name, action)
 }
 
@@ -4367,6 +4378,7 @@ pub mod tests {
             statement: statement.into(),
             bindings,
             http: None,
+            page: None,
             signal: None,
             guard: None,
             notify: None,

@@ -1,6 +1,7 @@
 
 use super::refusal::{refuse, Refusal};
 use super::*;
+use sha2::Digest;
 use std::sync::{Arc, OnceLock};
 
 /// The largest POST body a route reads.
@@ -822,8 +823,159 @@ pub async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPa
             }
             return response;
         }
+        if !artifact_path_exists(&state, &deployment, &relative).await {
+            let path = format!("/{}", relative.trim_start_matches('/'));
+            if let Some(response) = serve_page_path(&state, &deployment, &path, request.headers()).await {
+                return response;
+            }
+        }
     }
     serve_artifact(State(state), AxumPath(relative), request.headers().clone()).await
+}
+
+async fn artifact_path_exists(state: &AppState, deployment: &Deployment, relative: &str) -> bool {
+    let routing = artifact::routing(&deployment.manifest);
+    for candidate in artifact::candidates(relative, routing) {
+        if read_artifact(state, deployment, &candidate).await.is_ok() { return true; }
+    }
+    false
+}
+
+async fn serve_page_path(state: &AppState, deployment: &Deployment, path: &str, headers: &HeaderMap) -> Option<Response> {
+    let table = route_table(deployment);
+    let mut actions = table.program.actions.iter().collect::<Vec<_>>();
+    actions.sort_by(|(left_name, left), (right_name, right)| {
+        let literal_count = |action: &ActionDefinition| action.page.as_ref().and_then(|page| page["path"].as_str()).map(|path| path.split('/').filter(|segment| !segment.starts_with(':')).count()).unwrap_or(0);
+        literal_count(right).cmp(&literal_count(left)).then_with(|| left_name.cmp(right_name))
+    });
+    let (definition, page, params) = actions.into_iter().find_map(|(_, action)| {
+        let page = action.page.as_ref()?;
+        let pattern = page.get("path")?.as_str()?;
+        let params = match_page(pattern, path)?;
+        Some((action, page, params))
+    })?;
+    if is_private(deployment) {
+        match authenticate_deployment(state, deployment, headers) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Some(private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(state, deployment, headers))),
+            Err(response) => return Some(response),
+        }
+    }
+    let input = Value::Object(page_query_input(definition, &params));
+    let bindings = match resolve_bindings(definition, &input, None) {
+        Ok(bindings) => bindings,
+        Err(message) => return Some(error(StatusCode::BAD_REQUEST, &message)),
+    };
+    let permit = match state.guards.statement_permit(&deployment.id).await {
+        Ok(permit) => permit,
+        Err(wait) => return Some(rate_limited(wait)),
+    };
+    let result = match run_action_in_slot(database_path(state, &deployment.id), definition, bindings, permit).await {
+        Ok(result) => result,
+        Err(error_value) => return Some(error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string())),
+    };
+    let Some(rows) = result.answer.as_array() else {
+        return Some(error(StatusCode::INTERNAL_SERVER_ERROR, "The page query did not return rows."));
+    };
+    if rows.len() > 1 {
+        return Some(error(StatusCode::INTERNAL_SERVER_ERROR, "The page query returned more than one row."));
+    }
+    let Some(row) = rows.first().and_then(Value::as_object) else {
+        return Some(page_not_found(state, deployment).await);
+    };
+    let Some(title) = row.get("title").and_then(Value::as_str) else {
+        return Some(error(StatusCode::INTERNAL_SERVER_ERROR, "A page query must return a string title."));
+    };
+    let Some(file) = page.get("file").and_then(Value::as_str) else { return Some(page_not_found(state, deployment).await) };
+    let bytes = match read_artifact(state, deployment, file).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Some(page_not_found(state, deployment).await),
+    };
+    let seo_on = modules::is_on(&deployment.modules, "seo");
+    let address = seo_on.then(|| seo::address(state, deployment));
+    let canonical = address.as_ref().map(|address| format!("{}{}", address.url.trim_end_matches('/'), path));
+    let description = row.get("description").and_then(Value::as_str).unwrap_or("");
+    let image = row.get("image").and_then(Value::as_str).map(|image| {
+        if image.starts_with("http://") || image.starts_with("https://") { image.to_owned() }
+        else { format!("{}/{}", address.as_ref().map_or(deployment.url.as_str(), |address| address.url.as_str()).trim_end_matches('/'), image.trim_start_matches('/')) }
+    });
+    let html = seo::page_html(&bytes, &Value::Object(params), title, description, image.as_deref(), canonical.as_deref());
+    let row_bytes = serde_json::to_vec(row).unwrap_or_default();
+    let seo_state = serde_json::to_vec(&deployment.modules["seo"]).unwrap_or_default();
+    let digest = sha2::Sha256::digest([deployment.artifact_version.as_bytes(), row_bytes.as_slice(), canonical.as_deref().unwrap_or("").as_bytes(), seo_state.as_slice()].concat());
+    let etag = format!("\"{}-{}\"", deployment.artifact_version, hex::encode(digest));
+    if crate::etag_matches(headers, &etag) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+        response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));
+        return Some(response);
+    }
+    count_page_view(state, deployment, headers, file);
+    let mut response = artifact_response(html, file);
+    response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));
+    if !seo_on { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
+    Some(response)
+}
+
+async fn page_not_found(state: &AppState, deployment: &Deployment) -> Response {
+    match read_artifact(state, deployment, "404.html").await {
+        Ok(bytes) => {
+            let mut response = artifact_response(bytes, "404.html");
+            *response.status_mut() = StatusCode::NOT_FOUND;
+            response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
+            response
+        }
+        Err(_) => artifact::not_found_page(),
+    }
+}
+
+fn match_page(pattern: &str, path: &str) -> Option<serde_json::Map<String, Value>> {
+    let pattern = pattern.trim_start_matches('/').split('/').collect::<Vec<_>>();
+    let path = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
+    if pattern.len() != path.len() { return None }
+    let mut params = serde_json::Map::new();
+    for (pattern, value) in pattern.iter().zip(path) {
+        if let Some(key) = pattern.strip_prefix(':') {
+            params.insert(key.to_owned(), Value::String(decode_path_segment(value)?));
+        } else if *pattern != value {
+            return None;
+        }
+    }
+    Some(params)
+}
+
+fn page_query_input(action: &ActionDefinition, params: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    let mut input = params.clone();
+    for binding in &action.bindings {
+        if binding.source != "input" { continue }
+        let Some(key) = binding.key.as_deref() else { continue };
+        let Some(Value::String(value)) = params.get(key) else { continue };
+        let typed = match binding.value_type.as_deref() {
+            Some("number") => value.parse::<i64>().map(Value::from).ok().or_else(|| value.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map(Value::Number)),
+            Some("boolean") => match value.as_str() { "true" => Some(Value::Bool(true)), "false" => Some(Value::Bool(false)), _ => None },
+            _ => None,
+        };
+        if let Some(typed) = typed { input.insert(key.to_owned(), typed); }
+    }
+    input
+}
+
+fn decode_path_segment(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 pub async fn post_route(State(state): State<AppState>, request: Request) -> Response {

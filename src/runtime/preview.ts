@@ -92,6 +92,7 @@ export const runtimeClient = String.raw`
   }
 
   window.miniapp = {
+    page: { params: {} },
     actions: {
       call: (name, input = {}) => request('actions.invoke', { name, input })
     },
