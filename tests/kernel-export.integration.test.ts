@@ -148,7 +148,7 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect(twice.error).toContain("This account is not suspended.");
 
   expect(JSON.parse((await command("signup-policy", "closed")).output)).toMatchObject({ mode: "closed", previousMode: "open" });
-  expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).modules.auth.signupPolicy.mode).toBe("closed");
+  expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).signupPolicy.mode).toBe("closed");
   let refused = 0;
   for (let attempt = 0; attempt < 30 && refused === 0; attempt++) {
     const response = await appFetch(app, hostname, "/_konae/auth/signup", { method: "POST", headers: { "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: `late${attempt}@carried.test`, password }) });

@@ -337,13 +337,6 @@ cat /tmp/orders/konae.json
   "name": "Orders",
   "slug": "orders",
   "visibility": "private",
-  "signupPolicy": {
-    "mode": "invitation",
-    "allowlist": []
-  },
-  "signInMethods": [
-    "password"
-  ],
   "kernel": "<Kernel version>",
   "modules": {
     "auth": {
@@ -361,7 +354,14 @@ cat /tmp/orders/konae.json
   },
   "manifest": {
     "version": 1
-  }
+  },
+  "signupPolicy": {
+    "mode": "invitation",
+    "allowlist": []
+  },
+  "signInMethods": [
+    "password"
+  ]
 }
 ```
 
