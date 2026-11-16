@@ -1,5 +1,19 @@
 [
   {
+    "case": "a page file cannot contain a backslash",
+    "actions": {
+      "posts.head": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts", "file": "posts\\post.html" }
+      }
+    },
+    "code": "page.invalid",
+    "error": "Action posts.head has an invalid page binding."
+  },
+  {
     "case": "page declaration has an invalid shape",
     "actions": {
       "posts.head": {

@@ -129,5 +129,5 @@ fn selected_columns(statement: &str) -> Option<HashSet<String>> {
 }
 
 fn safe_file(file: &str) -> bool {
-    !file.is_empty() && !file.starts_with('/') && file.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+    !file.is_empty() && !file.starts_with('/') && !file.contains('\\') && file.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
 }
