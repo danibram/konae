@@ -1,7 +1,5 @@
 FROM oven/bun:1.3.11
 
-# The oven/bun image ships an unprivileged `bun` user. Vite writes its cache
-# under node_modules/.vite, so that user owns /app.
 WORKDIR /app
 RUN chown bun:bun /app
 USER bun

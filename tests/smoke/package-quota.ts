@@ -8,14 +8,6 @@ import type { AppSettings } from "../../src/lib/app-folder";
 import type { McpClient, Transfer } from "../../src/mcp/client";
 import { account, buildKernel, runtime, startKernel, type Kernel } from "../kernel-harness";
 
-// The quota proof of ADR-0008. An app whose database reached its 256 MiB cap,
-// with 20 MiB of files, leaves Konae through `exportLocal` with its data and
-// runs on the `kernel` binary alone. The exported folder holds the same row
-// counts, byte totals and files, an app user signs in with their password,
-// and the script samples peak resident memory on the source Kernel, the
-// export client and the target `kernel`.
-// Run with `bun run tests/smoke/package-quota.ts --port 19460`. The target
-// `kernel` uses the next port. It needs about 2 GB of free disk.
 const portIndex = process.argv.indexOf("--port");
 const port = portIndex < 0 ? 19460 : Number(process.argv[portIndex + 1]);
 if (!Number.isInteger(port) || port < 1024 || port > 65534) throw Error("Choose a source port between 1024 and 65534. The target uses the next port.");
@@ -38,7 +30,6 @@ const sources = {
 let source: Kernel | undefined;
 let target: ReturnType<typeof Bun.spawn> | undefined;
 
-/** Samples a process's resident set with `ps` every 100 ms and keeps the peak in MiB. */
 function sampleRss(pid: number) {
   let peak = 0;
   let running = true;
@@ -53,7 +44,6 @@ function sampleRss(pid: number) {
   return async () => { running = false; await done; return Math.round(peak); };
 }
 
-/** The process that listens on `port`. The harness keeps its Kernel's process to itself. */
 async function listener(port: number) {
   const child = Bun.spawn(["lsof", "-t", `-iTCP:${port}`, "-sTCP:LISTEN"], { stdout: "pipe", stderr: "ignore" });
   const pid = Number((await new Response(child.stdout).text()).trim().split("\n")[0]);
@@ -67,14 +57,12 @@ const sql = (client: McpClient, deploymentId: string, statement: string) =>
 type Counts = { blobs: number; bytes: number; notes: number };
 type SqlAnswer = { rows?: Counts[]; result?: { rows?: Counts[] } };
 
-/** The one row of COUNTS, from an answer that holds it at the top or under `result`. */
 function countsOf(answer: SqlAnswer) {
   const rows = answer.rows ?? answer.result?.rows;
   assert.ok(rows?.length === 1, `The counts query answered ${JSON.stringify(answer)}.`);
   return rows[0];
 }
 
-/** Inserts rows of `size` random bytes, `count` per statement, until the database refuses with its size cap. */
 async function fill(client: McpClient, deploymentId: string, size: number, count: number) {
   for (;;) {
     try {
@@ -88,7 +76,6 @@ async function fill(client: McpClient, deploymentId: string, size: number, count
 
 const COUNTS = "SELECT (SELECT COUNT(*) FROM blobs) blobs, (SELECT SUM(length(body)) FROM blobs) bytes, (SELECT COUNT(*) FROM notes) notes LIMIT 1";
 
-/** Runs one `kernel` command beside the target Kernel and returns its parsed output. */
 async function command(env: Record<string, string>, ...args: string[]) {
   const child = Bun.spawn([kernelBinary, ...args], { env, stdout: "pipe", stderr: "pipe" });
   const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -102,7 +89,6 @@ try {
   const sourceKernel = source;
   const { token } = await sourceKernel.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish", "export_data"], ttlSeconds: 7200 });
 
-  // An app folder as `konae init` writes it, with this script's sources in app/.
   const directory = path.join(root, "quota-app");
   await initLocal(directory, { name: "Quota app" });
   await rm(path.join(directory, "app"), { recursive: true });
@@ -118,7 +104,6 @@ try {
   const writer = runtime(sourceKernel, hostname, originalCookie);
   await writer.call("actions_invoke", { name: "notes.add", input: { body: "Before the quota" } });
 
-  // Ten 2 MiB files fill the 20 MiB file quota exactly.
   const fileIds: string[] = [];
   for (let index = 0; index < 10; index++) {
     const upload = await writer.upload(new Uint8Array(2 * mib).fill(index + 1));
@@ -129,7 +114,6 @@ try {
   await assert.rejects(writer.call("files_upload", { transferId: extra.transferId, name: "over.bin" }), /20 MiB file quota/);
   await writer.cancel(extra.transferId);
 
-  // Owner SQL fills the database through the Kernel until its 256 MiB cap refuses a write.
   const fillStarted = performance.now();
   await fill(sourceKernel.owner, published.id, mib, 8);
   await fill(sourceKernel.owner, published.id, 64 * 1024, 8);
@@ -142,7 +126,6 @@ try {
   const before = countsOf(await sql(sourceKernel.owner, published.id, COUNTS));
   assert.ok(before.blobs > 0 && before.bytes > 250 * mib && before.notes === 1, `The source holds ${JSON.stringify(before)}.`);
 
-  // The export lands where a Kernel looks for its apps, in a data directory no Konae ever used.
   const targetData = path.join(root, "target");
   const folder = path.join(targetData, "apps", settings.id);
   const clientBaseline = Math.round(Number((await Bun.$`ps -o rss= -p ${process.pid}`.text()).trim()) / 1024);
@@ -167,7 +150,6 @@ try {
   assert.equal(storedFiles.length, 10, "The export holds a different number of files.");
   assert.equal(storedBytes, 20 * mib, "The exported files hold a different byte total.");
 
-  // The `kernel` binary serves the folder alone.
   const targetPort = port + 1;
   const url = `http://127.0.0.1:${targetPort}`;
   const env = {
@@ -214,7 +196,6 @@ try {
     peakRssMiB: { sourceKernel: sourcePeak, exportClient: exportClientPeak, targetKernel: targetPeak },
   };
   console.log(JSON.stringify(report, null, 2));
-  // Each process, baseline included, stays under the 256 MiB database it moved.
   for (const [name, peak] of Object.entries(report.peakRssMiB)) assert.ok(peak < 192, `${name} peaked at ${peak} MiB.`);
   console.log("Passed. The 256 MiB database and 20 MiB of files left through the export and ran on the kernel binary alone, with bounded memory.");
 } finally {

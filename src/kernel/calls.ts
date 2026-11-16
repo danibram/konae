@@ -1,39 +1,24 @@
-// Calls between apps, docs/adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md.
-//
-// The same checks, in the same order and with the same messages, as
-// kernel-rs/kernel/src/calls.rs `declaration`, `check_program` and `check_connects`.
-// kernel-rs/kernel/src/call-cases.json holds the cases both test suites run. The
-// checks that need the installation, http only to its own apps and never the
-// editor's host, and the secrets a call names, run in the Kernel at publish
-// and in src/agent/release-check.ts when the editor has those facts.
 
 import { refusal } from "./refusal";
 
-/** How a call proves itself to the app it calls. */
 export type CallAuth =
-  /** Signs with Konae's route scheme in `header`, with the secret's value. */
   | { secret: string; header: string }
   /** Sends the secret's value, an API key, as `Authorization: Bearer`. */
   | { key: string };
 
-/** The mutation that runs when a call ends, with inputs read from the answer. */
 export type CallThen = { action: string; inputs: Record<string, string> };
 
-/** What one body key or header sends: an input's value, or a constant fixed in actions.json. */
 export type CallBodyValue = string | { value: string | number | boolean | null };
 
 export type CallDeclaration = {
   url: string;
   method: "GET" | "POST";
-  /** Body key to what it sends. A GET sends them as query parameters. A POST expands dotted keys into nested JSON. */
   body: Record<string, CallBodyValue>;
-  /** Extra request headers. Only Idempotency-Key is allowed. */
   headers?: Record<string, CallBodyValue>;
   auth?: CallAuth;
   then?: CallThen;
 };
 
-/** What `miniapp.actions.call` answers for a call: the Kernel queued it. */
 export type CallQueued = { callId: string; queued: true };
 
 const CALL_KEYS = ["url", "method", "body", "headers", "auth", "then"] as const;
@@ -56,7 +41,6 @@ export const DEFAULT_SIGNATURE_HEADER = "X-Konae-Signature";
 type Kind = "query" | "mutation" | "signal" | "call";
 type Binding = { source: string; key?: string; nullable?: boolean };
 
-/** Refuses url, method, body, headers, auth and then on an action that is not a call. */
 export function assertNoCallKeys(name: string, kind: Exclude<Kind, "call">, candidate: Record<string, unknown>) {
   if (CALL_KEYS.some((key) => candidate[key] != null)) {
     const word = kind === "signal" ? "signal action" : kind;
@@ -64,7 +48,6 @@ export function assertNoCallKeys(name: string, kind: Exclude<Kind, "call">, cand
   }
 }
 
-/** Checks one call's own keys. `assertCallTargets` checks its then against the program. */
 export function parseCall(name: string, bindings: Binding[], candidate: Record<string, unknown>): CallDeclaration {
   const statement = candidate.statement;
   const hasStatement = statement != null && !(typeof statement === "string" && !statement.trim());
@@ -93,7 +76,6 @@ export function parseCall(name: string, bindings: Binding[], candidate: Record<s
 function staticUrl(name: string, value: unknown): string {
   const invalid = () => refusal("call.url-invalid", `Action ${name} has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters.`);
   if (typeof value !== "string") throw invalid();
-  // Code points, as the Kernel counts characters.
   if ([...value].length > MAX_URL_CHARS || value.includes("#") || [...value].some((c) => c.codePointAt(0)! <= 0x20 || c.codePointAt(0) === 0x7f)) throw invalid();
   let url: URL;
   try {
@@ -114,12 +96,10 @@ function staticUrl(name: string, value: unknown): string {
   return value;
 }
 
-/** Sorted the way the Kernel sorts strings: by bytes, which for ASCII is by code unit. */
 function sortedEntries(record: Record<string, unknown>): [string, unknown][] {
   return Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** A constant body value: { "value": <string of at most 1000 characters, number, boolean or null> }. */
 function isConstant(value: unknown): value is { value: string | number | boolean | null } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const keys = Object.keys(value);
@@ -239,7 +219,6 @@ function parseThen(name: string, value: unknown, inputs: string[]): CallThen | u
 
 type ProgramAction = { kind: Kind; http?: unknown; bindings: Binding[]; call?: CallDeclaration };
 
-/** Checks each call's then against the program, in sorted name order. */
 export function assertCallTargets(actions: Record<string, ProgramAction>) {
   for (const name of Object.keys(actions).sort()) {
     const then = actions[name].call?.then;
@@ -263,12 +242,10 @@ export function assertCallTargets(actions: Record<string, ProgramAction>) {
   }
 }
 
-/** The call that names `action` as its then. Such a mutation runs only after its call. */
 export function thenOf(actions: Record<string, ProgramAction>, action: string): string | null {
   return Object.keys(actions).sort().find((name) => actions[name].call?.then?.action === action) ?? null;
 }
 
-// The manifest's connects: origins the page may reach with fetch.
 const MAX_CONNECTS = 10;
 
 export function checkConnects(value: unknown): string[] | undefined {
@@ -281,8 +258,6 @@ export function checkConnects(value: unknown): string[] | undefined {
     let origin: string | null = null;
     try {
       const url = new URL(entry);
-      // A browser treats localhost and its subdomains as secure, and a local
-      // installation serves its apps there over http.
       const local = url.hostname === "localhost" || url.hostname.endsWith(".localhost");
       if ((url.protocol === "https:" || (url.protocol === "http:" && local)) && !entry.includes("*")) origin = url.origin;
     } catch {}

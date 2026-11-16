@@ -1,14 +1,8 @@
-// A members-only book club. The Deployment is private and Invitation only, so
-// every visitor who reaches this script is a signed-in member of the app.
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-// The path miniapp.files.url returns; a cover is drawn in a template, which cannot wait for it.
 const fileUrl = (id) => `/_konae/files/${encodeURIComponent(id)}`;
 
 const status = $("#status");
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 function reason(error) {
   if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
   if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The club could not reach its server. Check the connection and try again.";
@@ -16,16 +10,12 @@ function reason(error) {
 }
 const localDay = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
-// A form's submit button stays disabled until its call answers, so a second
-// press cannot store the same book or note twice.
 async function busy(form, work) {
   const button = form.querySelector("button[type=submit]");
   button.disabled = true;
   try { await work(); } finally { button.disabled = false; }
 }
 
-// A file uploaded for an action the club then refused is deleted, so it does
-// not stay behind counting against the uploader's quota.
 async function attach(file, options, use) {
   const stored = await miniapp.files.upload(file, options);
   try { return await use(stored); }
@@ -37,8 +27,6 @@ function say(message, tone = "info") {
   status.hidden = !message;
 }
 
-// Organizer actions check the role in their WHERE clause and declare a guard,
-// so a refused call rejects with the action's own sentence.
 async function mutate(name, input, done) {
   try {
     await miniapp.actions.call(name, input);
@@ -105,8 +93,6 @@ async function render() {
   $("#members").innerHTML = members.map((member) => `<li><span>${esc(member.display)}</span><span class="badge" data-role="${esc(member.role)}">${esc(member.role)}</span></li>`).join("");
 }
 
-// A private note is read back through the file read path with the session
-// cookie. The Kernel answers 404 to anyone but its uploader.
 document.addEventListener("toggle", async (event) => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement) || !details.open || details.dataset.loaded) return;
@@ -125,7 +111,6 @@ document.addEventListener("click", (event) => {
   if (!button) return;
   const id = Number(button.dataset.id);
   if (button.dataset.action === "books.schedule") {
-    // Two weeks from today on the organizer's own calendar, not the UTC date.
     const meetsOn = localDay(new Date(new Date().setDate(new Date().getDate() + 14)));
     mutate("books.schedule", { id, meetsOn }, `Scheduled for ${meetsOn}.`);
   } else if (button.dataset.action === "books.finish") {
@@ -152,8 +137,6 @@ $("#propose-form").addEventListener("submit", async (event) => {
   const book = { title: data.get("title").trim(), author: data.get("author").trim() };
   await busy(form, async () => {
     try {
-      // A cover is public inside this private app: every signed-in member reads it.
-      // books.propose declares a guard, so a refused proposal rejects with its sentence.
       if (file instanceof File && file.size > 0) {
         await attach(file, { visibility: "public" }, (cover) => miniapp.actions.call("books.propose", { ...book, coverFileId: cover.id }));
       } else {
@@ -175,7 +158,6 @@ $("#note-form").addEventListener("submit", async (event) => {
   const name = `note-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}.txt`;
   await busy(form, async () => {
     try {
-      // Private is the default: only this member can list or read the file.
       await attach(new File([data.get("body")], name, { type: "text/plain" }), undefined,
         (stored) => miniapp.actions.call("notes.add", { bookId, fileId: stored.id, name }));
       form.reset();

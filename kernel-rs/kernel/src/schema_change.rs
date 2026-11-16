@@ -1,22 +1,3 @@
-//! The change from an app's live database to the one its `schema.sql`
-//! states (ADR-0005).
-//!
-//! The Kernel runs `schema.sql` only in a scratch database in memory, then
-//! compares that database's tables, columns and indexes with the live one,
-//! reading both through SQLite itself. Only statements the Kernel writes from
-//! that comparison touch the live file:
-//!
-//! - A new table, a new column and a new index apply.
-//! - A table whose definition changed is rebuilt by the steps of
-//!   https://sqlite.org/lang_altertable.html#otheralter. Foreign keys go
-//!   off, then one transaction creates the new table under another name,
-//!   copies the rows, drops the old table, renames the new one, recreates
-//!   the indexes and checks the foreign keys.
-//! - A dropped table, a dropped column and a column whose type changed lose
-//!   something, so the change applies only with the confirmation that the
-//!   plan of those statements and reported losses carries.
-//!
-//! An index loses no row, so a dropped or changed index applies without one.
 
 use super::{denied_function, limit_database_size, notify, refusal::refuse, ActionProgram, MAX_APP_DATABASE_BYTES};
 use anyhow::Result;
@@ -27,7 +8,6 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// What the live database loses under a change, in a sentence for the owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Loss {
     pub table: String,
@@ -35,7 +15,6 @@ pub struct Loss {
     pub sentence: String,
 }
 
-/// The planned statements, transformation row counts, and data losses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Change {
     pub statements: Vec<String>,
@@ -105,8 +84,6 @@ pub enum Mode<'a> {
     /// Apply what loses nothing, and what loses something only when the
     /// confirmation matches.
     Apply(Option<&'a str>),
-    /// Apply everything. The caller holds a copy it will throw away and wants
-    /// the plan.
     Plan,
 }
 
@@ -130,12 +107,9 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
     limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
     // An expression index, a CHECK or a copied row runs SQL once per stored
     // row, so a value has the runtime's size limit here too, and the whole
-    // change a deadline long enough to index or copy a full database.
     connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     connection.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
-    // The SQLite procedure turns foreign keys off before the transaction,
-    // since the pragma does nothing inside one.
     connection.execute_batch("PRAGMA foreign_keys=OFF")?;
     connection.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
@@ -205,8 +179,6 @@ pub fn apply_with_transforms(
     if let Some(refusal) = super::sql_rules::schema_refusal(schema) {
         anyhow::bail!(refusal);
     }
-    // Parse schema.sql up front so invalid syntax fails before opening the
-    // caller's database transaction.
     Scratch::connection(schema)?;
     let mut connection = Connection::open(path)?;
     limit_database_size(&connection, MAX_APP_DATABASE_BYTES)?;
@@ -354,7 +326,6 @@ fn change_table(transaction: &Connection, scratch: &Scratch, current: &Table, wa
 }
 
 /// Adds the columns `wanted` has after all of `current`'s, when that is the
-/// only difference. False, with nothing changed, when it is not.
 fn add_columns(transaction: &Connection, current: &Table, wanted: &Table, change: &mut Change) -> Result<bool> {
     let same_start = wanted.columns.len() > current.columns.len()
         && current.columns.iter().zip(&wanted.columns).all(|(a, b)| a.name.eq_ignore_ascii_case(&b.name));
@@ -378,9 +349,6 @@ fn add_columns(transaction: &Connection, current: &Table, wanted: &Table, change
     Ok(added)
 }
 
-/// The rebuild of the SQLite page on ALTER TABLE. Foreign keys are already
-/// off and the transaction open; the caller checks the keys before commit,
-/// and the index pass recreates the table's indexes.
 fn rebuild(transaction: &Connection, scratch: &Scratch, current: &Table, wanted: &Table, change: &mut Change) -> Result<()> {
     let mut temporary = format!("konae_new_{}", wanted.name);
     while Schema::read(transaction)?.table(&temporary).is_some() || scratch.schema.table(&temporary).is_some() {
@@ -403,10 +371,6 @@ fn rebuild(transaction: &Connection, scratch: &Scratch, current: &Table, wanted:
             .map_err(|error| anyhow::anyhow!("schema.sql cannot change table {} and keep its rows: {error}", wanted.name))?;
         change.statements.push(copy);
     }
-    // The copy sets an AUTOINCREMENT counter from the rows it copied, which
-    // would hand out the ID of a deleted row again. The old counter carries
-    // over. It is the Kernel's bookkeeping, so it is not among the statements
-    // a confirmation covers.
     let counter: Option<i64> = transaction
         .query_row("SELECT seq FROM sqlite_sequence WHERE name = ?1", [&current.name], |row| row.get(0))
         .optional()
@@ -427,8 +391,6 @@ fn run(transaction: &Connection, change: &mut Change, statement: String) -> Resu
     Ok(())
 }
 
-/// Foreign key violations by child and parent table, so a change is refused
-/// only for the ones it adds.
 fn foreign_key_violations(connection: &Connection) -> Result<HashMap<(String, String), i64>> {
     let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
     let mut rows = statement.query([])?;
@@ -439,9 +401,6 @@ fn foreign_key_violations(connection: &Connection) -> Result<HashMap<(String, St
     Ok(counts)
 }
 
-/// `schema.sql` run into an empty database in memory, under the rules the
-/// Kernel always held it to, so it holds tables and indexes and calls no
-/// denied function.
 pub(crate) struct Scratch {
     connection: Connection,
     schema: Schema,
@@ -458,8 +417,6 @@ impl Scratch {
         schema_connection(schema)
     }
 
-    /// The CREATE TABLE of `name` under the name `to`. SQLite renames it,
-    /// with every reference the table makes to itself, and the rename rolls back.
     fn renamed(&self, name: &str, to: &str) -> Result<String> {
         self.connection.execute_batch("SAVEPOINT konae_rename")?;
         let renamed = self
@@ -515,7 +472,6 @@ fn schema_connection(schema: &str) -> Result<Connection> {
 struct Column {
     name: String,
     declared: String,
-    /// False for a generated column, which holds no data of its own.
     stored: bool,
 }
 
@@ -532,8 +488,6 @@ struct Index {
     sql: String,
 }
 
-/// The tables and indexes of a database, as SQLite reads them. SQLite's own
-/// tables and the indexes it makes for a UNIQUE or PRIMARY KEY are left out.
 #[derive(Debug, Default)]
 struct Schema {
     tables: Vec<Table>,
@@ -587,7 +541,6 @@ fn type_name(declared: &str) -> &str {
     if declared.is_empty() { "no type" } else { declared }
 }
 
-/// A token of SQL text and where it starts and ends in that text.
 #[derive(Debug)]
 struct Token {
     text: String,
@@ -596,9 +549,6 @@ struct Token {
     end: usize,
 }
 
-/// Words, quoted names and strings, numbers and single symbols. Whitespace
-/// and comments are dropped. A word or a quoted name comes back lowercased
-/// and unquoted, so two spellings of one definition compare equal.
 fn tokens(sql: &str) -> Vec<Token> {
     let chars: Vec<(usize, char)> = sql.char_indices().collect();
     let end_of = |index: usize| chars.get(index).map_or(sql.len(), |(offset, _)| *offset);
@@ -647,9 +597,6 @@ fn tokens(sql: &str) -> Vec<Token> {
     tokens
 }
 
-/// Whether two CREATE statements define the same thing. They do when their
-/// tokens match once whitespace, comments, quoting, letter case and IF NOT
-/// EXISTS are set aside.
 pub(crate) fn canonical_tokens(sql: &str) -> Vec<String> {
     let mut words: Vec<String> = tokens(sql).into_iter().map(|token| token.text).collect();
     if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
@@ -660,10 +607,6 @@ pub(crate) fn canonical_tokens(sql: &str) -> Vec<String> {
     words
 }
 
-/// Fingerprint tokens that preserve ambiguous double-quoted values. SQLite
-/// accepts double-quoted string literals for compatibility. The fingerprint
-/// caller supplies identifiers resolved for this object and default-value
-/// tokens reported by SQLite, so ALTER quoting still normalizes by name.
 pub(crate) fn fingerprint_tokens(sql: &str, identifiers: &std::collections::HashSet<String>, defaults: &std::collections::HashSet<String>) -> Vec<String> {
     let mut words: Vec<String> = tokens(sql).into_iter().map(|token| {
         let raw = &sql[token.start..token.end];
@@ -683,7 +626,6 @@ fn same_sql(a: &str, b: &str) -> bool {
     canonical_tokens(a) == canonical_tokens(b)
 }
 
-/// The text of one column's definition in a CREATE TABLE, as written there.
 fn column_definition(sql: &str, column: &str) -> Option<String> {
     let tokens = tokens(sql);
     let open = tokens.iter().position(|token| token.text == "(")?;
@@ -771,7 +713,6 @@ mod tests {
     fn an_unchanged_schema_changes_nothing_and_a_second_pass_is_empty() {
         let (root, path) = seeded();
         assert_eq!(apply(&path, TASKS, &program(&[]), Mode::Apply(None)).unwrap(), Change::default());
-        // Another spelling of the same definitions is the same schema.
         let respelled = "-- the tasks\ncreate table if not exists tasks (\n  \"id\" integer primary key,\n  title text not null,\n  done integer not null default 0\n);\ncreate index if not exists tasks_title on tasks (title);";
         assert_eq!(apply(&path, respelled, &program(&[]), Mode::Apply(None)).unwrap(), Change::default());
         let _ = std::fs::remove_dir_all(root);
@@ -807,14 +748,12 @@ mod tests {
     #[test]
     fn a_new_column_add_column_refuses_is_rebuilt_without_confirmation() {
         let (root, path) = seeded();
-        // ADD COLUMN takes no UNIQUE column and no default that is an expression.
         let wanted = "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, slug TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')));
             CREATE INDEX IF NOT EXISTS tasks_title ON tasks(title);";
         let change = apply(&path, wanted, &program(&[]), Mode::Apply(None)).unwrap();
         assert!(change.losses.is_empty());
         assert!(change.statements.iter().any(|statement| statement.starts_with("INSERT INTO \"konae_new_tasks\" (\"id\", \"title\", \"done\")")), "{change:?}");
         assert_eq!(rows(&path, "SELECT count(*), count(created_at) FROM tasks"), vec![vec!["Integer(3)".to_owned(), "Integer(3)".to_owned()]]);
-        // The rebuild took the index with the old table, and the index pass made it again.
         assert_eq!(rows(&path, "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"), vec![vec!["Text(\"tasks_title\")".to_owned()]]);
         assert_eq!(apply(&path, wanted, &program(&[]), Mode::Apply(None)).unwrap(), Change::default());
         let _ = std::fs::remove_dir_all(root);
@@ -832,7 +771,6 @@ mod tests {
         assert!(refusal.message.contains("Drops column tasks.done and the 3 values it holds."), "{refusal:?}");
         assert_eq!(rows(&path, "SELECT count(done) FROM tasks"), vec![vec!["Integer(3)".to_owned()]], "nothing changed");
 
-        // The plan, made on a copy as release_plan makes it.
         let copy = root.join("copy.sqlite");
         Connection::open(&path).unwrap().execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()]).unwrap();
         let plan = apply(&copy, wanted, &program(&[]), Mode::Plan).unwrap();
@@ -996,13 +934,11 @@ mod tests {
             CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id), label TEXT);";
         apply(&path, schema, &program(&[]), Mode::Apply(None)).unwrap();
         Connection::open(&path).unwrap().execute_batch("INSERT INTO lists VALUES (1, 'home'); INSERT INTO items VALUES (1, 1, 'milk');").unwrap();
-        // The parent is rebuilt, and the child's reference still holds afterwards.
         let reordered = "CREATE TABLE IF NOT EXISTS lists (name TEXT NOT NULL, id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id), label TEXT);";
         apply(&path, reordered, &program(&[]), Mode::Apply(None)).unwrap();
         assert_eq!(rows(&path, "SELECT count(*) FROM pragma_foreign_key_check"), vec![vec!["Integer(0)".to_owned()]]);
         assert_eq!(rows(&path, "SELECT name FROM lists"), vec![vec!["Text(\"home\")".to_owned()]]);
-        // A parent whose key column goes would leave the child pointing at nothing.
         let broken = "CREATE TABLE IF NOT EXISTS lists (name TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id), label TEXT);";
         let plan = apply(&path, broken, &program(&[]), Mode::Plan);

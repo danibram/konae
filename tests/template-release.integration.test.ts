@@ -1,6 +1,3 @@
-// Every project the editor can start, and each showcase app, passes
-// release_plan on a fresh Kernel, so a template whose schema.sql and actions.json drift apart fails here
-// before anyone publishes it from the editor.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

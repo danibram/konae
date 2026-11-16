@@ -6,7 +6,6 @@ import { checkSourceFiles, checkSources } from "./source-rules";
 
 type Case = { case: string; files: Record<string, number>; more?: number; error: string | null; code?: string };
 
-// The Kernel runs the same file in kernel-rs/kernel/src/sources.rs and size.rs.
 describe("the rules the sources of app/ meet", () => {
   test("the case file covers every rule", () => {
     expect(file.cases.length).toBeGreaterThanOrEqual(20);

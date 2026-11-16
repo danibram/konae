@@ -6,7 +6,6 @@ export type BuildArtifact = StaticArtifact;
 export { renderCapsuleDocument, runtimeScriptAttribute } from "../lib/static-artifact.js";
 export { hostedRuntime };
 
-/** The `<meta>` that names the Deployment in the head of every page the editor builds. */
 export function deploymentHead(deploymentId?: string): string {
   return deploymentId ? `<meta name="konae-deployment" content="${escapeHtml(deploymentId)}">` : "";
 }

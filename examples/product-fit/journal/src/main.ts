@@ -2,9 +2,6 @@ import { renderEntry, type Entry } from './entry';
 declare const miniapp: any;
 const $ = <T extends HTMLElement>(s: string) => document.querySelector(s) as T;
 const moods = ['calm', 'bright', 'heavy', 'restless'];
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 const reason = (error: any): string => error?.message === 'rate-limited' ? 'Too many requests just now. Wait a few seconds and try again.'
   : error instanceof TypeError && /fetch|network|load failed/i.test(error.message) ? 'The journal could not reach its server. Check the connection and try again.'
   : error?.message ?? String(error);
@@ -31,7 +28,6 @@ $('#entries').addEventListener('click', async (e) => {
   if (!b) return;
   b.disabled = true;
   $('#status').textContent = '';
-  // entries.delete declares a guard, so an entry deleted on another device is refused with its sentence.
   try { await miniapp.actions.call('entries.delete', { id: Number(b.dataset.id) }); }
   catch (err) { $('#status').textContent = reason(err); }
   await load().catch((err) => { $('#status').textContent = reason(err); });

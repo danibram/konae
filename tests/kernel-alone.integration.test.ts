@@ -5,10 +5,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// The kernel binary serves a data directory of app folders with no Konae
-// around it (ADR-0001). Konae publishes one app, stops, and its
-// own files go; the Kernel alone then serves the app's Server Actions on the
-// runtime endpoint and never creates owners.sqlite or mcp.sqlite.
 const kernelBinary = path.resolve(import.meta.dir, "..", "kernel-rs/target/debug/kernel");
 let root: string;
 let konae: Kernel | undefined;

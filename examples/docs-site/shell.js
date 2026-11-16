@@ -1,6 +1,3 @@
-// Every page is the same shell. It fetches the page's markdown, which the
-// build publishes under content/, and renders it here. No inline scripts:
-// a published app runs under script-src 'self'.
 import { marked } from "marked";
 import { slug } from "./slug.js";
 
@@ -10,17 +7,10 @@ const { root, route, v } = document.body.dataset;
 const content = $("#content");
 const sidebar = $("#sidebar");
 const tocBox = $("#toc");
-/** The address of a page of this site, relative to the page that is open. */
 const pageHref = (to) => (to === "index" ? root || "./" : root + to);
 
 sidebar.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest" });
 
-/**
- * Points a link written for the repository at this site. A link to another
- * page's .md file becomes that page's address. A link to a file the site does
- * not hold goes to the repository when site.json names one, and otherwise
- * loses its href and stays as text.
- */
 function rewriteLink(link, site) {
   const href = link.getAttribute("href") ?? "";
   if (!href || href.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(href)) return;
@@ -44,7 +34,6 @@ function decorate(site) {
     wrap.className = "table-wrap";
     table.replaceWith(wrap);
     wrap.append(table);
-    // A narrow screen shows each row as a card, so every cell carries its column's name.
     const names = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
     for (const row of table.querySelectorAll("tbody tr")) [...row.cells].forEach((cell, index) => { if (names[index]) cell.dataset.label = names[index]; });
   }
@@ -86,7 +75,6 @@ function tableOfContents() {
   headings.forEach((h) => spy.observe(h));
 }
 
-/** One script tag for the diagram renderer, which the build publishes as it is under vendor/. */
 let renderer;
 const loadRenderer = () => (renderer ??= new Promise((resolve, reject) => {
   const script = document.createElement("script");
@@ -96,7 +84,6 @@ const loadRenderer = () => (renderer ??= new Promise((resolve, reject) => {
   document.head.append(script);
 }));
 
-/** The diagram colours are the design system's tokens as the page resolves them now, in light or dark. */
 function diagramTheme() {
   const style = getComputedStyle(document.documentElement);
   const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
@@ -121,10 +108,6 @@ function diagramTheme() {
   };
 }
 
-/**
- * Draws each mermaid block of the page in place. A page without one loads no
- * renderer. A block that does not parse stays as its source with the reason.
- */
 async function diagrams() {
   const blocks = [...content.querySelectorAll("pre > code.language-mermaid")];
   if (!blocks.length) return;
@@ -133,14 +116,12 @@ async function diagrams() {
     figure.className = "diagram";
     figure.dataset.source = code.textContent;
     figure.setAttribute("role", "img");
-    // The paragraph under a diagram says what it shows, so it names the figure for a screen reader.
     const caption = code.parentElement.nextElementSibling;
     if (caption?.tagName === "P") { caption.id ||= `diagram-${blocks.indexOf(code) + 1}-text`; figure.setAttribute("aria-labelledby", caption.id); }
     code.parentElement.replaceWith(figure);
     return figure;
   });
   let mermaid;
-  // The renderer measures each label in the page's typeface, so the typeface loads first.
   try { [mermaid] = await Promise.all([loadRenderer(), document.fonts?.ready]); }
   catch (error) { for (const figure of figures) showSource(figure, error.message); return; }
   let drawn = 0;
@@ -169,11 +150,6 @@ async function diagrams() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
 }
 
-/**
- * Opens a diagram over the page at the size it was drawn for, so a narrow
- * column or a phone can read it. The drawing itself moves into the dialog and
- * back, because its styles hang on its id.
- */
 function zoom(figure) {
   const drawing = figure.querySelector("svg");
   const dialog = document.createElement("dialog");
@@ -215,7 +191,6 @@ async function render() {
   tableOfContents();
   diagrams();
   content.removeAttribute("aria-busy");
-  // The browser looked for the anchor before the headings existed.
   if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
 }
 if (route) render().catch((error) => {
@@ -223,9 +198,6 @@ if (route) render().catch((error) => {
   content.removeAttribute("aria-busy");
 });
 
-// The installation's home answers on the bare domain. The docs answer on
-// <domain>/p/<name>/ or on their own <slug>-<6 hex>.<domain>, so the domain
-// comes from location, as examples/home/home.js reads it.
 {
   const labels = location.hostname.split(".");
   const own = !location.pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
@@ -236,7 +208,6 @@ if (route) render().catch((error) => {
   }
 }
 
-// Narrow screens.
 const menu = $(".menu");
 const scrim = $("#scrim");
 const closeNav = () => { document.body.classList.remove("nav-open"); scrim.hidden = true; menu.setAttribute("aria-expanded", "false"); menu.textContent = "Menu"; };
@@ -248,7 +219,6 @@ menu.addEventListener("click", () => (document.body.classList.contains("nav-open
 scrim.addEventListener("click", closeNav);
 sidebar.addEventListener("click", (event) => { if (event.target.closest("a")) closeNav(); });
 
-// Marks each match of the query in text that is escaped first.
 function mark(text, query) {
   const safe = esc(text);
   const needle = esc(query.trim());
@@ -256,7 +226,6 @@ function mark(text, query) {
   return safe.replace(new RegExp(`[\\w-]*${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\w-]*`, "gi"), (match) => `<mark>${match}</mark>`);
 }
 
-// A snippet starts and ends on a whole word, with an ellipsis where the section goes on.
 function snippet(r) {
   let text = String(r.snippet ?? "").replace(/\s+/g, " ").trim();
   if (r.clipped) text = `…${text.slice(text.indexOf(" ") + 1)}`;
@@ -264,7 +233,6 @@ function snippet(r) {
   return text;
 }
 
-// Search runs the anonymous docs.search action over one row per section.
 const search = $("#search");
 const results = $("#results");
 let timer;
@@ -276,7 +244,6 @@ async function run() {
   try {
     const rows = await miniapp.actions.call("docs.search", { q });
     if (search.value.trim() !== q) return;
-    // A section title that appears twice in the results carries its page's name.
     const counts = new Map();
     for (const r of rows) counts.set(r.title, (counts.get(r.title) ?? 0) + 1);
     const count = `<div class="count">${rows.length === 12 ? "The first 12 results" : `${rows.length} ${rows.length === 1 ? "result" : "results"}`} for “${esc(q)}”</div>`;

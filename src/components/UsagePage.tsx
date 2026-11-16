@@ -16,14 +16,12 @@ const formatTime = (at: number) => dateTime.format(at);
 const dayLabel = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
 const yearDayLabel = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 const clock = new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-/** The period in one format: "Oct 16 to Nov 14", with the year only when the period crosses one. */
 export function rangeLabel(from: string, to: string): string {
   const format = from.slice(0, 4) === to.slice(0, 4) ? dayLabel : yearDayLabel;
   return `${format.format(Date.parse(`${from}T00:00:00Z`))} to ${format.format(Date.parse(`${to}T00:00:00Z`))}`;
 }
 const deploymentId = () => new URLSearchParams(window.location.search).get("deployment");
 const projectHref = (projectId: string) => `/app/${encodeURIComponent(projectId)}`;
-/** An app's address as the project cards write it: host and port, no scheme. */
 const addressOf = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 const outcomeColor = (outcome: string) => outcome === "ok" ? "var(--ds-s1)" : outcome === "failed" ? "var(--ds-danger)" : outcome === "refused" ? "var(--ds-warning-fill)" : undefined;
 const outcomeTone = (outcome: string) => outcome === "ok" ? "success" : outcome === "failed" ? "danger" : outcome === "refused" ? "warning" : "neutral";
@@ -81,7 +79,6 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 60_000);
     return () => { window.clearInterval(timer); controller.current?.abort(); };
   }, [load]);
-  // The first read keeps its skeleton long enough that it never flashes.
   const reading = useLoadingHold(!updatedAt && !error, { sinceNavigation: true });
   const range = usageRange(period);
   const title = selected ? summary?.projectName : undefined;
@@ -111,7 +108,6 @@ export function UsagePage({ ownerSession }: { ownerSession: OwnerSession }) {
 
 function AccountUsage({ apps }: { apps: UsageApp[] }) {
   if (!apps.length) return <EmptyState className="usage-empty" icon={<BarChart3 size={22} />} title="No apps yet" description="Create a project and deploy it. Its usage appears here." action={<a className="ui-button ui-button-primary" href="/">Go to projects</a>} />;
-  // Published apps fill the table; drafts have nothing recorded, so they fold into one line under it.
   const drafts = apps.filter((app) => !app.summary && !app.error);
   const listed = [...apps.filter((app) => app.summary), ...apps.filter((app) => !app.summary && app.error)];
   return <><OverviewCharts apps={apps} /><section aria-labelledby="usage-apps-heading"><h2 id="usage-apps-heading">Apps</h2>
@@ -121,7 +117,6 @@ function AccountUsage({ apps }: { apps: UsageApp[] }) {
         if (!value) return <tr key={app.projectId}><th scope="row">{app.name}<small>Read failed</small></th>
           <td colSpan={3} data-label="Usage">{app.error}</td>
           <td data-label="Project"><a href={projectHref(app.projectId)}>Open project</a></td></tr>;
-        // Only trouble earns a line in the overview; the counts of what went well wait on the app's page.
         const failed = executionTotals(value.metrics).failed ?? 0;
         const notSent = noticeOutcomes(value).notSent;
         const trouble = [failed > 0 ? `${number.format(failed)} failed` : "", notSent > 0 ? `${number.format(notSent)} ${notSent === 1 ? "email" : "emails"} not sent` : ""].filter(Boolean).join(", ");
@@ -135,7 +130,6 @@ function AccountUsage({ apps }: { apps: UsageApp[] }) {
   </section></>;
 }
 
-/** The published apps added up; the table under it splits them by app. */
 function OverviewCharts({ apps }: { apps: UsageApp[] }) {
   const published = apps.flatMap((app) => app.summary ? [{ app, summary: app.summary }] : []);
   if (!published.length) return null;
@@ -198,7 +192,6 @@ function AppUsage({ summary }: { summary: UsageSummary }) {
   </>;
 }
 
-/** The rules behind one app's numbers, read on demand under "How these are counted". */
 function AppCounting({ summary }: { summary: UsageSummary }) {
   const coverage = summary.coverage;
   return <>

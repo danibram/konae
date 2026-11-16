@@ -1,7 +1,6 @@
 import { ArrowLeft, Box } from "lucide-react";
 import { Card } from "./ui";
 
-/** An address that names no page, or a project this workspace does not hold. */
 export function NotFound({ what, path }: { what: "page" | "project"; path: string }) {
   const project = what === "project";
   return (

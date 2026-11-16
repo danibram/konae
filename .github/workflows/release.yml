@@ -1,5 +1,3 @@
-# Builds the `kernel` binaries and the two multi-arch install images when a
-# version tag lands, then opens the GitHub Release. See docs/releasing.md.
 name: Release
 
 on:
@@ -16,8 +14,6 @@ env:
   OWNER: danibram
 
 jobs:
-  # Reads the version from the tag and refuses a release whose package.json,
-  # Cargo workspace or CHANGELOG.md disagree, before any build starts.
   prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -79,10 +75,6 @@ jobs:
           path: ${{ runner.temp }}/release-notes.md
           if-no-files-found: error
 
-  # One native runner per platform. The Linux binaries build inside the same
-  # rust:1.91-bookworm image the Dockerfiles use, so they link against glibc
-  # 2.36 and run on Debian 12 and anything newer. A build on the runner's own
-  # Ubuntu 24.04 would need glibc 2.39.
   binaries:
     needs: prepare
     strategy:
@@ -140,10 +132,6 @@ jobs:
           path: out/*-${{ needs.prepare.outputs.version }}-*
           if-no-files-found: error
 
-  # Each image builds once per architecture on a native runner and is pushed by
-  # digest. The next job joins the two digests under the version tags. QEMU
-  # made the first release of the Rust stage slower than a deploy could wait,
-  # so no build here emulates.
   images:
     needs: prepare
     strategy:
@@ -243,8 +231,6 @@ jobs:
       - name: Show the result
         run: docker buildx imagetools inspect "${REGISTRY}/${OWNER}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}"
 
-  # Runs only when every binary and both images are done, so a Release page
-  # never lists a release that has half its files.
   release:
     needs: [prepare, binaries, merge]
     runs-on: ubuntu-24.04

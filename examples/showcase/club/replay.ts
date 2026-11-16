@@ -1,7 +1,3 @@
-// Replays the club showcase against two isolated Kernels: publish, invite,
-// promote an organizer, store private and public files, recover a password,
-// export the app as a package and import it on the second Kernel. Every
-// assertion here is a claim the README makes.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -38,7 +34,6 @@ async function message(promise: Promise<unknown>) {
   assert.fail("Expected a refusal.");
 }
 
-// Small real PNG covers, so the browser renders something a person would see.
 function crc32(bytes: Uint8Array) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
@@ -103,7 +98,6 @@ async function startKernel(port: number, name: string) {
 type Kernel = Awaited<ReturnType<typeof startKernel>>;
 type Receipt = { id: string; hostname: string; url: string };
 
-/** One app on one Kernel, with helpers that speak to its host as a browser would. */
 function app(kernel: Kernel, receipt: Receipt) {
   const http = (route: string, init: RequestInit & { cookie?: string; bearer?: string } = {}) => {
     const headers = new Headers(init.headers);
@@ -128,7 +122,6 @@ function app(kernel: Kernel, receipt: Receipt) {
   return { receipt, http, post, runtime, cookieOf, login };
 }
 
-/** Waits for the newest development email of one purpose to one address and returns its token. */
 async function mail(kernel: Kernel, to: string, purpose: string, after = 0) {
   for (const deadline = Date.now() + 10_000; Date.now() < deadline; await Bun.sleep(100)) {
     const lines = (await readFile(kernel.mailbox, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -158,18 +151,15 @@ try {
   const origin = await startKernel(portA, "origin");
   const destination = await startKernel(portB, "destination");
 
-  // Publish with the CLI's own publish path and a delegated token, as a creator would.
   const root = path.join(scratch, "club");
   await cp(import.meta.dir, appDir(root), { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const project = { id: "showcase_club", name: "Club", slug: "club", manifest: { version: 1, visibility: "private" } };
-  // konae.json names the first release's signup policy; publish sends it as initialSignupPolicy.
   const cliProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "invitation" } } };
   const publishToken = await origin.owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
   const receiptA = await publishLocal(root, { url: origin.url, project: cliProject }, publishToken.token) as Receipt;
   const A = app(origin, receiptA);
   const firstPolicy = await origin.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receiptA.id });
   assert.equal(firstPolicy.mode, "invitation");
-  // A republish whose konae.json names another policy warns and changes nothing.
   const warnings: string[] = [];
   const openProject = { ...project, manifest: { ...project.manifest, signupPolicy: { mode: "open" } } };
   await publishLocal(root, { url: origin.url, project: openProject }, publishToken.token, (line) => warnings.push(line));
@@ -181,7 +171,6 @@ try {
   refused("Signup policy", "signup_policy_set with the CLI's publish token", publishOnlySet);
   check("Publish", `konae publish deployed ${receiptA.url} as private with policy ${firstPolicy.mode} from konae.json, on a token without manage_users. A republish naming open warned "${warnings[0]}" and kept invitation.`);
 
-  // A visitor gets the sign-in page and nothing else.
   const shell = await A.http("/");
   const shellText = await shell.text();
   assert.equal(shell.status, 200);
@@ -195,7 +184,6 @@ try {
   assert.equal(visitorList.status, 401);
   check("Visitor", "GET / answers the sign-in page without a signup form, signup answers 403 and the runtime endpoint answers 401.");
 
-  // Invitations through the development mailbox. Addresses come back lowercased.
   const people = { ana: "ana@club.example.test", ben: "ben@club.example.test", cy: "cy@club.example.test" };
   const invited = await origin.owner.call<{ results: Array<{ email: string; status: string; delivery: string }> }>("app_invitations_create", {
     deploymentId: receiptA.id, emails: Object.values(people).map((email) => email.replace("ana", "Ana")), idempotencyKey: "club-invites-0001",
@@ -211,13 +199,10 @@ try {
     cookies[who] = A.cookieOf(accepted);
   }
   const ana = A.runtime(cookies.ana), ben = A.runtime(cookies.ben), cy = A.runtime(cookies.cy);
-  // An account that has not joined has no members row, so books.propose's guard refuses it.
   assert.equal(await message(action(cy, "books.propose", { title: "Kindred", author: "Octavia E. Butler", coverFileId: null })), "Join the club before proposing a book.");
   for (const [client, display] of [[ana, "Ana"], [ben, "Ben"], [cy, "Cy"]] as const) assert.equal((await action(client, "me.join", { display })).changes, 1);
   check("Invitations", "Three invitations went through the development mailbox; each link opened the acceptance flow and set a password.");
 
-  // The owner promotes the organizer through owner SQL. The app's database
-  // has no email column to match on, so the owner joins app_users_list by hand.
   const users = await origin.owner.call<{ users: Array<{ userId: string; email: string }> }>("app_users_list", { deploymentId: receiptA.id });
   const anaId = users.users.find((user) => user.email === people.ana)!.userId;
   await origin.owner.call("database_execute", { deploymentId: receiptA.id, operation: "sql", input: { sql: `UPDATE members SET role = 'organizer' WHERE user_id = '${anaId}'` } });
@@ -225,7 +210,6 @@ try {
   assert.equal((await action(ben, "me.get"))[0].role, "member");
   check("Organizer", "The owner mapped Ana's email to her user ID with app_users_list and promoted her with database_execute.");
 
-  // Files: a public cover each, and private notes.
   const anaCover = await upload(ana, coverOne, "cover-dispossessed.png", "image/png", "public");
   const benCover = await upload(ben, coverTwo, "cover-solaris.png", "image/png", "public");
   assert.equal((await action(ana, "books.propose", { title: "The Dispossessed", author: "Ursula K. Le Guin", coverFileId: anaCover.id })).changes, 1);
@@ -262,21 +246,16 @@ try {
   const visitorCover = await A.http(`/_konae/files/${anaCover.id}`);
   assert.equal(visitorCover.status, 401);
   refused("Private Deployment", "A visitor's GET /_konae/files/<public cover>", `${visitorCover.status} ${await visitorCover.text()}`);
-  // A visitor of a private app is asked to sign in before any file is looked
-  // up, so a public cover, a private note and a missing ID answer alike.
   for (const id of [anaNote.id, crypto.randomUUID()]) {
     const visitorFile = await A.http(`/_konae/files/${id}`);
     assert.deepEqual([visitorFile.status, await visitorFile.json()], [401, { error: "authentication-required" }]);
   }
-  // There is no visibility between "only me" and "every member". The runtime
-  // tools refuse any other value, and so does the SDK (see Browser below).
   const sharedNote = await message(upload(ben, new TextEncoder().encode("For the organizers"), "for-organizers.txt", "text/plain", "organizers"));
   assert.equal(sharedNote, "Value is outside the allowed choices.");
   refused("File visibility", "files_upload with visibility \"organizers\" on the runtime endpoint", sharedNote);
   const sharedLater = await message(ben.call("files_update", { fileId: benNote.id, visibility: "organizers" }));
   assert.equal(sharedLater, "Value is outside the allowed choices.");
   refused("File visibility", "files_update of Ben's note with visibility \"organizers\"", sharedLater);
-  // An organizer role lives in the app's rows; the Kernel knows only the uploader.
   const organizerDeletes = await message(ana.call("files_delete", { fileId: benCover.id }));
   assert.equal(organizerDeletes, "Only the person who uploaded this file may change or delete it.");
   refused("File lifecycle", "Ana (organizer) deletes Ben's public cover with files_delete", organizerDeletes);
@@ -285,7 +264,6 @@ try {
   refused("File lifecycle", "Ana deletes Ben's private note with files_delete", anaDeletesBenNote);
   check("Files", "Ben cannot read Ana's private note over MCP or HTTP, reads her public cover both ways, and lists only what he may read. A visitor gets 401 for a public cover, a private note and a missing ID alike. Neither files_upload nor files_update accepts a visibility for organizers, and Ana's organizer role does not let her delete Ben's files.");
 
-  // A program reads public covers with an API key scoped to public files.
   const key = await origin.owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receiptA.id, name: "Cover mirror", files: ["public"] });
   const keyCover = await A.http(`/_konae/files/${benCover.id}`, { bearer: key.key });
   assert.equal(keyCover.status, 200);
@@ -302,17 +280,14 @@ try {
   refused("API key", "api_keys_create naming books.list, an authenticated action with no route", keyForQuery);
   check("API key", "A key scoped to public files reads a cover with Authorization: Bearer, gets 404 for a private note, and the runtime endpoint refuses it with 403 and says where keys work.");
 
-  // Roles in SQL: each organizer mutation declares a guard, so a member's call is refused with the app's sentence.
   const scheduleGuard = "Only an organizer can schedule a meeting, for a book on the shortlist while no other book is being read.";
   assert.equal(await message(action(ben, "books.schedule", { id: dispossessed, meetsOn: "2026-11-20" })), scheduleGuard);
   assert.equal(await message(action(ben, "books.remove", { id: solaris })), "Only an organizer can remove a book.");
-  // The guard cannot tell a missing book from a missing role: both change no row.
   assert.equal(await message(action(ben, "books.schedule", { id: 999_999, meetsOn: "2026-11-20" })), scheduleGuard);
   assert.equal((await action(ben, "books.list")).length, 2);
   assert.equal((await action(ana, "books.schedule", { id: dispossessed, meetsOn: "2026-11-20" })).changes, 1);
   assert.equal(await message(action(ben, "books.finish", { id: dispossessed })), "Only an organizer can mark the current book as finished.");
   refused("Roles in SQL", "Ben (member) calls books.schedule, books.remove and books.finish", `Each is refused with its guard, such as "${scheduleGuard}". books.schedule on a book that does not exist gets the same sentence`);
-  // Usage counts the organizer's schedule as an action and the two guard refusals under refused.
   const today = new Date().toISOString().slice(0, 10);
   let scheduled = 0;
   let refusedSchedules = 0;
@@ -323,16 +298,12 @@ try {
   }
   assert.equal(scheduled, 1);
   assert.equal(refusedSchedules, 2);
-  // An organizer is an app role; inviting stays with the Kernel owner.
   const organizerInvites = await message(ana.call("app_invitations_create", { deploymentId: receiptA.id, emails: ["dee@club.example.test"], idempotencyKey: "organizer-invite-01" }));
   refused("Roles in SQL", "Ana (organizer) calls app_invitations_create on the runtime endpoint", organizerInvites);
-  // One book is read at a time: with The Dispossessed current, even the organizer cannot schedule Solaris.
   assert.equal(await message(action(ana, "books.schedule", { id: solaris, meetsOn: "2026-12-04" })), scheduleGuard);
   assert.deepEqual((await action<Array<{ title: string; status: string }>>(ana, "books.list")).filter((book) => book.status === "current").map((book) => book.title), ["The Dispossessed"]);
   check("Roles", "Ben's schedule, remove and finish are refused with their guards, and a missing book gets the schedule guard too; Ana's schedule changes one. Usage counts 1 books.schedule action and 2 refused. Ana cannot schedule a second book while one is current.");
 
-  // A note outlives the book it was written for. Ben writes a note on a book Ana then
-  // removes; notes.mine still lists it, and notes.add refuses a book that is gone.
   assert.equal((await action(ben, "books.propose", { title: "Kindred", author: "Octavia E. Butler", coverFileId: null })).changes, 1);
   const kindred = (await action<Array<{ id: number; title: string }>>(ben, "books.list")).find((book) => book.title === "Kindred")!.id;
   const kindredNote = await upload(ben, new TextEncoder().encode("Read the prologue twice."), "note-kindred.txt", "text/plain");
@@ -344,8 +315,6 @@ try {
   check("Removed book", "Ben's note on a book Ana removed stays in notes.mine under \"A removed book\", and notes.add refuses the removed book with its guard.");
 
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
-    // Ben signs in through the Kernel's own page, sees the covers from the
-    // file read path, opens his note, and is refused an organizer action.
     const browser = await chromium.launch({ channel: "chrome" });
     try {
       let storage: Awaited<ReturnType<import("playwright").BrowserContext["storageState"]>> | undefined;
@@ -373,7 +342,6 @@ try {
         await page.locator("#notes summary", { hasText: "The Dispossessed" }).click();
         await page.locator("#notes .note-text").filter({ hasText: benNoteText }).waitFor({ timeout: 10_000 });
         if (!storage) {
-          // The SDK refuses a visibility the Kernel lacks instead of storing a private file.
           const sdk = await page.evaluate(async (noteId) => {
             const miniapp = (window as any).miniapp;
             const before = (await miniapp.files.list()).length;
@@ -383,8 +351,6 @@ try {
           }, benNote.id);
           assert.deepEqual(sdk, { refusal: "File visibility must be private or public.", url: `/_konae/files/${benNote.id}`, added: 0 });
           refused("File visibility", "miniapp.files.upload(file, { visibility: \"organizers\" }) in Ben's page", sdk.refusal);
-          // The note form uploads first and then calls notes.add. When the action refuses,
-          // the page deletes the upload, so a refused note leaves no file behind.
           const filesBefore = await page.evaluate(async () => (await (window as any).miniapp.files.list()).length);
           await page.locator("#note-form select").evaluate((select: HTMLSelectElement, id) => { select.options[0].value = String(id); }, kindred);
           await page.locator("#note-form textarea").fill("A note for a book that is gone.");
@@ -408,7 +374,6 @@ try {
     check("Browser", `Chrome signed Ben in through the Kernel's page, rendered both covers from /_konae/files, fetched his note from miniapp.files.url, saw the SDK refuse visibility "organizers" without storing a file, deleted the upload of a note notes.add refused, showed the organizer refusal, and reported no policy violation${shots ? `; screenshots in ${shots}` : ""}.`);
   }
 
-  // Account recovery: the emailed link sets a new password and ends Cy's old session.
   assert.equal((await cy.call<{ name: string }>("auth_session")).name, people.cy);
   const recover = await A.post("/_konae/auth/recover", { email: people.cy });
   assert.equal(recover.status, 202);
@@ -432,7 +397,6 @@ try {
   refused("Recovery", "The same recovery link used twice", `${reused.status} ${await reused.text()}`);
   check("Recovery", "The emailed link reset Cy's password; her earlier session answers 401, the old password fails and the link works once.");
 
-  // Export the app as a package from the origin Kernel.
   const exported = await origin.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("project_export", { deploymentId: receiptA.id });
   assert.equal(exported.manifest.visibility, "private");
   assert.deepEqual(exported.manifest.signupPolicy, { mode: "invitation", allowlist: [] });
@@ -440,7 +404,6 @@ try {
   for (const content of exported.manifest.contents) componentBytes[content.name] = await origin.owner.download(exported.downloads[content.name]);
   check("Export", `project_export wrote ${exported.manifest.contents.map((c: any) => `${c.name} ${c.size} B`).join(", ")}; excluded: ${exported.manifest.excluded.join("; ")}.`);
 
-  // Import into a second Kernel, under a second owner who never saw the origin.
   await destination.owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const components: Record<string, string> = {};
   for (const content of exported.manifest.contents) components[content.name] = (await destination.owner.upload(componentBytes[content.name], project.id, content.name)).transferId;
@@ -482,15 +445,12 @@ try {
   assert.deepEqual([originKey.status, originKeyBody], [401, { error: "invalid-api-key" }]);
   refused("Import", "The origin's API key on the destination's file read path", `${originKey.status} ${JSON.stringify(originKeyBody)}`);
   const keysOnB = await destination.owner.call<{ keys: Array<{ keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }> }>("api_keys_list", { deploymentId: receiptB.id });
-  // The package carries each key's name, scope and hash, revoked at import,
-  // so the destination owner sees which programs had access and reissues.
   assert.deepEqual(keysOnB.keys.map(({ keyId, name, files, revokedReason }) => ({ keyId, name, files, revokedReason })),
     [{ keyId: key.keyId, name: "Cover mirror", files: ["public"], revokedReason: "import" }]);
   assert.equal(typeof keysOnB.keys[0].revokedAt, "number");
   const invitationsOnB = await destination.owner.call<{ invitations: Array<{ status: string }> }>("app_invitations_list", { deploymentId: receiptB.id });
   check("Import", `The destination serves ${receiptB.url} under invitation; Ana, Ben and Cy sign in with their passwords, the organizer role, rows, cover and note bytes are intact, Ben still cannot read Ana's note, origin sessions answer 401, the origin key answers invalid-api-key and the destination lists it as "Cover mirror", public files, revoked at import. Invitation history travelled as ${invitationsOnB.invitations.map((item) => item.status).join(", ")}.`);
 
-  // The Action Contract and the conformance checks, through the CLI, against both Kernels.
   const [contractCode, , contractErr] = await cli(["contract", "--dir", root]);
   assert.equal(contractCode, 0, contractErr);
   const conformTotals: Record<string, string> = {};
@@ -499,9 +459,6 @@ try {
     const [code, out, err] = await cli(["conform", "--url", target.receipt.url, "--contract", path.join(root, "action-contract.json"), "--token", token]);
     const totals = out.trim().split("\n").at(-1)!;
     assert.equal(code, 0, out + err);
-    // books.propose and notes.add guard an INSERT. Ben is a member and the book exists, so
-    // conform's second identical call inserts again and cannot reach the guard; the replay
-    // proves both guards itself (Cy before joining, Ben on a removed book).
     assert.match(totals, /^\d+ passed, 0 failed, 2 skipped/);
     const skipped = out.split("\n").filter((line) => line.startsWith("SKIP")).map((line) => line.slice(0, line.indexOf(". "))).sort();
     assert.deepEqual(skipped, ["SKIP books.propose: refuses with its guard when no row changes", "SKIP notes.add: refuses with its guard when no row changes"], out);

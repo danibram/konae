@@ -1,12 +1,4 @@
 #!/usr/bin/env bun
-// Builds the docs site's content from docs/. The markdown under docs/ is the
-// only source: this script copies each page into the docs app's Capsule
-// (examples/docs-site), writes one HTML shell per page, llms.txt and the rows
-// the search reads. Everything it writes is ignored by git.
-//
-//   bun run docs:site          writes the files
-//   bun run docs:site --seed   also loads the search rows into the published app
-//   --dir <folder>             writes into a copy of the app instead of examples/docs-site
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { slug } from "../examples/docs-site/slug.js";
@@ -15,7 +7,6 @@ import { McpClient } from "../src/mcp/client";
 const repo = path.resolve(import.meta.dir, "..");
 export const docsRoot = path.join(repo, "docs");
 const dirFlag = process.argv.indexOf("--dir");
-/** The docs app's Capsule. --dir names a copy of it, such as one published to a test Kernel. */
 export const appRoot = dirFlag > 0 ? path.resolve(process.argv[dirFlag + 1]) : path.join(repo, "examples/docs-site");
 
 type NavEntry = string | { page: string; label: string };
@@ -23,13 +14,6 @@ type SiteConfig = { title: string; summary: string; repository: string; nav: { s
 export type Page = { route: string; source: string; title: string; label: string; markdown: string };
 export type Site = { config: SiteConfig; pages: Page[] };
 
-/**
- * docs/README.md is the home, and every other file keeps its path without
- * `.md`, unless site.json names another route for it. docs/reference/README.md
- * is the route `reference`, and docs/mcp-guide.md keeps `mcp-guide`, the
- * address the old MCP guide was published at. Every Deployment answers /mcp
- * with its runtime endpoint, so no page can live there.
- */
 export const routeOf = (source: string, routes: Record<string, string> = {}) =>
   routes[source] ?? (source === "README.md" ? "index" : source.replace(/(^|\/)README\.md$/, "$1index").replace(/\.md$/, ""));
 
@@ -43,7 +27,6 @@ async function markdownUnder(folder: string): Promise<string[]> {
   return found.sort();
 }
 
-/** The pages site.json names in its nav, then the folders it includes and the files it lists as `unlisted`, which answer at their route and appear in no menu. */
 export async function readSite(): Promise<Site> {
   const config = JSON.parse(await readFile(path.join(docsRoot, "site.json"), "utf8")) as SiteConfig;
   const labels = new Map<string, string | undefined>();
@@ -61,15 +44,9 @@ export async function readSite(): Promise<Site> {
 }
 
 const esc = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
-/** The way from a page back to the site's root: empty at the top, `../` one folder down. */
 const rootOf = (route: string) => "../".repeat(route.split("/").length - 1);
 const hrefOf = (root: string, route: string) => (route === "index" ? root || "./" : root + route);
 
-/**
- * A short name for the bytes of the site's own styles and scripts. Each page
- * asks for them as `site.css?v=<name>`, so a proxy that lets browsers keep CSS
- * and JavaScript for hours serves the new ones as soon as they change.
- */
 async function assetsVersion() {
   const hash = new Bun.CryptoHasher("sha256");
   for (const file of ["shell.js", "slug.js", "site.css", "public/styles.css", "package.json"]) hash.update(await readFile(path.join(appRoot, file)));
@@ -91,12 +68,6 @@ function shell(template: string, site: Site, page: Pick<Page, "route" | "title">
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key]);
 }
 
-/** Markdown as the words a reader sees, for the search rows. */
-/**
- * Search text for one section. Comments, list markers and table rules go; a
- * table row keeps its cells apart as "first: second, third." so a snippet
- * still reads as a row.
- */
 function plain(markdown: string) {
   return markdown
     .replace(/<!--[\s\S]*?-->/g, "")
@@ -115,7 +86,6 @@ function plain(markdown: string) {
     .trim();
 }
 
-/** One row per `## ` section, so a result opens at the heading that holds the match. */
 export function sections(page: Page) {
   const rows: { path: string; page: string; title: string; body: string }[] = [];
   const seen = new Map<string, number>();
@@ -125,7 +95,6 @@ export function sections(page: Page) {
   const close = () => { const body = plain(current.lines.join("\n")); if (body) rows.push({ path: current.path, page: page.title, title: current.title, body }); };
   for (const line of page.markdown.split("\n")) {
     if (line.trimStart().startsWith("```")) { fenced = !fenced; diagram = fenced && line.trim() === "```mermaid"; }
-    // A diagram's source is drawn, not read, so search skips it. The paragraph under it says the same in words.
     if (diagram) continue;
     const heading = fenced ? null : /^(#{1,6}) (.+)$/.exec(line);
     if (heading) {
@@ -140,10 +109,6 @@ export function sections(page: Page) {
 
 const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
 
-/**
- * The statements that replace every search row. The Kernel refuses an owner
- * SQL script over 100,000 bytes, so each statement stays under 80,000.
- */
 export function seedStatements(site: Site) {
   const statements = ["DELETE FROM sections"];
   let batch: string[] = [];
@@ -196,7 +161,6 @@ export async function writeSite(site: Site) {
     routes: Object.fromEntries(site.pages.map((page) => [page.source, page.route])),
   }, null, 2));
   await write("public/llms.txt", llms(site));
-  // shell.js draws a page's mermaid blocks with this file and loads it only on a page that has one.
   if (site.pages.some((page) => /^```mermaid$/m.test(page.markdown))) {
     const renderer = path.join(appRoot, "node_modules/@mermaid-js/tiny/dist/mermaid.tiny.js");
     await mkdir(path.join(appRoot, "public/vendor"), { recursive: true });
@@ -207,10 +171,8 @@ export async function writeSite(site: Site) {
   await write("seed.sql", `-- The search rows, one per section. bun run docs:site --seed loads them.\n${seedStatements(site).join(";\n")};\n`);
 }
 
-/** Runs each statement on the published app from the app folder `folder`, with the credential `konae login` saved there. */
 async function seed(site: Site, folder: string) {
   const missing = () => { throw Error(`The docs are not published from ${folder} yet. examples/docs-site/README.md has the commands.`); };
-  // konae publish saves the Deployment it wrote, and database_execute names a Deployment.
   const deployment = JSON.parse(await readFile(path.join(folder, ".konae/published.json"), "utf8").catch(missing));
   const saved = JSON.parse(await readFile(path.join(folder, ".konae/credentials.json"), "utf8").catch(missing)) as { url: string; token: string };
   const token = process.env.KONAE_MCP_TOKEN ?? saved.token;

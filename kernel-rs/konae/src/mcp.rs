@@ -3,7 +3,6 @@ use super::runtime::*;
 use super::transfers::{ADMIN_CHUNK, ADMIN_MCP_BODY_BYTES, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
 use rusqlite::params;
 
-/// The refusal of an owner's MCP request over [`ADMIN_MCP_BODY_BYTES`].
 fn admin_body_refused() -> String {
     format!("MCP request exceeds {ADMIN_MCP_BODY_BYTES} bytes. Write a transfer in blocks of at most chunkBytes ({ADMIN_CHUNK} bytes).")
 }
@@ -102,12 +101,9 @@ const OPEN_TOOLS: [&str; 19] = [
 ];
 /// What `initialize` tells an owner's agent on `/mcp`.
 const OWNER_INSTRUCTIONS: &str = "A delegated credential can access only projects that already exist; it cannot create a project. Source and builds stay on your computer. Run konae init and konae dev, then konae login --browser and konae publish. After a write, read its effect through the door named by platform_guide rules.";
-/// Tools a paused app takes because they are what maintenance is for:
-/// taking it out, and replacing what it holds.
 const PAUSED_TOOLS: [&str; 2] = ["maintenance_set", "project_import"];
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
 
-/// Runs before every administrative tool.
 async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     if name.starts_with("transfer_")
         || OPEN_TOOLS.contains(&name)
@@ -130,7 +126,6 @@ async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
                     .query_row("SELECT project,receipt FROM plans WHERE id=?1", [plan], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
                 match row {
-                    // An applied plan only returns its receipt.
                     Some((_, Some(_))) => return Ok(()),
                     Some((project, None)) => Some(project),
                     None => None,
@@ -149,10 +144,6 @@ async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     Ok(())
 }
 
-/// The Kernel's stores and Konae's: the owner accounts in `owners.sqlite`
-/// and the project list, credentials and audit in `mcp.sqlite`. A restore
-/// signs out owner and app sessions, Clerk creator sessions, agent
-/// credentials and OAuth tokens, and unfinished OAuth codes and release plans.
 pub(super) fn installation() -> super::installation::Installation {
     use super::installation::{AccountDatabase, RootDatabase};
     let mut installation = super::installation::Installation::kernel();
@@ -165,7 +156,6 @@ pub(super) fn installation() -> super::installation::Installation {
     installation
 }
 
-/// The owner of a project, for the daily email allowance of the owner's apps.
 fn project_owner(root: &Path, project_id: &str) -> Option<String> {
     let connection = Connection::open_with_flags(root.join("mcp.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     connection
@@ -211,7 +201,6 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_detail {
         db.execute("ALTER TABLE audit ADD COLUMN detail TEXT", [])?;
     }
-    // A plan names the upload of its sources when they travel apart from the payload.
     let has_sources: bool = db
         .prepare("PRAGMA table_info(plans)")?
         .query_map([], |r| r.get::<_, String>(1))?
@@ -315,11 +304,6 @@ pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<O
         }))
 }
 
-/// The 401 of the owner's MCP. A token this installation issued for this
-/// endpoint that has passed its expiry says when it expired and how to get a
-/// new one. Any other refusal answers as before, so an unknown or malformed
-/// token learns nothing. The `WWW-Authenticate` header stays the same, so an
-/// OAuth client still finds where to sign in again.
 fn owner_unauthorized(state: &Konae, headers: &HeaderMap) -> Response {
     let refused = unauthorized(state, headers);
     let Some(token) = bearer(headers) else { return refused };
@@ -372,18 +356,12 @@ pub(super) fn owned_project(state: &Konae, owner: &Owner, id: &str, scope: &str)
 
 pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this project. Type the project's name exactly to delete it.";
 
-/// Removes a project, its app folder and its Deployment. The Deployment
-/// leaves the routing map first, so its address stops answering, and the
-/// folder is renamed out of `apps/` before anything is deleted: a Kernel that
-/// stops halfway never reloads half an app. The registry rows go last, so a
-/// failure leaves a project the owner can see and delete again.
 async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     let published = {
         let mut deployments = state.deployments.write().await;
         let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.id == id).map(|(host, _)| host.clone()).collect();
         hosts.into_iter().filter_map(|host| deployments.remove(&host)).count() > 0
     };
-    // A Deployment the map never loaded still has its record in the folder.
     let ids: Vec<String> = if published || tokio::fs::try_exists(crate::layout::record(&state.data_root, id)).await? { vec![id.to_owned()] } else { Vec::new() };
     let trash = state.data_root.join("deleted");
     tokio::fs::create_dir_all(&trash).await?;
@@ -395,11 +373,8 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
         super::path::forget(state, deployment).await?;
         super::hostname::forget(state, deployment).await?;
         park(&folder, &trash, deployment).await?;
-        // The folder held the index, so no file of this Deployment is readable
-        // any more; a failure here leaves objects for files-reconcile.
         super::file_store::forget_deployment(state.files.store.as_ref(), deployment).await;
     }
-    // A project that was never published still has a folder with its sources.
     park(&folder, &trash, id).await?;
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -414,11 +389,6 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// Whether another app of this owner holds `value` as a route secret. A
-/// signature names no app, so a request signed for one app would be accepted
-/// by another that holds the same value. A secret for calls only verifies
-/// nothing, so it may hold the value of another app's route secret: that is
-/// how one app signs a call to another.
 fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -> Result<bool> {
     let db = store(state)?;
     let mut query = db.prepare("SELECT id FROM projects WHERE owner = ?1 AND id <> ?2")?;
@@ -431,7 +401,6 @@ fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -
     Ok(false)
 }
 
-/// Renames the folder into the trash, then deletes it there.
 async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
     let parked = trash.join(format!("{id}-{}", Uuid::new_v4().simple()));
     match tokio::fs::rename(folder, &parked).await {
@@ -461,8 +430,6 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Applies a changed-file upload to the complete saved document. The caller
-/// holds the project lock and has checked the expected source revision.
 fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value> {
     anyhow::ensure!(delta["format"] == "delta", "Invalid source update format.");
     let mut merged = current.clone();
@@ -500,8 +467,6 @@ fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value>
     Ok(merged)
 }
 
-/// Refuses an upload that names a component of an export. Such an upload may
-/// reach that component's quota, which saved sources and a release never take.
 fn ensure_no_component(upload: &Value) -> Result<()> {
     match upload["component"].as_str() {
         Some(component) => anyhow::bail!("This upload names the {component} component of an export. Upload sources and releases without a component."),
@@ -509,8 +474,6 @@ fn ensure_no_component(upload: &Value) -> Result<()> {
     }
 }
 
-/// The JSON of a release payload, refused before it is read when the upload
-/// names a component or holds more than a release does.
 async fn release_bytes(state: &Konae, upload: &Value, transfer_id: &str) -> Result<Vec<u8>> {
     ensure_no_component(upload)?;
     let size = upload["size"].as_u64().unwrap_or(0) as usize;
@@ -518,8 +481,6 @@ async fn release_bytes(state: &Konae, upload: &Value, transfer_id: &str) -> Resu
     Ok(tokio::fs::read(transfer_path(state, transfer_id)?).await?)
 }
 
-/// Lists release uploads in cleanup order. The release JSON stays last so a
-/// retry can recover the component upload IDs if cleanup stops midway.
 async fn release_upload_ids(
     state: &Konae,
     principal: &str,
@@ -545,8 +506,6 @@ async fn cleanup_release_uploads(state: &Konae, owner: &Owner, principal: &str, 
         let db = store(state)?;
         db.query_row("SELECT transfer,sources,cleanup_uploads FROM plans WHERE id=?1 AND owner=?2", params![plan_id, owner.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
     };
-    // New plans keep every consumed ID durably. Older plans can still recover
-    // from their release JSON while that upload remains available.
     let mut ids: Vec<String> = serde_json::from_str(&recorded_ids)?;
     if ids.is_empty() {
         ids = release_upload_ids(state, principal, &release_id, sources_id.as_deref()).await?;
@@ -577,7 +536,6 @@ fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, tra
     Ok((None, false))
 }
 
-/// The files of `app/` that travel in an upload of their own beside a release.
 #[derive(serde::Deserialize)]
 struct ReleaseSources {
     files: HashMap<String, String>,
@@ -587,11 +545,6 @@ struct ReleaseSources {
     directories: Vec<String>,
 }
 
-/// The release `release_plan` checks and `release_apply` installs. The
-/// payload in `transfer_id` names the project, the build and what a first
-/// release imports. The files of `app/` travel in `sources_id`, an upload of
-/// their own, so each upload stays under its own limit. A payload that holds
-/// `project.files` itself, as `project_import` takes, needs no second upload.
 async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>, artifact_id: Option<&str>) -> Result<DeployInput> {
     let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
     anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload", "Upload is not complete.");
@@ -810,7 +763,6 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools
 }
 
-// The tools of the Kernel modules an owner calls on one Deployment.
 
 fn calls_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
@@ -862,8 +814,6 @@ fn domain_tools() -> Vec<Value> {
 }
 
 
-/// The admin MCP tools this module answers. `mcp.rs` lists them only for a
-/// credential that holds `manage_users`, and every call checks it again.
 fn invitations_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     let key = json!({"type": "string", "minLength": 8, "maxLength": 128});
@@ -922,10 +872,6 @@ fn invitations_tools() -> Vec<Value> {
 }
 
 
-/// The `notices_read` admin tool: one Deployment's notice jobs, newest first,
-/// 50 at a time, with state, attempts and failure kind. It names no recipient,
-/// as `mail_status` names none. A notice the Kernel did not queue is no job;
-/// Usage counts it under `notify` with its reason.
 fn mail_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     vec![tool(
@@ -1017,10 +963,6 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     }
     let principal = format!("owner:{}", owner.id);
     let tools = admin_tools(&owner);
-    // Only a transfer_write may carry a block of ADMIN_CHUNK bytes; every
-    // other call keeps the 200 KB bound of the runtime endpoint.
-    // A body over 200 KB is refused unless it parses as a transfer_write, so an
-    // unparsable or other large body never reaches the JSON-RPC answer path.
     let bytes = match read_body_up_to(request, ADMIN_MCP_BODY_BYTES, &admin_body_refused()).await {
         Ok(bytes) => bytes,
         Err(response) => return response,
@@ -1047,7 +989,6 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 return rpc_error(id, -32602, "Tool name is required.");
             };
             let Some(definition) = tools.iter().find(|t| t["name"] == name) else {
-                // Name the permission an administrative tool needs, so the agent knows which credential to get.
                 let hint = super::guide::missing_permission(name, &owner);
                 return rpc_error(id, -32602, &hint.map_or("Unknown tool or insufficient permission.".to_owned(), |hint| format!("Unknown tool or insufficient permission. {hint}")));
             };
@@ -1067,9 +1008,6 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             } else {
                 None
             };
-            // An export's downloads hold accounts and data. Every
-            // credential of one owner shares the transfer principal, so reading
-            // them needs export_data, not the read scope that finds them.
             let package_transfer = (name.starts_with("transfer_") && name != "transfer_begin")
                 .then(|| transfer(&state, &principal, &arguments).ok())
                 .flatten();
@@ -1098,8 +1036,6 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     Some(id) => owned_project(&state, &owner, id, scope).map(|_| ()),
                     None => owner.require(scope, None),
                 };
-                // Check the first accepted scope the credential holds, so a
-                // refusal names the project grant rather than a scope it never had.
                 let held = |accepted: &[&'static str]| {
                     accepted
                         .iter()
@@ -1234,12 +1170,10 @@ fn audit(
 }
 
 /// The sink for an app user's file uploads and deletes, which the runtime
-/// endpoint reports and the owner's audit log keeps beside owner calls.
 pub(super) fn runtime_audit(root: PathBuf) -> super::runtime::AuditSink {
     Arc::new(move |principal: &str, name: &str, app: &str, ok: bool| record_audit(&root, principal, name, Some(app), None, ok))
 }
 
-/// Writes one audit row and keeps each owner's and each Deployment's newest rows.
 fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, detail: Option<&str>, ok: bool) {
     let written = store_at(root).and_then(|db| {
         let text = |value: &str| value.chars().take(AUDIT_TEXT_CHARACTERS).collect::<String>();
@@ -1250,9 +1184,6 @@ fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, 
         let id = db.last_insert_rowid();
         if id % AUDIT_PRUNE_INTERVAL == 0 {
             db.execute("DELETE FROM audit WHERE at<?1", [now_ms().saturating_sub(AUDIT_RETENTION_MS)])?;
-            // Each owner, and the app users of each Deployment together, keep
-            // their own newest rows, so an app user's uploads and deletes
-            // never push an owner's history out of the log.
             let actor = text(principal);
             let (low, high) = audit_partition(&actor);
             db.execute(
@@ -1267,15 +1198,12 @@ fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, 
     }
 }
 
-/// The range of `actor` values that share one audit allowance: every app
-/// user of one Deployment (`runtime:<deployment>:...`), or one owner.
 fn audit_partition(actor: &str) -> (String, String) {
     let prefix = actor
         .strip_prefix("runtime:")
         .and_then(|rest| rest.split_once(':'))
         .map(|(deployment, _)| format!("runtime:{deployment}:"))
         .unwrap_or_else(|| actor.to_owned());
-    // The smallest string after every string that starts with the prefix.
     let high = if prefix.starts_with("runtime:") { format!("{};", &prefix[..prefix.len() - 1]) } else { format!("{prefix}\u{1}") };
     (prefix, high)
 }
@@ -1415,8 +1343,6 @@ async fn admin_call(
             );
             let template = project_template(a["template"].as_str())?;
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").map(super::sources::manifest_without_runtime).unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
-            // The app's folder exists from the start: konae.json, and app/ once sources are saved.
-            // A step that fails takes the folder away again, so a retry with the same ID works.
             let created = async {
                 super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
                     .write(&state.data_root)
@@ -1490,7 +1416,6 @@ async fn admin_call(
                 )?;
                 return Ok(json!({"cancelled":true}));
             }
-            // A save swaps app/ under this lock, so a read never sees half of one.
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let db = store(state)?;
             db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
@@ -1612,7 +1537,6 @@ async fn admin_call(
         "secrets_list" | "secret_set" | "secret_delete" => {
             let id = a["projectId"].as_str().unwrap();
             owned_project(state, owner, id, if name == "secrets_list" { "read" } else { "publish" })?;
-            // Releases hold this lock, so a delete cannot pass between a release's check and its apply.
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let deployment = find_project_deployment(&*state.deployments.read().await, id);
             if name == "secret_set" && super::http::sets_route_secret(&a) {
@@ -1656,7 +1580,6 @@ async fn admin_call(
             let from = a["from"].as_str().unwrap_or("").to_owned();
             let to = a["to"].as_str().unwrap_or("").to_owned();
             tokio::task::spawn_blocking(move || {
-                // Validate the range even for an account without deployments.
                 super::usage::validate_range(&from, &to)?;
                 let flushed = super::usage::flush_status();
                 let apps: Vec<Value> = items.into_iter().map(|(id, name, deployment)| {
@@ -1683,8 +1606,6 @@ async fn admin_call(
         "sign_in_methods_set" => {
             let id = a["projectId"].as_str().unwrap();
             let found = owned_deployment(state, owner, id, "manage_users").await?;
-            // Releases and secret_delete hold the same lock, so neither a
-            // publish nor a deleted Google secret can pass this check.
             let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
             let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
             let methods = requested_sign_in_methods(state, &updated, &a["methods"])?;
@@ -1707,7 +1628,6 @@ async fn admin_call(
         "contact_email_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
             let deployment = owned_deployment(state, owner, id, "publish").await?;
-            // Releases hold the same lock, so a publish cannot put back the email it read before.
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
@@ -1740,8 +1660,6 @@ async fn admin_call(
                 .await,
             )
             .await?;
-            // A restore of a backup taken before an import may bring back the saved
-            // sources, so the editor's next save must read them first.
             if op == "restore-backup" && answer["holds"].as_array().is_some_and(|holds| holds.iter().any(|part| part == "sources")) {
                 store(state)?.execute("UPDATE projects SET sources=sources+1 WHERE id=?1", [&deployment.project_id])?;
             }
@@ -1773,15 +1691,12 @@ async fn admin_call(
                 return Err(source_revision_refusal(observed.unwrap_or(0)));
             }
             if let Some(package) = input.initial_package.as_ref() {
-                // The same export again answers with the first import.
                 if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
                     return Ok(replay);
                 }
                 super::package::verify(state, principal, &input.project.id, package).await?;
             }
             let schema = validate_release(state, &input, None).await?;
-            // The address the release answers on. A first release fixes it, so
-            // the owner reads it here before configuring Google or DNS.
             let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
             let (hostname, first_release) = match existing {
                 Some(deployment) => (Some(deployment.hostname), false),
@@ -1790,8 +1705,6 @@ async fn admin_call(
             let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
-            // Persist every upload that a successful apply consumes. Cleanup
-            // must survive client finally cancellation of the release JSON.
             let cleanup_uploads = release_upload_ids(state, principal, transfer_id, sources_id).await?;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision,cleanup_uploads) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision,serde_json::to_string(&cleanup_uploads)?])?;
             if let Some(package) = input.initial_package.as_ref() {
@@ -1823,10 +1736,7 @@ async fn admin_call(
             }
             let mut input = release_input(state, principal, &row.2, row.5.as_deref(), None).await?;
             anyhow::ensure!(input.project.id == row.0, "Artifact belongs to another project.");
-            // Notify to the owner sends to konae.json's address, else the app's, else the owner's.
             input.contact_email = contact_email(state, owner, &row.0, input.contact_email.as_deref()).await?;
-            // A schema change that loses data applies only with the
-            // confirmation release_plan gave for it.
             input.schema_confirmation = a["confirmSchema"].as_str().map(str::to_owned);
             metadata["name"] = json!(input.project.name);
             metadata["slug"] = json!(input.project.slug);
@@ -1850,7 +1760,6 @@ async fn admin_call(
             super::enter::issue(state, &deployment, a["userId"].as_str().unwrap_or_default(), principal).await
         }
         name if name.starts_with("app_") => {
-            // Every app user and invitation tool needs manage_users and the project grant.
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
             let inviter = super::invitations::Inviter { id: owner.id.clone(), email: inviter_email(state, &owner.id) };
             super::invitations::run(state, &deployment, &inviter, name, &a).await
@@ -1872,12 +1781,6 @@ async fn admin_call(
 
 const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
 
-/// `project_import`: replaces an existing app's sources, data or both with
-/// those of an exported folder, after a backup of what it replaces
-/// (`import.rs`). The sources arrive as a release payload in `transferId`,
-/// the data as `package { manifest, components }`. When the schema change
-/// loses data and `confirmSchema` does not match its plan, it answers the
-/// plan with `imported: false` and changes nothing.
 async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
     use super::import::{Outcome, Target};
     let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
@@ -1931,7 +1834,6 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         }
         None => None,
     };
-    // Resolve and validate release settings before an import can replace live data.
     let resolved_contact_email = match &release {
         Some((payload, _)) => Some(contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?),
         None => None,
@@ -1971,7 +1873,6 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     Ok(answer)
 }
 
-/// Restores the data and source backup when the release after an import fails.
 async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Value> {
     if has_package {
         let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
@@ -1984,19 +1885,12 @@ async fn restore_import_after_release_failure(state: &Konae, deployment: &Deploy
     Err(error)
 }
 
-/// The email of the owner account that invites, for the message. Owners
-/// signed in through Clerk keep no email in Konae, so their invitations name
-/// only the app. The file is opened read-only, so a lookup never creates the
-/// account tables.
 pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
-/// The contact email a release of `project` carries: the one the payload
-/// names from its folder's konae.json, else the one the published app has,
-/// which the owner may have set in App settings, else the owner's.
 async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
     if let Some(given) = given {
         let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
@@ -2006,8 +1900,6 @@ async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Optio
     Ok(kept.or_else(|| owner_email(state, &owner.id)))
 }
 
-/// The email of the owner's active account, when Konae keeps one. An owner
-/// who signs in through Clerk has none.
 fn owner_email(state: &Konae, owner: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
@@ -2016,8 +1908,6 @@ fn owner_email(state: &Konae, owner: &str) -> Option<String> {
 
 const METHODS_INVALID: &str = "Name the methods as password and google.";
 
-/// The methods `sign_in_methods_set` may store: password always, and
-/// google only once the app's Google client ID and secret are both set.
 fn requested_sign_in_methods(state: &Konae, deployment: &Deployment, requested: &Value) -> Result<Vec<SignInMethod>> {
     use super::refusal::refuse;
     let requested: Vec<SignInMethod> = serde_json::from_value(requested.clone())
@@ -2029,10 +1919,6 @@ fn requested_sign_in_methods(state: &Konae, deployment: &Deployment, requested: 
     Ok(methods)
 }
 
-/// The methods, what the sign-in page offers, whether each half of the app's
-/// Google client is set (never its value) and the callbacks to register. A
-/// Deployment that asks for Google without its client here, as after an
-/// import, keeps the setting and offers only the password; `notice` says so.
 fn sign_in_methods_value(state: &Konae, deployment: &Deployment) -> Value {
     let client = super::google::client_set(state, deployment);
     let mut offered = vec![SignInMethod::Password];
@@ -2054,9 +1940,6 @@ fn sign_in_methods_value(state: &Konae, deployment: &Deployment) -> Value {
 
 const GOOGLE_CLIENT_MISSING: &str = "This app asks for Google sign-in, but its Google client ID and client secret are not set on this installation, so its sign-in page offers only email and password. Set both, and add this app's redirect URIs to the Google client. Until then, people who signed in with Google sign in with a password, or set one with Forgot your password.";
 
-/// The Capsule a project is born as: one of the templates in
-/// project-templates.json, which `bun run templates:render` writes from the
-/// editor's templates and `konae init` reads too.
 fn project_template(id: Option<&str>) -> Result<Value> {
     let all: Value = serde_json::from_str(include_str!("project-templates.json"))?;
     let id = id.or(all["default"].as_str()).unwrap_or_default();
@@ -2070,12 +1953,8 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
     match super::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => Json(json!({"mode":"clerk","publishableKey":config.publishable_key})).into_response(),
         Ok(None) => {
-            // The owner page links to the project list only where an editor serves it.
             let editor = std::env::var("KONAE_EDITOR_DIR").is_ok_and(|dir| !dir.trim().is_empty());
-            // With the development transport, owner email lands in a file, not an inbox.
             let mail = std::env::var("KONAE_MAIL_TRANSPORT").unwrap_or_default();
-            // On a local installation that still runs with the published default
-            // key, the page fills it in, as `bun run dev:local` expects. Nowhere else.
             let local = url::Url::parse(&state.public_origin).ok().and_then(|u| u.host_str().map(crate::is_local_host)).unwrap_or(false);
             let default_key = local && state.setup_key == crate::DEFAULT_SETUP_KEY;
             Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"emailVerificationRequired":state.accounts.verification == auth::Verification::Required,"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
@@ -2084,9 +1963,6 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
     }
 }
 
-/// Who the browser is signed in as. A signed-out visit answers 200 with
-/// `signedIn: false`, so the editor's first check is not a 401 in the console.
-/// `session_inspect` stays the tool that lists scopes.
 pub(super) async fn owner_session(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
     let owner = match authenticate_owner(&state, &headers) {
@@ -2172,15 +2048,12 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
         Err(_) => return error(StatusCode::BAD_REQUEST, "Expected JSON."),
     };
     let client = state.guards.client_ip(peer, &headers);
-    // Counted before the setup key check, so the limit also slows guessing it.
     if let Err(wait) = state
         .guards
         .auth_attempt("owner", client, a["email"].as_str().unwrap_or(""))
     {
         return too_many_attempts(wait);
     }
-    // An invitation code, or the installation key while it may still create
-    // the first creator. admission.rs consumes either inside the signup.
     let admission = if signup {
         match super::admission::read(&state, &a) {
             Ok(admission) => Some(admission),
@@ -2206,8 +2079,6 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
             Err(e) => auth_error(e),
         };
     }
-    // Only signup needs the lock: it spans the insert and the first-owner claim
-    // below. The password hash runs before it, and logins run concurrently.
     let (result, _guard) = if let Some(admission) = admission {
         match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
             Ok(account) => {
@@ -2239,7 +2110,6 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
     }
 }
 
-/// The installation operator claims legacy deployments during the first setup.
 async fn claim_for_first_owner(state: &Konae, user_id: &str) {
     if let Ok(db) = store(state) {
         let owner_db = Connection::open(state.data_root.join("owners.sqlite")).unwrap();
@@ -2254,7 +2124,6 @@ async fn claim_for_first_owner(state: &Konae, user_id: &str) {
     }
 }
 
-/// The owner session cookie and body for a creator session just issued.
 pub(super) fn owner_session_response(state: &Konae, session: auth::AuthSession) -> Response {
     let cookie_name = owner_cookie_name(state);
     let secure = if cookie_name.starts_with("__Host-") {
@@ -2397,8 +2266,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The path host serves apps and the home, so the owner's MCP and owner
-    /// sign-in refuse it.
     #[tokio::test]
     async fn the_path_host_refuses_administration() {
         use tower::ServiceExt;
@@ -2421,9 +2288,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// An expired token says when it expired and how to get a new one, with
-    /// the same 401 and `WWW-Authenticate` as any refused token. An unknown
-    /// token, and a token issued for another endpoint, learn nothing more.
     #[tokio::test]
     async fn an_expired_token_says_it_expired() {
         use tower::ServiceExt;
@@ -2750,7 +2614,7 @@ mod tests {
             let root = std::env::temp_dir().join(format!("konae-google-cases-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let state = Konae::for_test(AppState {
-                public_origin: "http://localhost:8790".into(),
+                public_origin: "http:
                 ..AppState::for_test(&root)
             });
             let mut deployment: Deployment = serde_json::from_value(json!({
@@ -2812,17 +2676,14 @@ mod tests {
             requested_sign_in_methods(&state, &deployment, &json!(["google", "password", "google"])).unwrap(),
             vec![SignInMethod::Password, SignInMethod::Google]
         );
-        // The read-back names each half without its value, and the callback to register.
         deployment.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
         let value = sign_in_methods_value(&state, &deployment);
         assert_eq!(value["googleClient"], json!({"clientIdSet": true, "clientSecretSet": true}));
         assert_eq!(value["offered"], json!(["password", "google"]));
         assert_eq!(value["redirectUris"], json!(["http://practice.localhost:8790/_konae/auth/google/callback"]));
         assert!(!value.to_string().contains("GOCSPX"));
-        // Deleting a Google secret while Google is on is refused.
         let deleted = super::super::http::secrets_call(&db, "p1", Some(&deployment), "secret_delete", &json!({"name": "google_client_secret"}));
         assert_eq!(deleted.unwrap_err().to_string(), "Google sign-in is on for this app and needs google_client_secret. Turn Google off before deleting it.");
-        // Without its client, as after an import, the app keeps the setting and says why.
         db.execute("DELETE FROM secrets", []).unwrap();
         let value = sign_in_methods_value(&state, &deployment);
         assert_eq!((value["methods"].clone(), value["offered"].clone()), (json!(["password", "google"]), json!(["password"])));
@@ -2831,8 +2692,6 @@ mod tests {
     }
 
 
-    /// A refused source save says what the editor's format holds, so an agent
-    /// that saves sources over MCP can correct the JSON it uploaded.
     #[test]
     fn a_refused_source_save_names_the_expected_format() {
         let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
@@ -2945,9 +2804,6 @@ mod tests {
         assert!(validate_sources(&merge_source_delta(&merged, &invalid, "app_a").unwrap(), "app_a").is_err());
     }
 
-    /// The sdk topic is src/sdk/contract.ts rendered to sdk-guide.json. Every
-    /// tool a call names must be one the runtime endpoint serves, and a call the
-    /// contract opens to signed-out visitors must use only the tools they get.
     #[tokio::test]
     async fn platform_guide_sdk_topic_is_the_rendered_contract() {
         let root = std::env::temp_dir().join(format!("konae-guide-{}", Uuid::new_v4()));

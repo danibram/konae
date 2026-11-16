@@ -1,15 +1,10 @@
 import { sqlTokens, type SqlToken } from "../lib/sql-tokens";
 import { refusal } from "./refusal";
 
-// The same checks, in the same order and with the same messages, as
-// kernel-rs/kernel/src/sql_rules.rs `check_statement`. kernel-rs/kernel/src/sql-rule-cases.json
-// holds the cases both test suites run, with the schema cases the Validation
-// Gate refuses in src/agent/gate.ts.
 
 const MUTATION_WORDS = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
 const STRUCTURE_WORDS = new Set(["CREATE", "ALTER", "DROP"]);
 
-/** The first keyword, one statement, and no RETURNING on a mutation. */
 export function assertActionStatement(name: string, kind: "query" | "mutation", statement: string) {
   const tokens = sqlTokens(statement);
   const first = tokens.find((token) => token.kind === "word");
@@ -34,7 +29,6 @@ function firstWordRefusal(name: string, kind: "query" | "mutation", word: string
   return rule + hint;
 }
 
-/** A RETURNING keyword outside parentheses. `:returning`, `@returning` and `$returning` are parameters. */
 function returnsRows(tokens: SqlToken[]): boolean {
   return tokens.some((token, index) => {
     const previous = tokens[index - 1];
@@ -43,11 +37,6 @@ function returnsRows(tokens: SqlToken[]): boolean {
   });
 }
 
-/**
- * A `;` token followed by any other token is a second statement, as the Kernel
- * reads it. Comments and whitespace are not tokens; a character at or above
- * U+0080, such as a no-break space, is part of a word, as SQLite reads it.
- */
 function assertSingleStatement(name: string, tokens: SqlToken[]) {
   const end = tokens.findIndex((token) => token.kind === "symbol" && token.text === ";");
   if (end !== -1 && end + 1 < tokens.length) throw refusal("statement.several", `Action ${name} must contain one statement.`);

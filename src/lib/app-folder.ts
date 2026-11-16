@@ -1,15 +1,3 @@
-// The generated developer files for the app folder of ADR-0001. `konae init`
-// writes them and export includes them. The Kernel needs only konae.json,
-// app/, dist/ and data/; these developer files remain optional there.
-//
-//   konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
-//   app/            the sources: pages, actions.json, schema.sql and optional schema-transforms.json
-//   dist/           the built static files the Kernel serves
-//   data/           database.sqlite, identity.sqlite, usage.sqlite, files/
-//   compose.yaml, .env.example, .gitignore, AGENTS.md, action-contract.md,
-//   actions.d.ts, package.json, tsconfig.json, scripts/*.mjs
-//
-// The CLI writes these entries to disk and the editor packs them in a tar.
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
 import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
 import type { PackageComponentName } from "./portable-package";
@@ -20,7 +8,6 @@ export type FolderEntry = { path: string; contents: string | Uint8Array };
 
 export type SignupPolicy = { mode: "open" | "invitation" | "closed" | "allowlist"; allowlist?: string[] };
 
-/** konae.json, as kernel-rs/kernel/src/lib.rs `Settings` writes and reads it. */
 export type AppSettings = {
   id: string;
   name: string;
@@ -29,9 +16,7 @@ export type AppSettings = {
   signupPolicy: SignupPolicy;
   signInMethods: ("password" | "google")[];
   contactEmail?: string;
-  /** The version of the Kernel that wrote the file. */
   kernel: string;
-  /** The Capsule manifest without its visibility: routing, connects and the declared actions. */
   manifest: Record<string, unknown>;
 };
 
@@ -39,10 +24,8 @@ export const SETTINGS_FILE = "konae.json";
 export const SOURCES_FOLDER = "app";
 export const DIST_FOLDER = "dist";
 export const DATA_FOLDER = "data";
-/** The Kernel this checkout builds. package.json names its version, and kernel-rs/Cargo.toml repeats it. */
 export const KERNEL_VERSION: string = version;
 
-/** Where each part of an export's data lands in the folder. */
 export const dataPaths: Record<PackageComponentName, string> = {
   database: "data/database.sqlite",
   identity: "data/identity.sqlite",
@@ -50,13 +33,11 @@ export const dataPaths: Record<PackageComponentName, string> = {
   usage: "data/usage.sqlite",
 };
 
-/** The entries one data component becomes. The files component is a tar of `index.json` and `<id>.blob`. */
 export function dataEntries(name: PackageComponentName, bytes: Uint8Array): FolderEntry[] {
   if (name !== "files") return [{ path: dataPaths[name], contents: bytes }];
   return readTar(bytes).map((entry) => ({ path: `${dataPaths.files}/${entry.path}`, contents: entry.contents }));
 }
 
-/** The secrets the app's routes and calls sign with, by name. */
 export function secretNames(actionsSource: string): string[] {
   let actions: Record<string, { http?: { signature?: { secret?: unknown } }; auth?: { secret?: unknown } }> = {};
   try { actions = JSON.parse(actionsSource).actions ?? {}; } catch { return []; }
@@ -68,12 +49,6 @@ export function secretNames(actionsSource: string): string[] {
   return [...names].sort();
 }
 
-/**
- * The files the folder carries beside `app/`, `dist/` and `data/`. `runtime`
- * is the SDK (src/mcp/runtime.js) and `staticArtifact` the build rules
- * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
- * both local build doors run.
- */
 export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
@@ -99,7 +74,6 @@ export const gitignore = `data/
 node_modules/
 `;
 
-/** The image is the Kernel version konae.json names, so an exported folder runs the Kernel that wrote it. */
 function envExample(settings: AppSettings) {
   return `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
 # The image to run. A release publishes this tag for linux/amd64 and linux/arm64. A local image can replace it.
@@ -147,12 +121,6 @@ function packageManifest(settings: AppSettings) {
   }, null, 2)}\n`;
 }
 
-/**
- * What `npm run build` type-checks a TypeScript app against: app/src/, the
- * files it imports, and actions.d.ts. A script beside the app, such as a
- * replay script at the root of app/, stays out. Not strict, so a type that is only implicit passes; a call
- * to an action that does not exist, or with an input it does not take, fails.
- */
 const tsconfig = `${JSON.stringify({
   compilerOptions: {
     target: "ES2022",
@@ -225,10 +193,6 @@ Add \`--app ${settings.id}\` when the Kernel serves more than one app.
 `;
 }
 
-// Builds app/ into dist/ by the rules in static-artifact.mjs, which the
-// editor and `konae build` run too.
-// A release build is minified with NODE_ENV "production"; konae dev passes
-// --dev for a readable one. TypeScript sources are type-checked first.
 const buildScript = `import { spawnSync } from 'node:child_process';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';

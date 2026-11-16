@@ -72,7 +72,6 @@ describe("opening panels", () => {
     const revealed = togglePanel(shared, "preview");
     expect(isVisible(revealed, "preview")).toBe(true);
     expect(isOpen(revealed, "preview")).toBe(true);
-    // Only a panel the owner can see folds away.
     expect(isOpen(togglePanel(revealed, "preview"), "preview")).toBe(false);
   });
 
@@ -107,7 +106,6 @@ describe("dropping panels", () => {
 
   test("the group a panel leaves disappears when it was its last tab", () => {
     const state = movePanel(defaultLayout(), "preview", { target: "agent", zone: "center" });
-    // preview's old group held only preview, so the column collapsed onto agent.
     expect(stackPathOf(state.root, "agent")).not.toBeNull();
     expect(accountedFor(state)).toEqual(everything);
   });
@@ -137,7 +135,6 @@ describe("dropping panels", () => {
         }
       }
     }
-    // Anchoring only ever after the target reached three of these five.
     expect([...orders].sort()).toEqual([
       "data,files,preview",
       "data,preview,files",
@@ -165,7 +162,6 @@ describe("tabs and sizes", () => {
     const middle = resizeSplit(start, [], 0, 0.5);
     expect(sizesOf(middle)).toEqual([50, 50]);
 
-    // Past the floor the handle stops at the floor: the other child is not paying for it.
     const endStop = resizeSplit(start, [], 0, 0);
     expect(sizesOf(endStop)).toEqual([8, 92]);
     expect(sizesOf(resizeSplit(start, [], 0, 1))).toEqual([92, 8]);

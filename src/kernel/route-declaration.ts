@@ -1,33 +1,16 @@
-/**
- * A route's signature scheme and its `fields` map, as the Validation Gate
- * reads them (ADR-0013). The same checks, in the same order and with the same
- * messages, as kernel-rs/kernel/src/provider.rs `signature` and `fields`;
- * kernel-rs/kernel/src/http-binding-cases.json and signature-preset-cases.json hold
- * the cases both test suites run.
- */
 import signaturePresets from "../../kernel-rs/kernel/src/signature-presets.json";
 import { joinRefusals, refusal, type RefusalError } from "./refusal";
 
 export type SignatureScheme = "konae" | "hmac-body" | "timestamped" | "svix";
 
-/**
- * A route's signature. `scheme` is absent for Konae's own. `header` is the
- * header the MAC arrives in, `svix-signature` for the svix scheme. `secret`
- * names a value the owner sets with `secret_set`; it is never in actions.json.
- */
 export type RouteSignature = {
   header: string;
   secret: string;
   scheme?: Exclude<SignatureScheme, "konae">;
-  /** hmac-body: the HMAC's hash. */
   algorithm?: "sha256" | "sha1";
-  /** hmac-body: how the MAC is written. */
   encoding?: "hex" | "base64";
-  /** hmac-body: text before the MAC, such as "sha256=". timestamped: the timestamp field, such as "t=". */
   prefix?: string;
-  /** timestamped: the field that carries the MAC, such as "v1=". */
   tag?: string;
-  /** timestamped: how far `t` may sit from the server's clock, in seconds. */
   window?: number;
 };
 
@@ -54,11 +37,6 @@ function quotedList(keys: readonly string[]): string {
   return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
 }
 
-/**
- * The providers a route may name instead of spelling out a scheme, each the
- * long form it stands for without its secret. kernel-rs/kernel/src/provider.rs reads
- * the same file, so both doors expand a preset alike.
- */
 const PRESETS: Readonly<Record<string, Record<string, unknown>>> = signaturePresets;
 const PROVIDERS = Object.keys(PRESETS).sort();
 
@@ -67,11 +45,6 @@ function quotedChoices(keys: readonly string[]): string {
   return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} or ${quoted[quoted.length - 1]}`;
 }
 
-/**
- * Parses a route's `signature`. A `provider` names a row of the preset table
- * and takes only a `secret` beside it; it then parses as the long form that
- * row spells.
- */
 export function parseRouteSignature(name: string, method: "GET" | "POST", value: unknown): RouteSignature {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("route.invalid", `Action ${name} has an invalid http binding.`);
   const record = value as Record<string, unknown>;
@@ -85,11 +58,6 @@ export function parseRouteSignature(name: string, method: "GET" | "POST", value:
   return parseLongForm(name, method, { ...PRESETS[provider], ...(record.secret === undefined ? {} : { secret: record.secret }) });
 }
 
-/**
- * Parses a long-form `signature`: its scheme, then every key that scheme
- * takes. An unknown scheme, and a provider's scheme on GET, stop the parse;
- * every other wrong key adds its sentence, so one refusal names them all.
- */
 function parseLongForm(name: string, method: "GET" | "POST", record: Record<string, unknown>): RouteSignature {
   const scheme = record.scheme === undefined ? "konae" : SCHEMES.find((candidate) => candidate === record.scheme);
   if (!scheme) throw refusal("signature.scheme-unknown", `Action ${name} names an unknown signature scheme. Use "konae", "hmac-body", "timestamped" or "svix".`);
@@ -140,7 +108,6 @@ function parseLongForm(name: string, method: "GET" | "POST", record: Record<stri
   return named === undefined ? { header, secret } : { scheme: named, header, secret, ...rest };
 }
 
-/** The steps of a JSON path: `$`, then 1 to 16 of `.name` or `[index]`. Null when it is not one. */
 export function jsonPathSteps(path: string): Array<string | number> | null {
   if (path.length > MAX_PATH_LENGTH || !path.startsWith("$")) return null;
   const steps: Array<string | number> = [];
@@ -153,7 +120,6 @@ export function jsonPathSteps(path: string): Array<string | number> | null {
   return steps.length >= 1 && steps.length <= MAX_PATH_STEPS ? steps : null;
 }
 
-/** Parses a route's `fields`, input keys in sorted order, each one of the action's input bindings and mapped to a JSON path. */
 export function parseRouteFields(name: string, method: "GET" | "POST", inputs: ReadonlySet<string>, value: unknown): Record<string, string> {
   if (method === "GET") throw refusal("route.fields-on-get", `Action ${name} binds GET, so it cannot declare fields. Fields read a POST body.`);
   const count = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).length : 0;
@@ -173,11 +139,6 @@ export function parseRouteFields(name: string, method: "GET" | "POST", inputs: R
   return fields;
 }
 
-/**
- * The POST body a sender writes so a route with `fields` reads `input`: each
- * value at its path, every other key at the top level. The inverse of the
- * Kernel's projection, for the conformance runner and the editor's curl.
- */
 export function bodyFromFields(fields: Record<string, string> | undefined, input: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {

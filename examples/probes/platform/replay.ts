@@ -1,9 +1,3 @@
-// Probe: what the platform has no primitive for, such as realtime push. It
-// reads what the runtime door offers and how the two doors answer each
-// declaration, checks that both doors refuse the schedule and domain forms
-// they do not take, and checks what an unclaimed hostname answers.
-//
-//   KONAE_PROBE_PORT=23050 bun run examples/probes/platform/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -22,8 +16,6 @@ await probe("platform", 23050, async (kit) => {
   const app = await kit.publish(here, { projectId: "probe_platform", visibility: "public", signup: { mode: "open" } });
   const cookie = await kit.signup(app.host, "nell@probe.example");
 
-  // Every tool the runtime door offers. None sends mail, schedules, subscribes, charges or signs in elsewhere:
-  // a schedule is a declaration the Kernel's timer runs, never a tool an app calls.
   const member = await toolNames(kit.runtime(app.host, cookie));
   const visitor = await toolNames(kit.runtime(app.host));
   const absent = /mail|schedule|cron|subscribe|stream|watch|pay|charge|oauth|provider|domain/;
@@ -31,7 +23,6 @@ await probe("platform", 23050, async (kit) => {
   assert(member.includes("actions_invoke") && member.includes("files_upload") && visitor.includes("auth_signup"));
   kit.pass("Runtime tools", `A signed-in app user gets ${member.join(", ")}. A visitor gets ${visitor.join(", ")}. Accounts sign in with a password, or with Google once the owner turns it on.`);
 
-  // A declaration for each missing primitive, at both doors.
   const schema = await readFile(path.join(here, "schema.sql"), "utf8");
   const program = await readFile(path.join(here, "actions.json"), "utf8");
   const variants: Record<string, (actions: any) => void> = {
@@ -39,9 +30,6 @@ await probe("platform", 23050, async (kit) => {
     "a schedule on a mutation": (actions) => { actions["notes.add"].schedule = "0 8 * * *"; },
     "a subscription on a query": (actions) => { actions["notes.due"].subscribe = true; },
   };
-  // Today's answers: one refusal with the same words at both doors for each. Until 2026-11-07 the
-  // schedule and the subscription passed both doors and did nothing. notes.add takes input, so a
-  // schedule on it is refused before its cron text is read; the schedule probe covers the rest.
   const same = (message: string): [string, string] => [message, message];
   const expected: Record<string, [string, string]> = {
     "an action of kind email": same('Action notes.mail has an invalid kind. Use "query", "mutation", "signal" or "call".'),
@@ -59,7 +47,6 @@ await probe("platform", 23050, async (kit) => {
     kit.pass(`Declare ${label}`, `Gate: ${gate.startsWith("passes") ? "passes it" : `"${gate}"`}. Kernel: ${kernel === "passes" ? "publishes it and runs nothing extra" : `"${kernel}"`}.`);
   }
 
-  // Delayed work without a worker: a reminder is a row a query reads once its time has come.
   const runtime = kit.runtime(app.host, cookie);
   await runtime.call("actions_invoke", { name: "notes.add", input: { body: "Water the plants", remind_at: Date.now() + 1200 } });
   assert.equal((await runtime.call<any[]>("actions_invoke", { name: "notes.due", input: {} })).length, 0);
@@ -67,12 +54,10 @@ await probe("platform", 23050, async (kit) => {
   assert.equal((await runtime.call<any[]>("actions_invoke", { name: "notes.due", input: {} })).length, 1);
   kit.pass("A reminder without a worker", "notes.due returns nothing before remind_at and the note after it, because the query compares remind_at with kernel.now when someone asks. To act when nobody asks, a mutation declares a schedule (schedule probe); sending the reminder by email still has no primitive.");
 
-  // A hostname no Deployment has claimed with domain_set answers like an unknown host.
   const custom = await fetch(`${url}/`, { headers: { host: "notes.example.org" } });
   const customBody = (await custom.text()).replace(/\s+/g, " ").slice(0, 120);
   assert.notEqual(custom.status, 200);
   console.log(`  Host: notes.example.org answers ${custom.status} ${customBody}`);
-  // A proxy that maps the domain and rewrites Host still carries the browser's Origin, which the runtime refuses.
   const proxied = await fetch(`${url}/_konae/mcp`, {
     method: "POST",
     headers: { host: app.host, origin: "https://notes.example.org", "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": kit.address() },

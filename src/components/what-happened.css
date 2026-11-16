@@ -1,5 +1,3 @@
-/* What happened: the owner's list of what a published app sent and ran.
-   Tokens only, so the system theme carries light and dark. */
 
 .cap-workspace.happened > .happened-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; align-content: start; gap: var(--ds-space-3); padding: var(--ds-space-4) 20px 20px; color: var(--ds-text); }
 .cap-workspace.happened > .happened-empty { margin: auto; }

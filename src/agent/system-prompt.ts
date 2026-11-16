@@ -2,10 +2,6 @@ import type { MiniAppProject, ProjectFile } from "../lib/types";
 import { capsulePathFor } from "./capsule-env";
 import { sdkPromptSection } from "./sdk-section.generated";
 
-/**
- * The rows of the table in AGENTS.md "Pick the smallest piece" that a
- * Capsule declares. platform_guide topic pieces carries the whole table.
- */
 const PIECES = `| Need | Use | Not |
 | --- | --- | --- |
 | Page and rows the app owns | Capsule + Server Actions | Raw SQL from the browser |
@@ -21,11 +17,6 @@ const PIECES = `| Need | Use | Not |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |`;
 
-/**
- * The cached prefix of every request: the Capsule contract and the working
- * rules. It must stay byte-stable for a Project, so it holds no timestamp,
- * no id, no file contents and nothing derived from the current edit.
- */
 export function buildSystemPrompt(project: MiniAppProject): string {
   const visibility = project.manifest.visibility;
 
@@ -158,10 +149,6 @@ A project is born as one of seven templates, each a Capsule that already passes 
 - Finish with one short paragraph in the language the owner wrote to you: what you changed and anything they must know. No file dumps, no diffs, no bullet lists of tool calls.`;
 }
 
-/**
- * The whole Capsule seeded into the first user message so a typical edit costs
- * one model turn instead of a read-heavy loop.
- */
 export function buildInitialUserMessage(project: MiniAppProject, userPrompt: string, kept: readonly ProjectFile[] = []): string {
   const files = Object.keys(project.files).sort().map((file) => {
     const content = project.files[file] ?? "";
@@ -183,7 +170,6 @@ function fenceLanguage(file: ProjectFile): string {
   return "js";
 }
 
-/** A fence longer than any backtick run in the content, so file bodies cannot break out. */
 function longestFence(content: string): string {
   const longest = content.match(/`+/g)?.reduce((max, run) => Math.max(max, run.length), 0) ?? 0;
   return "`".repeat(Math.max(longest + 1, 3));

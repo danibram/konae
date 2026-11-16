@@ -1,9 +1,3 @@
-// Probe: a custom domain (ADR-0014). It serves a public guestbook from guestbook.example.org next to its generated hostname.
-// A fake resolver on a local UDP port answers the Kernel's own TXT lookup;
-// requests reach the alias with a Host header, as a proxy that forwards Host
-// unchanged sends them.
-//
-//   KONAE_PROBE_PORT=23060 bun run examples/probes/domain/replay.ts
 import assert from "node:assert/strict";
 import { probe } from "../_kit";
 import { fakeResolver } from "../_dns";
@@ -25,10 +19,8 @@ await probe("domain", 23060, async (kit) => {
   const set = (deploymentId: string, hostname: string) => owner.call<Domain>("domain_set", { deploymentId, hostname });
   const page = (host: string) => kit.appFetch(host)(`${url}/`, { headers: { accept: "text/html" } });
 
-  // Before anything is claimed, the name answers like any unknown host.
   assert.equal((await page(aliasHost)).status, 404);
 
-  // Names the Kernel refuses before it stores anything.
   const underSuffix = await kit.errorText(set(app.deploymentId, "guestbook.localhost"));
   assert.equal(underSuffix, "guestbook.localhost is under this installation's app suffix localhost, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix.");
   const notAName = await kit.errorText(set(app.deploymentId, "https://guestbook.example.org/"));
@@ -36,7 +28,6 @@ await probe("domain", 23060, async (kit) => {
   assert.equal((await owner.call<Domain>("domain_read", { deploymentId: app.deploymentId })).status, "none");
   kit.pass("Names refused", `A name under the suffix answers "${underSuffix}"; a URL answers "${notAName}". Nothing is stored.`);
 
-  // The first call issues the token; the alias does not serve yet.
   const pending = await set(app.deploymentId, "Guestbook.Example.org");
   assert.equal(pending.status, "pending");
   assert.equal(pending.hostname, alias);
@@ -50,20 +41,17 @@ await probe("domain", 23060, async (kit) => {
   });
   assert.equal(pendingRuntime.status, 403, "a pending alias is not a host the runtime knows");
 
-  // A record that holds something else is refused.
   dns.txt(record, ["konae-verify-not-this-one"]);
   const wrong = await kit.errorText(set(app.deploymentId, alias));
   assert.equal(wrong, `The TXT record at ${record} holds "konae-verify-not-this-one", not this Deployment's token. Set it to ${token} and call domain_set again.`);
   assert.equal((await page(aliasHost)).status, 404);
 
-  // The right token makes it serve.
   dns.txt(record, ["v=spf1 -all", token]);
   const active = await set(app.deploymentId, alias);
   assert.equal(active.status, "active");
   assert(dns.asked.filter((name) => name === record).length >= 3, "the Kernel asked the resolver itself");
   kit.pass("TXT proof", `The first domain_set answers pending with ${record} to hold ${token.slice(0, 22)}…; the Kernel asked the fake resolver ${dns.asked.length} times; a record holding another value answers "${wrong.split(",")[0]}, …" and the alias keeps answering 404; the right value makes it active.`);
 
-  // On the alias the app has its own origin.
   const home = await page(aliasHost);
   assert.equal(home.status, 200);
   assert.match(home.headers.get("content-security-policy") ?? "", /connect-src 'self'/);
@@ -95,13 +83,11 @@ await probe("domain", 23060, async (kit) => {
   const adminBody = (await admin.json()).error;
   kit.pass("Serve from the alias", `GET / on Host ${alias} answers 200 with the app policy and the generated hostname still answers. The runtime takes Origin ${aliasOrigin} and refuses Origin ${generatedOrigin} with 403 "${crossedBody}". An entry added on the alias reads the same from /api/entries on both hosts. Signup on the alias sets a host-only cookie (${cookie.split(";").slice(1).map((part) => part.trim()).join("; ")}) and auth_session sees the account there. Administration refuses Origin ${aliasOrigin} with 403 "${adminBody}".`);
 
-  // One name serves one Deployment.
   const other = await kit.publish(here, { projectId: "probe_domain_other", visibility: "public" });
   const taken = await kit.errorText(set(other.deploymentId, alias));
   assert.equal(taken, `${alias} already serves another Deployment on this installation. Clear it there with domain_clear first.`);
   kit.pass("A name another Deployment holds", `domain_set on a second app answers "${taken}"`);
 
-  // A package carries the name without the token; the destination issues its own.
   const exported = await owner.call<{ manifest: any; downloads: Record<string, any> }>("project_export", { deploymentId: app.deploymentId });
   assert.equal(exported.manifest.domain, alias);
   assert(!JSON.stringify(exported.manifest).includes(token), "the token stays behind");
@@ -128,7 +114,6 @@ await probe("domain", 23060, async (kit) => {
   assert.equal((await page(aliasHost)).status, 404, "an imported name waits for its own token");
   kit.pass("Package", `project_export's manifest names domain ${alias} and holds no token. Importing it while the origin serves the name answers "${held.slice(0, 90)}…". After domain_clear the alias answers 404, the generated hostname 200, and the import arrives with ${alias} pending under a new token.`);
 
-  // A new claim meets the old record: the first answer says so instead of refusing a token nobody could know.
   const reclaimed = await set(app.deploymentId, alias);
   assert.equal(reclaimed.status, "pending");
   assert.match(reclaimed.dns!, /not this token yet\.$/);

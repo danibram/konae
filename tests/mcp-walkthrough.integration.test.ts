@@ -7,11 +7,6 @@ import { signRoute } from "../src/lib/route-signature";
 import { provideLocalAppDependencies } from "./local-app-deps";
 import { Recorder, callTool, cli, renderDocument, startKernel, type KernelProcess, type ToolAnswer } from "./mcp-walkthrough";
 
-// Follows docs/mcp-walkthrough.md step by step on two Kernels and fails when
-// the document does not show exactly the commands and answers this run got.
-// KONAE_WALKTHROUGH_WRITE=1 rewrites the document's recorded blocks.
-// KONAE_WALKTHROUGH_PORT sets the first of three ports: Kernel A, Kernel B
-// and the kernel binary that dev runs on the folder.
 
 const repo = path.resolve(import.meta.dir, "..");
 const docPath = path.join(repo, "docs/mcp-walkthrough.md");
@@ -22,8 +17,6 @@ const setupKeyB = "walkthrough-second-installation-key";
 const password = "walkthrough-agent-password";
 const memberPassword = "walkthrough-member-password";
 const secret = "walkthrough-orders-secret-0123";
-// Usage counts by UTC day. A run that crosses 00:00 UTC asks from the day it
-// started to the day it reads, and the document shows both as <today>.
 const utcDay = () => new Date().toISOString().slice(0, 10);
 const today = utcDay();
 
@@ -102,7 +95,6 @@ const r = new Recorder();
 let root = "";
 let a: KernelProcess;
 let b: KernelProcess | undefined;
-/** What later steps need from earlier ones. */
 const s: Record<string, any> = {};
 const app = () => path.join(root, "orders");
 const shownPort: Record<number, number> = {};
@@ -140,7 +132,6 @@ async function runtimeTool(hostname: string, cookie: string | undefined, name: s
   return answer;
 }
 
-/** A request to an app host, shown as the curl an agent would send to it. */
 async function http(method: string, kernel: { url: string; port: number }, route: string, init: { host?: string; headers?: Record<string, string>; shownHeaders?: Record<string, string>; body?: string } = {}) {
   const response = await fetch(`${kernel.url}${route}`, { method, headers: { ...(init.host ? { host: init.host } : {}), ...init.headers }, body: init.body, redirect: "manual" });
   const shownUrl = `http://${init.host ?? "localhost"}:${shownPort[kernel.port]}${route}`;
@@ -350,7 +341,6 @@ describe("the MCP walkthrough", () => {
     r.name((invited.result as any).results[0].invitationId, "<invitation id>");
 
     r.step("accept");
-    // The mail worker appends the invitation after the tool answers, so wait for its whole line.
     let message: any;
     for (let attempt = 0; attempt < 50 && !message; attempt++) {
       const lines = (await readFile(path.join(a.data, "mailbox.jsonl"), "utf8").catch(() => "")).split("\n");
@@ -433,7 +423,6 @@ describe("the MCP walkthrough", () => {
     await tool("usage_summary", { projectId: s.deploymentId, from: today, to: readDay }, { pick: (value) => ({ from: value.usage.from, to: value.usage.to, totals: value.usage.totals }) });
     r.step("signals");
     const signals = await tool("signals_read", { projectId: s.deploymentId });
-    // conform sends one generated order; name it so the document is the same on every run.
     const generated = (signals.result as any).signals.find((signal: any) => signal.name === "order.received" && signal.properties.id !== "A-1");
     r.name(generated?.properties.id, "<conform order>");
   }, 60_000);
@@ -495,7 +484,6 @@ describe("the MCP walkthrough", () => {
 
     r.step("import-release");
     expect((await run(["build", "--dir", app()])).code).toBe(0);
-    // The release carries the built files of dist/, each as text.
     const dist = path.join(app(), "dist");
     const builtFiles: Record<string, string> = {};
     for (const name of await readdir(dist, { recursive: true })) {

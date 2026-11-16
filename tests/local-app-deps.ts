@@ -3,9 +3,7 @@ import path from "node:path";
 
 const repo = path.resolve(import.meta.dir, "..");
 
-/** Links the repository's pinned esbuild into an initialized app without installing packages. */
 export async function provideLocalAppDependencies(folder: string) {
-  // Ignore machine npm settings so build output stays repeatable.
   process.env.NPM_CONFIG_USERCONFIG = "/dev/null";
   const manifest = JSON.parse(await readFile(path.join(folder, "package.json"), "utf8")) as { devDependencies?: Record<string, string> };
   const expected = manifest.devDependencies?.esbuild;

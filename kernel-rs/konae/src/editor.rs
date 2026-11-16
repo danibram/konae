@@ -1,17 +1,3 @@
-//! The editor, served by Konae on the editor host.
-//!
-//! `bun run build` writes the editor into `dist/`, and `KONAE_EDITOR_DIR`
-//! names that folder. Konae then answers every GET on the host of
-//! `KONAE_PUBLIC_ORIGIN` with it, except the paths Konae itself answers:
-//! `/mcp`, `/_konae`, `/oauth` and `/.well-known`. A path that names no
-//! file and has no extension, such as `/app/<id>`, answers `index.html`,
-//! because the editor routes in the browser.
-//!
-//! The editor carries its own Content Security Policy, which stops at
-//! framing. Its preview is a `srcdoc` iframe that inherits the editor's
-//! policy, and esbuild, sql.js and the model providers the agent calls need
-//! more than `'self'`, so Konae's own page policy would break it. The `kernel`
-//! binary never serves the editor.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -25,13 +11,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-/// The paths Konae answers on the editor host. The editor never shadows them.
 const KONAE_PATHS: [&str; 4] = ["/mcp", "/_konae", "/oauth", "/.well-known"];
 
 /// The editor's policy. It is the one the Vite server sends in development.
 pub const EDITOR_POLICY: &str = "frame-ancestors 'none'";
 
-/// Vite names every file under `assets/` by its content hash.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 pub struct Editor {
@@ -83,7 +67,6 @@ impl Editor {
     }
 
     /// The file a path names under the editor's folder, or `None` for a path
-    /// that leaves it.
     fn file(&self, path: &str) -> Option<PathBuf> {
         let relative = Path::new(path.trim_start_matches('/'));
         if relative.as_os_str().is_empty() {

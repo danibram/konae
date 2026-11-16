@@ -14,7 +14,6 @@ describe("SQL console statements", () => {
     expect(classifySql("PRAGMA user_version = 3").read).toBe(false);
   });
 
-  /** The bug this pins: only `=` counted as setting a pragma, so the call form read as a read. */
   test("a pragma set through its argument form is a write", () => {
     expect(classifySql("PRAGMA writable_schema(1)").read).toBe(false);
     expect(classifySql("PRAGMA user_version(5)").read).toBe(false);
@@ -24,7 +23,6 @@ describe("SQL console statements", () => {
     expect(classifySql("PRAGMA foreign_keys").read).toBe(true);
   });
 
-  /** The bug this pins: `é` ended the word, so `éwhere` read as a WHERE clause on a delete that has none. */
   test("characters at or above U+0080 belong to the identifier around them", () => {
     expect(classifySql("DELETE FROM éwhere").danger).toContain("every row");
     expect(classifySql("DELETE FROM t\u00a0WHERE").danger).toContain("every row");
@@ -40,7 +38,6 @@ describe("SQL console statements", () => {
     expect(classifySql("SELECT 1; DROP TABLE IF EXISTS notes;").read).toBe(false);
   });
 
-  /** The bug this pins: comments were stripped before strings, so `'--'` hid the rest of the script. */
   test("a comment marker inside a string does not hide the next statement", () => {
     const kind = classifySql("SELECT '--'; DROP TABLE tasks");
     expect(kind.read).toBe(false);
@@ -57,12 +54,10 @@ describe("SQL console statements", () => {
     expect(classifySql("SELECT 1; DELETE FROM tasks").danger).toContain("every row");
     expect(classifySql("DROP TABLE IF EXISTS \"my tasks\"").danger).toContain("deletes my tasks");
     expect(classifySql("DROP TABLE main.tasks").danger).toContain("deletes tasks");
-    // A trigger body, including a CASE ... END inside it, is one statement.
     expect(classifySql("CREATE TRIGGER t AFTER INSERT ON tasks BEGIN UPDATE tasks SET done = CASE WHEN 1 THEN 1 END; END; SELECT 1").danger)
       .toBe("CREATE changes the database structure outside schema.sql. Add it to schema.sql too, so a new database gets it.");
   });
 
-  /** The bug this pins: a leading WITH made any statement read as a SELECT. */
   test("a leading WITH is classified by its main verb", () => {
     expect(classifySql("WITH x AS (SELECT 1) SELECT * FROM x")).toEqual({ read: true, danger: null });
     expect(classifySql("WITH x AS (SELECT 1) DELETE FROM tasks").danger).toContain("every row");

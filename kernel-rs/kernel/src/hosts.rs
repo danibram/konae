@@ -1,16 +1,9 @@
-//! The hosts an installation answers on (ADR-0014).
-//!
-//! `KONAE_DOMAIN` derives the public origin and the app suffix.
-//! `KONAE_PUBLIC_ORIGIN` and `KONAE_HOST_SUFFIX` win when they are set.
-//! Without the domain the Kernel answers on `http://localhost:8080` and
-//! `localhost`.
 
 use anyhow::{bail, Result};
 
 const DEFAULT_PUBLIC_ORIGIN: &str = "http://localhost:8080";
 const DEFAULT_HOST_SUFFIX: &str = "localhost";
 
-/// The origins and suffix one installation serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hosts {
     /// `KONAE_PUBLIC_ORIGIN`, or its derived value.
@@ -59,8 +52,6 @@ pub fn resolve(get: impl Fn(&str) -> Option<String>) -> Result<Hosts> {
     };
     let derived = format!("{scheme}://app.{domain}{port}");
     let public_origin = non_empty(&get, "KONAE_PUBLIC_ORIGIN").unwrap_or(derived);
-    // The home and every path address share <domain>. The editor on that host would let an
-    // app's script reach the owner's session, so the Kernel refuses to start that way (ADR-0014).
     refuse_on_domain("KONAE_PUBLIC_ORIGIN", &public_origin, &domain)?;
     Ok(Hosts {
         host_suffix: non_empty(&get, "KONAE_HOST_SUFFIX").unwrap_or_else(|| domain.clone()),

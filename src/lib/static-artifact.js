@@ -1,46 +1,16 @@
-// The static publishing contract: which Capsule files become a Build Artifact
-// and at which path each one is served. The CLI (`konae build`), the
-// editor's browser build and an app folder's scripts/build.mjs all run this
-// file, so it is plain JavaScript with no imports. Each door supplies how to
-// read a file and how to bundle a module; the rules below are the same for all.
-//
-// Pages are every .html at the Capsule root and every .html under pages/, which
-// is served without its pages/ prefix. Files under public/ are served as they
-// are, without the public/ prefix. Every other file ships only when a page, or
-// a stylesheet a page loads, references it. A page that is a fragment runs in
-// the Capsule document with styles.css and the bundled app inline. A page that
-// is a full document keeps its own head and loads the SDK through a loader that
-// writes its script tag under the page's base path.
 
-/** The attribute that marks the SDK script, so tools that rebuild a document can find it. */
 export const runtimeScriptAttribute = "data-konae-runtime";
 
-/** The SDK file a document page loads. The build adds it; a Capsule cannot hold its own. */
 export const runtimeFile = "runtime.js";
-/** Source metadata stays in app/ and never enters a Build Artifact. */
 export const sourceOnlyFiles = ["schema-transforms.json"];
 
-/**
- * The rule that finds the base path of a path address: /p/<id-or-name> and
- * everything under it. The Kernel strips that prefix before routing, so the
- * SDK and the inline pages build their Kernel URLs with it. Keep this text
- * in step with src/mcp/runtime.js, runtimeLoaderScript below and the inline
- * page in kernel-rs/kernel/src/accounts.rs. The tests
- * check that each of them carries it.
- */
 export const pathPrefixPattern = /^\/p\/([^\/]+)(\/|$)/;
 
-/** The base path of a pathname: /p/<segment> on a path address, empty at the home or on a generated hostname. */
 export function basePath(pathname) {
   const match = pathPrefixPattern.exec(pathname);
   return match ? `/p/${match[1]}` : "";
 }
 
-/**
- * The inline loader a document page carries in its head. It writes the SDK's
- * script tag under the page's base path with document.write, so the tag runs
- * before the page's own scripts, as a tag written in the head would.
- */
 export function runtimeLoaderScript() {
   return `<script>(function(){var m=/${pathPrefixPattern.source}/.exec(location.pathname);document.write('<script src="'+(m?'/p/'+m[1]:'')+'/${runtimeFile}"><\\/script>')})();</script>`;
 }
@@ -52,17 +22,12 @@ const reservedRoots = ["_konae", "oauth", ".well-known", "mcp"];
 const fetchingRels = ["stylesheet", "icon", "apple-touch-icon", "mask-icon", "manifest", "preload", "modulepreload", "prefetch"];
 const defaultBody = "<main id=app></main>";
 
-/**
- * Refuses a routing value other than "pages" or "spa". Undefined means "pages".
- * The Kernel refuses the same values with the same text at release_plan.
- */
 export function checkRouting(value) {
   if (value === undefined || value === null) return "pages";
   if (!routingModes.includes(value)) throw new Error(routingMessage);
   return value;
 }
 
-/** The served path of a Capsule file, or null when the file is not a page or a public file. */
 export function servedPath(source) {
   if (source.startsWith("public/")) return source.slice("public/".length) || null;
   if (!source.endsWith(".html")) return null;
@@ -71,35 +36,23 @@ export function servedPath(source) {
   return null;
 }
 
-/** True when the HTML is a whole document, false when it is a fragment for the Capsule body. */
 export function isDocument(html) {
   return /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype|html)[\s>]/i.test(html);
 }
 
-/** The files a fragment page runs, first held wins. */
 export const appEntries = ["src/main.tsx", "src/main.ts", "app.js"];
 
-/** The entry the build bundles into fragment pages, or null when the Capsule holds none. */
 export function appEntry(paths) {
   const held = new Set(paths);
   return appEntries.find((entry) => held.has(entry)) ?? null;
 }
 
-/**
- * The refusal for a Capsule whose entry never runs: it holds an entry, every
- * page is a whole document, and no page loads a script besides the SDK. A
- * whole document keeps its own body, so the build puts no app in it. A page
- * with no script of its own, such as a 404, passes while another page runs
- * the app. `pages` maps each page's Capsule path to its HTML. Returns null
- * when the Capsule passes.
- */
 export function entryNeverRunsMessage(paths, pages) {
   const list = [...paths];
   const entry = appEntry(list);
   if (entry === null) return null;
   const sources = list.filter((source) => !source.startsWith("public/") && servedPath(source)?.endsWith(".html"));
   const index = sources.find((source) => servedPath(source) === "index.html");
-  // Without index.html the build serves the fragment <main id=app></main>, which runs the entry.
   if (index === undefined) return null;
   for (const source of sources) {
     const html = pages[source];
@@ -109,7 +62,6 @@ export function entryNeverRunsMessage(paths, pages) {
   return `${index} is a whole document that loads no script, so ${entry} never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts ${entry} into it, or ${load}.`;
 }
 
-/** True when the page has a script element other than the SDK's tag. */
 function loadsScript(html, from) {
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   for (const match of visible.matchAll(/<script\b((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>([\s\S]*?)(?:<\/script\s*>|$)/gi)) {
@@ -125,13 +77,6 @@ function loadsScript(html, from) {
   return false;
 }
 
-/**
- * The one document shape a fragment page runs in, shared by the preview and
- * every Deployment. The compiled module is emitted as is: esbuild output may
- * end in a top-level `export`, which is only legal at module scope, and a
- * startup throw must reach the runtime's window error reporting instead of a
- * local catch.
- */
 export function renderCapsuleDocument(input) {
   const { head, body } = splitFragmentHead(input.body);
   return `<!doctype html>
@@ -139,12 +84,6 @@ export function renderCapsuleDocument(input) {
 <body>${body}<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
 }
 
-/**
- * Moves the <title> and the icon <link>s a fragment opens with into the head,
- * where the browser reads them; in the body they are ignored and the browser
- * asks for /favicon.ico. Only elements before the fragment's first other
- * element move, so an SVG's <title> further down stays where it is.
- */
 export function splitFragmentHead(fragment) {
   const lead = /^\s*(?:<!--[\s\S]*?-->|<title(?:\s[^>]*)?>[^<]*<\/title\s*>|<link\s[^>]*>)/i;
   const moved = [];
@@ -158,23 +97,10 @@ export function splitFragmentHead(fragment) {
   return moved.length ? { head: moved.join(""), body: rest.replace(/^\s+/, "") } : { head: "", body: fragment };
 }
 
-/**
- * Builds the artifact from a Capsule.
- *
- * input.paths   every file the Capsule holds, relative and with `/`
- * input.read    path -> string for text, Uint8Array for binary
- * input.compile () -> { styles, script }: styles.css and the bundled app for fragment pages
- * input.bundle  path -> { script, styles }: one module script a document page names
- * input.runtime the SDK source
- * input.head    optional markup for the head of every page
- * input.routing optional "pages" or "spa"
- * input.warn    optional, called with each root-relative URL warning (see rootRelativeWarnings)
- */
 export async function assembleStaticArtifact(input) {
   checkRouting(input.routing);
   const sourceOnly = new Set(sourceOnlyFiles);
   const held = new Set(input.paths.filter((path) => !sourceOnly.has(path)));
-  /** served path -> Capsule path */
   const sources = new Map();
   const claim = (served, source) => {
     const reserved = reservedRoots.find((root) => served === root || served.startsWith(`${root}/`));
@@ -207,7 +133,6 @@ export async function assembleStaticArtifact(input) {
   let usesRuntimeFile = false;
   const bundled = new Set();
   const pending = [];
-  /** Capsule path -> text, for the pages and stylesheets the root-relative check reads. */
   const seen = {};
   const reference = (raw, from, kind) => {
     const target = resolveReference(raw, from);
@@ -238,7 +163,6 @@ export async function assembleStaticArtifact(input) {
       continue;
     }
     scanHtml(html, served, reference);
-    // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
     const page = insertIntoHead(withoutRuntimeTags(html, served), `${input.head ?? ""}${runtimeLoaderScript()}`);
     usesRuntimeFile = true;
     files[served] = bom + page;
@@ -279,15 +203,6 @@ export async function assembleStaticArtifact(input) {
   return artifact;
 }
 
-/**
- * Drops the comment esbuild writes above each module it bundles, such as
- * `// app.js` or `/* lib/b.css *\/`. The name is relative to the folder the
- * builder ran in, so it would ship the builder's directory layout to every
- * visitor and make two builds of one Capsule from two folders differ. Only a
- * line that names a file the Capsule holds is dropped, with the `konae:`
- * namespace the editor's builder adds. esbuild drops a page's other comments
- * already, except legal ones, which stay.
- */
 export function stripModulePaths(code, held) {
   const named = (path) => held.has(path.startsWith("konae:") ? path.slice("konae:".length) : path);
   return code.replace(/^(?:\/\/ (\S+)|\/\* (\S+) \*\/)\n/gm, (line, js, css) => named(js ?? css) ? "" : line);
@@ -297,10 +212,6 @@ function withoutModulePaths(output, held) {
   return { ...output, script: stripModulePaths(output.script, held), styles: output.styles && stripModulePaths(output.styles, held) };
 }
 
-/**
- * The served path a reference names, or null when it is not a Capsule file:
- * another origin, a fragment, a data URL or a Kernel path under /_konae.
- */
 export function resolveReference(raw, from) {
   const value = raw.trim();
   if (!value || value.startsWith("#") || value.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
@@ -323,7 +234,6 @@ export function resolveReference(raw, from) {
   return target;
 }
 
-/** Calls `reference(raw, from, kind)` for every file a page fetches when it loads. */
 export function scanHtml(html, from, reference) {
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   const tags = /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g;
@@ -357,7 +267,6 @@ export function scanHtml(html, from, reference) {
   }
 }
 
-/** Calls `reference` for every url() and @import in a stylesheet. */
 export function scanCss(css, from, reference) {
   const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
   for (const match of clean.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi)) {
@@ -368,24 +277,11 @@ export function scanCss(css, from, reference) {
   }
 }
 
-/**
- * True for a URL that starts at the origin root: `/about`, `/`, `/?q=1`,
- * `/_konae/...`. A protocol-relative `//host` is not, and neither is the
- * SDK file the build supplies. On a path address such a URL leaves the app's
- * prefix, so the build and the Validation Gate warn about it.
- */
 export function isRootRelativeUrl(raw) {
   const value = raw.trim();
   return value.startsWith("/") && !value.startsWith("//") && value !== `/${runtimeFile}`;
 }
 
-/**
- * The warnings for root-relative URLs in every page and in each stylesheet a
- * page loads. `files` maps a Capsule path to its text. A file under public/
- * is served without that prefix and counts as a page when it is .html. The
- * message names the Capsule file, the URL and the relative address to write.
- * Returns `{ source, message }` in file-name order, then markup order.
- */
 export function rootRelativeWarnings(files) {
   const assetAt = (source) => (source.startsWith("public/") ? source.slice("public/".length) : source);
   const heldAt = new Map(Object.keys(files).map((source) => [assetAt(source), source]));
@@ -445,7 +341,6 @@ function verbFor(tag, attribute) {
   return "loads";
 }
 
-/** Calls `visit(raw, tag, attribute, rels)` for each URL-bearing attribute and each url() or @import in a page's markup and styles. */
 function walkHtml(html, from, visit) {
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   const tags = /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g;
@@ -473,7 +368,6 @@ function walkHtml(html, from, visit) {
   }
 }
 
-/** Calls `visit(raw, "url" | "@import")` for each url() and @import in a stylesheet. */
 function walkCss(css, visit) {
   const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
   for (const match of clean.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi)) visit(match[1] ?? match[2] ?? match[3] ?? "", "url");
@@ -493,7 +387,6 @@ function decodeEntities(value) {
   return value.replace(/&(amp|quot|#39|apos|lt|gt);/g, (_, name) => ({ amp: "&", quot: '"', "#39": "'", apos: "'", lt: "<", gt: ">" })[name]);
 }
 
-/** Removes the empty script tags a page writes for the SDK, so the loader is the only one. */
 function withoutRuntimeTags(html, from) {
   return html.replace(/<script\b([^>]*)>\s*<\/script\s*>/gi, (tag, attributes) => {
     const src = parseAttributes(attributes).src;
@@ -501,7 +394,6 @@ function withoutRuntimeTags(html, from) {
   });
 }
 
-/** Puts markup first in the head, so the SDK runs before any script the page names. */
 function insertIntoHead(html, markup) {
   if (!markup) return html;
   const head = /<head(?:\s[^>]*)?>/i.exec(html);

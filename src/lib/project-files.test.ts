@@ -52,7 +52,6 @@ describe("project file tree", () => {
     expect(() => createFile({ files: {}, directories: [] }, "Schema-Transforms.json")).toThrow("schema-transforms.json is a reserved project file");
   });
 
-  /** The bug this pins: App.js and SCHEMA.SQL passed, then overwrote the real files on a case-insensitive filesystem. */
   test("compares reserved paths and collisions without case", () => {
     const tree = { files: { "app.js": "app", "src/Label.js": "l" }, directories: ["docs"] };
     expect(() => createFile(tree, "App.js")).toThrow("app.js is a reserved project file");

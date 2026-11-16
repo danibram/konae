@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-// CONTEXT.md lists the terms written in lowercase in a sentence. This test holds the docs, the editor's words and the Kernel's
-// messages to that list, so a term keeps one spelling wherever a person reads it.
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -17,7 +15,6 @@ function lowercaseTerms(): string[] {
 
 const headings = new Set([...context.matchAll(/^\*\*([^*]+)\*\*:$/gm)].map((match) => match[1].toLowerCase()));
 
-/** "API key" becomes "API Key", "signing secret" becomes "Signing Secret". */
 const titled = (term: string) => term.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
 
 function files(dir: string, keep: (file: string) => boolean): string[] {
@@ -68,16 +65,13 @@ const code = [
   ...["kernel-rs/kernel/src", "kernel-rs/konae/src"].flatMap((dir) => files(dir, (file) => file.endsWith(".rs") || file.endsWith("-cases.json") || file.endsWith(".html"))),
 ];
 
-/** The text a person reads: CONTEXT.md without its headings, whole Markdown files, and string literals in code. */
 function readable(file: string): string {
-  // A Rust file's tests name fixtures, such as an app called "Invitation test", that nobody reads.
   const text = file.endsWith(".rs") ? read(file).split("#[cfg(test)]")[0] : read(file);
   if (file === "CONTEXT.md") return text.split("\n").filter((line) => !/^\*\*[^*]+\*\*:$/.test(line)).join("\n");
   if (file.endsWith(".md")) return text;
   return [...text.matchAll(/"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)].map((match) => match[0]).join("\n");
 }
 
-/** A capitalized term after a lowercase word or a comma is the term written with the wrong case. */
 function capitalizedUses(file: string, term: string): string[] {
   const wrong = titled(term);
   if (wrong === term) return [];

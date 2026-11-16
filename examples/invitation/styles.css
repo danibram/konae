@@ -1,5 +1,4 @@
 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400..700&display=swap');
-/* Konae design system. Change a token on :root to restyle the app. */
 :root {
   --ds-font: "Bricolage Grotesque Variable", sans-serif;
   --ds-mono: "JetBrains Mono Variable", monospace;
@@ -46,7 +45,6 @@
   --ds-space-4: 16px;
   --ds-space-6: 24px;
   --ds-space-8: 32px;
-  /* Offset shadows without blur; muted ink so one surface can stay quiet */
   --ds-shadow-sm: 2px 2px 0 #c5c1b5;
   --ds-shadow: 3px 3px 0 #bdb9ad;
   --ds-shadow-lg: 5px 5px 0 #bdb9ad;
@@ -76,7 +74,6 @@
       --ds-surface: #1c1f28;
       --ds-subtle: #262a34;
       --ds-border: #4a4f5c;
-      /* Ink stays the stroke colour in every theme; do not flip it to paper. */
       --ds-ink: #0d0e0b;
       --ds-stroke: #6b7182;
       --ds-field: #12141a;

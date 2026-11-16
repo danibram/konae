@@ -13,13 +13,6 @@ import {
 
 type Exported = { manifest: { contents: { name: PackageComponentName }[] }; downloads: Record<string, Transfer>; folder: Transfer; sourcesAhead: boolean };
 
-/**
- * The app folder as one tar. A published app comes from project_export:
- * konae.json, app/ and dist/ as the Kernel keeps them, and data/. An app not
- * published yet takes its sources and a build of them, and has no data. A
- * published app's export never builds the editor's files, so a draft that does
- * not build cannot keep its accounts and rows from leaving.
- */
 export async function createProjectExport(
   project: MiniAppProject,
   deploymentId?: string,
@@ -67,13 +60,11 @@ export async function createProjectExport(
   return { blob: new Blob([bytes], { type: "application/x-tar" }), filename: `${folder}.tar`, sourcesAhead };
 }
 
-/** The build a draft's export carries, loaded only when a draft is exported. */
 async function buildDraft(project: MiniAppProject) {
   const { buildProjectInBrowser } = await import("../runtime/browser-build");
   return buildProjectInBrowser(project);
 }
 
-/** What the editor and the project list say once an export is saved. */
 export function exportedMessage(filename: string, published: boolean, sourcesAhead: boolean) {
   if (!published) return `${filename} saved. It holds the app's files. A draft has no accounts or rows yet.`;
   return sourcesAhead

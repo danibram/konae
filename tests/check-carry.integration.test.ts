@@ -7,7 +7,6 @@ import type { PackageManifest } from "../src/lib/portable-package";
 import { downloadToFile } from "../scripts/package-files";
 import { buildKernel, importPackage, release, startKernel, type Kernel } from "./kernel-harness";
 
-// The CHECK constraints schema.sql declares travel in an export to another app.
 let root: string;
 let kernel: Kernel;
 

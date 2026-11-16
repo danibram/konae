@@ -1,14 +1,11 @@
-/* Connect a model: the design system's Dialog and Field, with the key's help under it. */
 
 .agent-settings.ui-dialog { width: min(520px, 100%); }
 .agent-settings-body { display: grid; gap: 18px; }
-/* Labels read in the body face at 13px, as every other form in the editor. */
 .agent-settings .ui-field > label { color: var(--ds-text); font: 600 13px/1.4 var(--ds-font); letter-spacing: 0; text-transform: none; }
 .agent-settings .ui-field small { font: 400 13px/1.5 var(--ds-font); }
 .agent-settings .ui-field small.is-error { color: var(--ds-danger); font-weight: 600; }
 
 .agent-settings-key { display: grid; gap: 8px; }
-/* The bar appears only after a Save that stored nothing. */
 .agent-settings-key.is-failed { padding-left: 12px; border-left: 3px solid var(--ds-danger); }
 .agent-settings-key .ui-input { font-family: var(--ds-mono); letter-spacing: .06em; }
 

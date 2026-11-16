@@ -107,12 +107,10 @@ const UsagePage = lazy(() => import("./components/UsagePage").then((module) => (
 
 const DesignSystem = lazy(() => import("./components/DesignSystem").then((module) => ({ default: module.DesignSystem })));
 
-/** Shortcut hints follow the keyboard in front of the owner. */
 const modKey = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
 
 export function App() {
   if (window.location.pathname === "/platform-access") return <PlatformAccess />;
-  // Public: outside PlatformGate, so a signed-out visitor is not sent to sign-in.
   if (window.location.pathname === "/design-system") return <PublicDesignSystem />;
   return <PlatformGate />;
 }
@@ -149,7 +147,6 @@ function WorkspaceGate({ ownerSession, refreshOwnerSession }: { ownerSession: Ex
     void sources.load().then((value) => { if (active) setLoaded(value); }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { active = false; };
   }, [sources]);
-  // A boot that took long enough to show its skeleton keeps it for a moment, so it never flashes.
   const booting = useLoadingHold(!loaded, { sinceNavigation: true });
   if (error) return <main className="platform-page"><div className="platform-main"><CardForPlatformError message={error} onRetry={() => window.location.reload()} /></div></main>;
   if (!loaded || booting) return <BootShell ownerSession={ownerSession} />;
@@ -177,12 +174,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [route, setRoute] = useState(() => {
     const requested = parseRoute(window.location.pathname);
     if (requested.screen !== "editor" || loaded.projects.some((item) => item.id === requested.projectId)) return requested;
-    // A published app with no editor files opens on its data. An unpublished one is on the list below; any other id has no page.
     if (loaded.missing.some((item) => item.id === requested.projectId)) return requested;
     return { screen: "not-found" as const, what: "project" as const, path: window.location.pathname };
   });
   const screen = route.screen;
-  // A link to an unpublished app this account holds without editor files says so, and the address bar stops naming it.
   const [activeFile, setActiveFile] = useState<EditorFile>("app.js");
   const [selectedPath, setSelectedPath] = useState("app.js");
   const [newEntry, setNewEntry] = useState<"file" | "folder" | null>(null);
@@ -195,10 +190,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [viewport, setViewport] = useState<"desktop" | "mobile">("desktop");
   const [deployOpen, setDeployOpen] = useState(false);
   const [deployment, setDeployment] = useState<DeploymentReceipt | null>(null);
-  // Null follows the app: a published app opens Data on its live rows, a draft on the test rows.
   const [databaseChoice, setDatabaseTarget] = useState<"local" | "deployed" | null>(null);
   const [authView, setAuthView] = useState<"rules" | "users" | "integrations">("rules");
-  // Counts each request to put the cursor in Access > Users' invite field.
   const [inviteFocus, setInviteFocus] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -212,10 +205,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [domainVersion, setDomainVersion] = useState(0);
-  // A platform tool the agent wants to run that waits for the owner (ADR-0007).
   const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
   const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
-  // The agent's publish tool waits on the Deploy dialog the owner drives.
   const resolveAgentPublish = useRef<((outcome: PublishOutcome) => void) | null>(null);
   const deploymentsRef = useRef(deployments);
   deploymentsRef.current = deployments;
@@ -288,25 +279,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const keyStore = useMemo(() => createAgentKeyStore(localStorage, ownerSession.ownerId), [ownerSession.ownerId]);
   const [explorerOpen, setExplorerOpen] = useState(false);
-  // Three widths: a phone shows one section at a time; a wide window keeps
-  // Describe in a rail beside the stage; in between, Describe is a section.
   const compact = useMediaQuery("(max-width: 900px)");
   const wide = useMediaQuery("(min-width: 1200px)");
-  // On a wide window Describe keeps a rail; the person can fold it to a strip and give the stage its width.
   const [railOpen, setRailOpen] = useState(() => localStorage.getItem("konae:describe-rail") !== "closed");
   const rail = wide && !compact && railOpen;
   const railFolded = wide && !compact && !railOpen;
   const foldRail = (open: boolean) => {
     setRailOpen(open);
     try { localStorage.setItem("konae:describe-rail", open ? "open" : "closed"); } catch { /* The choice lasts this visit. */ }
-    // Focus stays on the control that took the place of the one pressed.
     requestAnimationFrame(() => document.getElementById(open ? "describe-rail-fold" : "describe-rail-open")?.focus());
   };
   const [compactPanel, setCompactPanel] = useState<PanelId>("preview");
-  // The section on the stage. Choosing another never closes what the person opened.
   const [stage, setStage] = useState<PanelId>("preview");
   const [codeShare, setCodeShare] = useState(() => Number(localStorage.getItem("konae:code-share")) || 50);
-  // A panel mounts the first time it is shown and stays mounted, so a section keeps its state.
   const [visited, setVisited] = useState<ReadonlySet<PanelId>>(() => new Set<PanelId>(["preview", "agent"]));
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [exportAhead, setExportAhead] = useState(false);
@@ -332,7 +317,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const displayedLayout: LayoutState = compact
     ? { root: stack(workbenchPanels, workbenchPanels.indexOf(compactPanel)), closed: [], focused: compactPanel }
     : stageLayout(shownSection, { rail, codeShare });
-  /** The only change the stage takes from the frame is the width of the Files column. */
   const updateLayout = (next: LayoutState) => {
     if (compact) {
       if (next.focused) setCompactPanel(next.focused);
@@ -343,7 +327,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       localStorage.setItem("konae:code-share", String(next.root.sizes[0]));
     }
   };
-  /** Shows a section: on the stage, in the compact view, or, for Describe beside a stage, its composer. */
   const show = (panel: PanelId) => {
     if (panel === "explorer") return;
     setVisited((current) => current.has(panel) ? current : new Set(current).add(panel));
@@ -361,7 +344,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [proposalPreview, setProposalPreview] = useState<ProposalPreview | null>(null);
   const [proposalPreparation, setProposalPreparation] = useState<{ proposal: AgentProposal; error?: string } | null>(null);
   const [previewFrame, setPreviewFrame] = useState<HTMLIFrameElement | null>(null);
-  // Data, Uploads, Access, What happened and App settings load while the browser is idle, so their first open shows no loader.
   useEffect(() => {
     const preload = () => { for (const panel of [CapabilityWorkspace, WhatHappenedView, AppSettingsDialog]) panel.preload().catch(() => {}); };
     if (typeof window.requestIdleCallback === "function") {
@@ -373,15 +355,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   }, []);
   const activeDeployment = deployments[project.id] ?? null;
   const sourceDigest = useSourceDigest(activeDeployment ? project : null);
-  // Deploy stays quiet while a new app is still what New project wrote, since publishing the placeholder gives it a live address.
   const createdDigest = activeDeployment ? null : readCreatedDigest(workspaceStorage, project.id);
   const currentDigest = useSourceDigest(createdDigest ? project : null);
   const asCreated = createdDigest !== null && (createdDigest === "pending" || currentDigest === null || currentDigest === createdDigest);
   useEffect(() => {
-    // Once the app changes or deploys, it is no longer the placeholder, even if an edit is undone later.
     if (createdDigest && createdDigest !== "pending" && (activeDeployment || (currentDigest !== null && currentDigest !== createdDigest))) forgetCreatedDigest(workspaceStorage, project.id);
   }, [createdDigest, currentDigest, activeDeployment, workspaceStorage, project.id]);
-  // True, false, or null when the release names no digest; null shows no marker and the dialog does not guess.
   const sameAsLive = sameAsDeployed(project, activeDeployment, sourceDigest);
   const undeployed = sameAsLive === false;
   const deployedDatabase = useMemo(() => activeDeployment ? new HostedDatabaseClient(activeDeployment.id) : undefined, [activeDeployment]);
@@ -408,9 +387,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       try {
         persistWorkspace(projects, project.id, deployments, workspaceStorage);
       } catch (error) {
-        // A full or unavailable localStorage must say so. Reporting "Saving"
-        // forever, or worse "Saved locally", would hide that the work of the
-        // whole session is only in memory.
         setSaveError(error instanceof Error ? error.message : String(error));
       }
     }, 350);
@@ -583,7 +559,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setSaveAttempt((value) => value + 1);
   };
 
-  // Opening another file leaves the textarea wherever it was; the gutter follows it.
   useEffect(() => {
     if (gutterRef.current) gutterRef.current.scrollTop = editorRef.current?.scrollTop ?? 0;
   }, [activeFile]);
@@ -606,19 +581,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         toggleExplorer({ focus: true });
         return;
       }
-      // A fold of the section on stage goes back to the preview; anything else is shown.
       const target = action.kind === "fold" && shownSection === action.panel && action.panel !== "preview" ? "preview" : action.panel;
       show(target);
-      // Focus follows the keyboard: showing a section hides whatever was in front
-      // of it, and leaving focus on that hidden body drops the next keystrokes.
       if (!(target === "agent" && rail)) requestAnimationFrame(() => focusPanelTab(target));
     };
     window.addEventListener("keydown", shortcut);
     return () => window.removeEventListener("keydown", shortcut);
   });
 
-  // The sections that load on first open are fetched once the workbench settles,
-  // so opening one shows it at once instead of a loader that flashes for a few frames.
   useEffect(() => {
     if (screen !== "editor") return;
     const timer = window.setTimeout(() => {
@@ -629,7 +599,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return () => window.clearTimeout(timer);
   }, [screen]);
 
-  // On a phone the open file is a chip in a row that scrolls; keep it in view.
   useEffect(() => {
     if (!compact || shownSection !== "code") return;
     document.querySelector(".compact-file-list [aria-current='page']")?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -644,8 +613,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     });
   };
 
-  // Tree edits are computed before React sees them, because a throw inside a
-  // state updater escapes this try/catch and takes the whole editor down.
   const addTreeEntry = () => {
     if (!newEntry) return;
     if (!newEntryPath.trim()) {
@@ -714,11 +681,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPendingDelete(null);
   };
 
-  /**
-   * Rebuilds the preview. Run and its shortcut also bring the Preview forward,
-   * beside Files when Files is showing, so the person sees what the edit did.
-   * A failed build shows nothing new; the "Build failed" alert says why.
-   */
   const compilePreviewSnapshot = async (snapshot: MiniAppProject): Promise<MiniAppProject | null> => {
     const version = ++previewBuildVersion.current;
     setOperationError("");
@@ -781,7 +743,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         if (!compiled || JSON.stringify(projectRef.current) !== JSON.stringify(snapshot)) return;
         setPreviewProject(compiled);
         setPreviewEpoch((value) => value + 1);
-        // Files already stands beside the preview; elsewhere the preview comes forward.
         if (reveal && shownSection !== "code") show("preview");
       })
       .catch((error) => setOperationError(`Build failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -790,7 +751,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   useEffect(() => {
     if (sources.hasSources(project.id)) return;
     let cancelled = false;
-    // A build failure belongs to the project that failed. Opening another one starts clean.
     setOperationError("");
     const snapshot = project;
     void compilePreviewSnapshot(snapshot).then((compiled) => {
@@ -806,7 +766,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (route.screen === "editor" && projects.some((item) => item.id === route.projectId)) document.title = `${project.name} · Konae`;
   }, [route, project.name, projects]);
 
-  // The sections load their code while the person reads the preview, so opening one shows it at once.
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void import("./components/CapabilityWorkspace");
@@ -816,29 +775,21 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return () => window.clearTimeout(timer);
   }, []);
 
-  /**
-   * ADR-0007 lever 7: pi-agent-core, the provider catalogs and sql.js are imported
-   * on the first prompt, never at editor start.
-   */
   const ensureAgent = () => {
     if (agentRef.current) return Promise.resolve<KonaeAgentHandle | null>(agentRef.current);
     if (!agentLoad.current) {
       agentLoad.current = import("./agent/harness")
         .then(({ createKonaeAgent }) => {
           const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
-            // The Validation Gate's preview-rows stage needs the live database, not just a fresh one.
             liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
             sourceFiles: () => projectRef.current,
-            // The other half of the gate: what the running preview actually threw.
             previewErrors: () => hostLifecycleRef.current!.lifecycle.appliedHost.previewErrors(),
-            // What release_plan reads, as the Deploy dialog reads it: secret names and the installation's hosts.
             releaseFacts: async () => {
               const current = projectRef.current;
               const deploymentId = deploymentsRef.current[current.id]?.id;
               const facts = await readReleaseFacts(current.id, deploymentId);
               return { ...facts, ...(Object.hasOwn(current.manifest, "fileAccess") ? { fileAccess: current.manifest.fileAccess } : {}) };
             },
-            // ADR-0007: the owner's own MCP session, pinned to the open project.
             platform: {
               listTools: (signal) => platformMcp.listTools(signal),
               call: (name, args, signal) => platformMcp.call(name, args, signal),
@@ -879,12 +830,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return agentLoad.current;
   };
 
-  // The session is never allowed to keep reasoning about a Project it no longer
-  // edits — including a Capsule file the owner changed by hand. `retarget` knows
-  // the difference: it re-seeds the workspace and drops a pending proposal that
-  // was validated against files that have since moved, rather than letting Apply
-  // write it onto a Capsule the gate never saw. An Apply of its own is not a
-  // change from outside: `reseed` has already told the session about it.
   useEffect(() => {
     agentRef.current?.retarget(project);
   }, [project.id, project.manifest, project.files]);
@@ -895,7 +840,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   useEffect(() => () => agentRef.current?.dispose(), []);
 
-  // The address bar leads: a reload or a back button lands on the same project.
   useEffect(() => {
     const follow = () => { invalidateProjectSelection(); setRoute(parseRoute(window.location.pathname)); };
     window.addEventListener("popstate", follow);
@@ -913,7 +857,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       && (!sources.hasSources(project.id) || sources.isLoaded(project.id))) return;
     const selectionVersion = ++projectSelectionVersion.current;
     const target = projects.find((item) => item.id === route.projectId);
-    // A link to a project this workspace does not have says so; the list would hide the wrong address.
     if (!target) {
       if (!missing.some((item) => item.id === route.projectId)) {
         setRoute({ screen: "not-found", what: "project", path: window.location.pathname });
@@ -949,14 +892,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setStage("preview");
     setCompactPanel("preview");
     show(target);
-    // On a phone the composer would raise the keyboard, so a new app's Describe takes focus at its heading.
     if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
   const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean> => {
-    // The Validation Gate is structural here, not just a disabled button in the
-    // panel. The merge refuses a proposal whose untouched files have moved since
-    // the gate saw them, because that combination was never validated.
     const applied = applyProposal(project, proposal);
     if (!applied) return false;
     const approvedPreview = proposalPreview?.proposal === proposal ? proposalPreview : null;
@@ -994,7 +933,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       agentRef.current?.discard();
     },
     providers: PROVIDERS,
-    // An unsent draft waits per project in this browser, so a description typed in New project survives leaving and a reload.
     draftKey: project.id,
     draftStorage: workspaceStorage,
   });
@@ -1068,11 +1006,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const proposalError = proposalPreparation?.proposal === agentThread.state.proposal ? proposalPreparation.error : undefined;
 
   const previewDocument = useMemo(() => createPreviewDocument(activePreviewProject), [activePreviewProject]);
-  /**
-   * Assigning a new srcDoc to a live iframe is a navigation that adds a browser
-   * history entry, so the editor's Back button stepped through old previews.
-   * A new document gets a new iframe instead.
-   */
   const previewDocumentKey = useMemo(() => documentFingerprint(previewDocument), [previewDocument]);
 
   const resetProject = () => {
@@ -1094,7 +1027,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const { createProjectExport, exportedMessage } = await import("./lib/export-project");
       const result = await createProjectExport(project, activeDeployment?.id);
       downloadBlob(result.blob, result.filename);
-      // The editor saves between releases, so the published app may run older sources than app/ holds.
       toast(exportedMessage(result.filename, Boolean(activeDeployment), result.sourcesAhead));
       if (result.sourcesAhead) setExportAhead(true);
     } catch (error) {
@@ -1116,18 +1048,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setPublishing(true);
     setDeployError("");
     try {
-      // The release names the revision written by this save. A save failure
-      // stops publishing before the Kernel can change the running app.
       synchronized.current.set(project.id, JSON.stringify(project));
       const observedSourcesRevision = await sources.save(project);
       serverSnapshots.current.set(project.id, JSON.stringify(project));
       const artifact = await buildProjectInBrowser(project);
-      // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
       const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision);
       const record = published.receipt;
-      // Taking the release's manifest is not an edit of the person's, so "Edited" keeps its time.
       const releasedProject = { ...project, manifest: record.manifest };
       const releasedSnapshot = JSON.stringify(releasedProject);
       sources.markPublished(project.id, published.sourcesRevision, releasedProject);
@@ -1141,7 +1069,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
       resolveAgentPublish.current = null;
     } catch (error) {
-      // The owner kept the data: nothing was published and nothing failed.
       if (error instanceof SchemaChangeDeclined) return;
       if (isSignedOutError(error)) refreshOwnerSession();
       setDeployError(error instanceof Error ? error.message : String(error));
@@ -1158,7 +1085,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     pushRoute(next);
   };
 
-  // The app the owner last had open, so Projects can put focus back on its card.
   const leftProject = useRef<string | undefined>(undefined);
   if (route.screen === "editor") leftProject.current = route.projectId;
   const goToProjects = () => {
@@ -1207,9 +1133,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const described = description?.trim() ?? "";
     arrival.current = template === "scratch" || described ? "agent" : "preview";
     const base = createWorkspaceProject(name, projects);
-    // What the person wrote in the New project dialog waits as this project's unsent draft, and Describe opens on it.
     if (described) workspaceStorage.setItem(describeDraftKey(base.id), described);
-    // "No template" is a private plain list titled with the name, whose page declares what the person wrote; only a template made for visitors starts public.
     const next = template === "scratch" ? plainListProject(base, described) : applyTemplate(base, template);
     rememberCreatedDigest(workspaceStorage, next);
     setProjects((current) => [...current, next]);
@@ -1231,7 +1155,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     });
   };
 
-  /** Deletes an editable project; it leaves the lists at once, so a pending save cannot bring it back. */
   const deleteEditableProject = async (item: ProjectMetadata, name: string) => {
     await sources.deleteProject(item.id, name);
     synchronized.current.delete(item.id);
@@ -1297,7 +1220,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const signInHref = platformAccessHref(window.location.pathname);
 
   const actionsRefusal = actionReadout(project.files["actions.json"] ?? "", project.manifest.visibility).refusal;
-  // While the description waits for a model and the app is the placeholder New project made, Describe is the next step, not Deploy.
   const quietDeploy = asCreated && agentThread.draft.trim() !== "";
   const sections: { id: PanelId; label: string; icon: typeof Code2 }[] = [
     { id: "preview", label: "Preview", icon: Play },
@@ -1324,22 +1246,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const reveal = show;
 
-  /**
-   * Opens actions.json in Files with the caret on what the refusal names, and
-   * moves focus there, so a keyboard user lands on the line to fix.
-   */
   const openRefusal = () => {
     const source = projectRef.current.files["actions.json"] ?? "";
     const spot = refusedSpot(source, actionReadout(source, projectRef.current.manifest.visibility).refusal);
     setActiveFile("actions.json");
     setSelectedPath("actions.json");
     reveal("code");
-    // Wait two frames, so Files has rendered and a closing dialog has handed focus back.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const editor = editorRef.current;
       if (!editor) return;
       editor.focus();
-      // The caret waits at the statement's end, where a LIMIT goes, so typing adds to the query instead of replacing it.
       const end = spot?.value?.end ?? spot?.index ?? 0;
       editor.setSelectionRange(end, end);
       const before = editor.value.slice(0, end).split("\n");
@@ -1357,7 +1273,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const filesShowing = shownSection === "code";
 
-  /** The File list is part of Files: opening it shows Files, and it stays until closed. */
   const toggleExplorer = ({ focus = false }: { focus?: boolean } = {}) => {
     if (explorerOpen && filesShowing) {
       setExplorerOpen(false);
@@ -1371,7 +1286,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const runtimeProblems = previewProblems.filter((problem) => problem.kind === "error" || problem.kind === "unhandledrejection").length;
   const schemaProblem = previewProblems.find((problem) => problem.kind === "schema");
 
-  // Tab indents. Escape first, then Tab, leaves the editor, so the keyboard is never trapped.
   const indentWithTab = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Escape") {
       codeTabEscape.current = true;
@@ -1501,8 +1415,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               onChange={(event) => updateFile(event.target.value)}
               onKeyDown={indentWithTab}
               aria-describedby="code-editor-keys"
-              // The textarea is the only scroller; the gutter is dragged along by
-              // hand, or every number is wrong from the first scroll onwards.
               onScroll={(event) => {
                 if (gutterRef.current) gutterRef.current.scrollTop = event.currentTarget.scrollTop;
               }}
@@ -1628,7 +1540,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const describedRefusal = agentThread.footer.kind === "blocked" && !(rail || shownSection === "agent");
   const openDeploy = () => {
     setDeployment(null); setDeployError(""); setDeployOpen(true); refreshOwnerSession();
-    // A publish from an app folder changes the Deployment behind the editor's back, so read it again before the dialog compares.
     if (activeDeployment) void platformMcp.call<{ deployment: DeploymentReceipt | null }>("project_inspect", { projectId: project.id })
       .then((inspected) => { if (inspected.deployment) setDeployments((current) => ({ ...current, [project.id]: inspected.deployment! })); }, () => {});
   };
@@ -1794,10 +1705,8 @@ const problemLabels: Record<string, string> = {
   unhandledrejection: "Unhandled rejection",
 };
 
-/** Panels the workbench lays out. The File list is drawn inside Files instead. */
 const workbenchPanels: PanelId[] = panelIds.filter((id) => id !== "explorer");
 
-/** How many actions the file declares, counted from the JSON even when the check refuses it. */
 function listedActions(source: string): number {
   try {
     const actions = (JSON.parse(source) as { actions?: unknown }).actions;
@@ -1807,7 +1716,6 @@ function listedActions(source: string): number {
   }
 }
 
-/** Matches a media query and follows it as the window changes. */
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
@@ -1820,7 +1728,6 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-/** How many rows the published app holds, read when the preview is in view. Null until known. */
 function useLiveRowCount(database: HostedDatabaseClient | undefined, active: boolean): number | null {
   const [rows, setRows] = useState<number | null>(null);
   useEffect(() => {
@@ -1835,11 +1742,6 @@ function useLiveRowCount(database: HostedDatabaseClient | undefined, active: boo
   return rows;
 }
 
-/**
- * Above actions.json: the check's refusal in full, never clipped, or what each
- * action does, folded to one line until opened.
- */
-/** The button that takes a refusal to its line: the action it names, or the file. */
 function refusedLabel(source: string, refusal: string): string {
   const spot = refusedSpot(source, refusal);
   return spot ? `Go to ${spot.action}` : "Go to actions.json";
@@ -1873,7 +1775,6 @@ function describeDelete(project: MiniAppProject, path: string | null): string {
 type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 const createdDigestKey = (projectId: string) => `created-digest:${projectId}`;
 
-/** What New project wrote, by digest, so the workbench knows while the app is still that placeholder. "pending" until the digest is known. */
 function rememberCreatedDigest(storage: KeyStorage, project: MiniAppProject) {
   try { storage.setItem(createdDigestKey(project.id), "pending"); } catch { return; }
   void cachedSourceDigest(project).then((digest) => {

@@ -4,10 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// "notify": { "to": "owner" } sends to the app's contact email in konae.json.
-// A publish fills it with the owner's email when the app has none, the owner
-// changes it with contact_email_set, later publishes keep it, and a publish
-// from a folder whose konae.json names an address takes that one.
 let root: string;
 let kernel: Kernel;
 
@@ -45,14 +41,12 @@ test("the owner sets the app's contact email in konae.json, and a later publish 
   await release(kernel.owner, payload(id), id);
   expect((await read()).contactEmail).toBe("team@contact.test");
 
-  // A folder's konae.json names its own address, which a publish from it takes.
   await release(kernel.owner, payload(id, { contactEmail: "Folder@Contact.test" }), id);
   expect((await read()).contactEmail).toBe("folder@contact.test");
   await expect(release(kernel.owner, payload(id, { contactEmail: "nobody" }), id)).rejects.toThrow("The contact email is not a valid email address.");
 
   expect(await kernel.owner.call("contact_email_set", { projectId: receipt.id, email: null })).toMatchObject({ contactEmail: null, ownerNotices: ["notes.add"] });
   expect((await settings()).contactEmail).toBeUndefined();
-  // An app with no address gets the owner's again from the next publish.
   await release(kernel.owner, payload(id), id);
   expect((await read()).contactEmail).toBe("owner@contact.test");
 }, 120_000);

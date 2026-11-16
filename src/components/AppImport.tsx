@@ -20,11 +20,6 @@ type Props = {
   onSignedOut: () => void;
 };
 
-/**
- * Imports an exported app folder into this app. The Kernel backs up what
- * the import replaces first, and the Data panel's Backups restores it.
- * Rows are never merged.
- */
 export function AppImport({ deploymentId, project, visibility, onImported, onSignedOut }: Props) {
   const [folder, setFolder] = useState<{ name: string; read: ImportedFolder } | null>(null);
   const [replace, setReplace] = useState<ImportReplace>("both");

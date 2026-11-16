@@ -15,15 +15,12 @@ import "./app-settings.css";
 
 type Props = {
   projectName: string;
-  /** The app an import replaces, and the visibility its imported sources keep. */
   importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
   onClose: () => void;
   onSignedOut: () => void;
-  /** The generated address moved; the editor shows the new url everywhere. */
   onAddressMoved?: (url: string) => void;
   signInHref: string;
-  /** Downloads the app folder, as More > Export does. */
   onExport?: () => void;
 };
 
@@ -35,12 +32,10 @@ const sections: { id: Section; label: string }[] = [
 ];
 
 export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
-  // Everyday settings apart from moving the app; every part stays mounted, so a switch loses nothing typed.
   const [section, setSection] = useState<Section>("addresses");
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
   const [reading, setLoading] = useState(Boolean(deploymentId));
-  // The loader follows the hold. A quick read shows none, and once shown it stays 400 ms.
   const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -203,7 +198,6 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   </Dialog>;
 }
 
-/** Moves the generated address to another name. The Kernel checks the name and its refusal is shown as it comes; the change counts once domain_read shows the new address. */
 function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOut }: { deploymentId: string; url: string; disabled: boolean; onMoved: (url: string) => void; onSignedOut: () => void }) {
   const current = hostnameLabel(url);
   const [name, setName] = useState(current);
@@ -263,7 +257,6 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
 
 type PathConfirmation = { kind: "accept"; change: PathChange; message: string } | { kind: "remove-name" };
 
-/** The path address of the app: its switch, its addresses and its name. Each change reads the path back before it reports success. */
 function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: string; signInHref: string; onSignedOut: () => void }) {
   const [view, setView] = useState<PathView | null>(null);
   const [reading, setLoading] = useState(true);
@@ -299,7 +292,6 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
     return () => { current = false; };
   }, [deploymentId, reload, onSignedOut]);
 
-  // A change counts only when path_read shows it. A shared-origin refusal asks the owner, and the Kernel's words are the ones shown.
   const apply = async (next: PathChange, operation: () => Promise<unknown> = () => setPath(deploymentId, next)) => {
     if (!view || busy) return;
     setBusy(true);
@@ -327,7 +319,6 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
     } finally { if (alive.current) setBusy(false); }
   };
 
-  // The Kernel decides whether this app has accounts; its path.shared-origin refusal opens the confirmation with its own words.
   const turnOn = (next: PathChange) => { void apply(next); };
 
   const checked = name.trim() ? checkPathName(name) : null;

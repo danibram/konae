@@ -11,21 +11,12 @@ type Props = {
   sessionConfig: AgentSessionConfig;
   onSessionConfigChange: (config: AgentSessionConfig) => void;
   keyStore: AgentKeyStore;
-  /** Stored keys are invisible to React, so the panel needs telling they moved. */
   onKeyStoreChange?: () => void;
-  /** Defaults to the curated catalogue; the integrator may pass its own. */
   providers?: readonly ProviderConfig[];
 };
 
 const customOption = "__custom__";
 
-/**
- * Agent configuration only: which provider answers, which model, and the key
- * that pays for it. The conversation itself lives in the editor's agent panel;
- * a modal is the wrong place to watch work happen. A person who does not write
- * code meets this dialog on day one, so it says what a key is, where to get
- * one, who bills for it, and what Save does.
- */
 export function AgentSettingsModal({
   open,
   onClose,
@@ -38,7 +29,6 @@ export function AgentSettingsModal({
   const [keyDraft, setKeyDraft] = useState("");
   const [keyVersion, setKeyVersion] = useState(0);
   const [editingKey, setEditingKey] = useState(false);
-  // Set only by a Save that stored nothing, so an empty form never looks wrong.
   const [failure, setFailure] = useState("");
   const firstFieldRef = useRef<HTMLSelectElement>(null);
   const keyFieldRef = useRef<HTMLInputElement>(null);
@@ -53,7 +43,6 @@ export function AgentSettingsModal({
   const askingForKey = key === "missing" || editingKey;
 
   useEffect(() => {
-    // An unsaved key must not linger in component state after the dialog closes.
     if (open) return;
     setKeyDraft("");
     setEditingKey(false);
@@ -69,7 +58,6 @@ export function AgentSettingsModal({
   }
 
   function saveKey() {
-    // Enter in another field submits the form too; only a form that asks for a key can fail to save one.
     if (!askingForKey) return;
     const value = keyDraft.trim();
     if (!value) {
@@ -88,7 +76,6 @@ export function AgentSettingsModal({
     setFailure("");
     setKeyVersion((version) => version + 1);
     onKeyStoreChange?.();
-    // Back to Describe, where the composer holds what the person wrote.
     onClose();
   }
 

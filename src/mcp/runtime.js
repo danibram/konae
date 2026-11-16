@@ -1,5 +1,4 @@
 (() => {
-  // A path address answers at /p/<id-or-name>/ and the Kernel strips that prefix, so every Kernel URL carries it.
   const prefix = /^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);
   const base = prefix ? '/p/' + prefix[1] : '';
   const endpoint = base + '/_konae/mcp';
@@ -33,7 +32,6 @@
     const result = await rpc('tools/call', { name, arguments: args });
     if (result.isError) {
       const error = new Error(result.content?.[0]?.text || 'Runtime tool failed.');
-      // A visitor without a session gets this for anything not declared anonymous.
       if (error.message === 'authentication-required') error.status = 401;
       throw error;
     }
@@ -54,13 +52,10 @@
     return value;
   }
 
-  // The Kernel serves the file on the app's own origin, which connect-src
-  // 'self' and img-src 'self' allow; a Blob URL cannot be fetched again.
   function fileUrl(id) {
     return base + '/_konae/files/' + encodeURIComponent(fileId(id));
   }
 
-  // Sends the whole file in one request, which completes the transfer.
   async function sendWhole(transferId, bytes) {
     const response = await fetch(base + '/_konae/transfers/' + encodeURIComponent(transferId), {
       method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: bytes,

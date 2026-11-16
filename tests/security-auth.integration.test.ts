@@ -7,7 +7,6 @@ import { McpClient } from "../src/mcp/client";
 const processes: ReturnType<typeof Bun.spawn>[] = [];
 const roots: string[] = [];
 const password = "security-auth-password-2026";
-// A random base keeps parallel runs of this suite off each other's Kernels.
 let sequence = Math.floor(Math.random() * 180);
 
 beforeAll(async () => {
@@ -182,8 +181,6 @@ describe("authentication cookie isolation", () => {
       await expect(app.client("/mcp", app.host, cookie).call("session_inspect")).rejects.toThrow();
       expect((await app.client("/_konae/mcp", second, cookie).call<{ role: string }>("auth_session")).role).toBe("anonymous");
     }
-    // The prefixed app cookie is scoped to its own host: another app does not know the session,
-    // and the editor host does not accept an app session as an owner.
     const prefixed = `__Host-konae_app_session=${appToken}`;
     expect((await app.client("/_konae/mcp", first, prefixed).call<{ role: string }>("auth_session")).role).toBe("member");
     expect((await app.client("/_konae/mcp", second, prefixed).call<{ role: string }>("auth_session")).role).toBe("anonymous");

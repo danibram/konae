@@ -84,7 +84,6 @@ describe("HTTP security contract", () => {
           expect(response.headers.has("access-control-allow-origin")).toBe(false);
           await response.arrayBuffer();
         }
-        // The file read path answers GET only, and an unknown file is not found.
         const file = await fetch(`${url}/_konae/files/${crypto.randomUUID()}`, {
           method, headers: { host, cookie, "x-konae-admin-key": setupKey }, redirect: "manual",
         });
@@ -152,7 +151,6 @@ async function publish(id: string, visibility: "public" | "private", files: Reco
   } finally { await client.cancel(transfer.transferId); }
 }
 
-/** The CSP hash source of every inline script, computed the way a browser does. */
 function inlineScriptHashes(html: string) {
   return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script/gi)]
     .map(match => match[1].replace(/\r\n?/g, "\n"))
@@ -188,8 +186,6 @@ describe("isolation of hosted code", () => {
     expect(policy.get("script-src")).not.toContain("'unsafe-eval'");
     expect(page.headers.get("x-frame-options")).toBe("DENY");
     expect(page.headers.get("strict-transport-security")).toBeNull();
-    // A sub-resource and the 404 for an unknown path carry the policy too.
-    // The SVG's own script gets no hash, so it cannot run when opened directly.
     for (const [route, status] of [["/logo.svg", 200], ["/some/client/route", 404]] as const) {
       const response = await fetch(url + route, { headers: { host } });
       expect(response.status).toBe(status);
@@ -247,11 +243,9 @@ describe("isolation of hosted code", () => {
         expect((await response.json()).error).toBe("Administration refuses requests from app origins.");
       }
     }
-    // A host under the app suffix that is not yet a deployment is refused the same way.
     const unknown = await fetch(`${url}/mcp`, { method: "POST", body: adminCall, headers: { cookie, origin: `http://${editor.replace("127.0.0.1", "unpublished-app.localhost")}`, "content-type": "application/json" } });
     expect(unknown.status).toBe(403);
     expect((await unknown.json()).error).toBe("Administration refuses requests from app origins.");
-    // Owner sign-in, sign-out and the OAuth flow refuse an app origin too.
     for (const route of ["/_konae/owner/login", "/_konae/owner/signup", "/_konae/owner/logout", "/oauth/token"]) {
       const form = route === "/oauth/token";
       const response = await fetch(url + route, {
@@ -261,7 +255,6 @@ describe("isolation of hosted code", () => {
       expect(response.status).toBe(403);
       await response.arrayBuffer();
     }
-    // The editor's own origin still reaches administration.
     const own = await fetch(`${url}/mcp`, { method: "POST", body: adminCall, headers: { cookie, origin: url, "content-type": "application/json" } });
     expect(own.status).toBe(200);
   });
@@ -294,16 +287,13 @@ describe("isolation of hosted code", () => {
     const member = signup.headers.get("set-cookie")!.split(";")[0];
     const own = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: appHost, cookie: member, "content-type": "application/json" }, body: runtimeCall("auth_session") });
     expect((await own.json()).result.structuredContent.result.role).toBe("member");
-    // A page on one app posting to another app's runtime is refused on origin.
     const crossed = await fetch(`${url}/_konae/mcp`, {
       method: "POST", body: runtimeCall("auth_session"),
       headers: { host: other, origin: `http://${appHost}`, "sec-fetch-site": "same-site", cookie: member, "content-type": "application/json" },
     });
     expect(crossed.status).toBe(403);
-    // The session of one app is unknown to every other app.
     const reused = await fetch(`${url}/_konae/mcp`, { method: "POST", headers: { host: other, cookie: member, "content-type": "application/json" }, body: runtimeCall("auth_session") });
     expect((await reused.json()).result.structuredContent.result.role).toBe("anonymous");
-    // Sign-in on another app's host is refused from a foreign app origin as well.
     const login = await fetch(`${url}/_konae/auth/login`, {
       method: "POST", headers: { host: other, origin: `http://${appHost}`, "content-type": "application/json" },
       body: JSON.stringify({ email: "member@cross-app.test", password: "cross-app-password-2026" }),

@@ -25,22 +25,11 @@ type Props = {
   thread: AgentThread;
   sessionConfig: AgentSessionConfig;
   onOpenSettings: () => void;
-  /** Changes this app does not make yet, offered before anyone types. */
   suggestions?: string[];
   proposalReady?: boolean;
   proposalError?: string;
 };
 
-/**
- * The agent conversation, in the editor next to the code it edits. Provider,
- * model and key live in the settings dialog; this panel only reports which of
- * them is answering. All state belongs to `useAgentThread`, so the panel can be
- * moved between the rail and the stage without losing the conversation.
- *
- * Top to bottom: the thread, the Gate's verdict with Apply, and the composer,
- * which is always there. With no model connected a picked suggestion still
- * fills the composer, and the send button says what it needs.
- */
 export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
@@ -52,12 +41,9 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
   }, [state.messages, state.tools, footer.kind]);
 
   const model = sessionConfig.modelId || "no model";
-  // Words wait in the composer before the first message: from New project, or typed here.
   const waiting = state.messages.length === 0 && Boolean(thread.draft.trim());
   const descriptionReady = waiting && !live;
 
-  // Saving a key closes the dialog and unmounts its opener, so focus goes to the words it will send,
-  // and the panel says what Send does with them. Typing on an app already connected keeps "What should change?".
   const wasLive = useRef(live);
   const [justConnected, setJustConnected] = useState(false);
   useEffect(() => {

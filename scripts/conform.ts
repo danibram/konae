@@ -1,26 +1,16 @@
-// `bun run konae -- conform`: runs the Action Contract's checks against a
-// running Kernel, the way a replacement backend would be held to it.
 import { readFile } from "node:fs/promises";
 import { McpClient, McpError } from "../src/mcp/client";
 import { checkActionContract, type ActionContract } from "../src/lib/action-contract";
 import { formatConformanceReport, runConformance, type ConformanceTarget, type RouteRequest } from "../src/lib/action-conformance";
 
 export type KernelTargetOptions = {
-  /** The Deployment's URL, e.g. http://notes-ab12.localhost:8787. */
   url: string;
-  /** An app session token for a signed-in person. */
   token?: string;
-  /** An API key of this Deployment. */
   key?: string;
   secrets?: Record<string, string>;
-  /** Replaces fetch, e.g. to add headers a test proxy needs. */
   fetch?: typeof fetch;
 };
 
-/**
- * A ConformanceTarget for a Kernel. A `*.localhost` host is reached on
- * 127.0.0.1 with its name in the Host header, as a browser would.
- */
 export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
   const deployment = new URL(options.url);
   const connect = new URL(deployment);
@@ -51,7 +41,6 @@ export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
       for (const [key, value] of Object.entries(request.query ?? {})) target.searchParams.set(key, value);
       const headers = new Headers(request.headers);
       if (request.session && options.token) {
-        // The cookie a browser on the app's own origin would send.
         const cookie = deployment.protocol === "https:" ? "__Host-konae_app_session" : "konae_app_session";
         headers.set("cookie", `${cookie}=${options.token}`);
         headers.set("sec-fetch-site", "same-origin");
@@ -65,7 +54,6 @@ export function kernelTarget(options: KernelTargetOptions): ConformanceTarget {
   };
 }
 
-/** Signs in to the Deployment and returns the app session token from its cookie. */
 async function appSession(url: string, email: string, password: string): Promise<string> {
   const deployment = new URL(url);
   const connect = new URL("/_konae/auth/login", deployment);
@@ -79,7 +67,6 @@ async function appSession(url: string, email: string, password: string): Promise
   return token;
 }
 
-/** Reads the options, runs the checks, prints one line per check and returns the exit code. */
 export async function conformFromCli(args: string[]): Promise<number> {
   const values = (name: string) => args.flatMap((arg, index) => arg === `--${name}` ? [args[index + 1]] : []).filter((value) => value !== undefined && !value.startsWith("--"));
   const one = (name: string) => values(name)[0];

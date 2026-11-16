@@ -5,9 +5,6 @@ import { defineConfig } from "playwright/test";
 const baseURL = process.env.KONAE_EDITOR_URL ?? "http://127.0.0.1:4176";
 const editorPort = new URL(baseURL).port || "4176";
 const kernelPort = process.env.KONAE_TEST_KERNEL_PORT ?? "8794";
-// Workers load this file again with their own pid, so the first load decides
-// the path and the workers read it from the environment. The invitation test
-// reads the development mailbox there.
 const dataRoot = process.env.KONAE_E2E_DATA_DIR ?? path.join(tmpdir(), `konae-e2e-${process.pid}`);
 process.env.KONAE_E2E_DATA_DIR = dataRoot;
 

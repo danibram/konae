@@ -1,13 +1,9 @@
-//! What `platform_guide` answers, and the hint a refused tool call carries.
-//! docs/reference/ is the long form of every topic; docs/mcp-walkthrough.md runs
-//! them in order against a Kernel.
 
 use super::mcp::{admin_tools, Owner};
 use super::runtime::runtime_tools;
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
-/// The topics `platform_guide` takes, in the order an agent meets them.
 pub(super) const TOPICS: [&str; 10] = [
     "rules",
     "pieces",
@@ -21,14 +17,8 @@ pub(super) const TOPICS: [&str; 10] = [
     "refusals",
 ];
 
-/// The permissions a delegated credential may hold. The owner's browser
-/// session holds all of them.
 const SCOPES: [&str; 5] = ["read", "write", "publish", "manage_users", "export_data"];
 
-/// How to observe the effect of a write through the same door. A write with
-/// no entry here must be listed in [`READ_BACK_IN_ANSWER`] or
-/// [`READ_BACK_GAPS`]. Staging transfers are outside the rule until
-/// `transfer_complete` or a publish that consumes them.
 pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("project_create", "project_inspect"),
     ("project_sources_save", "project_sources_read"),
@@ -72,25 +62,17 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("actions_invoke", "actions_invoke"),
 ];
 
-/// The tag `konae build` puts in a whole-document page's head to load the
-/// SDK, as `runtimeLoaderScript` in src/lib/static-artifact.js writes it.
 const SDK_LOADER: &str = r#"<script>(function(){var m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);document.write('<script src="'+(m?'/p/'+m[1]:'')+'/runtime.js"><\/script>')})();</script>"#;
 
-/// Writes whose own answer is the observation, so a second call would only
-/// repeat it. Each entry says what in the answer to read.
 pub(super) const READ_BACK_IN_ANSWER: &[(&str, &str)] = &[
     ("transfer_write", "Its nextOffset is where the next block starts. Write the next block there; call transfer_status only to resume after an interrupted call, and transfer_complete checks the whole upload."),
     ("release_plan", "It changes nothing live. Its planId, expectedRevision and schema are the plan; pass that planId to release_apply. Calling release_plan again makes another plan with a new planId."),
 ];
 
-/// What a read-back answers when the write worked, where that answer looks
-/// like a refusal.
 pub(super) const READ_BACK_EXPECT: &[(&str, &str)] = &[
     ("transfer_cancel", "transfer_status answers \"Transfer not found or expired.\" That answer is the cancel confirmed: the transfer and its bytes are gone."),
 ];
 
-/// Writes whose effect this door cannot re-read yet. Each entry names what
-/// would close the gap. Kept empty on purpose when every write has a read-back.
 pub(super) const READ_BACK_GAPS: &[(&str, &str)] = &[];
 
 pub(super) fn topic(name: &str) -> Result<Value> {
@@ -204,7 +186,6 @@ pub(super) fn topic(name: &str) -> Result<Value> {
             "contract": "contract writes action-contract.json, its schema, action-contract.md and actions.d.ts, which types miniapp.actions.call, from actions.json and schema.sql. conform calls every action on a Deployment and checks the answers against that file, so point it at a test Deployment. The owner reads what ran with usage_summary and signals_read."
         }),
         "actions" => json!({"filename":"actions.json","format":{"version":1,"actions":{"items.list":{"kind":"query","access":"authenticated","statement":"SELECT id,title FROM items WHERE user_id=?1 LIMIT 50","bindings":[{"source":"actor","field":"id"}]},"items.create":{"kind":"mutation","access":"authenticated","statement":"INSERT INTO items(title,user_id) VALUES(?1,?2)","bindings":[{"source":"input","key":"title","type":"string","maxLength":200},{"source":"actor","field":"id"}]}}},"rules":"SQL and typed bindings stay server-side. Declare schema in schema.sql for artifact publication. Runtime calls only send the declared action name and input. Add nullable:true to an input binding to bind omitted values or explicit null as SQL NULL; supplied strings remain non-empty and all supplied values retain their type checks. Mutations return changes and lastInsertId, so read rows with a query instead of mutation RETURNING, which publication rejects. A query that reads rows needs a top-level LIMIT. A total with count, sum, avg, min or max and no GROUP BY does not. An anonymous action may add http:{method:'GET' for a query or 'POST' for a mutation,path,signature?:{scheme?:'konae'|'hmac-body'|'timestamped'|'svix',header,secret,...},fields?:{inputKey:'$.data.object.id'},callers?:['signature'|'key'|'session']} to answer on that path of its Deployment host; a provider's scheme and fields take a webhook as GitHub, Shopify, Stripe or Resend send it; an action whose route does not answer anyone answers only there, not through actions_invoke. The sdk topic's http module describes routes, callers, signatures, API keys and secret_set. A mutation may add guard:'<sentence>' so a statement that changes no row is refused with it instead of answering changes 0. A mutation may add notify:{to:'owner' or 'actor' or {column:'<name>'},changes?:['<column>'],subject,body} to queue email when it changes a row: to the app's contact email in konae.json, which the owner sets in App settings or with contact_email_set and a first publish from Konae fills with the owner's email when Konae knows it, to the calling account once it has proved its email, or to each proven account of this app whose ID a changed row holds in that column, with only its own rows. The templates take {input.<key>} for its input bindings, {actor.id}, {kernel.now}, {changes.count} and, in the body, {changes}, which lists the changed rows' changes columns; it never sends to an address from the input or a row. Usage counts each notice under notify, and the owner reads each queued notice's state with notices_read. A mutation may add signal:{name:'order.placed',properties:[input keys or 'actor']} to record a Signal when it changes a row, and kind:'signal' with access, bindings and signal but no statement records one without SQL. The owner reads them with signals_read and Usage with usage_summary. kind:'call' with access, input bindings only, method:'GET'|'POST', url, body:{bodyKey:'inputKey' or {value:constant}}, auth?:{secret,header?}|{key}, then?:{action,inputs:{key:'/status'|'/body/...'|'/input/...'}} queues a request the Kernel sends from its own process and answers {callId,queued:true}; the calls module of the sdk topic gives the address rules, and the owner reads the outbox with calls_read."}),
-        // Rendered from src/sdk/contract.ts by `bun run sdk:render`.
         "sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,
         "publishing" => json!({
             "steps": [
@@ -280,8 +261,6 @@ pub(super) fn topic(name: &str) -> Result<Value> {
     })
 }
 
-/// Every code a refused Capsule answers, rendered from refusal-codes.json
-/// (ADR-0004), grouped by the part of the Capsule it names.
 fn refusals() -> Value {
     let mut groups = serde_json::Map::new();
     for (code, row) in super::refusal::table() {
@@ -301,8 +280,6 @@ fn refusals() -> Value {
     })
 }
 
-/// What `session_inspect` reports under `can`: the scopes this credential
-/// holds, plus whether it may create tokens (owner browser session only).
 pub(super) fn session_can(owner: &Owner) -> Value {
     let holds = |scope: &str| owner.scopes.iter().any(|s| s == scope);
     json!({
@@ -315,7 +292,6 @@ pub(super) fn session_can(owner: &Owner) -> Value {
     })
 }
 
-/// The flag `konae login` takes to add a permission, when it has one.
 fn login_flag(scope: &str) -> Option<&'static str> {
     match scope {
         "manage_users" => Some("--manage-users"),

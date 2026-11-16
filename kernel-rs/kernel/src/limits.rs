@@ -1,4 +1,3 @@
-//! Per-client request limits for unauthenticated traffic.
 
 use std::{
     collections::HashMap,
@@ -20,11 +19,8 @@ pub const SIGNED_IN_ACTIONS_PERIOD: Duration = Duration::from_secs(10);
 pub const STATEMENTS_PER_DEPLOYMENT: usize = 4;
 /// How long a call waits for one of them before it is refused.
 pub const STATEMENT_WAIT: Duration = Duration::from_secs(2);
-/// Deployments whose slots the Kernel keeps while none is in use.
 const MAX_TRACKED_DEPLOYMENTS: usize = 10_000;
 
-/// A call that no statement slot freed for. It answers as the per-address
-/// limit does: `rate-limited`, with how long to wait.
 #[derive(Debug)]
 pub struct Busy(pub Duration);
 
@@ -59,7 +55,6 @@ pub const AUTH_FAILURES_PERIOD: Duration = Duration::from_secs(60 * 60);
 /// without looking, a valid one included, until the bucket refills.
 pub const API_KEY_FAILURES: u32 = 10;
 pub const API_KEY_FAILURES_PERIOD: Duration = Duration::from_secs(60);
-/// Each limiter remembers at most this many clients.
 const MAX_TRACKED_CLIENTS: usize = 10_000;
 
 /// A token bucket per key. Memory stays bounded. Once the map reaches its
@@ -96,7 +91,6 @@ impl RateLimiter {
         self.take_at(key, now, true)
     }
 
-    /// Like `check`, but leaves the token in place.
     fn peek_at(&self, key: &str, now: Instant) -> Result<(), Duration> {
         self.take_at(key, now, false)
     }
@@ -217,9 +211,6 @@ impl Guards {
         }
     }
 
-    /// The Deployment's semaphore. Once the map reaches its size limit,
-    /// semaphores nobody holds or waits on are dropped, since a fresh one
-    /// behaves the same.
     fn statement_slots(&self, deployment: &str) -> Arc<Semaphore> {
         let mut slots = self.statements.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = slots.get(deployment) {
@@ -313,8 +304,6 @@ impl Guards {
     }
 }
 
-/// The bucket key for an email address: trimmed, lowercased and capped at
-/// 254 bytes.
 fn email_key(email: &str) -> String {
     let email = email.trim().to_lowercase();
     let mut end = email.len().min(254);
@@ -391,7 +380,6 @@ mod tests {
             let _ = limiter.check_at(&format!("busy-{i}"), start);
             assert!(limiter.len() <= 8);
         }
-        // Refilled buckets are dropped before draining ones.
         let later = start + Duration::from_secs(60);
         limiter.check_at("fresh", later).unwrap();
         assert_eq!(limiter.len(), 1);
@@ -454,7 +442,6 @@ mod tests {
         let victim: IpAddr = "203.0.113.7".parse().unwrap();
         let email = "victim@example.test";
         let start = Instant::now();
-        // The attacker fails at its full allowed rate for two hours.
         let mut refused = 0;
         for second in 0..2 * 60 * 60 {
             let now = start + Duration::from_secs(second);

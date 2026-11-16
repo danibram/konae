@@ -3,10 +3,8 @@ import { checkArtifact, checkRelease, checkSourceUpload } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
 import { refusal } from "../kernel/refusal";
 
-/** What a schema change loses, as the Kernel words it. */
 export type SchemaLoss = { table: string; column: string | null; sentence: string };
 
-/** One planned transition and the rows it changed in a throwaway database. */
 export type SchemaTransformation = {
   id: string;
   definitionSha256: string;
@@ -18,25 +16,12 @@ export type SchemaTransformation = {
   baselineSkipped: boolean;
 };
 
-/**
- * The change `release_plan` derives from the app's live database to the one
- * schema.sql states (kernel-rs/kernel/src/schema_change.rs). `confirmation` is set
- * when losses or data transformations require approval; release_apply needs it back.
- */
 export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null; transformations?: SchemaTransformation[] };
 
-/**
- * `schema` is absent when release_plan replays an import it already applied.
- * `hostname` and `url` name the generated address the release answers on; on a
- * first release (`firstRelease`) they are the name it will take, null when the
- * slug and its coded name are both taken.
- */
 export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; expectedSourcesRevision: number; expiresAt: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
 
-/** Asks the owner to approve the planned database changes. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
 
-/** The release stopped because the owner declined the database changes. */
 export class SchemaChangeDeclined extends Error {
   constructor(readonly change: SchemaChange) {
     const effects = [
@@ -48,23 +33,12 @@ export class SchemaChangeDeclined extends Error {
   }
 }
 
-/**
- * What release_plan takes. `transferId` is the upload of the release JSON and
- * `sourcesTransferId` the upload of the files of app/, which travel apart so
- * each upload stays under its own limit.
- */
 export type ReleaseUploads = { transferId: string; sourcesTransferId?: string; observedSourcesRevision?: number };
 
-/** The shared refusal for a publish whose caller did not read the current sources. */
 export function sourceRevisionConflict(observed: number) {
   return refusal("sources.revision-conflict", `Sources changed since revision ${observed}. Run konae pull --dir <folder>, then publish again.`);
 }
 
-/**
- * Releases with release_plan, then release_apply. The editor and `konae publish`
- * both release through here, so each one shows the same plan and asks before
- * the same losses.
- */
 export async function release<Receipt>(client: Pick<McpClient, "call">, uploads: ReleaseUploads, confirm: ConfirmSchema, onPlan?: (plan: ReleasePlan) => void): Promise<{ plan: ReleasePlan; receipt: Receipt }> {
   const plan = await planRelease(client, uploads, onPlan);
   const confirmation = plan.schema?.confirmation;
@@ -73,24 +47,16 @@ export async function release<Receipt>(client: Pick<McpClient, "call">, uploads:
   return { plan, receipt };
 }
 
-/** Asks the Kernel to plan a release without applying it. */
 export async function planRelease(client: Pick<McpClient, "call">, uploads: ReleaseUploads, onPlan?: (plan: ReleasePlan) => void): Promise<ReleasePlan> {
   const plan = await client.call<ReleasePlan>("release_plan", uploads);
   onPlan?.(plan);
   return plan;
 }
 
-/** The project record project_create registers. */
 export type ProjectIdentity = { id: string; name: string; slug: string; manifest: Record<string, unknown> };
 
-/** A document that names its base64 files in `encodings`: the files of app/, or a Build Artifact. */
 type CarriedFiles = { files: Record<string, string>; encodings?: Record<string, string> };
 
-/**
- * What a release uploads. `project` holds the files of app/ beside its
- * identity. `initialSignupPolicy` goes only with a first release.
- * `contactEmail` is where notices to the owner go.
- */
 export type ReleaseContents = {
   project: ProjectIdentity & CarriedFiles & { directories?: string[] };
   visibility: unknown;
@@ -99,15 +65,6 @@ export type ReleaseContents = {
   contactEmail?: string;
 };
 
-/**
- * Publishes a project: project_create, the upload of the files of app/ and
- * the upload of the release JSON, then release(). The editor and `konae
- * publish` both publish through here. The sources, the artifact and the
- * release JSON meet the Kernel's limits before a byte travels, and a refusal
- * names the size and the limit. `contents` runs after project_create, so it
- * can read the project that call registered. Both uploads are cancelled
- * whatever happens, and `cancelFailed` hears when a cancel fails.
- */
 export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed?: (error: unknown) => void, onPlan?: (plan: ReleasePlan) => void, observedSourcesRevision?: number | (() => number | undefined)): Promise<{ plan: ReleasePlan; receipt: Receipt }>;
 export function publishProject(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: false, registerProject: false): Promise<{ plan: ReleasePlan }>;
 export function publishProject<Receipt>(client: Pick<McpClient, "call" | "upload" | "cancel">, project: ProjectIdentity, contents: () => ReleaseContents | Promise<ReleaseContents>, confirm: ConfirmSchema, cancelFailed: (error: unknown) => void, onPlan: ((plan: ReleasePlan) => void) | undefined, observedSourcesRevision: number | (() => number | undefined) | undefined, apply: boolean, registerProject?: boolean): Promise<{ plan: ReleasePlan; receipt?: Receipt }>;
@@ -151,7 +108,6 @@ export async function publishProject<Receipt>(
   }
 }
 
-/** The plan in lines for a terminal, with what it loses and then the statements. */
 export function describeSchemaChange(change: SchemaChange): string[] {
   const lines: string[] = [];
   if (change.losses.length) lines.push("This release changes the database and loses data:", ...change.losses.map((loss) => `  ${loss.sentence}`));

@@ -12,14 +12,12 @@ export class SaveSupersededError extends Error { constructor() { super("This sav
 
 type SaveJob = { project: MiniAppProject; snapshot: string; epoch: number; resolve: (revision: number) => void; reject: (error: unknown) => void };
 
-/** How many Kernel projects the signed-in owner has, including ones without editor sources. */
 export async function readOwnerProjectCount(ownerId?: string): Promise<number> {
   const client = ownerId ? new McpClient("/mcp", { ownerId }) : platformMcp;
   const result = await client.call<{ projects: { project: ProjectMetadata }[] }>("projects_list");
   return result.projects.length;
 }
 
-/** One instance remains bound to the owner that opened the workspace. */
 export class ProjectSources {
   private readonly client: McpClient;
   private readonly revisions = new Map<string, number>();
@@ -50,7 +48,6 @@ export class ProjectSources {
     }
   }
 
-  /** Loads project cards and deployment summaries without reading app/ files. */
   async load() {
     const result = await this.client.call<{ projects: { project: { id: string; name: string; slug: string } }[] }>("projects_list");
     const missing: ProjectMetadata[] = [];
@@ -85,9 +82,6 @@ export class ProjectSources {
     const cancelRead = () => { void this.client.cancelSourceRead(projectId, requestId).catch(() => {}); };
     activeSignal.addEventListener("abort", cancelRead, { once: true });
     try {
-      // This call may create a download before its response arrives. Keep the
-      // request alive until the transfer ID is known. The request ID lets pagehide
-      // cancel the server transfer even if navigation hides the response.
       const saved = await this.client.call<SourceResult>("project_sources_read", { projectId, requestId });
       if (activeSignal.aborted && saved.transfer) await this.client.cancel(saved.transfer.transferId).catch(() => {});
       activeSignal.throwIfAborted();
@@ -166,7 +160,6 @@ export class ProjectSources {
 
   cancelReload(projectId: string) { this.reloading.delete(projectId); }
 
-  /** Queues one save per project and replaces only snapshots that have not started. */
   save(project: MiniAppProject): Promise<number> {
     if (this.reloading.has(project.id)) return Promise.reject(new Error("Saved sources are loading. Resolve the source conflict before saving this draft."));
     const snapshot = JSON.stringify(project);
@@ -269,7 +262,6 @@ export class ProjectSources {
     this.documents.set(projectId, job.project);
   }
 
-  /** Aborts active work and rejects a queued snapshot. Cancellation reaches the owner transfer endpoint. */
   cancelProject(projectId: string) {
     const pending = this.pending.get(projectId);
     if (pending) { this.pending.delete(projectId); pending.reject(new Error("This queued save was canceled because the editor is closing.")); }
@@ -279,7 +271,6 @@ export class ProjectSources {
 
   cancelAll() { for (const projectId of new Set([...this.pending.keys(), ...this.controllers.keys(), ...this.downloads.keys()])) this.cancelProject(projectId); }
 
-  /** Deletes a project after its current save finishes, then confirms it disappeared. */
   async deleteProject(projectId: string, name: string): Promise<void> {
     this.cancelProject(projectId);
     while (this.running.has(projectId)) await new Promise((resolve) => setTimeout(resolve, 0));

@@ -1,5 +1,3 @@
-/* The design system's tokens, copied as plain CSS: square corners, hard
-   offset shadows, one acid accent, and a dark set that follows the system. */
 :root {
   color-scheme: light;
   --ds-font: system-ui, -apple-system, "Segoe UI", sans-serif;

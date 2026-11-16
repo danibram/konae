@@ -14,12 +14,9 @@ import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
 import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
 
-/** A stand-in Kernel MCP endpoint that records tool calls and can fail chosen ones. */
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
-/** Answers a test sets for one tool, over the defaults below. */
 const answers: Record<string, unknown> = {};
-/** The JSON of each upload, in order. A publish uploads the files of app/, then the release. */
 const uploads: string[] = [];
 const releaseUpload = () => JSON.parse(uploads.at(-1)!);
 let server: ReturnType<typeof Bun.serve>;
@@ -271,7 +268,6 @@ describe("konae CLI", () => {
     for (let attempt = 0; attempt < 9; attempt++) {
       await expect(publishLocal(directory, config, "token")).rejects.toThrow(`${step} failed`);
     }
-    // Each attempt cancels both of its uploads, the files of app/ and the release.
     expect(calls.filter((call) => call.name === "transfer_cancel")).toHaveLength(18);
     failing.clear();
     expect((await publishLocal(directory, config, "token")).url).toBe("http://test.localhost/");
@@ -296,7 +292,6 @@ describe("konae CLI", () => {
 
     expect(receipt.url).toBe("http://test.localhost/");
     expect(calls.map((call) => call.name)).toContain("transfer_cancel");
-    // No visibility in the manifest publishes private, the same default as the exported deploy script.
     expect(releaseUpload().visibility).toBe("private");
     const html = await readFile(path.join(directory, "dist/index.html"), "utf8");
     expect(html).toContain("<script data-konae-runtime>");
@@ -354,7 +349,6 @@ describe("konae CLI", () => {
     const origin = `http://127.0.0.1:${issuer.port}`;
     const lines: string[] = [];
     try {
-      // The browser: a stray answer with another state first, which login ignores, then the owner's.
       const signedIn = await browserLogin(origin, ["read", "write", "publish", "export_data"], {
         print: (line) => lines.push(line),
         openUrl: (address) => void (async () => {
@@ -1015,7 +1009,6 @@ setInterval(() => {}, 1000);
       "konae.json asks for signup Invitation only, but this app has Closed. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.",
     ]);
 
-    // The same policy, or a Kernel that cannot read it, publishes without a word.
     for (const answer of [{ mode: "invitation", allowlist: ["kept@example.test"] }, undefined]) {
       warnings.length = 0;
       answers.project_inspect = { deployment: { id: "dep_1", ...(answer ? { signupPolicy: answer } : {}) } };
@@ -1070,14 +1063,12 @@ setInterval(() => {}, 1000);
 
   test("init takes the editor's templates by id and refuses another before it writes", async () => {
     expect([...INIT_TEMPLATES]).toEqual(templateChoices.map((choice) => choice.id));
-    // The file init and project_create both read is what the editor's templates render to.
     expect(await readFile(path.join(import.meta.dir, "..", PROJECT_TEMPLATES_FILE), "utf8"), "Run bun run templates:render.").toBe(renderProjectTemplates());
     await rm(path.join(directory, "app"), { recursive: true });
     const run = cli("init", "--dir", directory, "--template", "blog");
     expect(await run.exited).toBe(1);
     expect(await new Response(run.stderr).text()).toContain("Unknown template blog. Choose one of: tasks, notes, members");
     await expect(readFile(path.join(directory, "konae.json"), "utf8")).rejects.toThrow();
-    // The shared list is for anyone with the link, so it is born public.
     expect(await cli("init", "--dir", directory, "--template", "tasks").exited).toBe(0);
     expect(JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8")).visibility).toBe("public");
   });
@@ -1110,7 +1101,6 @@ setInterval(() => {}, 1000);
       expect(await new Response(run.stderr).text()).toContain(`No kernel binary at ${path.join(directory, "no-kernel")}`);
     }
     expect(calls).toEqual([]);
-    // --prod is the only way to the published database.
     answers.project_inspect = { deployment: { id: "dep_1" } };
     await mkdir(path.join(directory, ".konae"));
     await writeFile(path.join(directory, ".konae/credentials.json"), JSON.stringify({ url: origin(), token: "token" }));
@@ -1119,7 +1109,6 @@ setInterval(() => {}, 1000);
     const empty = cli("sql", "--dir", directory);
     expect(await empty.exited).toBe(1);
     expect(await new Response(empty.stderr).text()).toContain("Give the statement in quotes or with --file");
-    // events --prod reads the Deployment's record with the four owner tools.
     answers.usage_summary = { usage: { days: [] }, metrics: [], actions: [] };
     answers.calls_read = { calls: [] };
     answers.notices_read = { notices: [] };
@@ -1148,7 +1137,6 @@ setInterval(() => {}, 1000);
     const events = mailEvents(mailbox, "dep_1", seen, 1_000);
     expect(events.map((event) => event.title)).toEqual(["Email from messages.send to owner@app.test", "Account email (recovery) to ana@app.test"]);
     expect(events[1].mail!.link).toContain("#recovery=abc");
-    // A later read keeps the time a line was first seen, so --follow prints it once.
     expect(mailEvents(mailbox, "dep_1", seen, 9_000).map((event) => event.at)).toEqual([1_000, 1_000]);
     expect(formatEvent(events[0])).toBe("00:00:01  mail      Email from messages.send to owner@app.test  (New message)\n          Written to the development mailbox. Nothing was sent.\n          | Ana wrote:\n          | Hola");
   });
@@ -1166,7 +1154,6 @@ setInterval(() => {}, 1000);
       expect(new URL(feed.url).hostname).toBe("localhost");
       const page = await fetch(feed.url);
       expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
-      // The page writes values as text, so a mail's markup stays text.
       const pageText = await page.clone().text();
       expect(pageText).not.toContain("innerHTML");
       const feedAddress = new URL(feed.url); const control = new URLSearchParams(feedAddress.hash.slice(1)).get("control")!; feedAddress.hash = ""; feedAddress.pathname = "/events.json";
@@ -1330,7 +1317,6 @@ setInterval(() => {}, 1000);
       { name: "notices_read", input: { projectId: "dep_1" } },
       { name: "signals_read", input: { projectId: "dep_1" } },
     ]);
-    // Locally one run of the kernel binary's events command answers the range.
     const runs: string[][] = [];
     expect(await kernelRecord({ async run(args) { runs.push(args); return JSON.stringify(record); } })(usageRange(3))).toEqual(record);
     expect(runs).toEqual([["events", "--from", usageRange(3).from, "--to", usageRange(3).to]]);
@@ -1366,13 +1352,11 @@ setInterval(() => {}, 1000);
   });
 
   test("tool and domain talk to --url or the installation login saved, as publish does", async () => {
-    // Nothing names the installation: the same refusal publish gives, not a default port.
     for (const run of [cli("tool", "session_inspect", "--dir", directory), cli("domain", "--deployment", "dep_1", "--dir", directory)]) {
       expect(await run.exited).toBe(1);
       expect(await new Response(run.stderr).text()).toBe(`${NO_INSTALLATION}\n`);
     }
     expect(calls).toEqual([]);
-    // login saved the installation: tool reads it from the folder.
     await mkdir(path.join(directory, ".konae"));
     await writeFile(path.join(directory, ".konae/credentials.json"), JSON.stringify({ url: origin(), token: "saved" }));
     expect(await cli("tool", "session_inspect", "--dir", directory).exited).toBe(0);

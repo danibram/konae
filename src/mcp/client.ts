@@ -2,7 +2,6 @@ import { UPLOAD_BYTES, uploadRefused } from "../lib/size";
 
 export type Transfer = { transferId: string; size: number; sha256: string; chunkBytes: number };
 
-/** A Capsule refusal a tool answers beside its text (ADR-0004). */
 export type McpRefusal = { code: string; message: string; hint?: { fix: string; remedy: string; tool?: string } };
 
 export class McpError extends Error {
@@ -38,24 +37,15 @@ export class McpClient {
     return result.structuredContent.result as T;
   }
 
-  /** The tools this credential may call, as the Kernel lists them for it. */
   async listTools(signal?: AbortSignal): Promise<{ name: string; description?: string; inputSchema?: Record<string, unknown> }[]> {
     await this.connect();
     const result = await this.request("tools/list", {}, false, signal);
     return Array.isArray(result?.tools) ? result.tools : [];
   }
 
-  /**
-   * Uploads bytes as one owner transfer. `component` names a part of an
-   * export (`database`, `identity`, `files` or `usage`), which lets the
-   * upload reach that component's limit instead of 32 MiB; a release then
-   * names the transfer in `initialPackage.components`.
-   */
   async upload(bytes: Uint8Array, projectId?: string, component?: string, signal?: AbortSignal): Promise<Transfer> {
     if (!component && (bytes.length === 0 || bytes.length > UPLOAD_BYTES)) throw new McpError(uploadRefused(bytes.length));
     const sha256 = await checksum(bytes);
-    // Keep begin un-aborted so the transfer ID is known and can be canceled if
-    // the caller leaves while the server is creating it.
     const transfer = await this.call<Transfer>("transfer_begin", { size: bytes.length, sha256, ...(projectId ? { projectId } : {}), ...(component ? { component } : {}) });
     try {
       signal?.throwIfAborted();
@@ -95,8 +85,6 @@ export class McpClient {
 
   cancelSourceRead(projectId: string, requestId: string) {
     const params = { name: "project_sources_read", arguments: { projectId, cancelRequestId: requestId } };
-    // A source read can only exist after initialize completed. Skip `call()`'s
-    // await here so pagehide dispatches the keepalive request before unload.
     return this.connecting ? this.request("tools/call", params) : this.call("project_sources_read", params.arguments);
   }
 
@@ -132,7 +120,6 @@ export async function checksum(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** The largest block a transfer moves in: the chunkBytes that transfer_begin or the download answered. */
 export function blockLimit(transfer: Pick<Transfer, "chunkBytes">): number {
   if (!Number.isSafeInteger(transfer.chunkBytes) || transfer.chunkBytes <= 0) throw new McpError("Invalid MCP transfer block size.");
   return transfer.chunkBytes;
@@ -145,7 +132,6 @@ export function encodeBase64(bytes: Uint8Array): string {
 }
 
 export function decodeBase64(value: string): Uint8Array {
-  // A plain loop, because Uint8Array.from with a callback takes about 90 ms for 2 MiB, and the editor decodes on every edit.
   const text = atob(value);
   const bytes = new Uint8Array(text.length);
   for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);

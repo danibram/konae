@@ -36,7 +36,6 @@ type SortState = { column: string; direction: "ASC" | "DESC" } | null;
 
 type Props = {
   host: DatabaseAdminHost;
-  /** Opens schema.sql in the editor. Absent where the app's files are not in the editor. */
   onEditSchema?: () => void;
   onExportDatabase: () => void;
   target?: "local" | "deployed";
@@ -172,15 +171,9 @@ function DataBrowser({ host, tables, tablesReady, selectedTable, onSelectTable, 
   );
 }
 
-/**
- * The grid keeps its own sort and page, so a mutation refreshes it through a
- * dependency rather than through the key: remounting on every edited cell threw
- * away the order and the page the owner had chosen, with no sign that it had.
- */
 function EditableTable({ host, tableName, refreshVersion, onMutated, onExport }: {
   host: DatabaseAdminHost;
   tableName: string;
-  /** Bumped by any write, here or in the SQL console: the page is re-read, not rebuilt. */
   refreshVersion: number;
   onMutated: () => void;
   onExport: () => void;
@@ -205,7 +198,6 @@ function EditableTable({ host, tableName, refreshVersion, onMutated, onExport }:
         sortColumn: sort?.column,
         sortDirection: sort?.direction,
       });
-      // Deleting the last rows of the last page leaves the owner past the end.
       const lastPage = Math.max(0, Math.ceil(next.totalRows / 50) - 1);
       if (page > lastPage) {
         setPage(lastPage);
@@ -360,7 +352,6 @@ function SqlConsole({ host, tables, onMutated }: {
   const run = async (confirmed = false) => {
     if (!query.trim() || running) return;
     const kind = classifySql(query);
-    // Destructive statements ask first, because only a backup can undo them.
     if (kind.danger && !confirmed) {
       setConfirming(kind.danger);
       return;
@@ -375,13 +366,11 @@ function SqlConsole({ host, tables, onMutated }: {
       setLastRead(kind.read);
       setShowHistory(false);
       setHistory((current) => [{ sql: query, elapsedMs: next.elapsedMs, ok: true }, ...current].slice(0, 30));
-      // DDL reports no changed rows, yet it changes the table list the most.
       if (!kind.read || next.changes > 0) onMutated();
     } catch (cause) {
       setResult(null);
       setError(cause instanceof Error ? cause.message : String(cause));
       setHistory((current) => [{ sql: query, elapsedMs: performance.now() - started, ok: false }, ...current].slice(0, 30));
-      // A script can write in its first statements and fail in a later one.
       if (!kind.read) onMutated();
     } finally {
       setRunning(false);
@@ -420,7 +409,6 @@ function SqlConsole({ host, tables, onMutated }: {
 function QueryResult({ result, error, read }: { result: DatabaseRunResult | null; error: string; read: boolean }) {
   if (error) return <div className="sql-error" role="alert"><strong>SQLite error</strong><code>{error}</code></div>;
   if (!result) return <StudioEmpty title="Nothing yet" detail="Run the query above. The rows show up here." />;
-  // An empty read has no result set at all in SQLite, so it has no column names either.
   if (result.columns.length === 0 && read) return <table className="data-table"><thead><tr><th className="row-index">#</th><th>Result</th></tr></thead><tbody><tr><td className="row-index" /><td className="data-table-empty">0 rows</td></tr></tbody></table>;
   if (result.columns.length === 0) return <div className="sql-success"><strong>Query executed</strong><span>{result.changes} row{result.changes === 1 ? "" : "s"} affected</span></div>;
   return <table className="data-table"><thead><tr><th className="row-index">#</th>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.rows.map((row, index) => <tr key={index}><td className="row-index">{index + 1}</td>{result.columns.map((column) => <td key={column}>{formatCellText(row[column])}</td>)}</tr>)}</tbody></table>;
@@ -431,11 +419,6 @@ function QueryHistory({ history, onSelect }: { history: Array<{ sql: string; ela
   return <div className="query-history">{history.map((item, index) => <button key={`${item.sql}-${index}`} onClick={() => onSelect(item.sql)}><i className={item.ok ? "ok" : "error"} /><code>{item.sql}</code><span>{item.elapsedMs.toFixed(1)} ms</span></button>)}</div>;
 }
 
-/**
- * The tables the database holds now. schema.sql is the model: a publish runs
- * it, so a new table or index arrives, and a changed column needs the owner's
- * ALTER TABLE in the SQL view.
- */
 function SchemaView({ tables, onEdit }: { tables: DatabaseTable[]; onEdit?: () => void }) {
   return (
     <div className="studio-document-view schema-model-view">
@@ -501,7 +484,6 @@ function BackupsView({ host, tables, deployed, onExport, onRestored }: {
     try {
       await host.restoreDatabaseBackup(restoreId);
       setRestoreId("");
-      // A restore writes a backup of what it replaced, so the list grows.
       await loadBackups();
       onRestored();
       setMessage("Backup restored");
@@ -545,7 +527,6 @@ function BackupsView({ host, tables, deployed, onExport, onRestored }: {
   );
 }
 
-/** What a backup taken before an import brings back, in words. */
 function backupHolds(holds: string[]) {
   const data = holds.includes("data"), sources = holds.includes("sources");
   return data && sources ? "data and saved sources" : data ? "data, accounts and files" : "saved sources";

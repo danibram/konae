@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import cases from "../../kernel-rs/kernel/src/domain-cases.json";
 import { checkHostname, domainRecordName } from "./domain-name";
 
-// The Kernel runs the same file in kernel-rs/kernel/src/domain.rs.
 describe("custom domain hostnames", () => {
   const rules = { suffix: cases.context.suffix, installationHosts: cases.context.installationHosts };
   test("the case file covers every rule", () => {

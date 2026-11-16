@@ -11,7 +11,6 @@ const settings: AppSettings = {
 };
 const bytes = (text: string) => new TextEncoder().encode(text);
 
-/** A folder as the editor's Export writes it: one top folder, data/ from the export's components. */
 function exported() {
   const index = JSON.stringify([{ id: "b-file", size: 2 }, { id: "a-file", size: 1 }]);
   const files = createTar([{ path: "index.json", contents: bytes(index) }, { path: "b-file.blob", contents: bytes("bb") }, { path: "a-file.blob", contents: bytes("a") }]);
@@ -20,7 +19,6 @@ function exported() {
     { path: "app/actions.json", contents: "{\"version\":1,\"actions\":{}}" },
     { path: "app/schema.sql", contents: "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);" },
     { path: "app/public/logo.png", contents: new Uint8Array([0x89, 0x50, 0xff, 0x00]) },
-    // macOS writes .DS_Store beside a file, and node_modules may sit in app/. The sources leave both out.
     { path: "app/public/.DS_Store", contents: new Uint8Array([0, 0, 0, 1, 0xff]) },
     { path: "app/.git/config", contents: "[core]" },
     { path: "app/node_modules/x/index.js", contents: "export {}" },
@@ -42,7 +40,6 @@ describe("reading an exported app folder", () => {
     expect(folder.sources.encodings).toEqual({ "public/logo.png": "base64" });
     expect(folder.sources.files["public/logo.png"]).toBe(encodeBase64(new Uint8Array([0x89, 0x50, 0xff, 0x00])));
     expect(new TextDecoder().decode(folder.data.database)).toBe("database bytes");
-    // The files component comes back in index order, byte for byte.
     expect(readTar(folder.data.files!).map((entry) => entry.path)).toEqual(["index.json", "b-file.blob", "a-file.blob"]);
     expect(folder.data.files).toEqual(files);
     expect(folder.data.usage).toBeUndefined();

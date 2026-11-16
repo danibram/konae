@@ -1,7 +1,3 @@
-// The page's Spanish text, keyed by each element's data-t. The English text is
-// the markup itself, which home.js reads once before it swaps a language in.
-// The editor's own words (Deploy, Apply, the Validation Gate's line) stay in
-// English in both languages, because the editor speaks English.
 export const es = {
   "nav.how": "Cómo funciona",
   "nav.examples": "Ejemplos",
@@ -173,8 +169,6 @@ export const es = {
   "foot.site.t": "Este sitio",
 };
 
-// Text the script writes, in both languages. The refusal itself stays in the
-// words the editor and the Kernel use, so it is not here.
 export const words = {
   en: {
     title: "Konae. Describe an app, share the link, keep it yours",

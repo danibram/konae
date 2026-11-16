@@ -1,17 +1,14 @@
 import type { AgentTool } from "./contracts";
 
-/** One entry of the Kernel's `tools/list`, as the owner's session reads it. */
 export type McpToolDefinition = {
   name: string;
   description?: string;
   inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
 };
 
-/** What the editor shows the owner before the agent runs a tool that leaves the project or cannot be undone. */
 export type PlatformConfirmation = {
   projectId: string;
   tool: string;
-  /** One sentence naming the effect, for the dialog. */
   summary: string;
   arguments: Record<string, unknown>;
 };
@@ -21,38 +18,23 @@ export type PublishOutcome =
   | { status: "declined" }
   | { status: "failed"; error: string };
 
-/**
- * The editor's side of ADR-0007: the owner's MCP session, which deployment the
- * open project has, a confirmation dialog and the Deploy dialog.
- */
 export type AgentPlatformBinding = {
   listTools(signal?: AbortSignal): Promise<McpToolDefinition[]>;
   call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   deploymentForProject(projectId: string): string | null;
   confirm(request: PlatformConfirmation): Promise<boolean>;
-  /** Opens the Deploy dialog, where the owner chooses visibility and who may sign up, and resolves when it closes. */
   publish?(projectId: string): Promise<PublishOutcome>;
-  /** Called after a confirmed tool ran, so the editor can refresh what it shows. */
   onChanged?(tool: string): void;
 };
 
 export type PlatformToolContext = {
   projectId: string;
-  /** A tool from an abandoned run cannot act on a newly selected project. */
   isCurrent(): boolean;
   binding: AgentPlatformBinding;
 };
 
 type Policy = "read" | "confirm";
 
-/**
- * The tools the build agent gets from the owner's MCP, and whether each asks the
- * owner first. A tool the Kernel lists that is not here never reaches the model:
- * transfers, credentials, secret values and exports stay with
- * the owner. `project_sources_read` and `project_sources_save` are left out on
- * purpose, because in the editor the agent edits a scratch copy behind the
- * Validation Gate and Apply saves it.
- */
 export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   session_inspect: "read",
   platform_guide: "read",
@@ -76,7 +58,6 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
 
 const readOnlyDatabaseOperations = new Set(["inspect", "browse", "list-backups"]);
 
-/** database_execute reads for inspect, browse, list-backups and a single SELECT; anything else changes the live data. */
 export function databaseCallWrites(args: Record<string, unknown>): boolean {
   const operation = args.operation;
   if (typeof operation === "string" && readOnlyDatabaseOperations.has(operation)) return false;
@@ -127,7 +108,6 @@ const publishedProjectTools = new Set([
   "maintenance_set", "hostname_set", "domain_set", "domain_clear", "path_set", "path_clear",
 ]);
 
-/** The schema the model sees: the project and deployment are the open project's, so the model never names one. */
 function modelSchema(schema: McpToolDefinition["inputSchema"]) {
   const properties = { ...(schema?.properties ?? {}) };
   for (const key of pinned) delete properties[key];
@@ -143,7 +123,6 @@ function text(value: unknown): string {
   return body.length > maxResultCharacters ? `${body.slice(0, maxResultCharacters)}\n… cut at ${maxResultCharacters} characters. Ask for less, such as a smaller page or a narrower query.` : body;
 }
 
-/** A refusal keeps the Kernel's words and code; a lost session says to sign in, not that the tool broke. */
 function explain(error: unknown): Error {
   const status = (error as { status?: unknown } | null)?.status;
   if (status === 401) return new Error("The owner's session ended. Ask the owner to sign in again, then retry. Nothing was changed.");
@@ -152,12 +131,6 @@ function explain(error: unknown): Error {
   return new Error(refusal?.code ? `${message} (${refusal.code})${refusal.hint?.fix ? ` ${refusal.hint.fix}` : ""}` : message);
 }
 
-/**
- * The owner's MCP tools this agent may call, read from the session that is
- * signed in now. Each call names the open project's project and deployment,
- * and a call that would change something outside the project, send email or
- * change who may get in waits for the owner.
- */
 export async function createPlatformTools(context: PlatformToolContext, signal?: AbortSignal): Promise<AgentTool<any>[]> {
   const { binding, projectId } = context;
   const listed = await binding.listTools(signal);

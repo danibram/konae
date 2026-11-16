@@ -1,14 +1,8 @@
-//! Owner accounts kept in `owners.sqlite`: signup through an invitation
-//! code or the setup key, the verification and recovery links, and the
-//! operator's suspension command. They use the same account core and email
-//! queue as app accounts, under their own scope.
 
 use super::*;
 use super::accounts::{ChallengeAnswer, Delivery, RecoveryRequest, issue_and_send, link_sent, mail, read_body};
 use auth::{AuthSession, NewPassword, Purpose, Verification};
 
-/// The scope of owner accounts in `owners.sqlite`. App accounts use
-/// `deployment:<id>`.
 pub(crate) const CREATOR_SCOPE: &str = "creator";
 
 pub fn routes() -> Router<Konae> {
@@ -18,7 +12,6 @@ pub fn routes() -> Router<Konae> {
         .route("/_konae/owner/recover", post(creator_recover))
 }
 
-/// Opens the creator account store in this installation's mode.
 pub(crate) fn creator_store(state: &Konae) -> Result<AuthService, AuthError> {
     AuthService::open_in(
         state.data_root.join("owners.sqlite"),
@@ -41,10 +34,6 @@ fn creator_delivery(email: &str, client: std::net::IpAddr, page: &str) -> Delive
 }
 
 
-/// Starts a creator signup on an installation that requires verification.
-/// The admission, an invitation code or the installation key, is checked and
-/// consumed in the transaction that creates the pending creator. `page` is
-/// the sign-in page the link opens. `client` feeds the mail limits.
 pub(crate) async fn signup_creator(
     state: &Konae,
     email: &str,
@@ -122,8 +111,6 @@ async fn creator_recover(State(state): State<Konae>, request: Request) -> Respon
         let _guard = database_lock(&state, "owner-auth").await;
         let auth = creator_store(&state)?;
         let email = input.email.clone();
-        // The link opens the owner page, as a verification link does: the
-        // installation's root may be the editor, which reads no link, or nothing.
         let delivery = creator_delivery(&email, client, &super::admission::login_page(&origin, None));
         issue_and_send(mail, delivery, move |outbox| auth.request_recovery_with(&email, outbox)).await?;
         Ok::<(), AuthError>(())
@@ -136,8 +123,6 @@ async fn creator_recover(State(state): State<Konae>, request: Request) -> Respon
 }
 
 
-/// Creator accounts answer only on the editor host and only without the
-/// optional hosted identity adapter, which keeps its own accounts.
 async fn creator_host(state: &Konae, headers: &HeaderMap) -> bool {
     super::oauth::valid_owner_host(state, headers).await && matches!(super::clerk::ClerkConfig::from_env(), Ok(None))
 }
@@ -177,8 +162,6 @@ fn run_operator_command(root: &Path, suspend: bool, email: &str) -> Result<Strin
         return Ok(format!("Resumed owner {id}. The account is {state}; it signs in again to get a session."));
     }
     let id = auth.suspend(email).map_err(|_| not_found())?;
-    // The account is suspended even if this cleanup fails, and a delegated
-    // credential checks the account's state on every use.
     let mcp_path = root.join("mcp.sqlite");
     if mcp_path.exists() {
         let mut mcp = Connection::open_with_flags(mcp_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
@@ -207,7 +190,6 @@ mod tests {
     use super::*;
     use super::super::accounts::tests::{APP_HOST, Fixture, PASSWORD, app_answer, app_signup, cookie_of, fixture, host_headers, request, rpc_json};
 
-    /// An app's link does nothing as an owner link.
     #[tokio::test]
     async fn an_app_link_does_nothing_as_an_owner_link() {
         let fixture = fixture(Verification::Required, true);
@@ -259,13 +241,11 @@ mod tests {
         assert!(link.link.starts_with("http://localhost/_konae/owner/login#verification="));
         assert_eq!(owner(&fixture, "/_konae/owner/login", login.clone()).await.status(), StatusCode::UNAUTHORIZED);
         let (_, token) = fixture.last_link();
-        // A creator token does nothing on an app.
         assert_eq!(app_answer(&fixture, APP_HOST, "/_konae/auth/verify", &token, PASSWORD).await.status(), StatusCode::GONE);
         let verified = owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await;
         assert_eq!(verified.status(), StatusCode::OK);
         let cookie = cookie_of(&verified).unwrap();
         let session = mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&cookie), None)).unwrap().unwrap();
-        // The editor's first check answers 200 either way, so a signed-out visit logs no error.
         let signed_out = mcp::owner_session(State(Konae::for_test(fixture.state.clone())), owner_headers(None, None)).await;
         assert_eq!(signed_out.status(), StatusCode::OK);
         assert_eq!(rpc_json(signed_out).await, json!({"signedIn": false}));
@@ -274,7 +254,6 @@ mod tests {
         assert_eq!(rpc_json(signed_in).await, json!({"signedIn": true, "ownerId": session.id, "displayName": "creator@example.test"}));
         assert_eq!(owner(&fixture, "/_konae/owner/login", login.clone()).await.status(), StatusCode::OK);
 
-        // A delegated MCP credential for this creator.
         let bearer = "creator-bearer-token";
         mcp::store(&Konae::for_test(fixture.state.clone())).unwrap().execute(
             "INSERT INTO credentials(hash, owner, scopes, projects, expires) VALUES (?1, ?2, '[\"read\"]', '[]', ?3)",
@@ -282,14 +261,11 @@ mod tests {
         ).unwrap();
         assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).unwrap().is_some());
 
-        // A credential that survives suspension is still refused, because
-        // every use reads the creator's state.
         creator_store(&Konae::for_test(fixture.state.clone())).unwrap().suspend("creator@example.test").unwrap();
         assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).is_err());
         creator_store(&Konae::for_test(fixture.state.clone())).unwrap().resume("creator@example.test").unwrap();
         assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(None, Some(bearer))).unwrap().is_some());
 
-        // The operator suspends the creator from the server.
         let message = run_operator_command(&fixture.root, true, "Creator@Example.test").unwrap();
         assert!(message.contains(&session.id));
         assert!(mcp::authenticate_owner(&Konae::for_test(fixture.state.clone()), &owner_headers(Some(&cookie), None)).unwrap().is_none());
@@ -305,7 +281,6 @@ mod tests {
 
         assert!(run_operator_command(&fixture.root, false, "nobody@example.test").is_err());
         run_operator_command(&fixture.root, false, "creator@example.test").unwrap();
-        // This test has used up the per-email sign-in limit; start a fresh window.
         fixture.state.guards = Arc::new(Guards::new(Vec::new()));
         assert_eq!(owner(&fixture, "/_konae/owner/login", login).await.status(), StatusCode::OK);
     }
@@ -321,8 +296,6 @@ mod tests {
         assert_eq!((unknown, known), (StatusCode::ACCEPTED, StatusCode::ACCEPTED));
         let (purpose, token) = fixture.last_link();
         assert_eq!(purpose, Purpose::Recovery);
-        // The editor reads no #recovery link, and an installation without the
-        // editor answers 404 on its root, so the link opens the owner page.
         let link = fixture.mailbox.0.lock().unwrap().last().unwrap().link.clone();
         assert!(link.starts_with("http://localhost/_konae/owner/login#recovery="), "{link}");
         assert_eq!(owner(&fixture, "/_konae/owner/verify", json!({"token": token, "password": PASSWORD})).await.status(), StatusCode::GONE);

@@ -1,14 +1,7 @@
-// A fake DNS resolver on a local UDP port for the custom domain replays. It
-// answers TXT queries from a table the replay edits, and NXDOMAIN for any
-// other name. Start it before the Kernel and pass its address as
-// KONAE_DNS_RESOLVER, so the Kernel's own lookup runs against it.
 
 export type FakeResolver = {
-  /** host:port, the value for KONAE_DNS_RESOLVER. */
   address: string;
-  /** Sets the TXT values a name answers with; no values removes the name. */
   txt(name: string, values: string[]): void;
-  /** The names asked so far, in order. */
   asked: string[];
   stop(): void;
 };
@@ -35,7 +28,6 @@ export async function fakeResolver(): Promise<FakeResolver> {
         const answers = values?.map((value) => {
           const text = Buffer.from(value, "utf8");
           const record = Buffer.alloc(12 + 1 + text.length);
-          // A pointer to the question's name, type TXT, class IN, a TTL of 60, then one character string.
           record.set([0xc0, 0x0c, 0, 16, 0, 1, 0, 0, 0, 60], 0);
           record.writeUInt16BE(text.length + 1, 10);
           record[12] = text.length;

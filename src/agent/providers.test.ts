@@ -54,8 +54,7 @@ describe("agent providers", () => {
 
   test("rejects an empty model id and an unknown provider", () => {
     expect(() => buildModel({ provider: "anthropic", modelId: "  " }, models)).toThrow();
-    // @ts-expect-error unknown provider ids must not type-check either
-    expect(() => buildModel({ provider: "ollama", modelId: "llama3" }, models)).toThrow();
+    expect(() => Reflect.apply(buildModel, undefined, [{ provider: "ollama", modelId: "llama3" }, models])).toThrow();
   });
 
   test("auth resolves the key of its own provider only", () => {

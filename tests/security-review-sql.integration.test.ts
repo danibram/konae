@@ -1,7 +1,3 @@
-// A hostile app author's SQL against both doors: the Validation Gate's
-// parser and the Kernel's release, then the Kernel at run time. Each test is
-// one attempt from the security review. A statement both doors refuse must be
-// refused with the same sentence.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { parseServerActionSource } from "../src/kernel/actions";
 import { checksum } from "../src/mcp/client";
@@ -18,7 +14,6 @@ const SCHEMA = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, owner T
 type Actions = Record<string, unknown>;
 const action = (statement: string, extra: object = {}) => ({ kind: "query", access: "anonymous", statement, bindings: [], ...extra });
 
-/** Publishes a public app with these actions and schema, or returns the Kernel's refusal. */
 async function publish(actions: Actions, schema = SCHEMA, extra: object = {}): Promise<{ hostname: string; id: string } | string> {
   const id = `review_sql_${++count}`;
   const project = { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" } };
@@ -34,7 +29,6 @@ async function publish(actions: Actions, schema = SCHEMA, extra: object = {}): P
   }
 }
 
-/** The Gate's sentence for an actions.json, or null when it passes. */
 function gate(actions: Actions): string | null {
   try { parseServerActionSource(JSON.stringify({ version: 1, actions })); return null; } catch (error) { return (error as Error).message; }
 }
@@ -61,7 +55,6 @@ describe("statements both doors refuse with one sentence", () => {
       const kernel = await publish(actions);
       const said = gate(actions);
       if (name === "UNION after a LIMIT") {
-        // A compound select whose last part has the LIMIT bounds the whole result in SQLite, so both doors accept it.
         expect(said).toBeNull();
         expect(typeof kernel).toBe("object");
         return;
@@ -84,9 +77,7 @@ describe("what a published statement can reach at run time", () => {
     const tables = JSON.stringify((await invoke(app.hostname, "meta.tables")).body);
     expect(tables).toContain("notes");
     for (const name of ["app_users", "app_sessions", "projects", "credentials", "route_signatures", "audit"]) expect(tables).not.toContain(name);
-    // These publish, because the Kernel prepares actions without the runtime authorizer, and every call is refused.
     for (const name of ["meta.files", "meta.extension"]) expect(answerText((await invoke(app.hostname, name)).body), name).toContain("not authorized");
-    // The Kernel's SQLite has no readfile or writefile, so such an action does not publish.
     expect(await publish({ "meta.read": action("SELECT readfile('/etc/passwd') AS content") })).toContain("no such function: readfile");
   });
 
@@ -111,7 +102,6 @@ describe("what a published statement can reach at run time", () => {
   });
 
   test("one slow SQLite step on one app does not hold up another app", async () => {
-    // instr compares inside one step, which the deadline cannot stop; it runs on a blocking thread.
     const slow = await publish({ "slow.instr": action("SELECT instr(printf('%.*c', 2000000, 'a'), printf('%.*c', 200000, 'a') || 'b') AS n") });
     if (typeof slow === "string") throw Error(slow);
     const running = invoke(slow.hostname, "slow.instr");

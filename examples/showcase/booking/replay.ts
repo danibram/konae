@@ -1,9 +1,3 @@
-// Replays the booking showcase against its own Kernel: publish, the signup
-// policy, the public and staff views, the one-statement booking, a race between
-// two staff members, the booking confirmation by email, the signed check-in
-// route, the scheduled release of bookings nobody checked in, the Action
-// Contract and a Chrome pass under the Content Security Policy. Exits 0 when
-// every check holds.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,7 +33,6 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
   try { await promise; } catch (error) { return message(error); }
   throw Error("Expected a refusal.");
 }
-// Days in UTC, the clock the Kernel's `now` binding reads.
 const utcDay = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 
 try {
@@ -54,7 +47,6 @@ try {
       KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
       KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: path.join(scratch, "data"),
       KONAE_SETUP_KEY: setupKey, KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
-      // bookings.release is declared every 15 minutes; the test clock runs it every 2 seconds.
       KONAE_SCHEDULE_MIN_SECONDS: "2",
     },
     stdout: "ignore", stderr: "inherit",
@@ -76,7 +68,6 @@ try {
   ownerCookie = ownerSignup.headers.get("set-cookie")!.split(";")[0];
   const owner = new McpClient(`${url}/mcp`, { fetch: ownerFetch });
 
-  // 1. The editor's Validation Gate and the Kernel judge the same Capsule.
   const capsule = { ...(await buildLocal(await copyOf("gate"))).files };
   const gate = createCapsuleValidator(() => initSqlJs());
   const verdict = await gate.validate(capsule);
@@ -90,7 +81,6 @@ try {
   };
   assert.notEqual(variants["a mutation that starts with WITH"]["actions.json"], capsule["actions.json"]);
   await owner.call("project_create", { projectId: "showcase_booking_probe", name: "Booking probe", slug: "booking-probe", manifest: { version: 1, visibility: "public" } });
-  // The probe holds its own value: the Kernel refuses one owner's second project with the same one.
   await owner.call("secret_set", { projectId: "showcase_booking_probe", name: "panel_hook", value: `probe_${panelSecret}` });
   const refusals: Record<string, { gate: string; kernel: string }> = {};
   for (const [name, change] of Object.entries(variants)) {
@@ -99,14 +89,11 @@ try {
     assert(!judged.ok, `The gate accepted ${name}.`);
     const kernelSaid = await refusal(publish("showcase_booking_probe", "booking-probe", files));
     refusals[name] = { gate: judged.errors.map((error) => [error.message, (error as any).detail].filter(Boolean).join(" ")).join(" "), kernel: kernelSaid };
-    // One rule, one sentence: the Gate's refusal for actions.json is its detail, for schema.sql its message.
     const [first] = judged.errors;
     assert.equal(first.stage === "actions" ? (first as any).detail : first.message, kernelSaid, `${name}: the Gate and the Kernel must give the same sentence.`);
   }
   check("Validation Gate and Kernel", `Both pass the Capsule and both refuse ${Object.keys(refusals).join(", ")} with the same sentence. ${JSON.stringify(refusals)}`);
 
-  // 2. Publish public with `konae publish`, with the Allowlist from
-  // konae.json installed before the first request.
   await owner.call("project_create", { projectId: "showcase_booking", name: "Room board", slug: "booking", manifest: { version: 1, visibility: "public" } });
   const unset = await refusal(publishWithCli("showcase_booking", "booking"));
   assert.match(unset, /signs with the secret panel_hook, which is not set/);
@@ -117,11 +104,9 @@ try {
   assert.equal(policy.mode, "allowlist");
   assert.deepEqual(policy.allowlist, ["@office.example"]);
   const sql = (statement: string) => owner.call<any>("database_execute", { deploymentId, operation: "sql", input: { sql: statement } });
-  // schema.sql may only create tables and indexes, so the owner adds the rooms.
   await sql("INSERT INTO rooms (id, name, seats) VALUES ('oak', 'Oak', 6), ('birch', 'Birch', 4), ('cedar', 'Cedar', 10), ('pine', 'Pine', 2)");
   check("Publish", `Refused first with "${unset}"; published public with konae publish at ${receipt.url} after secret_set, with konae.json's signupPolicy allowlist @office.example installed on the first release. The owner seeds rooms with database_execute.`);
 
-  // 3. Allowlist by domain, and its refusal next to Closed's.
   const host = receipt.hostname;
   const signup = async (email: string) => {
     const response = await fetch(`${url}/_konae/auth/signup`, {
@@ -161,12 +146,10 @@ try {
   await call(ana, "staff.name", { display: "Ana" });
   await call(ben, "staff.name", { display: "Ben" });
 
-  // 4. One statement books a span of hours, or nothing.
   const day = utcDay(14);
   const notBooked = "Not booked. The room or the day is not on the board, the span is not 1 to 4 whole hours between 08:00 and 18:00, or someone holds one of those hours.";
   let createCalls = 0;
   let createRefused = 0;
-  // A booking that inserts nothing is refused with the action's guard; book() answers 0 for it.
   const book = async (client: McpClient, input: Record<string, unknown>) => {
     createCalls++;
     try {
@@ -190,8 +173,6 @@ try {
     "an unknown room": { room: "attic", day, start: 9, hours: 1 },
   };
   for (const [name, input] of Object.entries(noops)) assert.equal((await book(ana, input)).changes, 0, `${name} must be refused.`);
-  // The Kernel's clock is UTC. West of UTC the evening is already tomorrow there, so the
-  // statement accepts the UTC day before today: a person in New York books their own today at 21:00.
   assert.equal((await book(ana, { room: "birch", day: utcDay(-1), start: 9, hours: 1, title: "Late booking" })).changes, 1, "The UTC day before today is still someone's today.");
   const backstopUnique = await refusal(sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at) VALUES ('owner', 'oak', '${day}', 9, 'owner', 'Direct', 0)`));
   const backstopCheck = await refusal(sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at) VALUES ('owner', 'pine', '${day}', 9.5, 'owner', 'Direct', 0)`));
@@ -199,7 +180,6 @@ try {
   assert.match(backstopCheck, /CHECK constraint failed/);
   check("One-statement booking", `A two-hour booking writes two rows in one INSERT ... WITH RECURSIVE ... SELECT. An overlap and ${Object.keys(noops).join(", ")} each are refused with the guard "${notBooked}"; the statement still cannot say which rule failed. Owner SQL past the WHERE meets the partial unique index ("${backstopUnique}") and the CHECK ("${backstopCheck}").`);
 
-  // 5. What a visitor sees, and what staff see.
   const publicRows = await call<any[]>(visitor, "availability.day", { day });
   assert.deepEqual(publicRows, [{ room: "oak", hour: 9 }, { room: "oak", hour: 10 }, { room: "oak", hour: 11 }]);
   assert.equal((await call<any[]>(visitor, "rooms.list")).length, 4);
@@ -220,7 +200,6 @@ try {
   assert(recent.some((row) => row.ref === planning.ref && row.cancelled_at), "The cancellation stays in the activity list.");
   check("Public and staff views", "A visitor and GET /api/availability get only { room, hour }; titles and names need a session, and authenticated actions answer authentication-required. Ben sees Ana's title, is refused with the cancel guard on her booking, and books the hours she freed. The cancelled row stays for the activity list.");
 
-  // 6. Two staff members race for overlapping hours.
   let raceWins = 0;
   const outcomes: string[] = [];
   for (let round = 0; round < 20; round++) {
@@ -243,7 +222,6 @@ try {
   const held = await sql(`SELECT count(*) AS n FROM bookings WHERE room_id = 'pine' AND day = '${crowdDay}' AND cancelled_at IS NULL`);
   check("Double booking under concurrency", `${raceWins} rounds of two overlapping bookings sent together: one wins with 2 rows, the other is refused with the guard (${[...new Set(outcomes)].join(", ")}, 0 standing for the guard). Ten requests for one hour: ${crowdChanges.join(",")}. Owner SQL counts ${held.rows[0].n} holder.`);
 
-  // 7. Signals record only when a booking inserted rows, and carry who booked. Refusals count in Usage.
   const signals: any[] = [];
   let cursor: string | undefined;
   do {
@@ -265,9 +243,6 @@ try {
   assert(staffIds.has(cancelled.signals[0].properties.actor) && cancelled.signals[0].properties.actor !== null, "booking.cancelled names who cancelled.");
   check("Signals", `${createCalls} bookings.create calls: ${booked} bookings made and ${booked} booking.created Signals, each naming the booker as actor. One booking.cancelled names the canceller. Usage counts the ${refusedCount} guard refusals under refused.`);
 
-  // 7a. A booking emails its confirmation to the booker, once the booker's
-  // account has proved its address. Ana and Ben signed up in local mode, which
-  // proves nothing, so their bookings sent nothing; Cara accepts an invitation.
   const mailbox = async () => (await readFile(path.join(scratch, "data", "mailbox.jsonl"), "utf8").catch(() => ""))
     .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const mailFor = async (purpose: string, to: string) => {
@@ -304,7 +279,6 @@ try {
   assert.equal(mailStatus.queue.notices.delivered, 1);
   check("Booking confirmation", `bookings.create declares "notify": { "to": "actor" }. Cara accepts an invitation, which proves her address, books pine and gets "${confirmation.subject}" in the development mailbox; her overlapping booking is refused with the guard and sends nothing. The ${booked} bookings Ana and Ben made after a local signup sent nothing, and usage_read says why: ${JSON.stringify(noticeLines)}. mail_status counts ${mailStatus.queue.notices.delivered} delivered notice.`);
 
-  // 8. The signed check-in route for a door panel, with a key or a signature.
   const panel = await owner.call<{ key: string; id?: string; keyId?: string }>("api_keys_create", { deploymentId, name: "Door panel", actions: ["panel.checkin"] });
   const post = async (body: object, headers: Record<string, string> = {}) => {
     const response = await fetch(`${url}/api/checkin`, { method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress(), ...headers }, body: JSON.stringify(body) });
@@ -313,7 +287,6 @@ try {
   const signedBody = JSON.stringify({ room: "oak", day, hour: 9 });
   const signature = await signRoute(panelSecret, { method: "POST", path: "/api/checkin", body: signedBody });
   assert.deepEqual(await post({ room: "oak", day, hour: 9 }), { status: 401, body: { error: "invalid-signature" } });
-  // A t outside the window has its own answer, so a panel with a skewed clock can tell.
   const stale = await signRoute(panelSecret, { method: "POST", path: "/api/checkin", body: signedBody }, Math.floor(Date.now() / 1000) - 400);
   assert.deepEqual(await post({ room: "oak", day, hour: 9 }, { "x-panel-signature": stale }), { status: 401, body: { error: "stale-timestamp" } });
   const signed = await fetch(`${url}/api/checkin`, { method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress(), "x-panel-signature": signature }, body: signedBody });
@@ -322,30 +295,22 @@ try {
   const byKey = await post({ room: "oak", day, hour: 10 }, { authorization: `Bearer ${panel.key}` });
   assert.equal(byKey.status, 200);
   assert.equal(byKey.body.result.changes, 1);
-  // A second check-in for the same hour, or one for an hour nobody booked, is refused with the guard.
   const panelGuard = { status: 403, body: { error: "No booking holds this room at this hour, or it is already checked in." } };
   assert.deepEqual(await post({ room: "oak", day, hour: 10 }, { authorization: `Bearer ${panel.key}` }), panelGuard);
   assert.deepEqual(await post({ room: "oak", day, hour: 16 }, { authorization: `Bearer ${panel.key}` }), panelGuard);
-  // The runtime endpoint refuses a key and says where keys work.
   const keyOnRuntimeResponse = await fetch(`${url}/_konae/mcp`, {
     method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${panel.key}`, "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "actions_invoke", arguments: { name: "availability.day", input: { day } } } }),
   });
   const keyOnRuntime = { status: keyOnRuntimeResponse.status, body: await keyOnRuntimeResponse.json() };
   assert.deepEqual(keyOnRuntime, { status: 403, body: { error: "An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session." } });
-  // A signed-in person from the app's own origin still needs the signature.
   const byPerson = await post({ room: "oak", day, hour: 11 }, { cookie: anaSignup.cookie!, origin: receipt.url, "sec-fetch-site": "same-origin" });
   assert.deepEqual(byPerson, { status: 401, body: { error: "invalid-signature" } });
-  // The signed route is the action's only door, so the runtime endpoint refuses it for a visitor and for staff.
   const unsignedRuntime = await refusal(call(visitor, "panel.checkin", { room: "oak", day, hour: 11 }));
   assert.equal(unsignedRuntime, "Action panel.checkin answers only on its HTTP route, POST /api/checkin.");
   assert.equal(await refusal(call(ana, "panel.checkin", { room: "oak", day, hour: 11 })), unsignedRuntime);
   check("Check-in route", `POST /api/checkin refuses an unsigned body (401 invalid-signature) and a stale t (401 stale-timestamp), and accepts a signature or the panel's API key. A second check-in for the same hour and one for an hour nobody booked get 403 with the guard. A staff session cookie without a signature gets 401 invalid-signature. The runtime endpoint refuses the key with ${keyOnRuntime.status} "${keyOnRuntime.body.error}". A visitor and a staff member calling panel.checkin through actions_invoke get "${unsignedRuntime}".`);
 
-  // 9. A booking nobody checked in within 15 minutes of its first hour is released, with
-  // nobody calling: bookings.release declares "schedule": { "every": "15m" }. Ana's
-  // "Late booking" for 09:00 yesterday, made in step 4, was never checked in. The owner
-  // adds one the panel checked in at 10:00, in one statement so no run can release it first.
   const yesterday = utcDay(-1);
   await sql(`INSERT INTO bookings (booking_ref, room_id, day, slot, user_id, title, created_at, checked_in_at) SELECT 'pine/${yesterday}/10/0', 'pine', '${yesterday}', 10, user_id, 'Checked in', 0, 1 FROM bookings WHERE title = 'Late booking'`);
   let yesterdayHeld: any[] = [];
@@ -367,7 +332,6 @@ try {
   assert.deepEqual(releasedSignals.signals.map((signal) => signal.properties), [{}]);
   check("Release unclaimed bookings", `bookings.release, declared every 15 minutes and run here every 2 seconds, released Ana's unclaimed 09:00 booking for ${yesterday} with nobody calling; GET availability for that day now holds only the checked-in ${JSON.stringify(yesterdayHeld[0])}, and no booking from today on was touched. Ben calling bookings.release himself is refused with "${releasedByBen}". usage_read lists ${releaseUsage.scheduled.length} runs, all ok, that changed 1 row between them, and one booking.released Signal records the run that did.`);
 
-  // 10. The Action Contract, and conform with a session token and with an API key.
   const contractDir = await copyOf("contract");
   const cli = async (args: string[]) => {
     const child = Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
@@ -390,13 +354,11 @@ try {
   for (const [name, run] of Object.entries({ withSecret, withKey, keyOnly })) assert.equal(run.code, 0, `${name}:\n${run.out}${run.err}`);
   assert.match(totals(withSecret), /^\d+ passed, 0 failed, 0 skipped/);
   assert.match(totals(withKey), /^\d+ passed, 0 failed, 0 skipped/);
-  // The same contract in-process from fresh addresses, so the anonymous limit never waits.
   const fromFresh: typeof fetch = (input, init) => { const headers = new Headers(init?.headers); headers.set("x-forwarded-for", freshAddress()); return fetch(input, { ...init, headers }); };
   const inProcess = await runConformance(contract, kernelTarget({ url: receipt.url, token, key: panel.key, fetch: fromFresh }));
   assert.equal(inProcess.failed, 0, formatConformanceReport(inProcess));
   check("Action Contract", `contract writes ${contract.actions.length} actions; warnings ${JSON.stringify(warnings ?? [])}; unnamed ${JSON.stringify(unnamed)}; columns typed unknown ${unknownColumns.join(", ")}. conform --token --secret: "${totals(withSecret)}". conform --token --key: "${totals(withKey)}". conform --key alone: "${totals(keyOnly)}".`);
 
-  // 11. Chrome under the Content Security Policy: visitor and staff, light and dark.
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     if (shots) await mkdir(shots, { recursive: true });
     const browser = await chromium.launch({ channel: "chrome" });
@@ -432,7 +394,6 @@ try {
           assert.equal(await page.locator("#status").textContent(), "Booked 2 hours.");
           await page.locator('button.cell[data-room="birch"][data-hour="15"]').waitFor({ state: "detached" });
           assert.equal(await page.locator(".cell.mine").count(), 2);
-          // With the network gone, moving to the next day says so on the page instead of failing silently.
           await context.setOffline(true);
           await page.locator("#next").click();
           await page.locator("#status.error").filter({ hasText: "could not reach its server" }).waitFor({ timeout: 10_000 });
@@ -462,7 +423,6 @@ try {
   await rm(scratch, { recursive: true, force: true });
 }
 
-/** An app folder in the scratch folder whose app/ holds a copy of this example's sources. */
 async function copyOf(name: string) {
   const root = path.join(scratch, name);
   await cp(source, appDir(root), { recursive: true, filter: (file) => !/(replay\.ts|README\.md|\.konae)$/.test(file) });
@@ -482,7 +442,6 @@ async function publish(projectId: string, slug: string, files: Record<string, st
   } finally { await owner.cancel(upload.transferId); }
 }
 
-/** `konae publish` from a copy of this folder, with a token that holds read, write and publish and not manage_users. */
 async function publishWithCli(projectId: string, slug: string, signupPolicy?: { mode: string; allowlist: string[] }) {
   const root = await copyOf(`cli-${projectId}-${crypto.randomUUID()}`);
   const owner = new McpClient(`${url}/mcp`, { fetch: ownerFetch });

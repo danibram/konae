@@ -1,13 +1,3 @@
-//! The Kernel alone serves each app folder as it finds it (ADR-0001). At
-//! startup it reads `konae.json`, `app/` and `dist/` of every folder under
-//! `apps/`, runs on them the checks a release gets, applies the schema
-//! change `app/schema.sql` asks of `data/database.sqlite`, and writes the
-//! record it serves the app by. An exported folder carries no record, so
-//! this is how it starts to answer.
-//!
-//! While it serves, the Kernel follows each app's `konae.json` for changes
-//! to the applied Signup Policy. Editable source settings stay drafts until
-//! a successful release.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -136,7 +126,6 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         contact_email: settings.contact_email.clone().or_else(|| released.as_ref().and_then(|snapshot| snapshot.contact_email.clone())),
         schema_confirmation: None,
     };
-    // The checks of a release: paths, size, routing, connects, the actions and their secrets.
     runtime::validate_release(state, &input, None).await?;
     let program: crate::ActionProgram = serde_json::from_str(&actions)?;
     let _database = crate::database_lock(state, id).await;
@@ -168,9 +157,6 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
             (hostname, now_ms(), Some(taking))
         }
     };
-    // A start that finds the files the record names keeps their release time
-    // and the digest of the sources they were built from, so app/ edits not
-    // yet built into dist/ still read as changes.
     let unchanged = !rebuilt && !candidate_sources;
     let released_at = if unchanged { released.as_ref().and_then(|snapshot| snapshot.released_at).or_else(|| stored.as_ref().and_then(|record| record.released_at)).or_else(|| existing.as_ref().map(|current| current.released_at)).unwrap_or_else(now_ms) } else { now_ms() };
     let source_digest = if candidate_sources || rebuilt || fresh_sources { Some(crate::sources::digest_folder(&sources).await?) } else { released.as_ref().and_then(|snapshot| snapshot.source_digest.clone()).or_else(|| stored.as_ref().and_then(|record| record.source_digest.clone())).or_else(|| existing.as_ref().and_then(|current| current.source_digest.clone())) };
@@ -203,7 +189,6 @@ async fn optional_text(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// The change `schema` asks of the live database, read from a copy.
 fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::ActionProgram, transforms: Option<&str>) -> Result<schema_change::Change> {
     let copy = state.data_root.join(format!("validate-{}.sqlite", Uuid::new_v4()));
     let result = (|| {
@@ -222,7 +207,6 @@ pub async fn free_hostname(state: &AppState, slug: &str, id: &str) -> (String, c
     crate::hostname::choose(state, slug, id).await
 }
 
-/// Every file under `dist/`, by its path inside it.
 pub(crate) fn read_dist(dist: &Path) -> Result<HashMap<String, Vec<u8>>> {
     let mut files = HashMap::new();
     let mut pending = vec![dist.to_path_buf()];
@@ -242,7 +226,6 @@ pub(crate) fn read_dist(dist: &Path) -> Result<HashMap<String, Vec<u8>>> {
     Ok(files)
 }
 
-/// A digest of the files, so the same `dist/` keeps its version across starts.
 pub(crate) fn version_of(files: &HashMap<String, Vec<u8>>) -> String {
     let mut paths = files.keys().collect::<Vec<_>>();
     paths.sort();
@@ -450,7 +433,6 @@ mod tests {
         let app = layout::sources(&root, "notes_app");
         let first = open(&state, "notes_app", None).await.unwrap();
         assert_eq!(first.source_digest.as_deref(), Some(crate::sources::digest_folder(&app).await.unwrap().as_str()));
-        // An edit to app/ that was not built into dist/ is not the release.
         std::fs::write(app.join("index.html"), "<main>edited</main>").unwrap();
         let same = open(&state, "notes_app", None).await.unwrap();
         assert_eq!(same.source_digest, first.source_digest);
@@ -469,7 +451,6 @@ mod tests {
         let first = open(&state, "notes_app", None).await.unwrap();
         assert_eq!(first.hostname, "notes.localhost");
         write_folder(&root, "notes_other", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
-        // Same slug "notes" from konae.json name Notes → safe_slug notes; first host is taken.
         let path = layout::settings(&root, "notes_other");
         let mut settings: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         settings.slug = "notes".into();
@@ -575,7 +556,6 @@ mod tests {
         let state = editor_state(&root);
         let hostname = free_hostname(&state, "app", "app_test").await.0;
         assert!(is_coded(&hostname, "app"), "{hostname}");
-        // An empty slug, and one that `safe_slug` empties, fall back to `app`.
         for slug in ["", "!!!", "日本語"] {
             let hostname = free_hostname(&state, slug, "app_test").await.0;
             assert!(is_coded(&hostname, "app"), "{slug:?} gave {hostname}");

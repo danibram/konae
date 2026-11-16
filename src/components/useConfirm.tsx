@@ -6,17 +6,12 @@ export function message(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/** The Kernel answers 401 when the owner session ended. */
 export function signedOut(cause: unknown) {
   return cause instanceof McpError && cause.status === 401;
 }
 
 type Confirm = { title: string; description: string; action: string; run: () => Promise<unknown> } | null;
 
-/**
- * A confirmation dialog for one owner action. A refusal from the Kernel stays
- * in the dialog, in the Kernel's words, so the owner reads why.
- */
 export function useConfirm(onSignedOut: () => void) {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [busy, setBusy] = useState(false);

@@ -1,4 +1,3 @@
-//! Execution policy for a Kernel process.
 
 use serde::{Deserialize, Serialize};
 

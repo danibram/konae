@@ -28,11 +28,6 @@ describe("capsule paths", () => {
     expect(capsuleFileFor("")).toBeNull();
   });
 
-  /**
-   * The bug this pins: only containment was checked, so the agent could create
-   * names the project tree refuses and a file nested under an existing file,
-   * which the export then fails to write.
-   */
   test("refuses names the project tree refuses and files nested under a file", async () => {
     expect(capsuleFileFor("/workspace/a\u0001b.js")).toBeNull();
     expect(capsuleFileFor(`/workspace/${"d/".repeat(130)}f.js`)).toBeNull();
@@ -54,10 +49,6 @@ describe("capsule paths", () => {
 });
 
 describe("capsule reserved paths", () => {
-  /**
-   * The bug this pins: case variants such as App.js, or a path inside a
-   * Capsule file, overwrote the real file on a case-insensitive filesystem.
-   */
   test("refuses case variants of Capsule files and paths inside them", async () => {
     const space = workspace();
     for (const path of [
@@ -68,7 +59,6 @@ describe("capsule reserved paths", () => {
     ]) {
       const written = await space.env.writeFile(path, "x");
       expect({ path, ok: written.ok }).toEqual({ path, ok: false });
-      // actions.JSON/x.json sits under the existing actions.json, so that one is refused as not_directory.
       if (!written.ok) expect(["permission_denied", "not_directory"]).toContain(written.error.code);
       expect((await space.env.appendFile(path, "x")).ok).toBe(false);
       expect((await space.env.createDir(path)).ok).toBe(false);
@@ -76,7 +66,6 @@ describe("capsule reserved paths", () => {
     expect(Object.keys(space.serialize().files).sort()).toEqual(Object.keys(seed).sort());
     expect(space.changedFiles()).toEqual([]);
 
-    // The five Capsule files and ordinary nested files stay writable.
     expect((await space.env.writeFile("/workspace/app.js", "x")).ok).toBe(true);
     expect((await space.env.writeFile("/workspace/src/schema.ts", "x")).ok).toBe(true);
   });

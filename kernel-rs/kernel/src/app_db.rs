@@ -1,27 +1,11 @@
-//! Open connections to app Databases, kept between Server Actions.
-//!
-//! Opening a connection, installing its limits and authorizer, and closing
-//! it again cost more than a small indexed query. In WAL mode the close of a
-//! Database's last connection also checkpoints the log and removes it. So a
-//! Server Action borrows a configured connection and gives it back.
-//!
-//! A kept connection reads the file it opened, even after another file is
-//! renamed over its path. So a connection is lent only while its path still
-//! names the file it opened, and `database_lock` (which a restore, a copy or
-//! an import holds) drops every kept connection of that Database.
 
 use rusqlite::Connection;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-/// Kept connections across every Database of this Kernel. Each holds three
-/// file descriptors (the file, its WAL and its index) and up to SQLite's
-/// default page cache of 2 MiB.
 const MAX_KEPT: usize = 64;
-/// Kept connections of one Database: as many as readers commonly overlap.
 const MAX_KEPT_PER_DATABASE: usize = 8;
-/// Prepared statements a connection keeps, one per distinct action text.
 const STATEMENT_CACHE: usize = 64;
 
 struct Kept {
@@ -32,7 +16,6 @@ struct Kept {
 #[derive(Default)]
 struct Pool {
     by_path: HashMap<PathBuf, Vec<Kept>>,
-    /// Paths from least to most recently returned, for eviction.
     order: VecDeque<PathBuf>,
     total: usize,
 }
@@ -109,12 +92,7 @@ pub fn open(path: &Path) -> anyhow::Result<AppConnection> {
     };
     super::arm_deadline(&connection);
     // A mutation answers SQLite's last inserted rowid, which belongs to the
-    // connection. A borrower starts at 0, as on a connection just opened, so
-    // an UPDATE never answers the id an earlier INSERT made.
-    // SAFETY: the handle is this live connection's, used on this thread only.
     unsafe { rusqlite::ffi::sqlite3_set_last_insert_rowid(connection.handle(), 0) };
-    // The file is named again after the open, so a connection opened on a
-    // path that was replaced meanwhile is used once and not kept.
     let file = file.filter(|file| file_id(path) == Some(*file));
     Ok(AppConnection { connection: Some(connection), path: path.to_owned(), file })
 }
@@ -123,8 +101,6 @@ fn take(path: &Path, file: FileId) -> Option<Connection> {
     let mut pool = pool();
     let pool = &mut *pool;
     let kept = pool.by_path.get_mut(path)?;
-    // A file renamed over this path since these were opened: none of them
-    // reads it.
     if kept.iter().any(|kept| kept.file != file) {
         pool.total -= kept.len();
         pool.by_path.remove(path);
@@ -158,8 +134,6 @@ fn give_back(path: &Path, connection: Kept) {
             }
         }
     }
-    // Closed outside the pool's lock: the last close of a Database
-    // checkpoints its log.
     drop(evicted);
 }
 

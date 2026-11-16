@@ -1,20 +1,9 @@
 import { templateHelpers, templateStyles } from "./shared";
 import type { TemplateSource } from "./types";
 
-/**
- * Every staff action checks the caller's role with this one predicate. The
- * app's own owner role is a profiles row the Konae owner marks with SQL in
- * Data; admin comes from that role's promote. The Kernel accepts it as written,
- * with ?1 bound to actor.id.
- */
 export const adminCheck = "(SELECT role FROM profiles WHERE user_id = ?1) IN ('admin', 'owner')";
 
-const schema = `-- One row per person who joined. The Kernel says who is signed in; the role
--- column is the app's own decision. Everyone joins as member. To name the
--- app's owner, run in Data > SQL, with the account ID that Access > Users shows:
---   UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';
--- Staff actions check: ${adminCheck}
-CREATE TABLE IF NOT EXISTS profiles (
+const schema = `CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY NOT NULL,
   display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 40),
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin', 'owner')),

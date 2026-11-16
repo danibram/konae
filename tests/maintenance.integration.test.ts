@@ -4,9 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// An app in maintenance takes no writes. The owner puts it in and takes it out
-// with maintenance_set, and kernel-rs/kernel/src/maintenance.rs keeps the state
-// in apps/<id>/.konae/maintenance.json, so a restart keeps it.
 let root: string;
 let kernel: Kernel;
 
@@ -61,7 +58,6 @@ test("an owner puts an app in maintenance, where it serves its page, refuses wri
   const rows = await kernel.owner.call<{ rows: { body: string }[] }>("database_execute", { projectId: receipt.id, operation: "browse", input: { tableName: "notes" } }).catch((error: Error) => error);
   expect(rows).not.toBeInstanceOf(Error);
 
-  // Taking the app out is the one change a paused app takes, and it writes again.
   expect((await kernel.owner.call<{ maintenance: boolean }>("maintenance_set", { projectId: receipt.id, on: false })).maintenance).toBe(false);
   expect((await invoke("notes.add", { body: "after" })).status).toBe(200);
   expect((await appFetch(kernel, receipt.hostname, "/", { headers: { accept: "text/html" } })).status).toBe(200);

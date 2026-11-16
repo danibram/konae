@@ -1,10 +1,3 @@
-//! The SQL rules an action statement and `schema.sql` must follow, with the
-//! words both doors refuse them in. `parseAction` in src/kernel/actions.ts and
-//! `refusedStatements` in src/agent/gate.ts give the same messages, and
-//! kernel-rs/kernel/src/sql-rule-cases.json holds the cases both test suites run.
-//!
-//! A statement is read with the tokenizer in main.rs, so a keyword or a `;`
-//! inside a string, a quoted name or a comment never counts.
 
 use super::refusal::{refuse, Refusal};
 use super::{sql_tokens, ActionDefinition, SqlTok, SqlTokKind};
@@ -38,9 +31,6 @@ pub fn check_statement(name: &str, action: &ActionDefinition) -> Result<(), Refu
     Ok(())
 }
 
-/// The refusal for a statement that starts with the wrong word, with a hint
-/// for the two mistakes the showcase apps made: a leading WITH, and schema
-/// work written as an action.
 fn first_word_refusal(name: &str, kind: &str, first: &str) -> Refusal {
     let rule = if kind == "query" {
         format!("Action {name} is a query, so it must start with SELECT.")
@@ -59,8 +49,6 @@ fn first_word_refusal(name: &str, kind: &str, first: &str) -> Refusal {
     refuse(code, format!("{rule}{hint}"))
 }
 
-/// A RETURNING keyword outside parentheses. `:returning`, `@returning` and
-/// `$returning` are named parameters, not the clause.
 fn returns_rows(tokens: &[SqlTok]) -> bool {
     tokens.iter().enumerate().any(|(index, token)| {
         let parameter = index > 0 && [":", "@", "$"].iter().any(|symbol| tokens[index - 1].is_symbol(symbol));
@@ -102,9 +90,6 @@ pub fn refused_schema_statements(schema: &str) -> Vec<String> {
     found
 }
 
-/// The refused functions a statement calls, from `DENIED_FUNCTIONS`, which
-/// the authorizer refuses too and `refusedFunctionNames` in
-/// src/agent/gate.ts repeats. A quoted name still calls the function.
 fn refused_functions(tokens: &[SqlTok]) -> Vec<String> {
     tokens
         .windows(2)
@@ -114,10 +99,6 @@ fn refused_functions(tokens: &[SqlTok]) -> Vec<String> {
         .collect()
 }
 
-/// The CREATE forms the Kernel will not apply, as `refusedCreate` in
-/// src/agent/gate.ts reads them: a trigger, a view or anything but a table
-/// or an index; a table or an index in the temp schema; and a table made AS
-/// a query, which copies rows in.
 fn refused_create(tokens: &[SqlTok], words: &[String]) -> Option<String> {
     let object = if words.get(1).map(String::as_str) == Some("UNIQUE") { words.get(2) } else { words.get(1) };
     let object = match object.map(String::as_str) {
@@ -138,8 +119,6 @@ fn refused_create(tokens: &[SqlTok], words: &[String]) -> Option<String> {
     if object == "INDEX" {
         return None;
     }
-    // The column list opens with the first top-level "(". An AS before it is
-    // a CREATE TABLE ... AS query; GENERATED ALWAYS AS sits inside the list.
     let outer = tokens[start].depth;
     for token in tokens.iter().skip(index).filter(|token| token.depth == outer) {
         if token.is_symbol("(") {
@@ -159,8 +138,6 @@ pub fn schema_refusal(schema: &str) -> Option<Refusal> {
         .then(|| refuse("schema.statement-refused", format!("schema.sql may only create tables and indexes, but it contains {}.", refused.join(", "))))
 }
 
-/// Splits a script on `;`, keeping a trigger body (`BEGIN ...; END`) in its
-/// statement, as `sqlStatementTokens` in src/lib/sql-tokens.ts does.
 fn statements(sql: &str) -> Vec<Vec<SqlTok>> {
     let mut statements = Vec::new();
     let mut current: Vec<SqlTok> = Vec::new();
@@ -257,7 +234,6 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    /// The editor runs the same file in src/kernel/sql-rules.test.ts.
     #[test]
     fn statements_and_schemas_are_refused_with_the_editors_words() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("sql-rule-cases.json")).unwrap();

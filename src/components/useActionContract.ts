@@ -5,11 +5,6 @@ export type ActionContractState =
   | { ok: true; markdown: string; actions: number; warnings: ContractWarning[] }
   | { ok: false; reason: string };
 
-/**
- * The Action Contract of the Capsule as it stands in the editor, written again
- * whenever actions.json or schema.sql changes. It is never stored: the export
- * and the CLI write it from the same sources.
- */
 export function useActionContract(actionsSource: string | undefined, schemaSource: string | undefined, project: { id: string; name: string }): ActionContractState {
   const { id, name } = project;
   return useMemo(() => {

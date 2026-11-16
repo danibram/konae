@@ -36,17 +36,11 @@ const schema = starter.files["schema.sql"];
 const actions = starter.files["actions.json"];
 
 describe("runtime host", () => {
-  /**
-   * The bug this pins: the host is built during render and parsed actions.json
-   * in its constructor, so one bad edit threw on every render and the editor
-   * could not open the project again, even after a reload.
-   */
   test("an invalid actions.json is reported, not thrown, and the last valid program keeps running", async () => {
     expect(() => new MiniAppRuntimeHost("broken", schema, "{ \"version\": 1, ")).not.toThrow();
     const broken = new MiniAppRuntimeHost("broken", schema, "{ \"version\": 1, ");
     expect(broken.actionsError).toContain("valid JSON");
     await expect(broken.handle("actions.invoke", { name: "tasks.list" })).rejects.toThrow("actions.json is invalid");
-    // Nothing valid ever loaded, so there is no last valid program to speak of.
     expect(broken.previewErrors()[0].message).toContain("has no server actions until it is fixed");
     expect(broken.previewErrors()[0].message).not.toContain("last valid");
 
@@ -57,7 +51,6 @@ describe("runtime host", () => {
     expect(host.actionsError).toContain("valid JSON");
     expect(host.previewErrors()[0]).toMatchObject({ kind: "actions" });
     expect(host.previewErrors()[0].message).toContain("still runs the last valid one");
-    // A reconnect clears runtime failures; it must not hide the broken file.
     host.clearPreviewErrors();
     expect(host.previewErrors()[0]).toMatchObject({ kind: "actions" });
     expect(await host.handle("actions.invoke", { name: "tasks.list" })).toEqual([]);
@@ -68,11 +61,6 @@ describe("runtime host", () => {
     expect(seen).toEqual([null, expect.stringContaining("valid JSON"), null]);
   });
 
-  /**
-   * The bug this pins: setSchema recorded the text before running it, so a
-   * failure was an unhandled rejection and running the same text again later
-   * was skipped as already applied.
-   */
   test("a failing schema.sql is surfaced and the same text is retried later", async () => {
     const host = new MiniAppRuntimeHost("schema", "CREATE TABLE broken (", actions);
     await host.setSchema("CREATE TABLE broken (");
@@ -89,11 +77,6 @@ describe("runtime host", () => {
     expect(host.schemaError).toBeNull();
   });
 
-  /**
-   * The bug this pins: a write was released and then persisted, so a full
-   * localStorage reported the write as failed while it stayed in memory and
-   * showed up in the next read.
-   */
   test("a write that cannot be saved is not left in memory", async () => {
     const host = new MiniAppRuntimeHost("quota", schema, actions);
     await host.handle("actions.invoke", { name: "tasks.create", input: { title: "kept" } });
@@ -157,14 +140,6 @@ describe("runtime host", () => {
       .rejects.toThrow("Action slots.hook answers only on its HTTP route, POST /hooks/slots.");
   });
 
-  /**
-   * The Kernel binds an integer-valued number as INTEGER and measures maxLength
-   * in UTF-16 code units, which is what JavaScript's string length counts.
-   * sql.js binds integers in the 32-bit range as INTEGER, so these agree.
-   * Larger integers, such as a millisecond timestamp, sql.js can only bind as
-   * REAL; a column with INTEGER affinity stores them as integers anyway, which
-   * is why the templates declare timestamp columns INTEGER.
-   */
   test("binds numbers and measures strings the way the Kernel does", async () => {
     const bindingSchema = "CREATE TABLE IF NOT EXISTS probe (n_int INTEGER, n_text TEXT, n_any, ts INTEGER, label TEXT);";
     const bindingActions = JSON.stringify({
@@ -191,7 +166,6 @@ describe("runtime host", () => {
       },
     });
     const host = new MiniAppRuntimeHost("binding", bindingSchema, bindingActions);
-    // One astral character is two UTF-16 code units, so it fills a maxLength of 2.
     await host.handle("actions.invoke", { name: "probe.create", input: { n: 5, label: "\u{1F600}" } });
     await expect(host.handle("actions.invoke", { name: "probe.create", input: { n: 5, label: "\u{1F600}a" } })).rejects.toThrow("too long");
     expect(await host.handle("actions.invoke", { name: "probe.list" })).toEqual([
@@ -372,11 +346,9 @@ describe("proposal preview host lifecycle", () => {
 
 describe("the preview refuses miniapp.actions.call with the Kernel's words", () => {
   const callErrors = sdkContract.modules.find((module) => module.name === "actions")!.calls.find((call) => call.name === "call")!.errors;
-  /** The contract's message for a refusal the preview shares with the Kernel, with its placeholders filled. */
   function kernelMessage(template: string, fill: Record<string, string> = {}): string {
     const error = callErrors.find((candidate) => candidate.message === template);
     expect(error, template).toBeDefined();
-    // Absent means the preview answers with the same text as the Kernel.
     expect(error!.preview, template).toBeUndefined();
     return template.replace(/<(key|name)>/g, (_, slot: string) => fill[slot] ?? "");
   }

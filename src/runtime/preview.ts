@@ -124,12 +124,6 @@ export const runtimeClient = String.raw`
   };
 })();`;
 
-/**
- * The preview must run a Capsule exactly as a Deployment does, same module
- * semantics and same error handling, or an app can work in one and be dead in
- * the other. Both go through renderCapsuleDocument; only the SDK transport
- * differs.
- */
 export function createPreviewDocument(project: MiniAppProject): string {
   const assets = new Map<string, string>();
   const stylesheets = new Map<string, string>();
@@ -151,7 +145,6 @@ export function createPreviewDocument(project: MiniAppProject): string {
   return rewritePreviewAssets(document, assets, stylesheets);
 }
 
-/** Rewrites only static fetch attributes and CSS URLs the shared builder resolves. */
 function rewritePreviewAssets(document: string, assets: Map<string, string>, stylesheets: Map<string, string>): string {
   const rewriteCss = (css: string, from: string, visited = new Set<string>()): string => {
     let output = css.replace(/@import\s+(?:url\(\s*)?(["'])([^"']+)\1\s*\)?([^;]*);/gi, (whole, quote, raw, suffix) => {

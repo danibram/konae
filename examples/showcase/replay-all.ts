@@ -1,8 +1,3 @@
-// Runs every showcase replay in turn, each on its own port, and exits non-zero
-// if any fails. Each replay starts and removes its own Kernel.
-//
-//   bun run examples/showcase/replay-all.ts
-//   KONAE_SHOWCASE_BASE_PORT=22000 bun run examples/showcase/replay-all.ts
 import { readdirSync } from "node:fs";
 import path from "node:path";
 

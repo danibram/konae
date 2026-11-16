@@ -83,18 +83,10 @@ export function Dialog({ open = true, title, description, showTitle = true, onCl
 
 export type SkeletonProps = { width?: number | string; height?: number | string; radius?: number | string; className?: string };
 
-/** A quiet placeholder shape. Give it the size of the content that replaces it so nothing moves. */
 export function Skeleton({ width = "100%", height = 14, radius, className }: SkeletonProps) {
   return <span aria-hidden="true" className={classes("ui-skeleton", className)} style={{ width, height, borderRadius: radius }} />;
 }
 
-/**
- * One loading surface: a single polite status with one label, and skeleton
- * shapes that hold the layout. The shapes are in the page from the first
- * paint but fade in after the loading delay, so a fast load shows nothing.
- * `sinceNavigation` counts that delay from the page load, so a skeleton
- * remounted by the next boot stage does not blink.
- */
 export function LoadingBlock({ label, rows = 3, children, className, sinceNavigation = false }: { label: string; rows?: number; children?: ReactNode; className?: string; sinceNavigation?: boolean }) {
   const delay = sinceNavigation && typeof performance !== "undefined" ? Math.round(LOADING_DELAY_MS - performance.now()) : LOADING_DELAY_MS;
   return <div role="status" aria-busy="true" className={classes("ui-loading", className)} style={{ "--ui-loading-delay": `${delay}ms` } as CSSProperties}>
@@ -105,11 +97,9 @@ export function LoadingBlock({ label, rows = 3, children, className, sinceNaviga
   </div>;
 }
 
-/* ---- Selection ---------------------------------------------------------- */
 
 export type TabItem = { id: string; label: string; count?: number; panel: ReactNode };
 
-/** Tabs with one tab stop: the arrow keys, Home and End move between tabs. */
 export function Tabs({ items, label, defaultId }: { items: TabItem[]; label: string; defaultId?: string }) {
   const [current, setCurrent] = useState(defaultId ?? items[0]?.id);
   const base = useId();
@@ -131,14 +121,9 @@ export function Tabs({ items, label, defaultId }: { items: TabItem[]; label: str
   </div>;
 }
 
-export type TabBarItem<T extends string> = { id: T; label: string; icon?: ReactNode; /** A short mark after the label, such as a count or "refused". */ badge?: ReactNode; /** The id of the panel this tab shows, when the caller renders it. */ controls?: string; tabId?: string };
+export type TabBarItem<T extends string> = { id: T; label: string; icon?: ReactNode;  badge?: ReactNode;  controls?: string; tabId?: string };
 
-/**
- * The tab strip of `Tabs` for a caller that owns the choice and draws the panels
- * itself, such as a workbench whose panels stay mounted. One tab stop; the arrow
- * keys, Home and End move and choose.
- */
-export function TabBar<T extends string>({ items, value, onChange, label, className, end }: { items: TabBarItem<T>[]; value: T | null; onChange: (id: T) => void; label: string; className?: string; /** Controls after the tabs, at the far end of the strip. */ end?: ReactNode }) {
+export function TabBar<T extends string>({ items, value, onChange, label, className, end }: { items: TabBarItem<T>[]; value: T | null; onChange: (id: T) => void; label: string; className?: string;  end?: ReactNode }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const selected = items.findIndex((item) => item.id === value);
   const move = (event: KeyboardEvent, index: number) => {
@@ -170,14 +155,12 @@ export function Radio({ label, className, ...props }: Omit<ComponentProps<"input
   return <label className={classes("ui-check ui-radio", className)}><input {...props} type="radio" /><span>{label}</span></label>;
 }
 
-/** A short single choice that changes the view, as a period. */
 export function Segmented<T extends string | number>({ value, onChange, options, label }: { value: T; onChange: (next: T) => void; options: { value: T; label: string }[]; label: string }) {
   return <div role="radiogroup" aria-label={label} className="ui-segmented">
     {options.map((option) => <button key={option.value} type="button" role="radio" aria-checked={option.value === value} onClick={() => onChange(option.value)}>{option.label}</button>)}
   </div>;
 }
 
-/* ---- Feedback ----------------------------------------------------------- */
 
 const alertIcon = { info: Info, success: CheckCircle2, warning: AlertTriangle, danger: OctagonAlert } as const;
 
@@ -192,7 +175,6 @@ export function Alert({ tone = "info", title, children, action, className }: { t
 
 export type ToastItem = { id: number; tone?: "success" | "danger" | "info"; message: string };
 
-/** The live region that holds toasts. The caller owns the list and the timers. */
 export function ToastRegion({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }) {
   return <div className="ui-toasts" role="region" aria-label="Notifications" aria-live="polite">
     {toasts.map((toast) => <div key={toast.id} className={classes("ui-toast", `ui-toast-${toast.tone ?? "info"}`)}><span>{toast.message}</span><IconButton label="Dismiss" onClick={() => onDismiss(toast.id)}><X size={14} /></IconButton></div>)}
@@ -203,7 +185,6 @@ export function Progress({ value, max = 100, label, tone = "accent" }: { value: 
   return <div className="ui-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={max} aria-valuenow={value} data-tone={tone}><span style={{ width: `${Math.min(100, Math.max(0, value / max * 100))}%` }} /></div>;
 }
 
-/* ---- Display ------------------------------------------------------------ */
 
 export function Avatar({ name, size = 32 }: { name: string; size?: number }) {
   const initials = name.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("");
@@ -222,9 +203,8 @@ export function Disclosure({ summary, children, defaultOpen }: { summary: ReactN
   return <details className="ui-disclosure" open={defaultOpen}><summary>{summary}</summary><div>{children}</div></details>;
 }
 
-export type StatProps = { label: string; value: string; /** Change against the previous period, as +12%. */ delta?: string; trend?: "up" | "down" | "flat"; /** Whether up is good. A refusal count going up is not. */ upIsGood?: boolean; spark?: ReactNode };
+export type StatProps = { label: string; value: string;  delta?: string; trend?: "up" | "down" | "flat";  upIsGood?: boolean; spark?: ReactNode };
 
-/** The headline numbers of one view. Four fit a row; more wrap. */
 export function StatStrip({ items }: { items: StatProps[] }) {
   return <dl className="ui-stats">{items.map((item) => {
     const good = item.trend === "flat" || item.trend === undefined ? undefined : (item.trend === "up") === (item.upIsGood ?? true);
@@ -238,9 +218,7 @@ export function Table({ caption, children, className }: { caption?: string; chil
   return <div className="ui-table-scroll"><table className={classes("ui-table", className)}>{caption && <caption>{caption}</caption>}{children}</table></div>;
 }
 
-/* ---- Overlays ----------------------------------------------------------- */
 
-/** A hint on hover and focus. It never carries the only copy of anything. */
 export function Tooltip({ text, children }: { text: string; children: ReactElement<{ "aria-describedby"?: string }> }) {
   const id = useId();
   return <span className="ui-tooltip">{cloneElement(children, { "aria-describedby": id })}<span role="tooltip" id={id}>{text}</span></span>;
@@ -248,22 +226,13 @@ export function Tooltip({ text, children }: { text: string; children: ReactEleme
 
 export type MenuItem = {
   label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; disabled?: boolean;
-  /** Marks the item that is the current page, as a switcher does. The menu opens with focus on it. */
   current?: boolean;
-  /** A short quiet word after the label, such as an app's Draft or Published. */
   detail?: string;
-  /** Draws a line above the item, apart from the ones before it. */
   separated?: boolean;
 };
 
-/**
- * A button that opens a short list of actions. Arrow keys move, Escape returns to the button.
- * The label names the button for a screen reader; with `showsLabel` the trigger's own text
- * names it instead (a switcher that shows the current project). `triggerClassName` restyles it.
- */
 export function Menu({ label, trigger, items, align = "end", triggerClassName, showsLabel = false }: { label: string; trigger: ReactNode; items: MenuItem[]; align?: "start" | "end"; triggerClassName?: string; showsLabel?: boolean }) {
   const [open, setOpen] = useState(false);
-  // Opens upward when the space below the button is too short for the list and the space above is not.
   const [side, setSide] = useState<"bottom" | "top">("bottom");
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -279,7 +248,6 @@ export function Menu({ label, trigger, items, align = "end", triggerClassName, s
     if (!open) return;
     const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
     document.addEventListener("pointerdown", close);
-    // A switcher opens where you are, on the current item; any other menu on its first.
     const start = root.current?.querySelector<HTMLElement>("[role=menuitem][aria-current]:not(:disabled)") ?? root.current?.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)");
     start?.focus({ preventScroll: false });
     return () => document.removeEventListener("pointerdown", close);
@@ -304,9 +272,7 @@ export function Menu({ label, trigger, items, align = "end", triggerClassName, s
   </div>;
 }
 
-/* ---- App patterns ------------------------------------------------------- */
 
-/** The column a small app lives in. */
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
   return <main className={classes("ui-page", className)}>{children}</main>;
 }
@@ -319,17 +285,14 @@ export function Lede({ children }: { children: ReactNode }) {
   return <p className="ui-lede">{children}</p>;
 }
 
-/** A row of actions under a lede: the primary one first. It wraps on a narrow screen. */
 export function Actions({ children }: { children: ReactNode }) {
   return <div className="ui-actions">{children}</div>;
 }
 
-/** Numbered steps: an ordered list whose numbers sit in accent squares. Screen readers hear each number once. */
 export function Steps({ items }: { items: { title: string; detail?: ReactNode }[] }) {
   return <ol className="ui-list ui-steps">{items.map((item, index) => <li className="ui-list-item" key={item.title}><span className="ui-list-lead" aria-hidden="true">{index + 1}</span><div className="ui-list-main"><p>{item.title}</p>{item.detail && <small>{item.detail}</small>}</div></li>)}</ol>;
 }
 
-/** Who is using the app, with the one button that changes it. */
 export function Identity({ name, children }: { name?: string; children?: ReactNode }) {
   return <div className="ui-identity">{name && <><Avatar name={name} size={26} /><span>{name}</span></>}{children}</div>;
 }
@@ -342,7 +305,6 @@ export function List({ children }: { children: ReactNode }) {
   return <div className="ui-list" role="list">{children}</div>;
 }
 
-/** One row: an optional leading control, a title with a quiet line under it, and what can be done to it. */
 export function ListItem({ title, detail, lead, end, done }: { title: ReactNode; detail?: ReactNode; lead?: ReactNode; end?: ReactNode; done?: boolean }) {
   return <article className="ui-list-item" role="listitem" data-done={done || undefined}>
     {lead && <span className="ui-list-lead">{lead}</span>}
@@ -351,7 +313,6 @@ export function ListItem({ title, detail, lead, end, done }: { title: ReactNode;
   </article>;
 }
 
-/** One line that adds a row: a field and its button, joined. */
 export function Composer({ label, placeholder, action, value, onChange, onSubmit }: { label: string; placeholder?: string; action: ReactNode; value: string; onChange: (value: string) => void; onSubmit: () => void }) {
   return <form className="ui-composer" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
     <input aria-label={label} placeholder={placeholder} value={value} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
@@ -367,7 +328,6 @@ export function Tile({ src, alt, caption, end, children }: { src?: string; alt?:
   return <figure className="ui-tile">{src ? <img src={src} alt={alt ?? ""} /> : <div className="ui-tile-media">{children}</div>}{(caption || end) && <figcaption><span>{caption}</span>{end}</figcaption>}</figure>;
 }
 
-/** Marks one row done or not done. The label names the row for a screen reader. */
 export function Tick({ pressed, onToggle, label = "Toggle task" }: { pressed: boolean; onToggle: () => void; label?: string }) {
   return <button type="button" className="ui-tick" aria-pressed={pressed} aria-label={label} onClick={onToggle} />;
 }

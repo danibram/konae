@@ -33,7 +33,6 @@ const routes = JSON.stringify({
   },
 });
 
-/** Every sentence the views show about access, to check the vocabulary once. */
 function allCopy() {
   return [
     ...Object.values(signupModeCopy).map((copy) => copy.sentence),
@@ -53,7 +52,6 @@ describe("signup policy copy", () => {
       expect(sentence.slice(0, -1)).not.toContain(". ");
     }
     expect(signupModeCopy.invitation.label).toBe("Invitation only");
-    // ADR-0003: the owner's invitation still works.
     expect(signupModeCopy.closed.sentence).toContain("people you invite can still accept");
     expect(signupModes.filter((mode) => signupModeCopy[mode].advanced)).toEqual(["allowlist"]);
   });
@@ -61,7 +59,6 @@ describe("signup policy copy", () => {
   test("a first publish proposes Invitation only for a private app and Open for a public one", () => {
     expect(defaultSignupMode("private")).toBe("invitation");
     expect(defaultSignupMode("public")).toBe("open");
-    // Allowlist needs its list, so the dialog leaves it to the Users view.
     expect(firstPublishModes).not.toContain("allowlist");
   });
 
@@ -75,7 +72,6 @@ describe("signup policy copy", () => {
     for (const sentence of allCopy()) {
       expect(sentence).not.toMatch(/create (an|the|your) app\b(?! account)/i);
       expect(sentence).not.toMatch(/\bsign up for Konae\b/i);
-      // A person who uses the app has an app account; "account" alone could mean the owner's.
       if (/\baccount\b/.test(sentence)) expect(sentence).toMatch(/app account/);
     }
   });
@@ -124,7 +120,6 @@ describe("invitation state", () => {
     expect(invitationView({ status: "pending", delivery: "not-sent", sends: 0 }).delivery.label).toBe("No email sent");
     expect(invitationView({ status: "needs-resend", delivery: "not-sent", sends: 1 }).delivery.label).toBe("Link no longer works");
     expect(invitationView({ status: "pending", delivery: "queued", sends: 2 }).sends).toBe("Sent 2 times");
-    // Nothing claims delivery to an inbox: the Kernel records no per-invitation provider state.
     for (const delivery of ["queued", "failed", "not-sent"] as const) {
       expect(invitationView({ status: "pending", delivery, sends: 1 }).delivery.label).not.toMatch(/delivered/i);
     }
@@ -228,7 +223,6 @@ describe("googleRefusal", () => {
       expect(shown?.field, item.case).toBe(item.tool === "secret_set" || item.tool === "secret_delete" ? saving : undefined);
       expect(ownerFixes(item.code), item.case).toBe(true);
     }
-    // An answer without an owner's refusal code is shown as it is.
     expect(googleRefusal(new Error("Network down"))).toBeNull();
     expect(googleRefusal(new McpError("Unknown tool."))).toBeNull();
   });

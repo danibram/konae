@@ -1,21 +1,3 @@
-//! A mutation's notice: an email the Kernel queues when the statement
-//! changes a row (ADR-0012).
-//!
-//! `"notify": { "to": "owner" | "actor", "subject", "body" }` sends to the
-//! app's contact email in `konae.json`, which the owner sets in App settings
-//! and a first publish from Konae fills with the owner's email when Konae
-//! knows it, or to the calling account's verified email,
-//! never to an address from the input, so an app cannot relay mail. The
-//! subject and body are templates whose only placeholders are
-//! `{input.<key>}`, for one of the action's input bindings, and `{actor.id}`.
-//! A value loses its line breaks and is cut to 200 characters, and the HTML
-//! part escapes it. The notice goes through the mail queue (`mail.rs`) under
-//! the installation's total and its own creator, app and recipient budgets.
-//! The mutation's answer never depends on it: a notice that cannot be sent
-//! is counted in Usage under `notify` with the reason.
-//!
-//! `parseNotify` in src/kernel/actions.ts makes the same checks, and
-//! kernel-rs/kernel/src/notify-cases.json holds the cases both test suites run.
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{Map, Value};
@@ -62,30 +44,22 @@ pub async fn set_contact_email(state: &AppState, deployment: &Deployment, email:
 
 pub const MAX_SUBJECT_CHARS: usize = 120;
 pub const MAX_BODY_CHARS: usize = 2000;
-/// Characters one placeholder's value keeps.
 const MAX_VALUE_CHARS: usize = 200;
-/// Characters a rendered subject and body keep.
 const MAX_RENDERED_SUBJECT_CHARS: usize = 200;
 const MAX_RENDERED_BODY_CHARS: usize = 5000;
 
-/// Columns a `changes` list may name.
 const MAX_CHANGES_COLUMNS: usize = 8;
 /// Changed rows the Kernel reads back from one run; the rest are counted
 /// in `{changes.count}` but not listed or addressed.
 pub const MAX_RETURNED_ROWS: usize = 1000;
-/// Rows `{changes}` lists in one notice before "and N more".
 const MAX_LISTED_ROWS: usize = 50;
 /// Distinct accounts one run notifies through a column (ADR-0012).
 pub const MAX_RECIPIENTS_PER_RUN: usize = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recipient {
-    /// The app's contact email in `konae.json`.
     Owner,
-    /// The calling account's verified email.
     Actor,
-    /// The verified email of each account whose ID a changed row carries in
-    /// this column.
     Column(String),
 }
 
@@ -102,7 +76,6 @@ enum Part {
 #[derive(Debug)]
 pub struct Declaration {
     pub to: Recipient,
-    /// Columns `{changes}` lists, in order.
     changes: Vec<String>,
     subject: Vec<Part>,
     body: Vec<Part>,
@@ -123,8 +96,6 @@ impl Declaration {
     }
 }
 
-/// A SQL name the Kernel can quote: letters, digits and underscores, not
-/// starting with a digit, at most 64 characters.
 fn is_column_name(value: &str) -> bool {
     let mut chars = value.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
@@ -135,7 +106,6 @@ fn is_column_name(value: &str) -> bool {
 /// Parses and checks one action's `notify` key. `Ok(None)` when it has none.
 pub fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Declaration>, Refusal> {
     let Some(value) = action.notify.as_ref() else { return Ok(None) };
-    // Each message is written out so src/sdk/contract.test.ts finds it.
     if action.kind == "query" {
         return Err(refuse("notify.not-mutation", format!("Action {name} is a query, so it cannot declare notify. Declare it on a mutation.")));
     }
@@ -214,8 +184,6 @@ fn is_control(c: char) -> bool {
     (c as u32) < 0x20 || c as u32 == 0x7f
 }
 
-/// Splits a template into text and placeholders. Every `{` opens a
-/// placeholder that the next `}` closes; a `}` on its own is text.
 fn parts(name: &str, field: &str, template: &str, inputs: &[&str]) -> Result<Vec<Part>, Refusal> {
     let mut parts = Vec::new();
     let mut rest = template;
@@ -256,8 +224,6 @@ pub fn with_returning(statement: &str, columns: &[String]) -> String {
     let tokens = super::sql_tokens(statement);
     let end = tokens.iter().find(|token| token.is_symbol(";")).map_or(statement.chars().count(), |token| token.start);
     let kept: String = statement.chars().take(end).collect();
-    // Brackets, not double quotes: SQLite reads an unknown "name" as a
-    // string, so a misspelled column would pass the check and list itself.
     let list = columns.iter().map(|column| format!("[{column}]")).collect::<Vec<_>>().join(", ");
     format!("{}\nRETURNING {list}", kept.trim_end())
 }
@@ -309,7 +275,6 @@ pub struct Changed<'a> {
     pub now: u64,
 }
 
-/// What one notice fills its placeholders with.
 struct Fill<'a> {
     input: &'a Value,
     actor: Option<&'a str>,
@@ -327,8 +292,6 @@ fn value_text(value: Option<&Value>) -> String {
     }
 }
 
-/// `{changes}`: one line per row, its listed columns joined by " · ", at
-/// most 50 rows, then a line that counts the rest.
 fn listed(fill: &Fill<'_>) -> String {
     let mut lines: Vec<String> = fill
         .rows
@@ -364,10 +327,6 @@ fn fill(parts: &[Part], values: &Fill<'_>) -> String {
     text
 }
 
-/// Subject, plain text and HTML of one notice. The template's own line
-/// breaks stay in the body; the HTML part escapes everything and turns each
-/// line break into `<br>`. A fixed last line says which app sent it and why
-/// the recipient gets it.
 fn render(declared: &Declaration, app_name: &str, values: &Fill<'_>) -> (String, String, String) {
     let app = mail::one_line(app_name, 80);
     let app = if app.is_empty() { "Konae".to_owned() } else { app };
@@ -439,8 +398,6 @@ pub async fn record(
     }
 }
 
-/// The account IDs a column names, in ID order, each with the rows that
-/// name it. A row whose column is not text names nobody.
 fn recipients<'a>(column: &str, rows: &'a [Map<String, Value>]) -> std::collections::BTreeMap<&'a str, Vec<&'a Map<String, Value>>> {
     let mut named: std::collections::BTreeMap<&str, Vec<&Map<String, Value>>> = std::collections::BTreeMap::new();
     for row in rows {
@@ -524,8 +481,6 @@ fn read_only(path: &std::path::Path) -> anyhow::Result<Option<Connection>> {
     Ok(Some(connection))
 }
 
-/// The email of an active app account that proved control of it by
-/// answering a verification, invitation or recovery link.
 fn verified_email(state: &AppState, deployment_id: &str, account: &str) -> anyhow::Result<Option<String>> {
     let path = crate::layout::identity(&state.data_root, &deployment_id);
     let Some(db) = read_only(&path)? else { return Ok(None) };
@@ -547,8 +502,6 @@ mod tests {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()
     }
 
-    /// The editor runs the same file in src/kernel/actions.test.ts and through
-    /// the Validation Gate in src/agent/gate.test.ts.
     #[test]
     fn notify_refuses_what_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("notify-cases.json")).unwrap();
@@ -564,9 +517,6 @@ mod tests {
         Fill { input, actor, now: 0, columns: &[], rows: &[], count: 1 }
     }
 
-    /// kernel-rs/kernel/src/notify-column-cases.json: a column the statement cannot
-    /// return is refused against the schema. src/agent/gate.test.ts runs the
-    /// same file through the Validation Gate.
     #[test]
     fn notify_columns_are_checked_against_the_schema_as_the_editor_checks_them() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("notify-column-cases.json")).unwrap();
@@ -668,7 +618,6 @@ mod tests {
         assert!(text.starts_with("Room Oak Bcc: x@example.test <b> for 2 h.\nBooked by user-1. Braces } stay.\n\n-- \n"));
         assert!(text.contains("Room board sent this notice through Konae after something you did in the app."));
         assert!(html.contains("Room Oak Bcc: x@example.test &lt;b&gt; for 2 h.<br>Booked by user-1.") && !html.contains("<b>"));
-        // A null input and a caller without an ID fill nothing.
         let (subject, text, _) = render(&declared, "Rooms", &plain(&json!({"room": "Oak", "title": null}), None));
         assert_eq!(subject, "Booked Oak");
         assert!(text.starts_with("Room Oak for  h.\nBooked by . Braces } stay."));

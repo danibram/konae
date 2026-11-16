@@ -1,6 +1,3 @@
-//! Measures what a Server Action costs on its Database, through the same lock
-//! and run path as the action route. Ignored by default:
-//! `cargo test --release sqlite_bench -- --ignored --nocapture`.
 
 use super::*;
 use rusqlite::params;
@@ -59,7 +56,6 @@ async fn sqlite_bench() {
     let list = action("query", "SELECT id, name, created_at FROM items WHERE owner = ?1 ORDER BY created_at DESC LIMIT 50");
     let insert = action("mutation", "INSERT INTO items(name, owner, created_at) VALUES ('new', ?1, 0)");
 
-    // One caller at a time.
     let mut samples = Vec::new();
     for i in 0..2_000 {
         samples.push(run(&state, &by_id, vec![SqlValue::Integer(1 + i % 20_000)]).await);
@@ -71,7 +67,6 @@ async fn sqlite_bench() {
     }
     report("sequential insert", samples);
 
-    // 32 readers listing rows while one writer inserts.
     let started = Instant::now();
     let mut readers = Vec::new();
     for reader in 0..32 {

@@ -1,19 +1,3 @@
-//! The maintenance state of one Deployment, and the guards that keep a paused
-//! app from taking writes. ADR-0008 records it.
-//!
-//! The state lives in `.konae/maintenance.json`, inside the app's folder, so
-//! a restart, a scheduled copy and a restore all keep it. The Kernel reads
-//! the file on every check, so the `maintenance` command run beside a
-//! serving Kernel takes effect at once. While it pauses an app:
-//!
-//! - the app host serves a maintenance page for the published shell and
-//!   refuses every other request with one message;
-//! - administrative tools that would change the app are refused;
-//! - the mail worker holds the app's queued email, and the call outbox and
-//!   the schedule wait.
-//!
-//! An installation that a restore could not reconcile is paused the same way
-//! for every app (`recovery::hold`).
 
 use axum::{http::Method, middleware::Next};
 
@@ -23,12 +7,9 @@ pub const MARKER_FILE: &str = "maintenance.json";
 /// How long the mail worker puts back a held job before looking again.
 pub const MAIL_HOLD_MS: i64 = 60_000;
 
-/// The answer to every refused request while an app is in maintenance.
 const MESSAGE: &str = "This app is in maintenance. It accepts no writes, signups, recovery, administrative changes or email until it comes out of maintenance.";
 const UNREADABLE: &str = "This app is in maintenance because its maintenance state (maintenance.json) cannot be read. The operator must repair or remove that file.";
 
-/// The maintenance state of one Deployment. A file that exists but cannot be
-/// read keeps the app paused, because the Kernel cannot tell why it was paused.
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Marker {
@@ -102,8 +83,6 @@ pub fn set(data_root: &Path, id: &str, on: bool) -> Result<Value> {
     Ok(read(data_root, id))
 }
 
-/// Puts a Deployment in maintenance or takes it out, for tests of the modules
-/// the pause reaches.
 #[cfg(any(test, feature = "testing"))]
 pub fn pause_for_test(data_root: &Path, id: &str, paused: bool) {
     let path = marker_path(data_root, id);
@@ -223,7 +202,6 @@ mod tests {
         let off = set(&root, "app-1", false).unwrap();
         assert_eq!((off["maintenance"].clone(), off["since"].clone()), (json!(false), Value::Null));
         assert!(pause(&root, "app-1").is_none());
-        // An unreadable state reads as paused, and taking the app out removes it.
         std::fs::write(marker_path(&root, "app-1"), "{not json").unwrap();
         assert_eq!(read(&root, "app-1")["unreadable"], true);
         assert_eq!(set(&root, "app-1", false).unwrap()["maintenance"], false);

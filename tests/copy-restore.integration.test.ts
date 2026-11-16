@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, type Transfer } from "../src/mcp/client";
 
-// Delivery 2's condition: a Kernel started on an empty volume from a copy
-// serves the same app with its artifact, rows, accounts and files.
 const binary = "kernel-rs/target/debug/konae";
 const setupKey = "copy-restore-setup-secret";
 const password = "copy-restore-password-2026";
@@ -77,7 +75,6 @@ const project = {
   } }),
 };
 
-/** Publishes an app on a Kernel that copies to `copyEnv`, writes a row, an account and a file, waits for a copy that started after those writes, and returns what the second Kernel must serve. */
 async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
   const { url, child } = await startKernel(root, { KONAE_COPY_INTERVAL_SECONDS: "1", ...copyEnv });
   try {
@@ -126,7 +123,6 @@ async function expectSameApp(root: string, app: { hostname: string; cookie: stri
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toEqual([{ id: 1, title: "Before the copy" }]);
     expect(await writer.download(await writer.call<Transfer>("files_read", { fileId: app.fileId }))).toEqual(attachment);
     const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_konae/owner/login", { email: "owner@copy.test", password }) });
-    // The project registry in mcp.sqlite travelled with the owner account.
     const inspection = await owner.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: "copy_proof" });
     expect(inspection.deployment.hostname).toBe(app.hostname);
   } finally {
@@ -154,10 +150,6 @@ describe("copies off the volume", () => {
     }
   }, 120_000);
 
-  // Needs the bucket to exist, as `docker compose up minio minio-init` creates it.
-  // Copies go under copies/ and file bytes under files/ in that one bucket,
-  // which other Kernels may share, so the test restores the copy that holds
-  // its own Deployment by ID and removes only that copy and its files.
   test.skipIf(!minio)("an S3 copy restores into an empty data directory and serves the same app", async () => {
     const scratch = await mkdtemp(path.join(tmpdir(), "konae-copy-s3-"));
     const bucket = new Bun.S3Client({ endpoint: s3Endpoint, bucket: s3Bucket, accessKeyId: s3Env.KONAE_S3_ACCESS_KEY, secretAccessKey: s3Env.KONAE_S3_SECRET_KEY });
@@ -171,7 +163,6 @@ describe("copies off the volume", () => {
       } while (continuationToken);
       return found;
     };
-    /** IDs of the copies whose manifest names the Deployment's folder. */
     const copiesOf = async (deployment: string) => {
       const ids: string[] = [];
       for (const key of (await keys("copies/")).filter((key) => /^copies\/[^/]+\/manifest\.json$/.test(key))) {

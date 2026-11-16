@@ -1,13 +1,3 @@
-//! Where the Kernel keeps the bytes of app files, and how many it accepts.
-//!
-//! A Deployment's file index, `apps/<id>/data/files/index.json`, always
-//! stays in the app folder, so listing, visibility and the quota never ask
-//! the store. Only the bytes go through [`FileStore`]. [`LocalFolder`] keeps
-//! them next to the index as `<file id>.blob`.
-//!
-//! The operator sets the limits with `KONAE_FILES_QUOTA_BYTES` (all files
-//! of one Deployment together, 20 MiB by default) and `KONAE_FILE_MAX_BYTES`
-//! (one file, 2 MiB by default). Every refusal names the configured number.
 
 use std::{
     future::Future,
@@ -37,25 +27,18 @@ pub struct Blob {
 /// The bytes of a Deployment's files. Every method names the Deployment, so a
 /// store never derives one Deployment's keys from another's.
 pub trait FileStore: Send + Sync {
-    /// `local` or `s3`, as the health check and `files-migrate` name it.
     fn kind(&self) -> &'static str;
     /// Stores the bytes of `source`, a local file, as `file`. A reader sees
     /// either the whole file or nothing.
     fn put<'a>(&'a self, deployment: &'a str, file: &'a str, source: &'a Path) -> BoxFuture<'a, Result<()>>;
     /// The file's bytes, or the `range` of them. `None` when the store holds
-    /// no such file.
     fn get<'a>(&'a self, deployment: &'a str, file: &'a str, range: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>>;
     /// Removes the file. Removing a file that is not there succeeds.
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>>;
-    /// The file IDs the store holds for the Deployment, whether or not its
-    /// index names them, sorted.
     fn list<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<String>>> {
         Box::pin(async move { Ok(self.objects(deployment).await?.into_iter().map(|object| object.id).collect()) })
     }
-    /// The same files with the time each was written.
     fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>>;
-    /// Every Deployment ID the store holds any file for. A bucket may also
-    /// name one whose files are all gone, as SeaweedFS does.
     fn deployments(&self) -> BoxFuture<'_, Result<Vec<String>>>;
 }
 
@@ -188,7 +171,6 @@ pub struct S3Store {
     pub settings: S3Settings,
 }
 
-/// A bucket, prefix and the keys that reach it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct S3Settings {
     pub endpoint: String,
@@ -257,7 +239,6 @@ impl S3Store {
         format!("{}{deployment}/{file}", self.settings.prefix)
     }
 
-    /// Every key under `prefix`, with its modification time, page by page.
     async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>)>, Vec<String>)> {
         let mut keys = Vec::new();
         let mut folders = Vec::new();
@@ -292,8 +273,6 @@ pub fn s3_client(settings: &S3Settings) -> S3Client {
         .credentials_provider(credentials)
         .endpoint_url(&settings.endpoint)
         .force_path_style(settings.path_style)
-        // A checksum header on every request is an SDK default that not
-        // every S3-compatible store accepts; the Kernel checks SHA-256 itself.
         .request_checksum_calculation(aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired)
         .response_checksum_validation(aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired)
         .build();
@@ -392,7 +371,6 @@ impl FileStore for S3Store {
     }
 }
 
-/// How many bytes one Deployment's files may take together, and one file alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileLimits {
     pub quota_bytes: u64,
@@ -472,7 +450,6 @@ pub fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// The installation's file store and limits, shared by every request.
 #[derive(Clone)]
 pub struct Files {
     pub store: Arc<dyn FileStore>,
@@ -480,7 +457,6 @@ pub struct Files {
 }
 
 impl Files {
-    /// The local folder with the default limits, for tests.
     #[cfg(any(test, feature = "testing"))]
     pub fn local(data_root: impl AsRef<Path>) -> Self {
         Self::new(Arc::new(LocalFolder::new(data_root.as_ref())), FileLimits::default())
@@ -523,15 +499,11 @@ impl BlockingFiles {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Which store holds the bytes
 
 /// The file in the data directory that says which store holds the bytes.
 pub const MARKER_FILE: &str = "files-store.json";
 const ORPHAN_GRACE_MS: u64 = 60 * 60 * 1000;
 
-/// What `files-store.json` records: `{"store":"local"}`, or the bucket and
-/// prefix of an S3 store. Keys and region stay in the environment.
 pub(crate) fn describe(settings: Option<&S3Settings>) -> serde_json::Value {
     match settings {
         None => serde_json::json!({"store": "local"}),
@@ -564,7 +536,6 @@ pub(crate) async fn write_marker(data_root: &Path, value: &serde_json::Value) ->
     Ok(())
 }
 
-/// Whether any app folder still holds a `.blob`.
 async fn local_bytes_remain(data_root: &Path) -> Result<bool> {
     let local = LocalFolder::new(data_root);
     for deployment in local.deployments().await? {
@@ -681,7 +652,6 @@ async fn blob_digest(mut blob: Blob) -> Result<(u64, String)> {
     Ok((length, hex::encode(sha2::Digest::finalize(hasher))))
 }
 
-/// What `files-migrate` did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Migrated {
     pub deployments: usize,
@@ -736,7 +706,6 @@ pub async fn migrate(data_root: &Path, source: &dyn FileStore, target: &dyn File
     Ok(summary)
 }
 
-/// What `files-reconcile` found.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Reconciled {
     pub removed: usize,
@@ -889,8 +858,6 @@ pub async fn operator_command() -> Result<bool> {
     }
 }
 
-/// Reads a whole blob into memory, for tests that compare stored bytes. The
-/// file path and the MCP read stream instead.
 #[cfg(any(test, feature = "testing"))]
 pub async fn read_all(store: &dyn FileStore, deployment: &str, file: &str) -> Result<Option<Vec<u8>>> {
     let Some(mut blob) = store.get(deployment, file, None).await? else { return Ok(None) };

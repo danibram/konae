@@ -26,22 +26,15 @@ export type AgentThreadInput = {
   keyStore: AgentKeyStore;
   threadResetToken: number;
   keyVersion: number;
-  /** Returns false when the proposal could not be landed, so nothing was written. */
   onApply: (proposal: AgentProposal) => boolean | Promise<boolean>;
   onDiscard: () => void;
   providers?: readonly ProviderConfig[];
-  /**
-   * The project the conversation belongs to. With `draftStorage`, an unsent
-   * draft is kept per project in this browser until it is sent, so words typed
-   * in New project or in Describe survive leaving the app and a reload.
-   */
   draftKey?: string;
   draftStorage?: DraftStorage;
 };
 
 export type DraftStorage = { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void; removeItem: (key: string) => void };
 
-/** Where a project's unsent Describe draft waits in this browser. */
 export const describeDraftKey = (projectId: string) => `describe-draft:${projectId}`;
 
 function readDraft(storage: DraftStorage | undefined, projectId: string | undefined): string {
@@ -62,7 +55,6 @@ export type AgentThread = {
   draft: string;
   setDraft: (value: string) => void;
   provider: ProviderConfig;
-  /** A provider key is stored, so prompts reach a real model. */
   live: boolean;
   blocker: string;
   footer: ProposalFooter;
@@ -75,11 +67,6 @@ export type AgentThread = {
   interrupt: () => void;
 };
 
-/**
- * The conversation lives here rather than inside the panel: a panel dragged to
- * another group is a different place in the layout tree, and React remounts it.
- * A thread that a move could erase is not a thread anyone would trust.
- */
 export function useAgentThread({
   ensureAgent,
   agent,
@@ -95,14 +82,12 @@ export function useAgentThread({
 }: AgentThreadInput): AgentThread {
   const [state, dispatch] = useReducer(agentThreadReducer, initialAgentThreadState);
   const [draft, setDraftState] = useState(() => readDraft(draftStorage, draftKey));
-  // Written on each change rather than from an effect, so a project switch never stores one project's draft under another.
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
   const setDraft = (value: string) => {
     setDraftState(value);
     writeDraft(draftStorage, draftKeyRef.current, value);
   };
-  // Subscription is keyed by instance so a send can attach before it runs.
   const subscription = useRef<{ agent: KonaeAgent; off: () => void } | null>(null);
 
   const provider = resolveProvider(providers, sessionConfig.provider);
@@ -117,7 +102,6 @@ export function useAgentThread({
     subscription.current?.off();
     subscription.current = {
       agent: next,
-      // Only tool and turn boundaries can move the proposal; a text delta cannot.
       off: next.subscribe((event) =>
         dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined }),
       ),
@@ -130,7 +114,6 @@ export function useAgentThread({
 
   useEffect(() => () => subscription.current?.off(), []);
 
-  // A new thread, or another project, opens on that project's unsent draft.
   useEffect(() => {
     dispatch({ type: "reset" });
     setDraftState(readDraft(draftStorage, draftKey));
@@ -147,18 +130,15 @@ export function useAgentThread({
       dispatch({ type: "event", event: { type: "error", message: "The agent failed to load." } });
       return;
     }
-    // Attaching before send is what guarantees the first delta is not lost.
     attach(handle);
     await handle.send(text);
     dispatch({ type: "settled", snapshot: readSnapshot(handle) });
   }
 
   async function apply() {
-    // The gate's verdict travels with the proposal, so the button cannot outrun it.
     if (!footer.canApply || !state.proposal?.validation?.ok) return;
     const files = state.proposal.changedFiles.join(", ");
     if (!await onApply(state.proposal)) {
-      // Refused, so nothing was written: say so instead of reporting an Apply.
       dispatch({ type: "discard" });
       dispatch({ type: "note", text: "The Capsule changed after this was validated, so nothing was applied. Ask again to redo it against the current files." });
       return;

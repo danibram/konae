@@ -1,10 +1,3 @@
-/**
- * Signs a POST body the way an outside service does for a route that declares
- * its scheme, as kernel-rs/kernel/src/provider.rs checks it (ADR-0013). The
- * conformance runner, the hub probe and the inbox replay sign with it.
- * kernel-rs/kernel/src/provider-signature-cases.json holds vectors both sides check,
- * among them GitHub's and Svix's published examples.
- */
 import type { RouteSignature } from "../kernel/route-declaration";
 
 const encoder = new TextEncoder();
@@ -17,17 +10,11 @@ async function hmac(hash: "SHA-256" | "SHA-1", key: Uint8Array<ArrayBuffer>, mes
 const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 
-/** The HMAC key of a Svix signing secret: the base64 after `whsec_`. */
 export function svixKey(secret: string): Uint8Array<ArrayBuffer> {
   const decoded = atob(secret.replace(/^whsec_/, ""));
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
 }
 
-/**
- * The headers a provider sends with `body`. `t` is the Unix second a
- * timestamped or svix signature carries; `id` the svix message ID, fresh by
- * default. A route in Konae's own scheme is signed with signRoute instead.
- */
 export async function signDelivery(
   signature: RouteSignature,
   secret: string,

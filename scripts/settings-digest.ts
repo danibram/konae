@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-/** Stable digest of the folder settings that define the published app. */
 export function settingsDigest(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }

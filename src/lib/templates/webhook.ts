@@ -1,8 +1,7 @@
 import { templateHelpers, templateStyles } from "./shared";
 import type { TemplateSource } from "./types";
 
-const schema = `-- Written only by the signed route. A redelivery of the same event changes nothing.
-CREATE TABLE IF NOT EXISTS events (
+const schema = `CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   external_id TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -11,9 +10,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS events_external_id_unique ON events(external_id);
 
--- The accounts that read the feed. The owner adds one from Data > SQL with
--- the account ID that Access > Users shows:
---   INSERT INTO admins (user_id) VALUES ('<account id>');
 CREATE TABLE IF NOT EXISTS admins (
   user_id TEXT PRIMARY KEY
 );

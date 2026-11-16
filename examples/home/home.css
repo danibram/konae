@@ -1,7 +1,3 @@
-/* Konae home. Everything sits on the design system's tokens in styles.css.
-   The system of this page: one container, one spacing scale, one type scale,
-   three surfaces (card, quiet panel, band), and grids whose column counts are
-   named at each breakpoint so no item is styled by where it happens to land. */
 
 :root {
   --w: min(1200px, calc(100% - 64px));
@@ -11,7 +7,6 @@
   --ink-surface: #262921;
   --ink-line: #5c6152;
   --lift: 10px 10px 0 var(--ds-accent);
-  /* A little darker than the design system's grey, for 4.5:1 on the light canvas. */
   --ds-muted: #4f5348;
 }
 @media (max-width: 1023px) { :root { --w: min(1200px, calc(100% - 48px)); --band: 88px; } }
@@ -28,7 +23,6 @@ main:focus { outline: none; }
 .narrow-only { display: none; }
 @media (max-width: 639px) { .wide-only { display: none; } .narrow-only { display: inline; } }
 
-/* Type scale */
 .display { margin: 0; color: var(--ds-text); font: 800 clamp(34px, 6.6vw, 84px)/1.02 var(--ds-font); letter-spacing: -.04em; text-wrap: balance; }
 .h2 { margin: 0; color: var(--ds-text); font: 800 clamp(30px, 4.4vw, 54px)/1.02 var(--ds-font); letter-spacing: -.04em; text-wrap: balance; }
 .h3 { margin: 0; color: var(--ds-text); font: 800 20px/1.2 var(--ds-font); letter-spacing: -.025em; text-wrap: balance; }
@@ -46,7 +40,6 @@ a { color: inherit; }
 .btn-ink { background: var(--ds-ink); border-color: var(--ds-ink); color: #f1efe7; box-shadow: none; }
 .btn-ink:hover { background: #000; color: #fff; }
 
-/* Bands */
 .band { padding: var(--band) 0; }
 .band-surface { border-block: var(--ds-bw) solid var(--ds-line); background: var(--ds-surface); }
 .head { max-width: 860px; margin-bottom: var(--s7); }
@@ -56,7 +49,6 @@ a { color: inherit; }
 .head-split .more { margin-top: var(--s4); }
 @media (min-width: 1024px) { .head-split { grid-template-columns: minmax(0, 6fr) minmax(0, 5fr); align-items: end; } }
 
-/* Header */
 .bar { position: sticky; top: 0; z-index: 30; border-bottom: var(--ds-bw) solid transparent; background: var(--ds-canvas); transition: border-color 200ms ease; }
 .bar.stuck { border-bottom-color: var(--ds-line); }
 .bar-in { display: flex; align-items: center; gap: var(--s6); min-height: 64px; }
@@ -72,7 +64,6 @@ a { color: inherit; }
 .bar-cta.quiet { display: none; }
 @media (max-width: 899px) { .bar-nav { display: none; } }
 
-/* Hero */
 .hero { padding: 56px 0 var(--band); text-align: center; }
 .hero .display { margin: var(--s5) auto 0; }
 .hero .display span { display: block; }
@@ -88,8 +79,6 @@ a { color: inherit; }
   .hero-actions .ui-button { flex: 1 1 100%; }
 }
 
-/* The editor, drawn from its own parts: the conversation on the left with the
-   proposal and the Validation Gate's line, the preview on the right. */
 .studio { margin: 56px 0 0; border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-surface); box-shadow: var(--lift); text-align: left; }
 .studio-bar { display: flex; align-items: center; gap: var(--s5); min-height: 48px; padding: 0 var(--s4); border-bottom: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-subtle); font: 600 13px/1.3 var(--ds-font); }
 .studio-crumb { display: flex; gap: 8px; min-width: 0; color: var(--ds-muted); white-space: nowrap; }
@@ -107,7 +96,6 @@ a { color: inherit; }
 @media (min-width: 760px) { .studio-body { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); height: 520px; } }
 .studio-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 @media (min-width: 760px) { .studio-chat { border-right: var(--ds-bw) solid var(--ds-stroke); } }
-/* On a phone the app comes first and the conversation follows it, so both fit one screen. */
 @media (max-width: 759px) { .studio-preview { order: -1; border-bottom: var(--ds-bw) solid var(--ds-stroke); } }
 .chat-log { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--s3); min-height: 150px; padding: var(--s4); overflow: hidden; }
 .bubble { max-width: 90%; margin: 0; padding: 9px 13px; border: 1px solid var(--ds-stroke); color: var(--ds-text); font: 450 14px/1.5 var(--ds-font); }
@@ -140,8 +128,6 @@ a { color: inherit; }
 .studio-caption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s3) var(--s5); padding: 10px var(--s4); border-top: var(--ds-bw) solid var(--ds-stroke); color: var(--ds-muted); font: 400 13px/1.5 var(--ds-font); }
 .replay[hidden] { display: none; }
 
-/* The steps of the build are shown by a class on the editor, so a change of
-   language or no motion at all still lands on a finished picture. */
 .studio[data-step="0"] [data-you], .studio[data-step="0"] [data-thinking], .studio[data-step="0"] [data-bot], .studio[data-step="0"] [data-proposal],
 .studio[data-step="1"] [data-thinking], .studio[data-step="1"] [data-bot], .studio[data-step="1"] [data-proposal],
 .studio[data-step="2"] [data-bot], .studio[data-step="2"] [data-proposal],
@@ -155,7 +141,6 @@ a { color: inherit; }
 .studio:not(:is([data-step="0"], [data-step="1"], [data-step="2"], [data-step="3"], [data-step="4"], [data-step="5"])) [data-empty] { display: none; }
 .studio:not([data-step="7"]) .join-form, .studio:not([data-step="7"]) .join-note { visibility: hidden; }
 
-/* The example app, used in the editor's preview and again where it moves. */
 .app { position: relative; border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-surface); box-shadow: var(--ds-shadow-lg); }
 .studio-preview .app { animation: rise 500ms cubic-bezier(.2, .8, .2, 1) both; }
 .app-bar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-field); }
@@ -179,7 +164,6 @@ a { color: inherit; }
 .join-note { min-height: 0; margin: -6px 16px 12px; color: var(--ds-text); font: 500 12px/1.4 var(--ds-font); }
 .join-note:empty { display: none; }
 
-/* Facts under the hero, as one bar of four. */
 .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: var(--s8) 0 0; padding: 0; border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-surface); list-style: none; text-align: left; }
 .facts li { display: grid; gap: 2px; padding: var(--s4) var(--s5); border-top: 1px solid var(--ds-border); }
 .facts li:nth-child(-n+2) { border-top: 0; }
@@ -197,7 +181,6 @@ a { color: inherit; }
   .facts li:first-child { border-top: 0; }
 }
 
-/* How it works: three steps in one row, or one column. */
 .steps { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s5); margin: 0; padding: 0; list-style: none; }
 @media (min-width: 900px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .step { display: grid; grid-template-rows: auto auto 1fr auto; gap: var(--s3); padding: var(--s5); border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-canvas); box-shadow: var(--ds-shadow-sm); }
@@ -212,8 +195,6 @@ a { color: inherit; }
 .art-pills .on, .art-move .on { background: var(--ds-accent); color: var(--ds-on-accent); }
 .art-move svg { width: 20px; height: 20px; fill: none; stroke: var(--ds-text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-/* What every app has. Every tile is the same card; the two wide ones carry a
-   drawing. Four columns, two, or one, with each tile placed by name. */
 .bento { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); margin: 0; padding: 0; list-style: none; }
 .tile { display: grid; align-content: start; gap: var(--s2); min-width: 0; padding: var(--s5); border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-surface); box-shadow: var(--ds-shadow-sm); }
 .tile > svg { width: 26px; height: 26px; margin-bottom: var(--s2); fill: none; stroke: var(--ds-text); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -241,8 +222,6 @@ a { color: inherit; }
 .mock-table .th { border-top: 0; background: var(--ds-subtle); color: var(--ds-muted); font: 700 12px/1.6 var(--ds-font); }
 .mock-table span:nth-child(even) { color: var(--ds-muted); font-family: var(--ds-mono); font-size: 13px; text-align: right; }
 
-/* The ink band: the page's one dark stage, in both themes. Its tokens are set
-   here, so every part inside it draws on the dark palette. */
 .band-ink {
   --ds-canvas: var(--ink-bg); --ds-surface: var(--ink-surface); --ds-subtle: #2f3329; --ds-field: #14160f;
   --ds-text: #f1efe7; --ds-muted: #b3b6a6; --ds-border: var(--ink-line); --ds-stroke: #8c917e; --ds-line: #8c917e;
@@ -292,7 +271,6 @@ a { color: inherit; }
 .again .again-t { color: var(--ds-text); font-weight: 700; }
 .again .more { margin-top: var(--s2); }
 
-/* Two ways into the same app. */
 .doors { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
 @media (min-width: 760px) { .doors { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .door { display: grid; grid-template-rows: auto 1fr; gap: var(--s3); min-width: 0; }
@@ -305,7 +283,6 @@ a { color: inherit; }
 .doors mark { padding: 0 3px; background: var(--ds-accent); color: var(--ds-on-accent); transition: box-shadow 150ms ease; }
 .doors mark.linked { box-shadow: 0 0 0 2px var(--ds-stroke); }
 
-/* Examples: six cards, three across, two, or one. */
 .ex-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); margin: 0; padding: 0; list-style: none; }
 @media (min-width: 640px) { .ex-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 1024px) { .ex-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -335,7 +312,6 @@ a { color: inherit; }
 .mini-docs b { height: 56px; clip-path: polygon(0 0, 72% 0, 100% 22%, 100% 100%, 0 100%); }
 .mini-docs b.lock { background: var(--ds-text); }
 
-/* Developers: three ways behind tabs, then the shared check. */
 .tabs { border: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-canvas); box-shadow: var(--ds-shadow-sm); }
 .tab-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: var(--ds-bw) solid var(--ds-stroke); background: var(--ds-subtle); }
 .tab { min-width: 0; min-height: 48px; padding: 6px var(--s3); border: 0; border-right: 1px solid var(--ds-border); background: none; color: var(--ds-muted); font: 700 14px/1.3 var(--ds-font); cursor: pointer; }
@@ -378,7 +354,6 @@ a { color: inherit; }
 .dropped .refusal { border-color: var(--ds-danger); } .dropped .verdict { background: var(--ds-danger); }
 .idle .refusal { border-color: var(--ds-stroke); } .idle .verdict { background: var(--ds-muted); }
 
-/* Questions */
 .faq-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 var(--s7); }
 @media (min-width: 1024px) { .faq-wrap { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } .faq-wrap .head { margin-bottom: 0; } }
 .faq { border-top: var(--ds-bw) solid var(--ds-line); }
@@ -391,7 +366,6 @@ a { color: inherit; }
 .faq details p { max-width: 66ch; margin: 0 0 var(--s5); color: var(--ds-muted); font: 400 16px/1.6 var(--ds-font); }
 .faq details p a { color: var(--ds-text); }
 
-/* The closing band is the accent colour in both themes, with ink on it. */
 .band-accent { --ds-text: var(--ds-ink); --ds-muted: #3d4136; --ds-stroke: var(--ds-ink); border-block: var(--ds-bw) solid var(--ds-ink); background: var(--ds-accent); color: var(--ds-ink); }
 .closing-title { max-width: 14ch; }
 .start { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4) var(--s6); margin: var(--s7) 0; padding: 0; list-style: none; }
@@ -403,7 +377,6 @@ a { color: inherit; }
 
 @media (max-width: 659px) { .band-accent .actions { flex-direction: column; align-items: flex-start; } }
 
-/* Footer */
 .foot { padding: var(--s8) 0 var(--s7); color: var(--ds-muted); font: 400 14px/1.6 var(--ds-font); }
 .foot-in { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s6) var(--s5); }
 @media (min-width: 560px) { .foot-in { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -417,7 +390,6 @@ a { color: inherit; }
 .foot-col a[hidden] { display: none; }
 @media (min-width: 900px) { .foot-in { grid-template-columns: minmax(0, 5fr) repeat(3, minmax(0, 2fr)); } .foot-brand { grid-column: auto; } }
 
-/* Motion: the hero arrives in order, and each block rises the first time it is seen. */
 @keyframes rise { from { opacity: 0; translate: 0 16px; } }
 @media (prefers-reduced-motion: no-preference) {
   .hero .wrap > :not(.studio):not(.facts) { animation: rise 600ms cubic-bezier(.2, .8, .2, 1) both; }
@@ -429,8 +401,6 @@ a { color: inherit; }
 }
 @media (prefers-reduced-motion: reduce) { .caret, .thinking i { animation: none; } .app, .package-chip, .app-meter span, .slot { transition: none; } }
 
-/* Narrow screens: the conversation takes only the room its messages need, and
-   a command keeps its line and scrolls sideways instead of breaking a word. */
 @media (max-width: 759px) {
   .chat-log { min-height: 0; }
   .studio[data-step="0"] .chat-log { padding-block: 0; }

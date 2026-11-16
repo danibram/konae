@@ -9,7 +9,6 @@ export type WorkspaceState = { projects: MiniAppProject[]; activeProjectId: stri
 const activeProjectKey = "konae:active-project";
 const deploymentsKey = "konae:deployments";
 
-/** Browser storage keeps view state and the selected app ID, while app files load from the installation. */
 export function loadWorkspaceState(storage: Pick<Storage, "getItem"> = localStorage): WorkspaceState {
   const deployments = readJson<DeploymentIndex>(storage.getItem(deploymentsKey)) ?? {};
   const legacyDeployment = readJson<DeploymentReceipt>(storage.getItem("konae:active-deployment"));

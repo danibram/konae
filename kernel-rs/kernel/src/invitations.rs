@@ -1,19 +1,3 @@
-//! App invitations and the owner's user tools.
-//!
-//! An invitation fixes one email on one Deployment. Its secret is an
-//! `invitation` challenge in `account_challenges`, so it expires, works once
-//! and does nothing on another Deployment or for another purpose, like every
-//! other account link. The `app_invitations` row beside it is the history:
-//! who invited whom, when, whether the mail transport took the message, and
-//! whether the person accepted. A full copy deletes the challenges and
-//! `forget_tokens` clears the rows' token hashes, so an export carries the
-//! recipients and never a working link; the destination resends them.
-//!
-//! Inviting creates a pending account for a new email, the way a signup that
-//! waits for verification does. Accepting answers the challenge in one
-//! transaction that rechecks the Deployment's signup policy and the
-//! account's state, sets the password, activates the account, marks the
-//! invitation accepted and issues the session.
 
 use super::*;
 use accounts::app_store;
@@ -24,7 +8,6 @@ use rusqlite::params;
 pub const MAX_BATCH: usize = 50;
 /// The most rows one page of `app_users_list` or `app_invitations_list` returns.
 pub const MAX_PAGE: usize = 100;
-/// How long the answer stored for an idempotency key is kept.
 const IDEMPOTENCY_SECONDS: i64 = 7 * 24 * 60 * 60;
 /// Beside an invitation's link when the development transport kept its email.
 pub const LOCAL_MAILBOX_INVITATION: &str = "No email left this server. The development mail transport writes the invitation to mailbox.jsonl in the Kernel's data directory instead of sending it. Send acceptUrl to the person yourself; it works once.";
@@ -103,8 +86,6 @@ fn storage(error_value: rusqlite::Error) -> AuthError {
     AuthError::Storage(error_value)
 }
 
-// ---------------------------------------------------------------------------
-// Acceptance
 
 /// What the invitation page shows before the person chooses a password: the
 /// invited email, the app and whether accepting can work. Changes nothing.
@@ -239,8 +220,6 @@ async fn invitation_page(State(state): State<AppState>, headers: HeaderMap) -> R
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
-    // With Google offered, the page can accept with the Google account of the
-    // invited email instead of a password.
     let page = if google::offered(&state, &deployment) {
         INVITATION_PAGE.replacen(
             "<button>Accept and enter</button></form>",
@@ -261,9 +240,6 @@ async fn invitation_page(State(state): State<AppState>, headers: HeaderMap) -> R
         .into_response()
 }
 
-/// The page an invitation link opens. The token stays in the fragment. The
-/// page asks the Kernel which email the token was issued for, shows it read
-/// only, and posts the token with the chosen password. GET changes nothing.
 const INVITATION_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Your invitation</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}input[readonly]{background:#f4f5f7;color:#20232a}button{border:0;background:#273449;color:white;cursor:pointer}#error{min-height:1.5em;margin:0;color:#a32727}[hidden]{display:none}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,">
 <main><h1 id="title">Your invitation</h1><p id="note">Checking your invitation.</p>
 <form id="accept" hidden><label>Email <input id="email" type="email" readonly></label><label>Choose a password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label><button>Accept and enter</button></form>
@@ -276,8 +252,6 @@ $('#google')?.addEventListener('click',async()=>{try{const r=await post(prefix+'
 $('#accept').addEventListener('submit',async e=>{e.preventDefault();try{await post(prefix+'/_konae/auth/accept',{token,password:new FormData(e.currentTarget).get('password')});location.replace(prefix+'/');}catch(x){$('#error').textContent=x.message}});
 </script></html>"#;
 
-// ---------------------------------------------------------------------------
-// Owner tools
 
 /// Who sends an invitation: the ID its idempotency keys and rows record, and
 /// the email the message names, when there is one.
@@ -286,7 +260,6 @@ pub struct Inviter {
     pub email: Option<String>,
 }
 
-/// A refusal that names what the owner should do instead, or a storage error.
 enum Refusal {
     Said(&'static str),
     Auth(AuthError),
@@ -305,7 +278,6 @@ impl From<rusqlite::Error> for Refusal {
 }
 
 /// Runs `work` in the store's write transaction. A refusal rolls back
-/// everything the closure wrote and reaches the owner as its message.
 fn write<T>(auth: &AuthService, work: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, Refusal>) -> Result<T> {
     let mut refused = None;
     let result = auth.transaction(|tx| match work(tx) {
@@ -385,7 +357,6 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
             let invited_by = sender.email.clone();
             // With the development transport the message only reaches the
             // server's mailbox file, so the caller, who holds manage_users,
-            // gets the acceptance link it carries.
             let local_mailbox = state.accounts.queue.as_ref().is_some_and(|queue| queue.local_mailbox().is_some());
             let mut outcomes: HashMap<String, &'static str> = HashMap::new();
             let mut links: HashMap<String, String> = HashMap::new();
@@ -597,8 +568,6 @@ fn resend(
         Err("already-member") => return Err(Refusal::Said("This email already has an active account. Ask the person to sign in.")),
         Err(_) => return Err(Refusal::Said("This account is suspended. Resume it before inviting it again.")),
     };
-    // The new challenge replaces the account's open invitation challenge;
-    // deleting the recorded one as well covers an account that changed.
     if let Some(old_hash) = old_hash {
         tx.execute("DELETE FROM account_challenges WHERE token_hash = ?1", [&old_hash])?;
     }
@@ -987,9 +956,6 @@ mod tests {
         }
     }
 
-    /// With the development transport no email leaves, so the inviter gets
-    /// the acceptance link. A retry with the same key replays the stored
-    /// answer, which never held the link.
     #[tokio::test]
     async fn the_development_transport_hands_the_link_to_the_inviter() {
         let mut fixture = fixture(SignupMode::Invitation);
@@ -1032,8 +998,6 @@ mod tests {
         assert_eq!(fixture.accounts_named("ana@example.test").await[0].1, "pending");
         assert_eq!(fixture.signup("ana@example.test").await, StatusCode::FORBIDDEN, "an invitation is not a signup");
 
-        // Opening the link with GET returns the page and changes nothing; the
-        // page learns the email from a read that changes nothing either.
         let page = invitation_page(State(fixture.state.clone()), {
             let mut headers = HeaderMap::new();
             headers.insert(header::HOST, HeaderValue::from_static(APP_HOST));
@@ -1075,10 +1039,6 @@ mod tests {
         assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::OK, "the refused link still works");
     }
 
-    /// The owner chose the invited person, so an invitation is acceptable
-    /// under Closed (ADR-0003), from the answer
-    /// to `app_invitations_create` to the acceptance. A signup and a
-    /// verification stay refused.
     #[tokio::test]
     async fn closed_refuses_a_signup_and_accepts_an_owner_invitation() {
         let fixture = fixture(SignupMode::Closed);
@@ -1104,7 +1064,6 @@ mod tests {
     #[tokio::test]
     async fn a_suspended_account_is_not_reactivated_by_an_invitation() {
         let fixture = fixture(SignupMode::Open);
-        // Suspended before the invitation: nothing is issued.
         fixture.invite(&["held@example.test"], "first-held").await;
         let token = fixture.last_token();
         assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::OK);
@@ -1115,7 +1074,6 @@ mod tests {
         assert_eq!(again["results"][0]["status"], "suspended");
         assert_eq!(fixture.sent(), sent);
 
-        // Suspended while the invitation is open: the suspension ends the link.
         fixture.invite(&["late@example.test"], "late-batch").await;
         let token = fixture.last_token();
         let late_id = fixture.accounts_named("late@example.test").await[0].0.clone();
@@ -1124,8 +1082,6 @@ mod tests {
         assert!(!has_cookie(&refused));
         assert_eq!(fixture.accounts_named("late@example.test").await[0].1, "suspended");
 
-        // Suspended inside the window between issue and answer, with the link
-        // still stored: the transaction reads the state and refuses.
         fixture.invite(&["race@example.test"], "race-batch").await;
         let token = fixture.last_token();
         fixture.db().await.execute("UPDATE app_users SET state = 'suspended' WHERE email = 'race@example.test'", []).unwrap();
@@ -1146,8 +1102,6 @@ mod tests {
         assert_eq!(statuses, [StatusCode::OK, StatusCode::GONE]);
         assert_eq!(fixture.accounts_named("twice@example.test").await.len(), 1);
 
-        // Without the Kernel's identity lock, the store's own transaction
-        // still lets only one answer through.
         fixture.invite(&["threads@example.test"], "threads-batch").await;
         let token = fixture.last_token();
         let app = fixture.app(APP_HOST).await;
@@ -1212,7 +1166,6 @@ mod tests {
             .call("app_invitations_create", json!({"emails": ["cy@example.test"], "idempotencyKey": "retry-key-1"}))
             .await;
         assert!(reused.unwrap_err().to_string().contains("different request"));
-        // A new key for a pending recipient sends nothing new either.
         let again = fixture.invite(&["ana@example.test"], "retry-key-2").await;
         assert_eq!(again["results"][0]["status"], "already-invited");
         assert_eq!(fixture.sent(), 2);
@@ -1226,7 +1179,6 @@ mod tests {
         let again = fixture.invite(&["ana@example.test"], "member-again").await;
         assert_eq!(again["results"][0]["status"], "already-member");
 
-        // An account that became active while its invitation was open.
         fixture.invite(&["bo@example.test"], "bo-batch").await;
         let token = fixture.last_token();
         fixture.db().await.execute("UPDATE app_users SET state = 'active' WHERE email = 'bo@example.test'", []).unwrap();
@@ -1252,7 +1204,6 @@ mod tests {
         assert_eq!(fixture.answer(APP_HOST, &token, PASSWORD).await.status(), StatusCode::GONE);
         assert!(fixture.accounts_named("ana@example.test").await.is_empty());
         assert!(fixture.call("app_invitation_resend", json!({"invitationId": invitation, "idempotencyKey": "after-revoke"})).await.is_err());
-        // The address can be invited again.
         assert_eq!(fixture.invite(&["ana@example.test"], "revoke-again").await["results"][0]["status"], "invited");
     }
 
@@ -1278,7 +1229,6 @@ mod tests {
         let pending = fixture.last_token();
         assert_eq!(fixture.answer(APP_HOST, &first, PASSWORD).await.status(), StatusCode::OK);
 
-        // Export the accounts as the export does, then import them into a new Deployment.
         let app = fixture.app(APP_HOST).await;
         let carried = fixture.root.join("carried.sqlite");
         crate::copies::vacuum_into(&crate::layout::identity(&fixture.root, &app.id), &carried).unwrap();
@@ -1314,7 +1264,6 @@ mod tests {
         assert_eq!(statuses, [("ana@example.test".into(), "accepted".into()), ("bo@example.test".into(), "needs-resend".into())]);
         assert_eq!(fixture.login("ana@example.test", PASSWORD).await, StatusCode::OK, "the accepted account keeps its password at the origin");
 
-        // The destination resends with its own link and the recipient enters.
         let bo = rest["invitations"].as_array().unwrap().iter().chain(listed["invitations"].as_array().unwrap())
             .find(|row| row["email"] == "bo@example.test").unwrap()["invitationId"].as_str().unwrap().to_owned();
         let resent = run(&fixture.state, &imported, &Inviter { id: OWNER.into(), email: None }, "app_invitation_resend", &json!({"invitationId": bo, "idempotencyKey": "copy-resend"})).await.unwrap();

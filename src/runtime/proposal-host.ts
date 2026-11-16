@@ -6,7 +6,6 @@ export type PreviewSource = {
   fileAccess?: "app-users";
 };
 
-/** Keeps the applied preview alive while each proposal gets a disposable copy. */
 export class ProposalHostLifecycle {
   readonly appliedHost: MiniAppRuntimeHost;
   private proposal: { id: string; host: MiniAppRuntimeHost } | null = null;
@@ -74,7 +73,6 @@ export class ProposalHostLifecycle {
     await this.appliedHost.setSchema(source.schema);
   }
 
-  /** React StrictMode replays effect cleanup and setup; defer release one microtask. */
   retain() {
     this.disposalGeneration += 1;
     return () => {

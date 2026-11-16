@@ -12,7 +12,6 @@ function Sample({ id, title, note, children }: { id: string; title: string; note
 
 const sections = [["foundations", "Foundations"], ["actions", "Actions"], ["fields", "Fields"], ["navigation", "Navigation"], ["feedback", "Feedback"], ["data", "Data"], ["charts", "Charts"], ["patterns", "App patterns"], ["surfaces", "Surfaces"], ["loading", "Loading"], ["dialogs", "Dialogs"]];
 
-/** Thirty days of fixed numbers, so the gallery looks the same on every visit. */
 const days = Array.from({ length: 30 }, (_, index) => {
   const date = new Date(Date.UTC(2026, 9, 11 + index));
   const wave = 1 + Math.sin(index / 3.1) * 0.35 + (index % 7 === 5 ? -0.5 : 0) + index * 0.012;

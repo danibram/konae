@@ -1,9 +1,3 @@
-// `konae push` is the inverse of `konae pull`: it imports the folder's data/
-// into the app's own published Deployment with project_import replace=data,
-// as `kernel import <folder>` imports it on a Kernel without Konae. Rows are
-// never merged. Every check this machine can make runs before anything is
-// sent, and the published app goes into maintenance only for the transfer
-// and the import.
 import { Database } from "bun:sqlite";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,18 +8,13 @@ import { DATA_FOLDER } from "../src/lib/app-folder";
 import { describeSchemaChange, type SchemaChange } from "../src/deployments/release";
 import { checksumFile, uploadFromFile, writeTarFile } from "./package-files";
 
-/** The per-file cap and the quota of one Deployment, as platform_describe answers them. */
 export type FileLimits = { quotaBytes: number; maxFileBytes: number };
-/** The Kernel's defaults, for an installation whose platform_describe predates `files`. */
 const DEFAULT_LIMITS: FileLimits = { quotaBytes: 20 * 1024 * 1024, maxFileBytes: 2 * 1024 * 1024 };
 
-/** One file `data/files/index.json` lists, with the blob beside it. */
 export type IndexedFile = { id: string; name: string; size: number; blob: string };
 
-/** A component ready to upload: a file in the scratch folder, its size and SHA-256. */
 export type Staged = { name: PackageComponentName; file: string; size: number; sha256: string };
 
-/** What push found in data/ and what it will send. */
 export type LocalData = {
   components: Staged[];
   tables: { name: string; rows: number }[];
@@ -35,7 +24,6 @@ export type LocalData = {
 
 const NOTHING_SENT = "Nothing was sent.";
 
-/** Sizes as the Kernel writes them: whole MiB or KiB when exact, else one decimal. */
 export function bytes(value: number) {
   const mib = 1024 * 1024;
   if (value >= mib) return value % mib === 0 ? `${value / mib} MiB` : `${(value / mib).toFixed(1)} MiB`;
@@ -43,19 +31,12 @@ export function bytes(value: number) {
   return value === 1 ? "1 byte" : `${value} bytes`;
 }
 
-/** The installation's file limits from platform_describe. */
 export async function fileLimits(client: Pick<McpClient, "call">): Promise<FileLimits> {
   const described = await client.call<{ files?: Partial<FileLimits> }>("platform_describe");
   const { quotaBytes, maxFileBytes } = described.files ?? {};
   return Number.isSafeInteger(quotaBytes) && Number.isSafeInteger(maxFileBytes) ? { quotaBytes: quotaBytes!, maxFileBytes: maxFileBytes! } : DEFAULT_LIMITS;
 }
 
-/**
- * Reads `data/files/index.json` and checks each file as the Kernel's import
- * does: a valid id, a blob beside the index whose size is the indexed size,
- * an owner the pushed accounts hold, the per-file cap and the quota. A
- * refusal names the largest offending file and the totals.
- */
 export async function checkFiles(directory: string, limits: FileLimits, accounts: Set<string> | undefined): Promise<{ index: Uint8Array; files: IndexedFile[] }> {
   const where = path.join(DATA_FOLDER, "files", "index.json");
   let index: Uint8Array;
@@ -113,7 +94,6 @@ export async function checkFiles(directory: string, limits: FileLimits, accounts
   return { index, files };
 }
 
-/** Rows per table of an app database, as database_execute inspect counts them. */
 function countRows(file: string) {
   const db = new Database(file, { readonly: true });
   try {
@@ -122,12 +102,6 @@ function countRows(file: string) {
   } finally { db.close(); }
 }
 
-/**
- * A consistent copy of a SQLite file, rows still in its write-ahead log
- * included. The connection opens read-write without creating, because a
- * read-only one cannot make the -shm file a WAL database needs once the
- * Kernel has closed it. VACUUM INTO changes nothing in the source.
- */
 function snapshot(source: string, target: string) {
   const db = new Database(source, { readwrite: true, create: false });
   try { db.run("VACUUM INTO ?", [target]); } finally { db.close(); }
@@ -135,11 +109,6 @@ function snapshot(source: string, target: string) {
 
 async function exists(file: string) { return stat(file).then(() => true, () => false); }
 
-/**
- * Stages the parts of `data/` the Kernel's folder import takes: database,
- * identity when present, files when `data/files` exists, and usage when
- * present. `secrets.sqlite` never leaves. Checks every limit on the way.
- */
 export async function stageData(root: string, scratch: string, limits: FileLimits): Promise<LocalData> {
   const data = path.join(root, DATA_FOLDER);
   const source = (name: string) => path.join(data, name);
@@ -147,7 +116,6 @@ export async function stageData(root: string, scratch: string, limits: FileLimit
   const components: Staged[] = [];
   const add = async (name: PackageComponentName, file: string) => {
     const sized = await checksumFile(file);
-    // The files archive is bounded by the installation's quota, which checkFiles applies.
     const limit = name === "files" ? Infinity : packageComponentLimits[name];
     if (sized.size > limit) throw Error(`The ${name} component is ${bytes(sized.size)}; the Kernel takes at most ${bytes(limit)}. ${NOTHING_SENT}`);
     components.push({ name, file, ...sized });
@@ -172,19 +140,16 @@ export async function stageData(root: string, scratch: string, limits: FileLimit
   }
   if (await stat(source("files")).then((info) => info.isDirectory(), () => false)) {
     const { index, files } = await checkFiles(source("files"), limits, accounts);
-    // index.json first, then each blob in index order: the order the Kernel reads. Nothing else in the folder goes.
     const archive = path.join(scratch, "files.tar");
     await writeTarFile(archive, [{ path: "index.json", contents: index, mode: 0o600 }, ...files.map((file) => ({ path: `${file.id}.blob`, file: file.blob, size: file.size }))]);
     await add("files", archive);
     result.files = { count: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0) };
   }
-  // The manifest lists database first, as an export does.
   components.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
   return result;
 }
 const order: PackageComponentName[] = ["database", "identity", "files", "usage"];
 
-/** The manifest of a package built from data/, for `project_import`. */
 export function pushManifest(deployment: { id: string; projectId: string }, visibility: "public" | "private", components: Staged[]): PackageManifest {
   return {
     format: packageFormat, version: packageVersion, packageId: crypto.randomUUID(), createdAt: Date.now(),
@@ -199,7 +164,6 @@ async function remoteRows(client: Pick<McpClient, "call">, deploymentId: string)
   return new Map((Array.isArray(answer) ? answer : answer.result).map((table) => [table.name, table.totalRows]));
 }
 
-/** Local rows against published rows, one line per table either side has. */
 export function rowsTable(local: { name: string; rows: number }[], remote: Map<string, number> | undefined, headings: [string, string]) {
   const names = [...new Set([...local.map((table) => table.name), ...(remote?.keys() ?? [])])].sort();
   const here = new Map(local.map((table) => [table.name, table.rows]));
@@ -213,14 +177,6 @@ export type PushOptions = { yes: boolean; confirmSchema?: string; log?: (line: s
 
 export type Pushed = { backupId: string; deploymentId: string; leftInMaintenance: boolean };
 
-/**
- * Replaces the published app's data with the folder's `data/`. Without
- * `yes` it prints what would be replaced and refuses. With it: maintenance
- * on (unless the owner already put the app there), each component uploaded
- * in the installation's block size, project_import replace=data, which
- * writes its own backup first, the rows read back, and maintenance back to
- * how it was, on every failure path too.
- */
 export async function pushData(root: string, client: McpClient, project: { id: string; name: string; visibility: "public" | "private" }, options: PushOptions): Promise<Pushed> {
   const log = options.log ?? console.log;
   const inspected = await client.call<{ deployment?: { id: string; url?: string; projectId?: string; manifest?: { visibility?: string } } | null }>("project_inspect", { projectId: project.id });
@@ -246,9 +202,7 @@ export async function pushData(root: string, client: McpClient, project: { id: s
     const paused = (await client.call<{ maintenance?: boolean }>("maintenance_read", { projectId: deployment.id })).maintenance === true;
     let backupId: string | undefined;
     let failure: unknown;
-    // True once push itself put the app in maintenance, so only push's own pause is lifted.
     let pausedHere = false;
-    // An interrupt would skip the finally below, so it releases the uploads and lifts the pause itself.
     const interrupted = () => {
       log(pausedHere ? "Interrupted. Taking the app out of maintenance." : "Interrupted.");
       void Promise.all(transfers.map((transfer) => client.cancel(transfer.transferId).catch(() => {})))
@@ -264,7 +218,6 @@ export async function pushData(root: string, client: McpClient, project: { id: s
       }
       const components: Record<string, string> = {};
       for (const component of local.components) {
-        // Recorded as soon as it begins, so an interrupt mid-upload releases it too.
         const transfer = await uploadFromFile(client, component.file, component, { projectId: project.id, component: component.name }, (begun) => transfers.push(begun));
         components[component.name] = transfer.transferId;
         log(`Uploaded ${component.name} (${bytes(component.size)}).`);
@@ -283,7 +236,6 @@ export async function pushData(root: string, client: McpClient, project: { id: s
       }
       backupId = answer.backup!.id;
       log(`Imported. Backup ${backupId} holds the published data as it was before.`);
-      // Read back through the same door. The backup is listed, and the published rows are the ones sent.
       const backups = await client.call<{ id: string }[] | { result: { id: string }[] }>("database_execute", { projectId: deployment.id, operation: "list-backups" });
       if (!(Array.isArray(backups) ? backups : backups.result).some((backup) => backup.id === backupId)) throw Error(`The import answered backup ${backupId}, but list-backups does not show it.`);
       const after = await remoteRows(client, deployment.id);

@@ -1,14 +1,8 @@
-// `konae events`: what an app did besides answer its page. Email, calls
-// to other services, scheduled runs, routes and Signals, newest last, from
-// the local app, through the kernel binary's commands, or, with --prod, from the published
-// Deployment. The entries are the editor's What happened list
-// (src/lib/what-happened.ts), so a refusal reads the same in both places.
 import { readFile } from "node:fs/promises";
 import type { McpClient } from "../src/mcp/client";
 import { usageRange, type UsageSummary } from "../src/lib/usage";
 import { whatHappened, type Call, type Notice, type Signal, type Sources } from "../src/lib/what-happened";
 
-/** One line of the feed. `mail` exists only for the local app, whose mailbox is a file that names the recipient and holds the text. */
 export type AppEvent = {
   id: string;
   at: number;
@@ -16,19 +10,12 @@ export type AppEvent = {
   title: string;
   detail?: string;
   outcome: string;
-  /** Who must act and what to do, when someone must. */
   fix?: string;
-  /** A mail's recipient, purpose, subject, text and link, as the development mailbox wrote them. */
   mail?: { to: string; purpose: string; action?: string; subject?: string; text?: string; link?: string };
 };
 
 type MailboxLine = { to?: string; purpose?: string; scope?: string; action?: string; subject?: string; text?: string; link?: string; expiresAt?: number };
 
-/**
- * The development mailbox's lines for one Deployment. A line carries no
- * time, so `at` is the time of this read for a line not seen before, and
- * `seen` keeps the first time each line was read during a --follow.
- */
 export function mailEvents(mailbox: string, deploymentId: string, seen = new Map<number, number>(), now = Date.now()): AppEvent[] {
   const events: AppEvent[] = [];
   mailbox.split("\n").forEach((text, index) => {
@@ -48,7 +35,6 @@ export function mailEvents(mailbox: string, deploymentId: string, seen = new Map
   return events;
 }
 
-/** The Kernel's own record of a range of days: Usage, calls, notices and Signals. */
 export type ReadRecord = (range: { from: string; to: string }) => Promise<Sources>;
 export type LocalTestControls = {
   status(): Promise<unknown>;
@@ -73,7 +59,6 @@ async function boundedBody(request: Request, maxBytes: number) {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-/** The published Deployment's record, read with the four owner tools at once. */
 export function deploymentRecord(client: Pick<McpClient, "call">, deploymentId: string): ReadRecord {
   return async (range) => {
     const [summary, calls, notices, signals] = await Promise.all([
@@ -86,10 +71,8 @@ export function deploymentRecord(client: Pick<McpClient, "call">, deploymentId: 
   };
 }
 
-/** The Kernel's own record: notices, calls, scheduled runs, routes and Signals of the last `days` days. */
 export async function kernelEvents(read: ReadRecord, days = 7, mailboxShowsDelivered = false): Promise<AppEvent[]> {
   const record = await read(usageRange(days));
-  // Locally a delivered notice is a line of the mailbox, which names its recipient and text, so it is listed once, as mail.
   const notices = mailboxShowsDelivered ? record.notices.filter((notice) => notice.state !== "delivered") : record.notices;
   return whatHappened({ ...record, notices }).map((entry) => ({
     id: entry.id, at: entry.at, kind: entry.kind, title: entry.title, detail: entry.detail, outcome: entry.outcome.words,
@@ -97,25 +80,18 @@ export async function kernelEvents(read: ReadRecord, days = 7, mailboxShowsDeliv
   }));
 }
 
-/** Everything, oldest first, so a terminal and a --follow read downwards. */
 export async function readEvents(read: ReadRecord, deploymentId: string, options: { mailbox?: string; days?: number; seen?: Map<number, number> } = {}): Promise<AppEvent[]> {
   const mailbox = options.mailbox ? await readFile(options.mailbox, "utf8").catch(() => "") : "";
   const events = [...await kernelEvents(read, options.days, options.mailbox !== undefined), ...mailEvents(mailbox, deploymentId, options.seen)];
   return events.sort((a, b) => a.at - b.at);
 }
 
-/** One event as terminal lines: time, kind and title, then what happened, then a mail's text. */
 export function formatEvent(event: AppEvent): string {
   const lines = [`${new Date(event.at).toISOString().slice(11, 19)}  ${event.kind.padEnd(9)} ${event.title}${event.detail ? `  (${event.detail})` : ""}`, `          ${event.outcome}${event.fix ? ` ${event.fix}` : ""}`];
   if (event.mail?.text) lines.push(...event.mail.text.trim().split("\n").map((line) => `          | ${line}`));
   return lines.join("\n");
 }
 
-/**
- * The page `dev` serves beside the app: the same events, newest first, read
- * again every two seconds. It is one file with no dependency, and it writes
- * every value as text, never as markup, because a mail's text comes from the app's input.
- */
 export const EVENTS_PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -245,11 +221,6 @@ export const EVENTS_PAGE = `<!doctype html>
 </html>
 `;
 
-/**
- * Serves the page and `events.json` on this machine only. It stamps each
- * mailbox line once a second, so a mail's time is when it was written to
- * within a second, also for a later `konae events`, which reads from here.
- */
 export function serveEvents(read: ReadRecord, deploymentId: string, mailbox: string, port: number, controls?: LocalTestControls) {
   const seen = new Map<number, number>();
   const stamp = async () => { mailEvents(await readFile(mailbox, "utf8").catch(() => ""), deploymentId, seen); };

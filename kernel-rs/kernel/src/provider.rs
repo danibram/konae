@@ -1,23 +1,3 @@
-//! Webhooks from outside services: the signature schemes a route may declare
-//! besides Konae's own, and the `fields` map that reads a provider's
-//! nested payload into the action's inputs (ADR-0013).
-//!
-//! A route's `signature` names a `scheme`:
-//!
-//! | Scheme        | Header the sender sets                  | MAC                                   | Replay refused by          |
-//! | ------------- | --------------------------------------- | ------------------------------------- | -------------------------- |
-//! | `konae`   | `header`: `t=..,n=..,v1=..`             | http.rs, over t, nonce, route, body   | the MAC, for 600 s         |
-//! | `hmac-body`   | `header`: `[prefix]<hex or base64>`     | HMAC-SHA256 or SHA-1 of the raw body  | the MAC, for 72 hours      |
-//! | `timestamped` | `header`: `<prefix><t>,<tag><hex>`      | HMAC-SHA256 of `<t>.<body>`           | `t` outside `window`, then the MAC until `t` leaves it |
-//! | `svix`        | `svix-id`, `svix-timestamp`, `svix-signature` | HMAC-SHA256 of `<id>.<t>.<body>` with the `whsec_` key | `t` outside 300 s, then the id for 72 hours |
-//!
-//! The parse makes the same checks, in the same order and with the same
-//! messages, as src/kernel/route-declaration.ts; kernel-rs/kernel/src/http-binding-cases.json
-//! holds the cases and kernel-rs/kernel/src/provider-signature-cases.json the
-//! vectors both sides check. A provider's MAC is remembered in the
-//! Deployment's identity.sqlite, next to `route_signatures`, in its own table
-//! because each entry has its own expiry. A request whose action then fails
-//! gives its entry back, so the provider's retry of the same delivery runs.
 
 use super::refusal::{refuse, Refusal};
 use super::*;
@@ -29,10 +9,7 @@ use ring::hmac;
 pub const DELIVERY_MEMORY_SECONDS: u64 = 72 * 60 * 60;
 /// The Svix timestamp window, as Svix's own libraries use.
 pub const SVIX_WINDOW_SECONDS: u64 = 300;
-/// The largest `window` a `timestamped` signature may declare.
 const MAX_WINDOW_SECONDS: u64 = 3600;
-/// Signature values one header may carry, so a header cannot ask for one MAC
-/// per value. A rotation sends two.
 const MAX_PROVIDER_TAGS: usize = 4;
 const MAX_FIELDS: usize = 32;
 const MAX_PATH_STEPS: usize = 16;
@@ -59,10 +36,7 @@ pub enum Scheme {
     Svix,
 }
 
-// ---------------------------------------------------------------------------
-// Declarations.
 
-/// The keys each scheme takes, in the order its refusal lists them.
 fn scheme_keys(scheme: &str) -> &'static [&'static str] {
     match scheme {
         "konae" => &["scheme", "header", "secret"],
@@ -96,7 +70,6 @@ fn valid_secret_name(name: &str) -> bool {
         && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
-/// `t=` or `v1=`: a field name of letters, digits, `_` and `-`, then `=`.
 fn valid_field_prefix(prefix: &str) -> bool {
     (2..=16).contains(&prefix.len())
         && prefix.ends_with('=')
@@ -107,9 +80,6 @@ fn valid_body_prefix(prefix: &str) -> bool {
     (1..=32).contains(&prefix.len()) && prefix.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"=-_.:".contains(&byte))
 }
 
-/// The providers a route may name instead of spelling out a scheme, each the
-/// long form it stands for without its secret. src/kernel/route-declaration.ts
-/// imports the same file, so both doors expand a preset alike.
 const PRESETS: &str = include_str!("signature-presets.json");
 
 fn presets() -> &'static serde_json::Map<String, Value> {
@@ -155,9 +125,6 @@ pub fn signature(name: &str, method: &str, value: &Value) -> Result<(String, Str
     long_form(name, method, &expanded)
 }
 
-/// Parses a long-form `signature`: its scheme, then every key that scheme
-/// takes. An unknown scheme, and a provider's scheme on GET, stop the parse;
-/// every other wrong key adds its sentence, so one refusal names them all.
 fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) -> Result<(String, String, Scheme), Refusal> {
     let scheme = match record.get("scheme") {
         None => "konae",
@@ -239,7 +206,6 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
                     r#"Action {name} has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's."#
                 )));
             }
-            // 300.0 is the integer 300 to the editor's JSON reader, so it is here too.
             let window = record
                 .get("window")
                 .and_then(Value::as_f64)
@@ -263,7 +229,6 @@ fn long_form(name: &str, method: &str, record: &serde_json::Map<String, Value>) 
     }
 }
 
-/// One step of a JSON path: `.name` or `[index]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
     Key(String),
@@ -354,15 +319,11 @@ pub fn project(fields: &[(String, Vec<Step>)], action: &ActionDefinition, body: 
     Value::Object(input)
 }
 
-// ---------------------------------------------------------------------------
-// Verification.
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Delivery {
-    /// The MAC matched. The key the replay memory records, and when it may forget it.
     Valid { key: String, expires: u64 },
     Invalid,
-    /// The timestamp is outside the window. Checked before the MAC.
     Stale,
 }
 
@@ -433,8 +394,6 @@ pub fn verify(scheme: &Scheme, signature_header: &str, secret: &str, header: &dy
             let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
             let message = [format!("{timestamp}.").as_bytes(), body].concat();
             match first_match(&key, &message, &tags) {
-                // A request with this `t` is stale once `t` leaves the window,
-                // so the memory may forget it then.
                 Some(mac) => Delivery::Valid { key: format!("mac:{mac}"), expires: timestamp + window + 1 },
                 None => Delivery::Invalid,
             }
@@ -461,8 +420,6 @@ pub fn verify(scheme: &Scheme, signature_header: &str, secret: &str, header: &dy
             let Some(secret) = svix_key(secret) else { return Delivery::Invalid };
             let key = hmac::Key::new(hmac::HMAC_SHA256, &secret);
             let message = [format!("{id}.{sent}.").as_bytes(), body].concat();
-            // Svix sends a retry with the same id and a new signature, so the
-            // id, which the MAC covers, is what a replay repeats.
             match first_match(&key, &message, &tags) {
                 Some(_) => Delivery::Valid { key: format!("id:{id}"), expires: now + DELIVERY_MEMORY_SECONDS },
                 None => Delivery::Invalid,
@@ -471,9 +428,6 @@ pub fn verify(scheme: &Scheme, signature_header: &str, secret: &str, header: &dy
     }
 }
 
-// ---------------------------------------------------------------------------
-// Replay memory. identity.sqlite, as `route_signatures`, so it survives a
-// restart and travels with the accounts in an export.
 
 fn deliveries_table(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
@@ -516,8 +470,6 @@ mod tests {
         (header, scheme)
     }
 
-    /// src/lib/provider-signature.ts signs the same vectors; the provider
-    /// examples are the ones their documentation publishes.
     #[test]
     fn the_vectors_verify_and_a_changed_byte_does_not() {
         let vectors: Vec<Value> = serde_json::from_str(include_str!("provider-signature-cases.json")).unwrap();
@@ -537,8 +489,6 @@ mod tests {
         }
     }
 
-    /// src/lib/provider-signature.test.ts runs the same file against the
-    /// editor's parser.
     #[test]
     fn a_preset_expands_to_its_long_form_and_refusals_name_every_wrong_key() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("signature-preset-cases.json")).unwrap();
@@ -556,7 +506,6 @@ mod tests {
         }
     }
 
-    /// A provider joins the table only with a vector that signs as it does.
     #[test]
     fn every_preset_verifies_a_vector() {
         let vectors: Vec<Value> = serde_json::from_str(include_str!("provider-signature-cases.json")).unwrap();

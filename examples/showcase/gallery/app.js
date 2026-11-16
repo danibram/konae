@@ -1,13 +1,9 @@
-// One module for both pages. Each part runs only when its elements exist.
 const $ = (selector) => document.querySelector(selector);
 const el = (tag, props = {}, children = []) => {
   const node = Object.assign(document.createElement(tag), props);
   node.append(...children);
   return node;
 };
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 function reason(error) {
   if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
   if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The site could not reach its server. Check the connection and try again.";
@@ -101,16 +97,13 @@ async function showStudio() {
     button.disabled = true;
     status.textContent = "Uploading…";
     try {
-      // A draft is a private file and a published photograph a public one.
       const file = await miniapp.files.upload(data.get("file"), { visibility: publish ? "public" : "private" });
       const caption = String(data.get("caption")).trim();
       try {
-        // photos.add declares a guard, so an account outside the studio is refused with its sentence.
         await miniapp.actions.call("photos.add", {
           file_id: file.id, title: String(data.get("title")).trim(), caption: caption || null, status: publish ? "published" : "draft",
         });
       } catch (error) {
-        // The refused photograph's file is deleted, so it does not stay behind counting against the quota.
         await miniapp.files.delete(file.id).catch(() => {});
         throw error;
       }
@@ -133,7 +126,6 @@ async function refreshStudio() {
     miniapp.actions.call("studio.messages"),
   ]);
   const drafts = photos.filter((photo) => photo.status === "draft");
-  // files.url names the file's path, so a preview loads only the drafts shown.
   const urls = await Promise.all(drafts.map((photo) => miniapp.files.url(photo.file_id)));
   $("#drafts").replaceChildren(...(drafts.length ? drafts.map((photo, index) => draftRow(photo, urls[index])) : [el("li", { className: "muted", textContent: "No drafts." })]));
   $("#inbox").replaceChildren(...(messages.length ? messages.map((message) => el("li", { className: "card" }, [
@@ -143,7 +135,6 @@ async function refreshStudio() {
 }
 
 function draftRow(photo, url) {
-  // Publishing makes the draft's own file public, so no second copy is stored.
   const publish = el("button", { type: "button", className: "secondary", textContent: "Publish" });
   const note = el("span", { className: "muted" });
   publish.addEventListener("click", async () => {
@@ -154,7 +145,6 @@ function draftRow(photo, url) {
       try {
         await miniapp.actions.call("photos.publish", { id: photo.id });
       } catch (error) {
-        // The row stayed a draft, so its file goes back to private.
         await miniapp.files.update(photo.file_id, { visibility: "private" }).catch(() => {});
         throw error;
       }

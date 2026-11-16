@@ -1,35 +1,13 @@
-// release_plan's sentences from names alone, for the Validation Gate and the
-// Deploy dialog. Kept apart from gate.ts so the editor shell can import it
-// without the Gate's sql.js path (ADR-0007, lever 7).
 import type { ServerActionProgram } from "../kernel/actions";
 import type { DomainRules } from "../lib/domain-name";
 import { hintOf, type Refusal, type RefusalCode } from "../kernel/refusal";
 
-/**
- * What the editor knows about the project and its installation that
- * release_plan also reads. Each part is absent when the editor could not read
- * it, and the Gate then says nothing about what it would decide.
- */
 export type ReleaseFacts = {
-  /** The Capsule manifest's file policy, if present. */
   fileAccess?: unknown;
-  /**
-   * Names, use and whether the value decodes as a svix key, from
-   * `secrets_list`. Never a value.
-   */
   secrets?: { name: string; use?: string; svixKey?: boolean }[];
-  /** The installation's app suffix and its own hosts, from `domain_read`. */
   rules?: DomainRules;
 };
 
-/**
- * The first sentence release_plan would refuse a parsed program with, from
- * names alone: kernel-rs/kernel/src/http.rs `require_secrets`, then calls.rs
- * `check_release`, each over actions in name order. The cases are in
- * kernel-rs/kernel/src/release-cases.json. A svix route is refused for its key only
- * when `secrets_list` says the value does not decode, since the editor never
- * reads the value.
- */
 export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts): Refusal | null {
   const names = Object.keys(program.actions).sort();
   const known = facts.secrets ? new Map(facts.secrets.map((secret) => [secret.name, secret])) : null;
@@ -77,7 +55,6 @@ export function releaseRefusal(program: ServerActionProgram, facts: ReleaseFacts
   return null;
 }
 
-/** kernel-rs/kernel/src/http.rs `unset_secrets_message`: one sentence for every unset route secret. */
 function unsetSecretsSentence(actions: string[], secrets: string[]): string | null {
   const list = (items: string[]) => items.length === 1 ? items[0] : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
   if (actions.length === 0) return null;

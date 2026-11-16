@@ -7,7 +7,6 @@ import { docsRoot, readSite, sections, seedStatements } from "./docs-site";
 const repo = path.resolve(import.meta.dir, "..");
 const site = await readSite();
 
-/** The ids a page's headings get, by the rule the site and GitHub share. */
 function anchors(markdown: string) {
   const seen = new Map<string, number>();
   const ids = new Set<string>();
@@ -20,7 +19,6 @@ function anchors(markdown: string) {
   return ids;
 }
 
-/** Every markdown link outside code, as written. */
 function links(markdown: string) {
   const prose = markdown.replace(/^ *```[\s\S]*?^ *```/gm, "").replace(/`[^`\n]*`/g, "");
   return [...prose.matchAll(/\]\(([^)\s]+)\)/g)].map((match) => match[1]);
@@ -30,7 +28,6 @@ describe("the docs site", () => {
   test("every page in the navigation exists, has a title and its own route", () => {
     expect(site.pages.length).toBeGreaterThan(30);
     expect(new Set(site.pages.map((page) => page.route)).size).toBe(site.pages.length);
-    // The Kernel keeps these paths on every Deployment.
     for (const page of site.pages) expect(["mcp", "oauth", "_konae", "runtime"]).not.toContain(page.route.split("/")[0]);
   });
 
@@ -87,11 +84,9 @@ describe("the docs site", () => {
     const withDiagrams = site.pages.filter((page) => page.markdown.includes("```mermaid"));
     expect(withDiagrams.length).toBeGreaterThan(5);
     for (const page of withDiagrams) {
-      // An agent reads the markdown and a screen reader the paragraph, so each block is followed by words.
       for (const after of page.markdown.split(/^```mermaid\n[\s\S]*?^```\n/m).slice(1)) {
         expect(after.trimStart(), `docs/${page.source} has a diagram with no paragraph under it`).toMatch(/^[A-Z`]/);
       }
-      // The site draws an escaped <id> from #lt;id#gt;. A bare tag in a label is dropped.
       for (const block of page.markdown.match(/^```mermaid\n[\s\S]*?^```\n/gm) ?? []) {
         expect(block.replace(/<br\/>/g, ""), `docs/${page.source}`).not.toMatch(/<[a-z]/i);
       }

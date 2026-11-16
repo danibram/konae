@@ -2,10 +2,6 @@ import { limitIndex, unboundedQueryReason } from "./query-bound.ts";
 import { sqlTokens } from "./sql-tokens.ts";
 import { es, words } from "./i18n.js";
 
-// Points the links at this installation. The page answers on <domain>/,
-// on <domain>/p/<name>/ and on its own <slug>-<6 hex>.<domain>, and only the
-// browser knows which, so the addresses come from location. A custom domain
-// looks like the bare domain here, so on one the links name that domain.
 const { protocol, hostname, port, pathname } = location;
 const labels = hostname.split(".");
 const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
@@ -39,17 +35,10 @@ const point = () => {
 point();
 for (const element of document.querySelectorAll("[data-text]")) element.textContent = links[element.dataset.text];
 
-// Each line of a code block becomes its own element before the page's text is
-// read, so a long command wraps under itself and never reads as a new one, and
-// a flag such as --url never breaks between its hyphens.
 for (const pre of document.querySelectorAll("figure.code pre")) {
   pre.innerHTML = pre.innerHTML.split("\n").map((line) => `<span class="line">${line.replace(/(--[a-z-]+)/g, '<span class="flag">$1</span>') || " "}</span>`).join("");
 }
 
-// The page is written in English and carries its Spanish text in i18n.js.
-// ?lang= wins, then the visitor's last choice, then the browser's language.
-// Each part of the page that writes text registers a function in `redraw`,
-// which runs again when the language changes.
 const marked = [...document.querySelectorAll("[data-t]")];
 const english = new Map(marked.map((element) => [element, element.innerHTML]));
 const stored = (() => { try { return localStorage.getItem("konae-home-lang"); } catch { return null; } })();
@@ -65,7 +54,6 @@ const speak = () => {
   for (const element of marked) element.innerHTML = lang === "es" && es[element.dataset.t] ? es[element.dataset.t] : english.get(element);
   for (const element of document.querySelectorAll("[data-t-label]")) element.setAttribute("aria-label", w.labels[element.dataset.tLabel] ?? element.getAttribute("aria-label"));
   point();
-  // The invitation request opens in the language the visitor reads here.
   for (const element of document.querySelectorAll('[data-link="invite"]')) element.href = `${links.invite}?lang=${lang}`;
   for (const draw of redraw) draw();
 };
@@ -81,8 +69,6 @@ switcher.addEventListener("click", () => {
   speak();
 });
 
-// The example app. The editor's preview and the app that changes server show
-// the same list, so a name added in one is still there in the other.
 const here = domain === "localhost" || /^[\d.]+$/.test(domain) ? "konae.example.com" : domain;
 const hosts = () => [here, w.otherHost];
 const places = 14;
@@ -118,11 +104,6 @@ const renderList = () => {
 };
 redraw.push(renderList);
 
-// The editor in the hero builds the app once when it comes into view: the
-// sentence types itself, the assistant answers, the files appear, the
-// Validation Gate's line shows, Apply puts the app in the preview and Deploy
-// gives it its address. Each moment is a step number on the figure, and the
-// stylesheet shows what belongs to that step.
 const studio = document.querySelector("[data-studio]");
 if (studio) {
   const typed = studio.querySelector("[data-typed]");
@@ -228,10 +209,6 @@ if (studio) {
   }
 }
 
-// The app changes server when the visitor presses the button. The slot that
-// holds the app is as tall as the app and the empty one folds to one line;
-// both change together while a copy of the card flies between them, so the
-// figure keeps its height.
 const stage = document.querySelector("[data-stage]");
 if (stage) {
   const app = stage.querySelector("[data-app]");
@@ -268,7 +245,6 @@ if (stage) {
     if (reduced) { place(index); return; }
     const from = app.getBoundingClientRect();
     const base = stage.getBoundingClientRect();
-    // Measure where the app lands without animating, then start from the old layout.
     stage.classList.add("instant");
     place(index);
     const to = app.getBoundingClientRect();
@@ -282,7 +258,6 @@ if (stage) {
     Object.assign(ghost.style, { left: `${from.left - base.left}px`, top: `${from.top - base.top}px`, width: `${from.width}px` });
     stage.append(ghost);
     app.style.visibility = "hidden";
-    // Out of the flow while it flies, so each slot follows only its own animated height.
     app.style.position = "absolute";
     app.style.width = `${from.width}px`;
     place(index);
@@ -324,11 +299,8 @@ if (stage) {
   addEventListener("resize", () => { if (!busy) reserve(); });
 }
 
-// Every code block copies its own text. Without clipboard access it selects the text instead.
 for (const button of document.querySelectorAll("[data-copy]")) {
   const pre = button.closest("figure").querySelector("pre");
-  // The copied text is read when the button is pressed, one line per element,
-  // so it follows the language on screen.
   const text = () => [...pre.querySelectorAll(".line")].map((line) => line.textContent).join("\n");
   const label = () => {
     const state = button.dataset.state;
@@ -351,8 +323,6 @@ for (const button of document.querySelectorAll("[data-copy]")) {
   redraw.push(label);
 }
 
-// The three ways for developers sit behind tabs. Without this script they
-// stay one under the other.
 const tabs = document.querySelector("[data-tabs]");
 if (tabs) {
   const buttons = [...tabs.querySelectorAll('[role="tab"]')];
@@ -375,9 +345,6 @@ if (tabs) {
   select(0);
 }
 
-// Pointing at "anyone with the link" lights the action's "access": "anonymous"
-// too, and back. A change of language writes the first mark again, so the
-// marks are found each time.
 const doors = document.querySelector(".doors");
 const light = (on) => (event) => {
   if (!event.target.closest?.("mark")) return;
@@ -386,10 +353,6 @@ const light = (on) => (event) => {
 doors.addEventListener("mouseover", light(true));
 doors.addEventListener("mouseout", light(false));
 
-// The statement box runs the row-limit check the editor's Validation Gate
-// runs (query-bound.ts is a copy of src/lib/query-bound.ts), with the sentence
-// src/kernel/actions.ts and the Kernel build from it. The Gate checks a
-// statement's shape first; this box says so instead of judging other statements.
 const check = document.querySelector("[data-check]");
 if (check) {
   const toggle = check.querySelector("[data-toggle]");
@@ -434,7 +397,6 @@ if (check) {
   input.hidden = false;
   toggle.hidden = false;
   input.addEventListener("input", judge);
-  // The LIMIT goes before a trailing comment, where the Gate would read it, and comes out the same way.
   toggle.addEventListener("click", () => {
     const [code, ...comment] = input.value.trimEnd().split(/(?=--)/);
     const statement = code.trimEnd();
@@ -445,9 +407,6 @@ if (check) {
   redraw.push(judge);
 }
 
-// Blocks rise into place the first time they come into view, each a little
-// after the one before it in the same row. Without the observer, or with
-// reduced motion, nothing is hidden.
 const rising = [...document.querySelectorAll("[data-reveal]")];
 if (!reduced && "IntersectionObserver" in window) {
   document.documentElement.classList.add("anim");
@@ -465,8 +424,6 @@ if (!reduced && "IntersectionObserver" in window) {
   }
 }
 
-// The header draws its rule once the page has scrolled, and its button hides
-// while the hero's own call to action is on screen.
 const bar = document.querySelector(".bar");
 const stick = () => bar.classList.toggle("stuck", scrollY > 8);
 addEventListener("scroll", stick, { passive: true });
@@ -477,8 +434,6 @@ if (heroCta && barCta && "IntersectionObserver" in window) {
   new IntersectionObserver((entries) => barCta.classList.toggle("quiet", entries.some((entry) => entry.isIntersecting))).observe(heroCta);
 }
 
-// The privacy and terms links show only where the installation has those
-// pages. The check needs the same origin, so it is skipped on the app's own hostname.
 if (!ownHostname) for (const element of document.querySelectorAll("[data-legal]")) {
   fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
 }

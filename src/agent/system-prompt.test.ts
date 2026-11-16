@@ -32,9 +32,7 @@ describe("system prompt", () => {
     ]) {
       expect(prompt).toContain(fragment);
     }
-    // A new project is private until its owner or its template makes it public.
     expect(prompt).toContain("private deployment");
-    // The Kernel refuses to deploy "granted", so the prompt must not offer it.
     expect(prompt).not.toContain('"granted"');
   });
 });
@@ -49,7 +47,6 @@ describe("what the prompt says a Deployment serves", () => {
     expect(servedPath("public/robots.txt")).toBe("robots.txt");
     expect(prompt).toContain("/workspace/404.html");
     expect(servedPath("404.html")).toBe("404.html");
-    // An .html outside the root and pages/ is not a page, as the prompt says.
     expect(prompt).toContain("An .html file anywhere else is not a page.");
     expect(servedPath("src/partial.html")).toBeNull();
   });
@@ -85,11 +82,9 @@ describe("what the prompt leaves to the Validation Gate", () => {
   });
 
   test("carries no table of declaration refusals; validate_capsule returns each with its code and remedy", () => {
-    // A Gate refusal of a declared key, which the case files name with a code.
     expect(prompt).not.toContain("has an invalid notify subject");
     expect(prompt).not.toContain("has an invalid signature window");
     expect(prompt).toContain("validate_capsule returns its sentence, a code and the remedy");
-    // A refusal the running app or a route's caller meets stays in the prompt.
     expect(prompt).toContain('"Server action not declared."');
     expect(prompt).toContain('"invalid-signature"');
   });

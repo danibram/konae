@@ -1,28 +1,8 @@
-//! Response headers that keep hosted code on its own origin.
-//!
-//! Every app is served from `<slug>-<id>.<suffix>`, so a creator's JavaScript
-//! runs next to other apps and next to the editor host. One layer adds the
-//! headers below to every response the Kernel sends.
-//!
-//! - App hosts get a Content Security Policy. A Build Artifact inlines the
-//!   Konae runtime and the compiled module in `index.html`, so the policy
-//!   allows those exact scripts by their SHA-256 hashes instead of allowing
-//!   inline script in general. Inline event handler attributes, `eval` and
-//!   scripts from other origins stay blocked.
-//! - Every host gets `frame-ancestors 'none'` and `X-Frame-Options: DENY`, so
-//!   an app cannot frame the editor, another app or itself in another origin.
-//! - Every host gets HSTS when the installation is served over HTTPS, and a
-//!   custom domain gets it without `includeSubDomains`.
-//! - A path address on `<domain>` (ADR-0014) is an app host for these headers.
-//!   The layer runs outside the router, so the home page and the redirects of
-//!   the path router get the same headers as an app response.
 
 use super::*;
 use axum::middleware::Next;
 use sha2::{Digest, Sha256};
 
-/// HTML larger than this is served without script hashes, so its inline
-/// scripts do not run. Deployments are capped below this size.
 const MAX_HASHED_HTML: usize = 32 * 1024 * 1024;
 
 /// The policy for a response from an app host, given the hash sources of its
@@ -271,7 +251,7 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let host = visitor[header::HOST].to_str().unwrap().to_owned();
         let client = reqwest::Client::new();
-        let fresh = client.get(format!("http://{address}/fresh")).header("host", &host).send().await.unwrap();
+        let fresh = client.get(format!("http:
         let policy = fresh.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_owned();
         assert!(policy.contains(&sha("window.a=1")), "{policy}");
         let same = client.get(format!("http://{address}/same")).header("host", &host).send().await.unwrap();

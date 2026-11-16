@@ -1,22 +1,3 @@
-//! Usage and Signals, ADR-0010.
-//!
-//! Each Deployment keeps `usage.sqlite` in its app folder's `data/`, next to
-//! `database.sqlite` and `identity.sqlite`. It holds daily totals of the
-//! runtime endpoint's operations the Kernel authorized and the Signals that Server Actions
-//! declared. Nothing else writes it and a Runtime Actor never reads it; the
-//! owner reads it with `usage_summary` and `signals_read`.
-//!
-//! A handler calls `count` or `signal` after the operation succeeded. Both put a
-//! message on a bounded queue and return at once. One writer thread drains the
-//! queue and writes each Deployment's file in one transaction per batch, so a
-//! response never waits on this store. When the queue is full the message is
-//! dropped and counted in `dropped`, rather than slowing the app down.
-//!
-//! The one other writer is the timer in `schedule.rs` (ADR-0011). It records
-//! each scheduled run, its `scheduled` count and the slot it ran for with
-//! `record_run`, directly and in one transaction, because a run the store lost
-//! would run again after a restart. SQLite's WAL and busy timeout let the two
-//! writers take turns.
 
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, Deployment};
@@ -42,18 +23,13 @@ pub const USAGE_DAYS: i64 = 400;
 pub const MAX_USAGE_ROWS: i64 = 100_000;
 /// Signals kept, oldest dropped first.
 pub const MAX_SIGNALS: i64 = 50_000;
-/// Daily execution and Signal aggregates, bounded independently from operation totals.
 const MAX_METRIC_ROWS: i64 = 100_000;
-/// Daily counts per app account, oldest days dropped first.
 const MAX_ACCOUNT_ROWS: i64 = 100_000;
-/// The accounts `usage_summary` lists, most active first.
 const ACCOUNTS_PAGE: i64 = 20;
 /// Scheduled runs kept, oldest dropped first. A job every 5 minutes makes 288 a day.
 pub const MAX_SCHEDULED_RUNS: i64 = 10_000;
-/// The scheduled runs `usage_summary` returns, newest first.
 const SCHEDULED_PAGE: i64 = 500;
 pub const MAX_SIGNAL_PROPERTIES: usize = 8;
-/// The property that records the caller's ID instead of an input.
 const SIGNAL_ACTOR: &str = "actor";
 /// A string property keeps at most this many bytes, cut at a character boundary.
 pub const MAX_PROPERTY_BYTES: usize = 128;
@@ -63,25 +39,16 @@ const BATCH: usize = 1_024;
 
 /// An operation of the runtime endpoint that the Kernel authorized.
 pub enum Operation {
-    /// `auth_session`, which the SDK calls when an app opens.
     Session,
     Action(String),
-    /// An HTTP route, as `POST /hooks/orders`.
     Route(String, String),
     Upload,
     FileRead,
     Signup,
     Login,
-    /// A guarded mutation that changed no row, by action name. The one
-    /// refusal Usage counts: the app's own rule said no (`guard.rs`).
     Refused(String),
-    /// A mutation's notice, named `<action>: queued` or `<action>: <reason>`
-    /// when nothing will be sent (`notify.rs`).
     Notify(String),
-    /// A call queued by an action of `"kind": "call"`, by action name (`calls.rs`).
     Call(String),
-    /// A browser navigation to one of the artifact's HTML pages, by the file
-    /// served (`count_page_view` in `main.rs`).
     PageView(String),
 }
 
@@ -173,12 +140,9 @@ pub fn signal(data_root: &Path, deployment_id: &str, action_name: &str, action: 
     });
 }
 
-/// What one app account did, as `account_daily` counts it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccountKind {
-    /// The app opened with this account's session (`auth_session`).
     Open,
-    /// A Server Action succeeded or a service call entered the queue.
     Action,
 }
 
@@ -231,7 +195,6 @@ pub fn flush_status() -> bool {
     send_waiting(Message::Flush(done)).is_ok() && wait.recv_timeout(Duration::from_secs(5)).is_ok()
 }
 
-/// A flush is the one sender that waits for room, and only for five seconds.
 fn send_waiting(message: Message) -> std::result::Result<(), ()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut message = message;
@@ -401,7 +364,6 @@ pub fn record_run(folder: &Path, run: &Run) -> Result<()> {
 }
 
 fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
-    // A Deployment removed or moved since the message was queued gets no new folder.
     if !folder.is_dir() {
         return Ok(());
     }
@@ -446,8 +408,6 @@ fn metric(db: &Connection, at: u64, feature: &str, name: &str, origin: &str, out
     Ok(())
 }
 
-/// Keeps the store within its bounds: `USAGE_DAYS` days and `MAX_USAGE_ROWS`
-/// rows of totals, and the newest `MAX_SIGNALS` Signals.
 fn prune(db: &Connection, now: u64) -> Result<()> {
     let cutoff = day(now.saturating_sub((USAGE_DAYS as u64 - 1) * 86_400_000));
     prune_daily(db, "usage_daily", MAX_USAGE_ROWS, &cutoff)?;
@@ -465,7 +425,6 @@ fn prune(db: &Connection, now: u64) -> Result<()> {
 }
 
 fn prune_daily(db: &Connection, table: &str, limit: i64, cutoff: &str) -> Result<()> {
-    // Table names come only from prune, never from a request.
     let predicate = format!("day < ?1 OR rowid IN (SELECT rowid FROM {table} ORDER BY day LIMIT max(0, (SELECT COUNT(*) FROM {table}) - ?2))");
     let latest: Option<String> = db.query_row(&format!("SELECT MAX(day) FROM {table} WHERE {predicate}"), params![cutoff, limit], |r| r.get(0))?;
     if let Some(latest) = latest {
@@ -482,7 +441,6 @@ pub fn day(ms: u64) -> String {
     format!("{year:04}-{month:02}-{date:02}")
 }
 
-/// Days since 1970-01-01 to a proleptic Gregorian date.
 fn civil(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -496,7 +454,6 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (year, month, date)
 }
 
-/// Parses `YYYY-MM-DD` into days since 1970-01-01, refusing dates that do not exist.
 fn parse_day(text: &str) -> Option<i64> {
     let bytes = text.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
@@ -507,7 +464,6 @@ fn parse_day(text: &str) -> Option<i64> {
     if !(1..=12).contains(&month) || date < 1 {
         return None;
     }
-    // Days from civil, the inverse of `civil`.
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let yoe = y.rem_euclid(400);
@@ -518,9 +474,6 @@ fn parse_day(text: &str) -> Option<i64> {
     (civil(days) == (year, month as u32, date as u32)).then_some(days)
 }
 
-// ---------------------------------------------------------------------------
-// Declarations. The same checks, order and messages as `parseSignal` in
-// src/kernel/actions.ts; kernel-rs/kernel/src/signal-cases.json holds the cases.
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Signal {
@@ -571,7 +524,6 @@ pub fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Signa
         Some(_) => return Err(invalid()),
     };
     if properties.len() > MAX_SIGNAL_PROPERTIES {
-        // The number is written out so src/sdk/contract.test.ts finds the message.
         return Err(refuse("signal.properties-too-many", format!("Action {name} names more than 8 signal properties.")));
     }
     let inputs: Vec<&str> = action
@@ -597,7 +549,6 @@ pub fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Signa
     Ok(Some(Signal { name: signal_name.to_owned(), properties }))
 }
 
-/// Dot-separated lowercase words, at least two, as action names are, up to 64 characters.
 fn valid_name(name: &str) -> bool {
     let parts: Vec<&str> = name.split('.').collect();
     name.len() <= 64
@@ -609,9 +560,6 @@ fn valid_name(name: &str) -> bool {
         })
 }
 
-// ---------------------------------------------------------------------------
-// The usage and Signal reads, which the caller has authorized for one
-// Deployment. The runtime endpoint never offers them.
 
 /// Answers `usage_summary` and `signals_read` for a Deployment the caller may read.
 pub async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
@@ -653,7 +601,6 @@ pub fn read_usage(path: &Path, from: &str, to: &str) -> Result<Value> {
     let mut totals: Vec<Value> = Vec::new();
     let mut scheduled: Vec<Value> = Vec::new();
     if let Some(db) = read_only(path)? {
-        // A store written before scheduled work existed has no runs table.
         let has_runs: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_runs')", [], |row| row.get(0))?;
         if has_runs {
@@ -730,10 +677,6 @@ pub fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &
             "installationWriteErrorsSinceRestart": WRITE_ERRORS.load(Ordering::Relaxed)}, "updatedAt": super::now_ms()}))
 }
 
-/// What signed-in app accounts did in the period: how many were active, how
-/// many were active each day, and the most active ones with their email,
-/// which comes from `identity.sqlite` at read time so `usage.sqlite` keeps
-/// only the account's ID. A visitor without an account appears nowhere here.
 fn read_accounts(usage: &Path, identity: &Path, from: &str, to: &str) -> Result<Value> {
     let empty = json!({"active": 0, "opens": 0, "actions": 0, "days": [], "top": [], "limit": ACCOUNTS_PAGE, "startedAt": null});
     let Some(db) = read_only(usage)? else { return Ok(empty) };
@@ -767,7 +710,6 @@ fn read_accounts(usage: &Path, identity: &Path, from: &str, to: &str) -> Result<
     Ok(json!({"active": active, "opens": opens, "actions": actions, "days": days, "top": top, "limit": ACCOUNTS_PAGE, "startedAt": started_at}))
 }
 
-/// The bytes one part of an app takes now: a file, or a folder and all it holds.
 fn bytes_on_disk(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else { return 0 };
     if meta.is_file() {
@@ -779,7 +721,6 @@ fn bytes_on_disk(path: &Path) -> u64 {
     std::fs::read_dir(path).map(|entries| entries.flatten().map(|entry| bytes_on_disk(&entry.path())).sum()).unwrap_or(0)
 }
 
-/// A SQLite file with its write-ahead log and shared-memory index.
 fn sqlite_bytes(path: &Path) -> u64 {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     ["", "-wal", "-shm"].iter().map(|suffix| bytes_on_disk(&path.with_file_name(format!("{name}{suffix}")))).sum()
@@ -819,7 +760,6 @@ pub fn compact_overview(mut summary: Value) -> Value {
     summary["usage"]["scheduled"] = json!([]);
     summary["accounts"]["days"] = json!([]);
     summary["accounts"]["top"] = json!([]);
-    // A notice keeps its outcome as "*: <reason>", so the overview can tell a queued notice from one never sent.
     let mut totals: std::collections::BTreeMap<(String, String), i64> = std::collections::BTreeMap::new();
     for row in summary["usage"]["totals"].as_array().into_iter().flatten() {
         let kind = row["kind"].as_str().unwrap_or("").to_owned();
@@ -842,12 +782,10 @@ pub fn compact_overview(mut summary: Value) -> Value {
     summary
 }
 
-/// Current states of operations created in the period, limited to retained job records.
 fn retained_states(path: &Path, table: &str, column: &str, scope: &str, from: i64, to: i64) -> Result<Value> {
     let Some(db) = read_only(path)? else { return Ok(json!({"states": [], "retainedOnly": true})); };
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ?1)", [table], |r| r.get(0))?;
     if !exists { return Ok(json!({"states": [], "retainedOnly": true})); }
-    // All identifiers are constants supplied above; only scope and dates come from a caller.
     let sql = format!("SELECT state, COUNT(*) FROM {table} WHERE {column} = ?1 AND created_at >= ?2 AND created_at < ?3{} GROUP BY state", if table == "jobs" { " AND purpose = 'notify'" } else { "" });
     let mut q = db.prepare(&sql)?;
     let states = q.query_map(params![scope, from, to], |r| Ok(json!({"state": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -886,7 +824,6 @@ pub fn read_signals(path: &Path, name: Option<&str>, cursor: Option<&str>) -> Re
     Ok(json!({"signals": signals, "nextCursor": next}))
 }
 
-/// The number of Signals in a store.
 #[cfg(test)]
 fn signal_count(path: &Path) -> i64 {
     read_only(path)
@@ -925,7 +862,6 @@ mod tests {
         ]));
     }
 
-    /// The editor runs the same file in src/kernel/actions.test.ts.
     #[test]
     fn signals_refuse_what_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("signal-cases.json")).unwrap();
@@ -956,7 +892,6 @@ mod tests {
         }
         count_account(&root, id, "u-ana", AccountKind::Open);
         count_account(&root, id, "u-gone", AccountKind::Open);
-        // A visitor without an account is never a row.
         count_account(&root, id, "anonymous", AccountKind::Open);
         count_account(&root, id, "", AccountKind::Action);
         assert!(flush_status());
@@ -967,7 +902,6 @@ mod tests {
         let top = accounts["top"].as_array().unwrap();
         assert_eq!((top[0]["account"].as_str(), top[0]["email"].as_str(), top[0]["actions"].as_i64(), top[0]["opens"].as_i64()), (Some("u-ana"), Some("ana@example.com"), Some(3), Some(1)));
         assert_eq!((top[1]["account"].as_str(), top[1]["email"].clone()), (Some("u-gone"), Value::Null));
-        // A store an older Kernel wrote, with no account table, reads as none.
         let old = scratch("accounts-old").join(USAGE_DATABASE);
         Connection::open(&old).unwrap().execute_batch("CREATE TABLE usage_daily(day TEXT, kind TEXT, name TEXT, count INTEGER);").unwrap();
         assert_eq!(read_accounts(&old, &old, &today, &today).unwrap()["active"], 0);
@@ -1014,7 +948,6 @@ mod tests {
         count(&root, id, Operation::Login);
         let long = "é".repeat(100);
         signal(&root, id, "orders.place", action, &json!({"id": long}), None);
-        // An app folder that is gone gets no new file.
         count(&root, "deployment-gone", Operation::Session);
         flush();
         let path = crate::layout::usage(&root, &id);
@@ -1042,10 +975,8 @@ mod tests {
         {
             let mut db = open(&path).unwrap();
             let transaction = db.transaction().unwrap();
-            // Days older than the window go, whatever the row count.
             let old = day(now - USAGE_DAYS as u64 * 86_400_000);
             transaction.execute("INSERT INTO usage_daily VALUES(?1, 'login', '', 7)", [&old]).unwrap();
-            // More rows than the bound inside the window: the oldest days go first.
             let mut insert = transaction.prepare("INSERT INTO usage_daily VALUES(?1, 'action', ?2, 1)").unwrap();
             for index in 0..(MAX_USAGE_ROWS + 10) {
                 let at = now - (index as u64 % 300) * 86_400_000;
@@ -1087,7 +1018,6 @@ mod tests {
         tx.commit().unwrap();
         assert_eq!(signal_count(&path), 0);
         assert_eq!(db.query_row("SELECT count FROM metric_daily WHERE name = 'order.placed'", [], |r| r.get::<_, i64>(0)).unwrap(), MAX_SIGNALS + 10);
-        // A pre-monitor store remains unchanged until its next write.
         let old = root.join("old.sqlite");
         Connection::open(&old).unwrap().execute_batch("CREATE TABLE usage_daily(day TEXT, kind TEXT, name TEXT, count INTEGER);").unwrap();
         assert_eq!(read_usage(&old, &day(at), &day(at)).unwrap()["totals"], json!([]));
