@@ -256,13 +256,18 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
         "signup-policy" => signup_policy(state, deployment, words).await,
         "modules" => {
             ensure!(words.rest().is_empty(), "kernel modules takes no arguments.");
-            crate::modules::read(&state.data_root, &deployment.id)
+            Ok(crate::modules::read(&deployment))
         }
         "module" => {
             let name = words.next().context("kernel module needs a module name and on or off.")?;
             let value = words.next().context("kernel module needs on or off.")?;
             ensure!(words.rest().is_empty() && ["on", "off"].contains(&value.as_str()), "kernel module <name> on|off");
-            crate::modules::set(&state.data_root, &deployment.id, &name, Some(value == "on"), None, None).await
+            let result = crate::modules::set(&state.data_root, &deployment.id, &name, Some(value == "on"), None, None).await?;
+            let mut deployments = state.deployments.write().await;
+            if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+                current.modules.insert(name, result["state"].clone());
+            }
+            Ok(result)
         }
         "maintenance" => {
             let on = match words.required("on or off")?.as_str() {

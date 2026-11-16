@@ -154,6 +154,8 @@ pub struct Deployment {
     pub signup_policy: SignupPolicy,
     /// How people sign in. Password always; Google when the owner turned it on.
     pub sign_in_methods: Vec<SignInMethod>,
+    #[serde(default = "modules::defaults")]
+    pub modules: std::collections::BTreeMap<String, Value>,
     /// Where `"notify": { "to": "owner" }` sends. A publish from Konae fills
     /// it with the owner's email; the Kernel keeps no record of owners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -329,6 +331,7 @@ impl Settings {
             signup_policy,
             sign_in_methods,
             contact_email,
+            modules: self.modules,
             released_schema: released.as_ref().map(|r| r.schema_sql.clone()).unwrap_or_default(),
         }
     }
@@ -1009,6 +1012,11 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         sign_in_methods: match existing.as_ref() {
             Some(item) => item.sign_in_methods.clone(),
             None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
+        },
+        modules: {
+            let mut modules = existing.as_ref().map(|item| item.modules.clone()).or_else(|| input.initial_modules.clone()).unwrap_or_else(modules::defaults);
+            modules::complete(&mut modules);
+            modules
         },
         contact_email: input.contact_email.clone(),
         released_schema,
@@ -4305,6 +4313,7 @@ pub mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
+            modules: modules::defaults(),
             released_schema: String::new(),
         };
         tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))

@@ -2,6 +2,7 @@
   "modules": {
     "auth": {
       "summary": "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
+      "switch": false,
       "options": [],
       "permission": "manage_users",
       "agentRule": "never",
@@ -13,6 +14,7 @@
     },
     "actions": {
       "summary": "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
+      "switch": false,
       "options": [],
       "permission": "publish",
       "agentRule": "never",
@@ -23,6 +25,7 @@
     },
     "files": {
       "summary": "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
+      "switch": false,
       "options": [],
       "permission": "publish",
       "agentRule": "never",
@@ -34,6 +37,7 @@
     },
     "calls": {
       "summary": "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
+      "switch": false,
       "options": [],
       "permission": "publish",
       "agentRule": "never",
@@ -46,6 +50,7 @@
     },
     "http": {
       "summary": "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
+      "switch": false,
       "options": [],
       "permission": "publish",
       "agentRule": "never",
@@ -58,6 +63,7 @@
     },
     "seo": {
       "summary": "Search listing and page cards, once the Kernel implements this module.",
+      "switch": true,
       "options": [
         {
           "key": "canonical",
@@ -67,7 +73,7 @@
             "hostname",
             "path"
           ],
-          "default": "domain",
+          "default": null,
           "label": "Canonical address",
           "help": "Choose the address search engines and link previews should use."
         },

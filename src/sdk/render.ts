@@ -109,6 +109,7 @@ export function renderPlatformGuide(contract: SdkContract = sdkContract): string
     modules: contract.modules.map((module) => ({
       name: module.name,
       summary: module.summary,
+      switch: module.switch,
       notes: module.notes,
       declarations: module.declarations.map(({ errors, ...declaration }) => ({
         ...declaration,
@@ -202,6 +203,7 @@ export function renderAll(contract: SdkContract = sdkContract): Record<string, s
     [renderedPaths.docs]: renderDocs(contract),
     [renderedPaths.modules]: `${JSON.stringify({ modules: Object.fromEntries(contract.modules.map((module) => [module.name, {
       summary: module.summary,
+      switch: module.switch,
       options: module.options,
       permission: module.permission,
       agentRule: module.agentRule,

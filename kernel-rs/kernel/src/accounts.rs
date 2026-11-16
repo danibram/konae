@@ -696,6 +696,7 @@ pub mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
+            modules: crate::modules::defaults(),
             released_schema: String::new(),
         }
     }

@@ -163,15 +163,15 @@ The calls a Deployment queued, in the installation's `calls.sqlite`, which the o
 _Avoid_: call log, queue (the mail queue holds email)
 
 **SDK Module**:
-A part of an SDK module that a page calls on `window.miniapp`, such as `auth`, `actions` or `files`, described in `src/sdk/contract.ts`.
+The part of a module that a page calls on `window.miniapp`, such as `auth`, `actions` or `files`, described in `src/sdk/contract.ts`.
 _Avoid_: plugin, library, extension
 
 **Module**:
-One capability of an app, described in `src/sdk/contract.ts` with its calls, Capsule keys, options, permission, agent rule, requirements and use markers. `konae.json` names every known module and whether it is on. `modules_read` reads the state and `module_set` changes it; the Kernel binary reads the same state from an exported app folder (ADR-0015).
+One capability of an app, described in `src/sdk/contract.ts` with its calls, Capsule keys, options, permission, agent rule, requirements, use markers and whether it can be switched yet. `konae.json` stores state only for modules that can be switched. `modules_read` reads the state and `module_set` changes it; the Kernel binary reads the same state from an exported app folder (ADR-0015).
 _Avoid_: plugin, extension
 
 **Module State**:
-The on/off value and options for every module the Kernel knows, held in `konae.json`. A change applies at once, and export carries the value to import.
+The on/off value and options for modules whose switch is available, held in `konae.json`. A change applies at once, and export carries the value to import.
 _Avoid_: plugin configuration
 
 **Action Contract**:

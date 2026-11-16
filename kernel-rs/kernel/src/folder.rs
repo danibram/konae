@@ -182,7 +182,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         id: id.to_owned(), project_id: id.to_owned(), project_name: input.project.name.clone(), slug: input.project.slug.clone(),
         url: crate::deployment_url(&state.public_origin, &hostname), created_at, released_at, source_digest,
         manifest: input.project.manifest.clone(), hostname, actions, artifact_version, signup_policy: policy,
-        sign_in_methods, contact_email: input.contact_email.clone(), released_schema: schema,
+        sign_in_methods, contact_email: input.contact_email.clone(), modules: settings.modules.clone(), released_schema: schema,
     };
     open_auth(state, &deployment)?;
     if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories, schema_transforms.as_deref(), None).await?; }
@@ -290,6 +290,7 @@ async fn reload(state: &AppState, deployment: Deployment) {
     updated.signup_policy = settings.signup_policy;
     updated.sign_in_methods = settings.sign_in_methods;
     updated.contact_email = settings.contact_email;
+    updated.modules = settings.modules;
     deployments.insert(updated.hostname.clone(), updated);
 }
 
@@ -338,7 +339,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_folder_from_0_9_0_opens_and_lists_every_module_off() {
+    async fn a_folder_from_0_9_0_keeps_unmoved_modules_implicit() {
         let root = scratch();
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-mechanism-0.9.0");
         for relative in ["konae.json", "app/actions.json", "app/schema.sql", "dist/index.html"] {
@@ -350,9 +351,34 @@ mod tests {
         let deployment = open(&state, "app_legacy_modules", None).await.unwrap();
         let served = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
         assert!(String::from_utf8(served).unwrap().contains("Legacy app"));
-        let listed = crate::modules::read(&root, "app_legacy_modules").unwrap();
-        assert_eq!(listed["modules"].as_object().unwrap().len(), 6);
-        assert!(listed["modules"].as_object().unwrap().values().all(|module| module["state"]["on"] == false));
+        let listed = crate::modules::read(&deployment);
+        assert_eq!(listed["modules"]["actions"]["state"]["on"], true);
+        let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
+        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["seo".to_owned()].into());
+        assert_eq!(rewritten["modules"]["seo"]["on"], false);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn follow_settings_reapplies_a_hand_edited_module_state() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        open(&state, "notes_app", None).await.unwrap();
+        follow_settings(state.clone());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let mut settings = Settings::read(&root, "notes_app").unwrap();
+        settings.modules.get_mut("seo").unwrap()["on"] = serde_json::json!(true);
+        settings.write(&root).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let current = state.deployments.read().await.values().next().unwrap().clone();
+                if current.modules["seo"]["on"] == true { break current; }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.unwrap();
+        let current = state.deployments.read().await.values().next().unwrap().clone();
+        assert_eq!(current.modules["seo"]["on"], true);
         std::fs::remove_dir_all(root).unwrap();
     }
 

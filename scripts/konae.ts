@@ -495,7 +495,7 @@ export function configOf(settings: AppSettings, url?: string): Config {
   return {
     ...(url ? { url } : {}),
     ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
-    modules: settings.modules ?? defaultModuleStates(),
+    modules: defaultModuleStates(settings.modules),
     project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
   };
 }

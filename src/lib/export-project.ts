@@ -44,7 +44,7 @@ export async function createProjectExport(
     settings = {
       id: project.id, name: project.name, slug: project.slug, visibility,
       signupPolicy: { mode: visibility === "public" ? "open" : "closed", allowlist: [] }, signInMethods: ["password"],
-      kernel: KERNEL_VERSION, modules: defaultModuleStates(), manifest,
+      kernel: KERNEL_VERSION, modules: defaultModuleStates(project.modules), manifest,
     };
     entries = [
       { path: SETTINGS_FILE, contents: `${JSON.stringify(settings, null, 2)}\n` },

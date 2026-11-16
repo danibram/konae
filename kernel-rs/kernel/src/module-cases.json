@@ -1,8 +1,13 @@
 [
-  {"case":"module state matches expected","rule":"expected","module":"seo","state":{"on":false,"canonical":"domain","image":null},"expected":{"on":false,"canonical":"domain","image":null},"error":null},
-  {"case":"stale module state is refused","rule":"expected","module":"seo","state":{"on":true,"canonical":"domain","image":null},"expected":{"on":false,"canonical":"domain","image":null},"code":"module.changed","error":"Module seo changed since it was read. Read modules_read and try again."},
-  {"case":"an off module cannot be used","rule":"on","module":"seo","state":{"on":false,"canonical":"domain","image":null},"code":"module.off","error":"Module seo is off. Turn it on with module_set."},
-  {"case":"a required module must be on","rule":"requires","module":"http","required":"actions","state":{"on":false},"requiredState":{"on":false},"code":"module.requires","error":"Module http requires actions, which is off. Turn actions on first."},
+  {"case":"module state matches expected","rule":"expected","module":"seo","state":{"on":false,"canonical":null,"image":null},"expected":{"on":false,"canonical":null,"image":null},"error":null},
+  {"case":"stale module state is refused","rule":"expected","module":"seo","state":{"on":true,"canonical":null,"image":null},"expected":{"on":false,"canonical":null,"image":null},"code":"module.changed","error":"Module seo changed since it was read. Read modules_read and try again."},
+  {"case":"an off module cannot be used","rule":"on","module":"seo","state":{"on":false},"code":"module.off","error":"Module seo is off. Turn it on with module_set."},
+  {"case":"a non-switch module cannot be changed","rule":"switch","module":"actions","switch":false,"code":"module.not-switch","error":"Module actions cannot be changed yet."},
+  {"case":"an unknown module is refused","rule":"known","module":"missing","known":false,"code":"module.unknown","error":"Unknown module missing."},
+  {"case":"a required module must be on","rule":"requires","module":"http","required":"actions","requiredState":{"on":false},"code":"module.requires","error":"Module http requires actions, which is off. Turn actions on first."},
   {"case":"an unused module can turn off","rule":"in-use","module":"seo","used":false,"error":null},
-  {"case":"a module in use cannot turn off","rule":"in-use","module":"seo","used":true,"code":"module.in-use","error":"Module seo is in use by the published app. Remove its use before turning it off."}
+  {"case":"a module in use cannot turn off","rule":"in-use","module":"seo","used":true,"code":"module.in-use","error":"Module seo is in use by the published app. Remove its use before turning it off."},
+  {"case":"an unknown module option is refused","rule":"option-unknown","module":"seo","option":"missing","value":true,"options":[{"key":"canonical","type":"enum","values":["domain","hostname","path"]}],"code":"module.option-unknown","error":"Unknown option missing for module seo."},
+  {"case":"an enum refusal names allowed values","rule":"option-invalid","module":"seo","option":"canonical","value":"other","options":[{"key":"canonical","type":"enum","values":["domain","hostname","path"]}],"code":"module.option-invalid","error":"Module seo option canonical must be one of domain, hostname, path."},
+  {"case":"an image option must be a relative app path","rule":"option-invalid","module":"seo","option":"image","value":"/outside.png","options":[{"key":"image","type":"path"}],"code":"module.option-invalid","error":"Module seo option image must be a relative app path or null."}
 ]

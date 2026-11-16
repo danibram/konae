@@ -5,36 +5,13 @@ use serde_json::{Map, Value, json};
 
 use crate::Settings;
 
-#[cfg(test)]
-fn case_outcome(case: &Value) -> Option<crate::refusal::Refusal> {
-    let module = case["module"].as_str().unwrap();
-    match case["rule"].as_str().unwrap() {
-        "expected" if case["state"] != case["expected"] => Some(crate::refusal::refuse(
-            "module.changed",
-            format!("Module {module} changed since it was read. Read modules_read and try again."),
-        )),
-        "on" if case["state"]["on"] != true => require_on(&BTreeMap::new(), module).err(),
-        "requires" if case["requiredState"]["on"] != true => {
-            let required = case["required"].as_str().unwrap();
-            Some(crate::refusal::refuse(
-                "module.requires",
-                format!(
-                    "Module {module} requires {required}, which is off. Turn {required} on first."
-                ),
-            ))
-        }
-        "in-use" if case["used"] == true => require_not_in_use(module, true).err(),
-        _ => None,
-    }
-}
-
 fn registry() -> Value {
     serde_json::from_str(include_str!("modules.json")).expect("modules.json is generated JSON")
 }
 
 pub fn defaults() -> BTreeMap<String, Value> {
     let mut modules = BTreeMap::new();
-    for (name, description) in registry()["modules"].as_object().into_iter().flatten() {
+    for (name, description) in registry()["modules"].as_object().into_iter().flatten().filter(|(_, description)| description["switch"] == true) {
         let mut state = Map::new();
         state.insert("on".into(), Value::Bool(false));
         for option in description["options"].as_array().into_iter().flatten() {
@@ -48,13 +25,48 @@ pub fn defaults() -> BTreeMap<String, Value> {
 }
 
 pub fn complete(modules: &mut BTreeMap<String, Value>) {
+    let switches = registry()["modules"].as_object().cloned().unwrap_or_default();
+    modules.retain(|name, _| switches.get(name).is_some_and(|description| description["switch"] == true));
     for (name, state) in defaults() {
         modules.entry(name).or_insert(state);
     }
 }
 
+pub fn check_expected(module: &str, current: &Value, expected: Option<&Value>) -> std::result::Result<(), crate::refusal::Refusal> {
+    if expected.is_some_and(|expected| expected != current) {
+        return Err(crate::refusal::refuse("module.changed", format!("Module {module} changed since it was read. Read modules_read and try again.")));
+    }
+    Ok(())
+}
+
+pub fn check_switch(module: &str, switch: bool) -> std::result::Result<(), crate::refusal::Refusal> {
+    if !switch {
+        return Err(crate::refusal::refuse("module.not-switch", format!("Module {module} cannot be changed yet.")));
+    }
+    Ok(())
+}
+
+pub fn check_known(module: &str, known: bool) -> std::result::Result<(), crate::refusal::Refusal> {
+    if !known {
+        return Err(crate::refusal::refuse("module.unknown", format!("Unknown module {module}.")));
+    }
+    Ok(())
+}
+
+pub fn check_requires(module: &str, required: &str, on: bool) -> std::result::Result<(), crate::refusal::Refusal> {
+    if !on {
+        return Err(crate::refusal::refuse("module.requires", format!("Module {module} requires {required}, which is off. Turn {required} on first.")));
+    }
+    Ok(())
+}
+
+pub fn is_on(modules: &BTreeMap<String, Value>, module: &str) -> bool {
+    let description = registry()["modules"][module].clone();
+    description["switch"] != true || modules.get(module).is_some_and(|state| state["on"] == true)
+}
+
 pub fn require_on(modules: &BTreeMap<String, Value>, module: &str) -> std::result::Result<(), crate::refusal::Refusal> {
-    if modules.get(module).is_some_and(|state| state["on"] == true) {
+    if is_on(modules, module) {
         return Ok(());
     }
     Err(crate::refusal::refuse("module.off", format!("Module {module} is off. Turn it on with module_set.")))
@@ -68,6 +80,32 @@ pub fn require_not_in_use(module: &str, used: bool) -> std::result::Result<(), c
         "module.in-use",
         format!("Module {module} is in use by the published app. Remove its use before turning it off."),
     ))
+}
+
+fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> std::result::Result<(), crate::refusal::Refusal> {
+    let Some(option) = description["options"].as_array().into_iter().flatten().find(|item| item["key"].as_str() == Some(key)) else {
+        return Err(crate::refusal::refuse("module.option-unknown", format!("Unknown option {key} for module {module}.")));
+    };
+    let valid = match option["type"].as_str() {
+        Some("boolean") => value.is_boolean(),
+        Some("string") => value.is_string(),
+        Some("number") => value.is_number(),
+        Some("enum") => option["values"].as_array().into_iter().flatten().any(|candidate| candidate == value),
+        Some("path") => value.is_null() || value.as_str().is_some_and(|path| !path.is_empty() && !path.starts_with('/') && !path.contains('\\') && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")),
+        _ => false,
+    };
+    if !valid {
+        let message = if option["type"] == "enum" {
+            let values = option["values"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>();
+            format!("Module {module} option {key} must be one of {}.", values.join(", "))
+        } else if option["type"] == "path" {
+            format!("Module {module} option {key} must be a relative app path or null.")
+        } else {
+            format!("Module {module} option {key} must be a {}.", option["type"].as_str().unwrap_or("valid value"))
+        };
+        return Err(crate::refusal::refuse("module.option-invalid", message));
+    }
+    Ok(())
 }
 
 pub fn preserve_release_state(
@@ -85,16 +123,19 @@ pub fn preserve_release_state(
     } else if let Some(initial) = initial {
         next.modules = initial.clone();
     }
+    complete(&mut next.modules);
 }
 
-pub fn read(root: &std::path::Path, id: &str) -> Result<Value> {
-    let settings = Settings::read(root, id)?;
+pub fn read(deployment: &crate::Deployment) -> Value {
     let descriptions = registry();
-    let states = settings.modules;
     let modules = descriptions["modules"].as_object().into_iter().flatten().map(|(name, description)| {
-        let state = states.get(name).cloned().unwrap_or_else(|| defaults()[name].clone());
+        let switch = description["switch"] == true;
+        let state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
         (name.clone(), json!({
             "state": state,
+            "switch": switch,
+            "canChange": switch,
+            "message": if switch { Value::Null } else { json!("This module cannot be changed yet.") },
             "summary": description["summary"],
             "options": description["options"],
             "uses": description["uses"],
@@ -103,7 +144,7 @@ pub fn read(root: &std::path::Path, id: &str) -> Result<Value> {
             "agentRule": description["agentRule"],
         }))
     }).collect::<Map<String, Value>>();
-    Ok(json!({"projectId":id,"modules":modules}))
+    json!({"projectId":deployment.id,"modules":modules})
 }
 
 pub async fn set(
@@ -116,21 +157,14 @@ pub async fn set(
 ) -> Result<Value> {
     let mut settings = Settings::read(root, id)?;
     let description = registry()["modules"][module].clone();
-    if description.is_null() {
-        anyhow::bail!("Unknown SDK module {module}.");
-    }
+    check_known(module, !description.is_null())?;
+    check_switch(module, description["switch"] == true)?;
     let mut current = settings
         .modules
         .get(module)
         .cloned()
         .unwrap_or_else(|| defaults()[module].clone());
-    if expected.is_some_and(|expected| expected != &current) {
-        return Err(crate::refusal::refuse(
-            "module.changed",
-            format!("Module {module} changed since it was read. Read modules_read and try again."),
-        )
-        .into());
-    }
+    check_expected(module, &current, expected)?;
     if let Some(on) = on {
         if on {
             for required in description["requires"]
@@ -139,15 +173,12 @@ pub async fn set(
                 .flatten()
                 .filter_map(Value::as_str)
             {
-                let required_state = settings
-                    .modules
-                    .get(required)
-                    .cloned()
-                    .unwrap_or_else(|| defaults()[required].clone());
-                if required_state["on"] != true {
-                    return Err(crate::refusal::refuse("module.requires", format!("Module {module} requires {required}, which is off. Turn {required} on first.")).into());
+                    if !is_on(&settings.modules, required) {
+                        check_requires(module, required, false)?;
                 }
             }
+        } else {
+            require_not_in_use(module, false)?;
         }
         current["on"] = json!(on);
     }
@@ -156,31 +187,7 @@ pub async fn set(
             .as_object()
             .ok_or_else(|| anyhow!("Module options must be an object."))?;
         for (key, value) in incoming {
-            let option = description["options"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|item| item["key"].as_str() == Some(key.as_str()))
-                .ok_or_else(|| anyhow!("Unknown option {key} for module {module}."))?;
-            if option["type"] == "enum"
-                && !option["values"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|candidate| candidate == value)
-            {
-                anyhow::bail!("Invalid value for {module}.{key}.");
-            }
-            if option["type"] == "path"
-                && !value.is_null()
-                && !value.as_str().is_some_and(|path| {
-                    !path.is_empty()
-                        && !path.starts_with('/')
-                        && !path.split('/').any(|part| part == "..")
-                })
-            {
-                anyhow::bail!("Invalid value for {module}.{key}.");
-            }
+            check_option(module, &description, key, value)?;
             current[key] = value.clone();
         }
     }
@@ -198,42 +205,33 @@ mod tests {
         let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).unwrap();
         assert!(cases.len() >= 6);
         for case in cases {
-            let outcome = case_outcome(&case);
-            match (case["error"].as_str(), outcome) {
-                (None, None) => {}
-                (Some(message), Some(refusal)) => {
-                    assert_eq!(
-                        case["code"].as_str(),
-                        Some(refusal.code),
-                        "{}",
-                        case["case"]
-                    );
-                    assert_eq!(
-                        Some(message),
-                        Some(refusal.message.as_str()),
-                        "{}",
-                        case["case"]
-                    );
-                }
-                (expected, actual) => {
-                    panic!("{} expected {expected:?}, got {actual:?}", case["case"])
-                }
-            }
+            let module = case["module"].as_str().unwrap();
+            let outcome = match case["rule"].as_str().unwrap() {
+                "expected" => check_expected(module, &case["state"], Some(&case["expected"])),
+                "switch" => check_switch(module, case["switch"] == true),
+                "known" => check_known(module, case["known"] == true),
+                "on" => require_on(&BTreeMap::from([(module.to_owned(), case["state"].clone())]), module),
+                "requires" => check_requires(module, case["required"].as_str().unwrap(), case["requiredState"]["on"] == true),
+                "in-use" => require_not_in_use(module, case["used"] == true),
+                "option-unknown" | "option-invalid" => check_option(module, &json!({"options":case["options"]}), case["option"].as_str().unwrap(), &case["value"]),
+                _ => panic!("unknown module case {}", case["case"]),
+            };
+            crate::refusal::assert_case(&case, outcome);
         }
     }
 
     #[test]
-    fn every_known_module_has_an_explicit_default_state() {
+    fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(
-            modules.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["actions", "auth", "calls", "files", "http", "seo"]
-        );
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);
         assert_eq!(partial.len(), modules.len());
         assert_eq!(partial["seo"]["on"], true);
+        assert!(is_on(&partial, "actions"));
+        assert!(is_on(&partial, "seo"));
+        assert!(!is_on(&modules, "seo"));
     }
 
     #[tokio::test]
@@ -289,12 +287,34 @@ mod tests {
         settings.write(&root).await.unwrap();
         let expected = settings.modules["seo"].clone();
         set(&root, "app", "seo", Some(true), Some(&json!({"canonical":"path"})), Some(&expected)).await.unwrap();
-        let observed = read(&root, "app").unwrap();
+        let changed = Settings::read(&root, "app").unwrap();
+        let observed = changed.deployment(crate::Installed {
+            hostname: "app.example.test".into(), created_at: 0, released_at: None,
+            source_digest: None, actions: "{}".into(), artifact_version: "v1".into(), released: None,
+        }, "https://example.test");
+        let observed = read(&observed);
         assert_eq!(observed["modules"]["seo"]["state"]["on"], true);
         assert_eq!(observed["modules"]["seo"]["state"]["canonical"], "path");
         let error = set(&root, "app", "seo", Some(false), None, Some(&expected)).await.unwrap_err();
         let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.changed");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn set_refuses_non_switch_modules_unknown_options_and_invalid_values() {
+        let root = std::env::temp_dir().join(format!("konae-modules-refusals-{}", uuid::Uuid::new_v4()));
+        Settings::new("app", "App", "app", &json!({"visibility":"public"})).write(&root).await.unwrap();
+        let not_switch = set(&root, "app", "actions", Some(false), None, None).await.unwrap_err();
+        assert_eq!(not_switch.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.not-switch");
+        let unknown = set(&root, "app", "missing", Some(true), None, None).await.unwrap_err();
+        assert_eq!(unknown.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.unknown");
+        let option = set(&root, "app", "seo", None, Some(&json!({"unknown":true})), None).await.unwrap_err();
+        assert_eq!(option.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.option-unknown");
+        let value = set(&root, "app", "seo", None, Some(&json!({"canonical":"bogus"})), None).await.unwrap_err();
+        let refusal = value.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(refusal.code, "module.option-invalid");
+        assert!(refusal.message.contains("domain, hostname, path"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

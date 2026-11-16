@@ -76,7 +76,7 @@ Product terms keep their capitals in a heading. In a sentence these are lowercas
 
 **Outbox.** The calls a Deployment queued, which the owner reads with `calls_read`.
 
-**SDK module.** A namespace on `window.miniapp`, such as `auth`, `actions` or `files`. [The SDK reference](./sdk.md) is rendered from its contract.
+**SDK module.** The part of a module that a page calls on `window.miniapp`, such as `auth`, `actions` or `files`. [The SDK reference](./sdk.md) is rendered from its contract.
 
 **Action Contract.** The generated description of a Capsule's Server Actions, `action-contract.json` and `action-contract.md`. `konae conform` checks a backend against it.
 

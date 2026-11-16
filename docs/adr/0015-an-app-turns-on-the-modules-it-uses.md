@@ -14,9 +14,9 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 ### `konae.json` says which modules are on
 
-- `konae.json` holds `"modules": { "<name>": { "on": true, "<option>": <value> } }`. An export carries it. A secret never goes there.
-- A module is off until someone turns it on. `konae init` and the editor's templates turn on what the template uses.
-- The state belongs to the project, so it exists before the first publish. A change applies at once and has no draft.
+- `konae.json` holds state only for modules whose switch is available: `"modules": { "<name>": { "on": true, "<option>": <value> } }`. An export carries it. A secret never goes there.
+- A switchable module is off until someone turns it on. `konae init` and the editor's templates turn on what the template uses.
+- The first release carries module state alongside the Signup Policy. Later changes apply at once and have no draft.
 - A module that `konae.json` does not name has never been decided for that app. Only an app made before the module existed is in that state.
 
 ### The published app never uses a module that is off

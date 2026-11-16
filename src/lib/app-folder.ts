@@ -44,10 +44,11 @@ export const DATA_FOLDER = "data";
 /** The Kernel this checkout builds. package.json names its version, and kernel-rs/Cargo.toml repeats it. */
 export const KERNEL_VERSION: string = version;
 
-export function defaultModuleStates(): AppSettings["modules"] {
-  return Object.fromEntries(sdkContract.modules.map((module) => [module.name, {
+export function defaultModuleStates(existing: AppSettings["modules"] = {}): AppSettings["modules"] {
+  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, {
     on: false,
     ...Object.fromEntries(module.options.map((option) => [option.key, option.default])),
+    ...existing?.[module.name],
   }]));
 }
 

@@ -56,6 +56,7 @@
     {
       "name": "auth",
       "summary": "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
+      "switch": false,
       "notes": [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
         "An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.",
@@ -141,6 +142,7 @@
     {
       "name": "actions",
       "summary": "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
+      "switch": false,
       "notes": [
         "A binding passes who calls: { \"source\": \"actor\", \"field\": \"id\" } is the signed-in person's ID or the API key's ID, and refuses a caller without one. It cannot come from the input. Roles are rows in the app's own tables, checked in SQL against that ID.",
         "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
@@ -505,6 +507,7 @@
     {
       "name": "files",
       "summary": "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
+      "switch": false,
       "notes": [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
@@ -757,6 +760,7 @@
     {
       "name": "calls",
       "summary": "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
+      "switch": false,
       "notes": [
         "The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.",
         "http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.",
@@ -962,6 +966,7 @@
     {
       "name": "http",
       "summary": "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
+      "switch": false,
       "notes": [
         "Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.",
         "Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.",
@@ -1221,6 +1226,7 @@
     {
       "name": "seo",
       "summary": "Search listing and page cards, once the Kernel implements this module.",
+      "switch": true,
       "notes": [],
       "declarations": [],
       "calls": []

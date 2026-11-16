@@ -706,10 +706,10 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         path_read_tool(),
         tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"projectId":text}), &["projectId"], true),
         tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
-        tool("modules_read", "Read every SDK module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
+        tool("modules_read", "Read every module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
     ]);
     if owner.scopes.iter().any(|scope| ["publish", "write", "manage_users"].contains(&scope.as_str())) {
-        tools.push(tool("module_set", "Turn an SDK module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
+        tools.push(tool("module_set", "Turn a module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
     }
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
@@ -1710,16 +1710,21 @@ async fn admin_call(
         }
         "modules_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
-            kernel::modules::read(&state.data_root, &deployment.id)
+            Ok(kernel::modules::read(&deployment))
         }
         "module_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
             let module = a["module"].as_str().unwrap_or_default();
             let registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json"))?;
-            let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::anyhow!("Unknown SDK module {module}."))?;
+            let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::Error::new(kernel::refusal::refuse("module.unknown", format!("Unknown module {module}."))))?;
             let deployment = owned_deployment(state, owner, id, scope).await?;
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
-            kernel::modules::set(&state.data_root, &deployment.id, module, a["on"].as_bool(), a.get("options"), a.get("expected")).await
+            let result = kernel::modules::set(&state.data_root, &deployment.id, module, a["on"].as_bool(), a.get("options"), a.get("expected")).await?;
+            let mut deployments = state.deployments.write().await;
+            if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+                current.modules.insert(module.to_owned(), result["state"].clone());
+            }
+            Ok(result)
         }
         "contact_email_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
@@ -2544,6 +2549,9 @@ mod tests {
         let after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
         assert_eq!(after["modules"]["seo"]["state"]["on"], true);
         assert_eq!(after["modules"]["seo"]["state"]["canonical"], "path");
+        assert_eq!(state.deployments.read().await.values().find(|item| item.id == "app_modules").unwrap().modules["seo"]["canonical"], "path");
+        assert_eq!(after["modules"]["actions"]["state"]["on"], true);
+        assert_eq!(after["modules"]["actions"]["canChange"], false);
         let stale = admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false,"expected":expected})).await.unwrap_err();
         let refusal = stale.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.changed");
