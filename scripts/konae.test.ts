@@ -24,6 +24,21 @@ const uploads: string[] = [];
 const releaseUpload = () => JSON.parse(uploads.at(-1)!);
 let server: ReturnType<typeof Bun.serve>;
 
+async function mockPulled(root: string, packageId: string, snapshotId: string) {
+  const bytes = new TextEncoder().encode("database component fixture");
+  const pull = path.join(root, ".konae/pull");
+  await mkdir(pull, { recursive: true });
+  await writeFile(path.join(pull, packageComponentFiles.database), bytes);
+  return {
+    snapshotId,
+    manifest: {
+      format: "konae-package", version: 1, packageId, createdAt: 1, deploymentId: "app_test", projectId: "app_test",
+      visibility: "public", publishedRevision: 1,
+      contents: [{ name: "database", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }], excluded: [],
+    },
+  } as never;
+}
+
 beforeAll(() => {
   server = Bun.serve({
     port: 0,
@@ -691,7 +706,7 @@ describe("konae CLI", () => {
   test("a failed import leaves local data and reset records untouched", async () => {
     await mkdir(path.join(directory, "data"));
     await writeFile(path.join(directory, "data/database.sqlite"), "old-db");
-    const pulled = { manifest: { packageId: "pkg_bad" } } as never;
+    const pulled = await mockPulled(directory, "pkg_bad", "snapshot_bad");
     await expect(resetData(directory, { data: "kernel", run: async () => { throw Error("invalid import"); } }, pulled)).rejects.toThrow("invalid import");
     expect(await readFile(path.join(directory, "data/database.sqlite"), "utf8")).toBe("old-db");
     await expect(readFile(path.join(directory, ".konae/local-state.json"))).rejects.toThrow();
@@ -929,7 +944,7 @@ setInterval(() => {}, 1000);
         throw Error(`Unexpected command ${args.join(" ")}`);
       },
     };
-    const pulled = { snapshotId: "snapshot_1", manifest: { packageId: "package_1" } } as never;
+    const pulled = await mockPulled(directory, "package_1", "snapshot_1");
     await expect(resetData(directory, kernel, pulled)).rejects.toThrow("retirement stopped");
     expect(readQueue(path.join(directory, "data/database.sqlite"))).toBe("app before");
     expect(readQueue(path.join(directory, "kernel/mail.sqlite"))).toBe("mail before");
@@ -961,7 +976,7 @@ setInterval(() => {}, 1000);
         throw Error(`Unexpected command ${args.join(" ")}`);
       },
     };
-    const pulled = { snapshotId: "snapshot_2", manifest: { packageId: "package_2" } } as never;
+    const pulled = await mockPulled(directory, "package_2", "snapshot_2");
     const reset = await resetData(directory, kernel, pulled);
     expect(commands.map((command) => command.split(" ")[0])).toEqual(["import", "test"]);
     expect(await readFile(path.join(reset.backup, "data/database.sqlite"), "utf8")).toBe("before");

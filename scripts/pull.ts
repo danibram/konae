@@ -2,7 +2,7 @@
 // .konae/pull. A clean source tree receives app/ and konae.json; `dev --reset`
 // imports the staged data, and push.ts sends local data/ back to the Deployment.
 import { cp, mkdir, mkdtemp, readFile, readdir, rename as fsRename, rm, stat, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { McpClient, Transfer } from "../src/mcp/client";
@@ -307,6 +307,32 @@ export async function readPulled(root: string): Promise<Pulled | undefined> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   const pulled = JSON.parse(text) as Pulled;
   return { ...pulled, manifest: checkPackageManifest(pulled.manifest) };
+}
+
+/** Rebuilds the import tree from immutable raw components after checking the recorded manifest. */
+export async function extractVerifiedPulledData(root: string, target: string, pulled: Pulled): Promise<void> {
+  const manifest = checkPackageManifest(pulled.manifest);
+  await mkdir(target, { recursive: true });
+  const pull = path.join(root, PULL_DIRECTORY);
+  for (const component of manifest.contents) {
+    const raw = path.join(pull, packageComponentFiles[component.name]);
+    let bytes: Uint8Array;
+    try { bytes = new Uint8Array(await readFile(raw)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw Error(`The raw ${component.name} component for snapshot ${manifest.packageId} is missing. Run konae pull again.`);
+      throw error;
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.byteLength !== component.size || digest !== component.sha256) {
+      throw Error(`The raw ${component.name} component no longer matches snapshot ${manifest.packageId}. Run konae pull again.`);
+    }
+    for (const entry of dataEntries(component.name, bytes)) {
+      const destination = path.resolve(target, entry.path);
+      if (!destination.startsWith(path.resolve(target) + path.sep)) throw Error(`Invalid snapshot path ${entry.path}.`);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(destination, entry.contents);
+    }
+  }
 }
 
 /** One phrase for the exported data: where it came from, when, and each component with its size. */

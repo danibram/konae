@@ -17,7 +17,7 @@ import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src
 import { type ProjectTemplates } from "./project-templates";
 import type { AppEvent, ReadRecord } from "./events";
 import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testCalls, testControls, testReply, testSchedule } from "./local-test";
-import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
+import { PULL_DIRECTORY, describePulled, downloadData, extractVerifiedPulledData, pullLocal, readPulled, type Pulled } from "./pull";
 import { pushData } from "./push";
 import {
   ACTION_CONTRACT_FILE, ACTION_CONTRACT_MARKDOWN, ACTION_CONTRACT_SCHEMA_FILE,
@@ -1173,7 +1173,12 @@ export async function resetData(root: string, kernel: Pick<LocalKernel, "run" | 
     await snapshotLocalState(root, kernel.data, backup);
     try {
       if (pulled) {
-        const imported = JSON.parse(await kernel.run(["import", path.join(root, PULL_DIRECTORY), ...(confirmSchema ? ["--confirm-schema", confirmSchema] : [])])) as { backup?: { id?: string } };
+        const importRoot = path.join(root, ".konae", `reset-import-${executionId}`);
+        let imported: { backup?: { id?: string } };
+        try {
+          await extractVerifiedPulledData(root, importRoot, pulled);
+          imported = JSON.parse(await kernel.run(["import", importRoot, ...(confirmSchema ? ["--confirm-schema", confirmSchema] : [])])) as { backup?: { id?: string } };
+        } finally { await rm(importRoot, { recursive: true, force: true }); }
         if (!imported.backup?.id) throw Error("The Kernel imported the data without returning its backup record.");
       } else {
         await emptyReset(root);
