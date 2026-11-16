@@ -1,5 +1,10 @@
 [
   {"case":"window SDK file call","sources":["window.miniapp.files.upload(file)"],"artifact":["window.miniapp.files.upload(file)"],"usesFiles":true},
   {"case":"file URL in HTML","sources":["<img src=\"/_konae/files/file-id\">"],"artifact":["<img src=\"/_konae/files/file-id\">"],"usesFiles":true},
+  {"case":"space before files property","sources":["miniapp .files.upload(file)"],"artifact":["miniapp .files.upload(file)"],"usesFiles":false},
+  {"case":"newline before files property","sources":["miniapp\n  .files.upload(file)"],"artifact":["miniapp\n  .files.upload(file)"],"usesFiles":false},
+  {"case":"window miniapp file call","sources":["window.miniapp.files.upload(file)"],"artifact":["window.miniapp.files.upload(file)"],"usesFiles":true},
+  {"case":"bracket access does not match the literal","sources":["window[\"miniapp\"].files.upload(file)"],"artifact":["window[\"miniapp\"].files.upload(file)"],"usesFiles":false},
+  {"case":"comment names the file module","sources":["// miniapp.files is enabled"],"artifact":["// miniapp.files is enabled"],"usesFiles":true},
   {"case":"page without file access","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesFiles":false}
 ]
