@@ -10,6 +10,7 @@ export type StaticArtifact = {
 
 export const runtimeScriptAttribute: "data-konae-runtime";
 export const runtimeFile: "runtime.js";
+export const sourceOnlyFiles: string[];
 export const routingModes: RoutingMode[];
 export const routingMessage: string;
 export const pathPrefixPattern: RegExp;

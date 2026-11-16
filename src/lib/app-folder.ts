@@ -3,7 +3,7 @@
 // app/, dist/ and data/; these developer files remain optional there.
 //
 //   konae.json      name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
-//   app/            the sources: pages, actions.json, schema.sql
+//   app/            the sources: pages, actions.json, schema.sql and optional schema-transforms.json
 //   dist/           the built static files the Kernel serves
 //   data/           database.sqlite, identity.sqlite, usage.sqlite, files/
 //   compose.yaml, .env.example, .gitignore, AGENTS.md, action-contract.md,
@@ -184,6 +184,8 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 - \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call. When \`app/src/\` holds TypeScript, \`npm run build\` checks it, and what it imports, against them with \`tsconfig.json\` and stops on an error.
 
 ## Rules the Kernel checks
+
+An optional \`schema-transforms.json\` records ordered data changes between schema fingerprints. The Kernel stores applied history in \`data/database.sqlite\`; the definition travels with app sources and never ships in \`dist/\`. The Validation Gate checks its shape, order, bounds and SQL subset. It cannot prove a transition against a real database.
 
 - The page talks to the database only through the named Server Actions in \`app/actions.json\`. \`action-contract.md\` lists them.
 - A query that reads rows names a LIMIT.

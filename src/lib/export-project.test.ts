@@ -36,3 +36,15 @@ test("a draft's export writes a file that is not text as its bytes", async () =>
   expect(entries.get("notes/app/public/logo.png")).toEqual(png);
   expect(entries.get("notes/dist/logo.png")).toEqual(png);
 });
+
+test("a draft export carries schema transform definitions in app/ and omits them from dist/", async () => {
+  const source = '{"version":1,"transitions":[]}';
+  const withTransforms = { ...draft, files: { ...draft.files, "actions.json": JSON.stringify({ version: 1, actions: {} }), "schema-transforms.json": source } } as never;
+  const result = await createProjectExport(withTransforms, undefined, {
+    mcp,
+    build: async () => ({ version: 1, entrypoint: "index.html", files: { "index.html": "<main></main>" } }) as never,
+  });
+  const paths = readTar(new Uint8Array(await result.blob.arrayBuffer())).map((entry) => entry.path);
+  expect(paths).toContain("notes/app/schema-transforms.json");
+  expect(paths).not.toContain("notes/dist/schema-transforms.json");
+});

@@ -17,6 +17,8 @@ export const runtimeScriptAttribute = "data-konae-runtime";
 
 /** The SDK file a document page loads. The build adds it; a Capsule cannot hold its own. */
 export const runtimeFile = "runtime.js";
+/** Source metadata stays in app/ and never enters a Build Artifact. */
+export const sourceOnlyFiles = ["schema-transforms.json"];
 
 /**
  * The rule that finds the base path of a path address: /p/<id-or-name> and
@@ -170,7 +172,8 @@ export function splitFragmentHead(fragment) {
  */
 export async function assembleStaticArtifact(input) {
   checkRouting(input.routing);
-  const held = new Set(input.paths);
+  const sourceOnly = new Set(sourceOnlyFiles);
+  const held = new Set(input.paths.filter((path) => !sourceOnly.has(path)));
   /** served path -> Capsule path */
   const sources = new Map();
   const claim = (served, source) => {

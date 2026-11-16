@@ -216,6 +216,7 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   }
   const statement = candidate.statement as string;
   assertActionStatement(name, kind === "query" ? "query" : "mutation", statement);
+  assertNoReservedKernelTable(name, statement);
   assertRuntimeSql(kind === "query" ? "query" : "execute", statement);
   if (kind === "query") {
     const reason = unboundedQueryReason(statement);
@@ -233,6 +234,28 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
     name, kind, access, statement: statement.trim(), bindings,
     ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}),
   };
+}
+
+/** Refuses app SQL that names the Kernel's private schema transformation journal. */
+function assertNoReservedKernelTable(name: string, statement: string) {
+  const tokens = sqlTokens(statement);
+  const tableKeywords = new Set(["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "REFERENCES"]);
+  const reserved = new Set(["__konae_schema_state", "__konae_schema_history"]);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token.kind !== "word" || !tableKeywords.has(token.text.toUpperCase())) continue;
+    let targetAt = index + 1;
+    const modifier = tokens[targetAt];
+    if (token.text.toUpperCase() === "UPDATE" && modifier?.kind === "word" && modifier.text.toUpperCase() === "OR") targetAt += 2;
+    const target = tokens[targetAt];
+    if (!target || (target.kind !== "word" && target.kind !== "identifier")) continue;
+    const separator = tokens[targetAt + 1];
+    const nameAt = separator?.kind === "symbol" && separator.text === "." ? targetAt + 2 : targetAt;
+    const table = tokens[nameAt];
+    if ((table?.kind === "word" || table?.kind === "identifier") && reserved.has(table.text.toLowerCase())) {
+      throw refusal("schema-transform.statement-refused", `Action ${name} cannot read or write a reserved Kernel table.`);
+    }
+  }
 }
 
 // The same checks, in the same order and with the same messages, as

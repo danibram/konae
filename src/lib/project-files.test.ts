@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDirectory, createFile, normalizeProjectPath, removePath } from "./project-files";
+import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./project-files";
 
 describe("project file tree", () => {
   test("an owner creates nested files and empty directories through project paths", () => {
@@ -43,6 +43,13 @@ describe("project file tree", () => {
     expect(() => createDirectory(tree, "schema.sql")).toThrow("schema.sql is a reserved project file");
     expect(() => createFile(tree, "actions.json/x.json")).toThrow("actions.json is a reserved project file");
     expect(createFile(tree, "src/schema.ts").files["src/schema.ts"]).toBe("");
+  });
+
+  test("schema-transforms.json is the one optional reserved source file owners may create", () => {
+    expect(protectedProjectPaths.has("schema-transforms.json")).toBe(false);
+    const created = createFile({ files: {}, directories: [] }, "schema-transforms.json", "{\"version\":1,\"transitions\":[]}");
+    expect(created.files["schema-transforms.json"]).toContain("transitions");
+    expect(() => createFile({ files: {}, directories: [] }, "Schema-Transforms.json")).toThrow("schema-transforms.json is a reserved project file");
   });
 
   /** The bug this pins: App.js and SCHEMA.SQL passed, then overwrote the real files on a case-insensitive filesystem. */

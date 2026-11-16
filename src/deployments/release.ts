@@ -6,12 +6,24 @@ import { refusal } from "../kernel/refusal";
 /** What a schema change loses, as the Kernel words it. */
 export type SchemaLoss = { table: string; column: string | null; sentence: string };
 
+/** One planned transition and the rows it changed in a throwaway database. */
+export type SchemaTransformation = {
+  id: string;
+  definitionSha256: string;
+  before: string;
+  after: string;
+  statements: string[];
+  maxRows: number;
+  affectedRows: number;
+  baselineSkipped: boolean;
+};
+
 /**
  * The change `release_plan` derives from the app's live database to the one
  * schema.sql states (kernel-rs/kernel/src/schema_change.rs). `confirmation` is set
  * only when the change loses data, and release_apply then needs it back.
  */
-export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null };
+export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null; transformations?: SchemaTransformation[] };
 
 /**
  * `schema` is absent when release_plan replays an import it already applied.
@@ -27,7 +39,7 @@ export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
 /** The release stopped because the owner kept the data a schema change would lose. */
 export class SchemaChangeDeclined extends Error {
   constructor(readonly change: SchemaChange) {
-    super(`Nothing was published. ${change.losses.map((loss) => loss.sentence).join(" ")} Keep the table or column in schema.sql, or confirm the change.`);
+    super(`Nothing was published. ${describeSchemaChange(change).join(" ")} Confirm the plan to apply it.`);
     this.name = "SchemaChangeDeclined";
   }
 }
@@ -137,10 +149,18 @@ export async function publishProject<Receipt>(
 
 /** The plan in lines for a terminal, with what it loses and then the statements. */
 export function describeSchemaChange(change: SchemaChange): string[] {
-  return [
-    "This release changes the database and loses data:",
-    ...change.losses.map((loss) => `  ${loss.sentence}`),
-    "The Kernel runs, in one transaction:",
-    ...change.statements.map((statement) => `  ${statement};`),
-  ];
+  const lines: string[] = [];
+  if (change.losses.length) lines.push("This release changes the database and loses data:", ...change.losses.map((loss) => `  ${loss.sentence}`));
+  if (change.transformations?.length) {
+    lines.push("The Kernel applies these data transformations:");
+    for (const transition of change.transformations) {
+      const baseline = transition.baselineSkipped ? " SQL is skipped for the fresh database." : "";
+      lines.push(`  ${transition.id} changes ${transition.affectedRows} ${transition.affectedRows === 1 ? "row" : "rows"} (limit ${transition.maxRows}).${baseline}`);
+      lines.push(...transition.statements.map((statement) => `    ${statement};`));
+    }
+  }
+  if (change.statements.length) {
+    lines.push("The Kernel runs these schema statements in one transaction:", ...change.statements.map((statement) => `  ${statement};`));
+  }
+  return lines;
 }

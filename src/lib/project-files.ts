@@ -12,6 +12,8 @@ export type ProjectTree = {
  * deletes as ordinary tree entries.
  */
 export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]);
+const reservedProjectPaths = new Set([...protectedProjectPaths, "schema-transforms.json"]);
+const optionalProtectedFiles = new Set(["schema-transforms.json"]);
 
 /**
  * The key two project paths share when a case-insensitive filesystem (the
@@ -29,7 +31,7 @@ export function foldPath(path: string): string {
  */
 export function reservedPathConflict(path: string): string | null {
   const folded = foldPath(path);
-  for (const reserved of protectedProjectPaths) {
+  for (const reserved of reservedProjectPaths) {
     if (folded === reserved || folded.startsWith(`${reserved}/`)) return reserved;
   }
   return null;
@@ -98,7 +100,7 @@ export function createDirectory(tree: ProjectTree, input: string): ProjectTree {
 
 export function createFile(tree: ProjectTree, input: string, content = ""): ProjectTree {
   const path = requirePath(input);
-  requireUnreservedPath(path);
+  if (!optionalProtectedFiles.has(path)) requireUnreservedPath(path);
   requireHeldPath(path);
   requireNoFile(tree.files, path);
   const directory = existingDirectory([...tree.directories, ...directoriesForFiles(tree.files)], path);

@@ -7,6 +7,7 @@ import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkFileAccess } from "../deployments/manifest";
 import { checkSourceFiles } from "../lib/source-rules";
+import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
 import type {
   CapsuleFiles,
@@ -58,6 +59,9 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
  *    the preview re-runs it on every open and the Kernel runs it twice in its
  *    scratch database too. It may only hold CREATE TABLE and CREATE [UNIQUE]
  *    INDEX, the same allowlist the Kernel's scratch database enforces.
+ *    Optional schema-transforms.json gets static shape, order, bounds and SQL
+ *    subset checks. The Gate cannot establish database history, row counts,
+ *    or that transition statements will run against a particular database.
  * 2. `actions`. actions.json must parse, every binding must resolve, and
  *    every statement must prepare against the schema it declares.
  * 3. `preview-rows`, only when the preview's database could be read.
@@ -96,6 +100,11 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         checkFileAccess(facts);
       } catch (error) {
         return failure({ stage: "actions", message: describe(error) }, checked);
+      }
+      const transforms = files[SCHEMA_TRANSFORMS_FILE];
+      if (typeof transforms === "string") {
+        const refused = schemaTransformsRefusal(transforms);
+        if (refused) return failure({ stage: "schema", message: refused.message, code: refused.code, hint: refused.hint }, checked);
       }
       // Read before running: sql.js lacks some refused functions, and "no such
       // function" would hide the reason the Kernel gives.
