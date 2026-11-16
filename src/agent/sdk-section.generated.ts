@@ -252,7 +252,7 @@ Limits:
 
 ## The seo module, declared, with no browser call
 
-Search listing and page cards, once the Kernel implements this module.
+Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.
 
 Any call that reaches the Kernel can also refuse with:
 - "Sign in to use Konae MCP." when the Deployment is private and the visitor has no session; actions.call then sends the browser to /_konae/login and auth.session returns the anonymous state instead

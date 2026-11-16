@@ -355,7 +355,7 @@ mod tests {
         let deployment = open(&state, "app_legacy_modules", None).await.unwrap();
         let served = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
         assert!(String::from_utf8(served).unwrap().contains("Legacy app"));
-        let listed = crate::modules::read(&deployment);
+        let listed = crate::modules::read(&state, &deployment);
         assert_eq!(listed["modules"]["actions"]["state"]["on"], true);
         let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
         assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["seo".to_owned()].into());

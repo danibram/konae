@@ -1711,7 +1711,7 @@ async fn admin_call(
         }
         "modules_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
-            Ok(kernel::modules::read(&deployment))
+            Ok(kernel::modules::read(&state, &deployment))
         }
         "module_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();

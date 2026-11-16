@@ -209,6 +209,7 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     let deployment = deployment_for_request(&state, request.headers(), request.uri().path()).await;
     let app = deployment.is_some();
     let private = deployment.as_ref().is_some_and(super::is_private);
+    let seo_off = deployment.as_ref().is_some_and(|deployment| !super::modules::is_on(&deployment.modules, "seo"));
     if state.execution_mode.is_test() && app {
         request.headers_mut().remove(header::IF_NONE_MATCH);
     }
@@ -247,7 +248,7 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     };
     parts.headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    if private {
+    if private || (app && seo_off) {
         parts.headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     }
     if let Some(hsts) = hsts {

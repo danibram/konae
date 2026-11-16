@@ -138,8 +138,8 @@ describe("a multi-page artifact under pages routing", () => {
     }
   });
 
-  test("Kernel and private app pages tell crawlers not to list them", async () => {
-    expect((await get("static_pages", "/")).headers.get("x-robots-tag")).toBeNull();
+  test("Kernel pages, private apps and public apps with seo off tell crawlers not to list them", async () => {
+    expect((await get("static_pages", "/")).headers.get("x-robots-tag")).toBe("noindex");
     const { artifact } = await buildLocal(await capsuleOnDisk("private", capsule));
     await release("static_private", artifact, { visibility: "private" });
     const home = await get("static_private", "/");
