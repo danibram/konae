@@ -342,11 +342,15 @@ mod tests {
     async fn a_folder_from_0_9_0_keeps_unmoved_modules_implicit() {
         let root = scratch();
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-mechanism-0.9.0");
-        for relative in ["konae.json", "app/actions.json", "app/schema.sql", "dist/index.html"] {
+        for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
             let destination = layout::folder(&root, "app_legacy_modules").join(relative);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             std::fs::copy(fixture.join(relative), destination).unwrap();
         }
+        // The repository ignores every dist/, so the fixture cannot carry its built page.
+        let dist = layout::dist(&root, "app_legacy_modules");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<!doctype html><title>Legacy app</title><main>Legacy app</main>").unwrap();
         let state = AppState::for_test(&root);
         let deployment = open(&state, "app_legacy_modules", None).await.unwrap();
         let served = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
