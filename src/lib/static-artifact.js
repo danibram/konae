@@ -189,6 +189,7 @@ export async function assembleStaticArtifact(input) {
   };
 
   const pages = [...sources].filter(([served]) => served.endsWith(".html") && !sources.get(served).startsWith("public/"));
+  const pageDepths = new Map((input.pageRoutes ?? []).map(({ path, file }) => [file, path.split("/").filter(Boolean).length]));
   if (!sources.has("index.html")) pages.unshift(["index.html", null]);
   let compiled;
   let usesRuntimeFile = false;
@@ -226,7 +227,8 @@ export async function assembleStaticArtifact(input) {
     }
     scanHtml(html, served, reference);
     // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
-    const page = insertIntoHead(withoutRuntimeTags(html, served), `${input.head ?? ""}${runtimeLoaderScript()}`);
+    const depth = pageDepths.get(served) ?? 0;
+    const page = insertIntoHead(rewritePageUrls(withoutRuntimeTags(html, served), depth), `${input.head ?? ""}${runtimeLoaderScript()}`);
     usesRuntimeFile = true;
     files[served] = bom + page;
   }
@@ -264,6 +266,33 @@ export async function assembleStaticArtifact(input) {
   const artifact = { version: 1, entrypoint: "index.html", files };
   if (Object.keys(encodings).length) artifact.encodings = encodings;
   return artifact;
+}
+
+export function pageRoutesFromActions(source) {
+  const actions = JSON.parse(source).actions;
+  return Object.values(actions ?? {}).flatMap((action) => {
+    const page = action?.page;
+    return typeof page?.path === "string" && typeof page.file === "string" ? [{ path: page.path, file: page.file }] : [];
+  });
+}
+
+function rewritePageUrls(html, depth) {
+  const prefix = "../".repeat(Math.max(0, depth - 1));
+  if (!prefix) return html;
+  const scripts = [];
+  const source = html.replace(/(<script\b[^>]*>)([\s\S]*?<\/script\s*>)/gi, (_, start, body) => `${start}\u0000${scripts.push(body) - 1}\u0000`);
+  const url = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.startsWith("/") || trimmed.startsWith("#") || trimmed.startsWith("?") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return value;
+    return `${prefix}${value}`;
+  };
+  const css = (value) => value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${url(target)}${after}`);
+  const styles = source.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_, start, body, end) => `${start}${css(body)}${end}`);
+  const inline = styles.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, body) => `${before}${quote}${css(body)}${quote}`);
+  const srcset = (value) => value.split(",").map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${url(target)}`)).join(",");
+  return inline.replace(/(\b(?:href|src|action|formaction|poster|data)\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${url(value)}${quote}`)
+    .replace(/(\bsrcset\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${srcset(value)}${quote}`)
+    .replace(/\u0000(\d+)\u0000/g, (_, index) => scripts[Number(index)]);
 }
 
 /**

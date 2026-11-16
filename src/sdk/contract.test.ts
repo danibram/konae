@@ -73,7 +73,7 @@ describe("the SDK contract", () => {
   test("lists each module and call once, with a signature and an example that name it", () => {
     const calls = contractCalls();
     expect(new Set(calls).size).toBe(calls.length);
-    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "page.params", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
+    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "page.params", "page.url", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
     for (const module of sdkContract.modules) {
       for (const call of module.calls) {
         const name = `miniapp.${module.name}.${call.name}`;
@@ -99,6 +99,18 @@ describe("runtime.js and the preview client expose exactly the contract", () => 
 
   test("the editor preview client exposes the same calls", () => {
     expect(drift(exposedCalls(runtimeClient))).toEqual(agreed);
+  });
+
+  test("page.url keeps the path address prefix on both SDK doors", () => {
+    const paths = ["/", "/p/spring-menu/posts/hello"];
+    for (const source of [publishedSdk, runtimeClient]) {
+      for (const pathname of paths) {
+        const window: Record<string, any> = {};
+        new Function("window", "location", "addEventListener", "parent", "document", source)(window, { pathname }, () => {}, { postMessage: () => {} }, { querySelector: () => undefined });
+        const expected = source === runtimeClient || !pathname.startsWith("/p/") ? "/posts/next" : "/p/spring-menu/posts/next";
+        expect(window.miniapp.page.url("/posts/next")).toBe(expected);
+      }
+    }
   });
 
   test("the published SDK calls exactly the runtime tools the contract lists", () => {

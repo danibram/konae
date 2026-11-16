@@ -46,7 +46,7 @@ describe("preview document", () => {
   test("offers a Capsule exactly the SDK a Deployment offers", () => {
     const preview = sdkSurfaceOf(createPreviewDocument(project));
     expect(preview).toEqual(sdkSurfaceOf(createHostedArtifact({ body: "", styles: "", script: "" }).files["index.html"]));
-    expect(preview).toEqual(["actions.call", "auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "files.delete", "files.list", "files.update", "files.upload", "files.url", "page.params"]);
+    expect(preview).toEqual(["actions.call", "auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "files.delete", "files.list", "files.update", "files.upload", "files.url", "page.params", "page.url"]);
   });
 
   test("keeps a closing script tag inside app.js from ending the script element", () => {

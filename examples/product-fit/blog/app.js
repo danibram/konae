@@ -1,7 +1,14 @@
 const page = document.querySelector("#posts");
 if (page) {
   const rows = await miniapp.actions.call("posts.published");
-  page.innerHTML = rows.map((row) => `<li><a href="/posts/${encodeURIComponent(row.slug)}">${row.slug}</a></li>`).join("");
+  for (const row of rows) {
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = miniapp.page.url(`/posts/${encodeURIComponent(row.slug)}`);
+    link.textContent = row.slug;
+    item.append(link);
+    page.append(item);
+  }
 } else {
   const { slug } = miniapp.page.params;
   const [post] = await miniapp.actions.call("posts.head", { slug });

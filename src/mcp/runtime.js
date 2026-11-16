@@ -81,11 +81,15 @@
 
   window.miniapp = {
     page: {
-      params: (() => {
+      get params() {
         const value = typeof document === 'undefined' ? undefined : document.querySelector?.('meta[name="konae-page-params"]')?.getAttribute("content");
         if (!value) return {};
         try { return JSON.parse(value); } catch { return {}; }
-      })()
+      },
+      url: path => {
+        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) throw Error('An app page path must start with one slash.');
+        return base + path;
+      }
     },
     actions: { call: async (name, input = {}) => {
       try { return await call('actions_invoke', { name, input }); }

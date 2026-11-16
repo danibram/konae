@@ -32,8 +32,10 @@ export function assembleStaticArtifact(input: {
   runtime: string;
   head?: string;
   routing?: unknown;
+  pageRoutes?: { path: string; file: string }[];
   warn?: (message: string) => void;
 }): Promise<StaticArtifact>;
+export function pageRoutesFromActions(source: string): { path: string; file: string }[];
 export function stripModulePaths(code: string, held: Set<string>): string;
 export function resolveReference(raw: string, from: string): string | null;
 export function scanHtml(html: string, from: string, reference: (raw: string, from: string, kind: "asset" | "module") => void): void;

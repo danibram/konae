@@ -8,6 +8,7 @@ const rows = await miniapp.actions.call("tasks.list");           // array of row
 await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
 await miniapp.actions.call("lesson.finish", { lesson });         // a signal action: { recorded: true }
 const { slug } = miniapp.page.params;
+link.href = miniapp.page.url(\`/posts/\${encodeURIComponent(slug)}\`);
 const files = await miniapp.files.list();                        // files visible to the current visitor or app user
 const stored = await miniapp.files.upload(file);                 // uses the app's file policy
 const shared = await miniapp.files.upload(file, { visibility: "public" });
@@ -134,6 +135,11 @@ Values from the page address. The Kernel fills params when a declared page path 
 
 miniapp.page.params: Read the values captured by the page path, or an empty object on a file page. Returns An object keyed by page path parameter, such as { slug: "hello" }.
 Editor preview: Always returns an empty object because the editor preview has no page URL.
+
+miniapp.page.url(path): Build an app link that keeps the current hostname or path address. Returns The path with the current /p/<name> prefix when the app uses a path address..
+Refusals:
+- "An app page path must start with one slash." when path does not start with one slash
+Editor preview: Returns the app path unchanged.
 
 ## miniapp.files
 

@@ -372,7 +372,10 @@ export const sdkContract = {
       summary: "Values from the page address. The Kernel fills params when a declared page path answers.",
       switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
       declarations: [],
-      calls: [{ name: "params", signature: "miniapp.page.params", summary: "Read the values captured by the page path, or an empty object on a file page.", signedOut: true, tools: [], args: [], returns: "An object keyed by page path parameter, such as { slug: \"hello\" }", errors: [], limits: [], examples: [{ code: "const { slug } = miniapp.page.params;" }], preview: "Always returns an empty object because the editor preview has no page URL." }],
+      calls: [
+        { name: "params", signature: "miniapp.page.params", summary: "Read the values captured by the page path, or an empty object on a file page.", signedOut: true, tools: [], args: [], returns: "An object keyed by page path parameter, such as { slug: \"hello\" }", errors: [], limits: [], examples: [{ code: "const { slug } = miniapp.page.params;" }], preview: "Always returns an empty object because the editor preview has no page URL." },
+        { name: "url", signature: "miniapp.page.url(path)", summary: "Build an app link that keeps the current hostname or path address.", signedOut: true, tools: [], args: [{ name: "path", type: "string", required: true, description: "An app path starting with one slash, such as /posts/hello." }], returns: "The path with the current /p/<name> prefix when the app uses a path address.", errors: [{ message: "An app page path must start with one slash.", when: "path does not start with one slash", source: "sdk" }], limits: [], examples: [{ code: "link.href = miniapp.page.url(`/posts/${encodeURIComponent(slug)}`);" }], preview: "Returns the app path unchanged." },
+      ],
       notes: [],
     },
     {
