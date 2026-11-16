@@ -256,7 +256,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
         "signup-policy" => signup_policy(state, deployment, words).await,
         "modules" => {
             ensure!(words.rest().is_empty(), "kernel modules takes no arguments.");
-            Ok(crate::modules::read(&deployment))
+            Ok(crate::modules::read(state, &deployment))
         }
         "module" => {
             let name = words.next().context("kernel module needs a module name and on or off.")?;

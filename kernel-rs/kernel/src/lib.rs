@@ -20,6 +20,7 @@ use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::Digest;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use uuid::Uuid;
 
@@ -63,6 +64,7 @@ pub mod schedule;
 pub mod schema_change;
 pub mod schema_transform;
 pub mod security;
+pub mod seo;
 pub mod size;
 pub mod sources;
 pub mod sql_rules;
@@ -2164,6 +2166,8 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
     if artifact::kernel_path(&path) {
         return artifact::not_found_page();
     }
+    let seo_on = modules::is_on(&deployment.modules, "seo");
+    let address = seo_on.then(|| seo::address(&state, &deployment));
     let cache = ArtifactCache::of(&deployment);
     // A publish writes a new artifact version, so within one version an address
     // always resolves to the same bytes. An asset the browser already holds is
@@ -2173,15 +2177,54 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
         .get("sec-fetch-dest")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.eq_ignore_ascii_case("document"));
-    if !navigation && etag_matches(&headers, &cache.version_tag()) {
+    if !seo_on && !navigation && etag_matches(&headers, &cache.version_tag()) {
         return cache.not_modified(cache.version_tag());
     }
     let routing = artifact::routing(&deployment.manifest);
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
+            if seo_on && candidate == "robots.txt" {
+                let mut body = bytes;
+                if !String::from_utf8_lossy(&body).lines().any(|line| line.trim_start().to_ascii_lowercase().starts_with("sitemap:")) {
+                    if !body.is_empty() && !body.ends_with(b"\n") { body.push(b'\n'); }
+                    body.extend_from_slice(format!("Sitemap: {}/sitemap.xml\n", address.as_ref().unwrap().url.trim_end_matches('/')).as_bytes());
+                }
+                let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(sha2::Sha256::digest([body.as_slice(), address.as_ref().unwrap().url.as_bytes()].concat()))), private: cache.private };
+                if !navigation && etag_matches(&headers, &tagged.version_tag()) { return tagged.not_modified(tagged.version_tag()); }
+                return tagged.respond(&HeaderMap::new(), body, &candidate);
+            }
+            if seo_on && candidate == "sitemap.xml" {
+                return cache.respond(&headers, bytes, &candidate);
+            }
+            if seo_on && (candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
+                let canonical = seo::page_canonical(&address.as_ref().unwrap().url, &candidate);
+                if let Some(title) = seo::title(&bytes) {
+                    let description = seo::description(&bytes);
+                    let image = deployment.modules["seo"]["image"].as_str().map(|image| format!("{}/{}", address.as_ref().unwrap().url.trim_end_matches('/'), image.trim_start_matches('/')));
+                    let body = seo::enrich_html(&bytes, &canonical, &title, &description, image.as_deref());
+                    let option_state = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
+                    let digest = sha2::Sha256::digest([body.as_slice(), address.as_ref().unwrap().url.as_bytes(), option_state.as_bytes()].concat());
+                    let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
+                    if !navigation && etag_matches(&headers, &tagged.version_tag()) { return tagged.not_modified(tagged.version_tag()); }
+                    return tagged.respond(&HeaderMap::new(), body, &candidate);
+                }
+                let mut response = cache.respond(&headers, bytes, &candidate);
+                response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
+                return response;
+            }
             return cache.respond(&headers, bytes, &candidate);
         }
+    }
+    if seo_on && path == "robots.txt" {
+        let sitemap = format!("Sitemap: {}/sitemap.xml\n", address.as_ref().unwrap().url.trim_end_matches('/'));
+        return ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], format!("User-agent: *\nAllow: /\n{sitemap}")).into_response();
+    }
+    if seo_on && path == "sitemap.xml" {
+        let body = seo::sitemap(&state.data_root, &deployment, &address.as_ref().unwrap().url);
+        let mut response = artifact_response(body, "sitemap.xml");
+        response.headers_mut().insert(header::CACHE_CONTROL, cache.control());
+        return response;
     }
     // A browser asks for /favicon.ico on every first visit. An app without one answers
     // with nothing instead of a 404 that every visitor's console reports as an error.
@@ -2192,7 +2235,9 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
         artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
             Ok(bytes) => {
                 count_page_view(&state, &deployment, &headers, "index.html");
-                cache.respond(&headers, bytes, "index.html")
+                let mut response = cache.respond(&headers, bytes, "index.html");
+                if seo_on { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
+                response
             }
             Err(_) => error(StatusCode::NOT_FOUND, "Artifact not found."),
         },
@@ -5139,6 +5184,63 @@ pub mod tests {
         let usage = usage::read_usage(&crate::layout::usage(&root, &deployment.id), &today, &today).unwrap();
         let index = usage["totals"].as_array().unwrap().iter().find(|row| row["kind"] == "page_view" && row["name"] == "index.html").cloned();
         assert_eq!(index, Some(json!({"kind": "page_view", "name": "index.html", "count": 2})));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn seo_lists_only_titled_pages_and_revalidates_the_chosen_address() {
+        let root = std::env::temp_dir().join(format!("konae-seo-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let mut state = test_state(&root);
+        state.public_origin = "https://konae.example.test".into();
+        deploy_files(&state, json!({
+            "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"Start here\"></head><body>Home</body></html>",
+            "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
+            "untitled.html": "<html><body>Missing title</body></html>",
+            "robots.txt": "User-agent: special\nDisallow: /private\n",
+            "card.png": "image"
+        })).await;
+        let (host, deployment) = state.deployments.read().await.iter().next().map(|(host, deployment)| (host.clone(), deployment.clone())).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_str(&host).unwrap());
+        let _off = serve_key(state.clone(), headers.clone(), "index.html".into()).await;
+        {
+            let mut deployments = state.deployments.write().await;
+            let app = deployments.get_mut(&host).unwrap();
+            app.modules.get_mut("seo").unwrap()["on"] = json!(true);
+            app.modules.get_mut("seo").unwrap()["canonical"] = Value::Null;
+            app.modules.get_mut("seo").unwrap()["image"] = json!("card.png");
+        }
+        let home = serve_key(state.clone(), headers.clone(), "index.html".into()).await;
+        let home_body = axum::body::to_bytes(home.into_body(), 100_000).await.unwrap();
+        let home_html = String::from_utf8(home_body.to_vec()).unwrap();
+        for card in ["og:title", "og:description", "og:url", "og:image"] { assert!(home_html.contains(card), "missing {card}"); }
+        let about = serve_key(state.clone(), headers.clone(), "about".into()).await;
+        let old_etag = about.headers()[header::ETAG].to_str().unwrap().to_owned();
+        let about_body = axum::body::to_bytes(about.into_body(), 100_000).await.unwrap();
+        let about_html = String::from_utf8(about_body.to_vec()).unwrap();
+        assert!(about_html.contains("<title>A \"small\" <app> &amp; more</title>"));
+        assert!(about_html.contains("content=\"Owner title\""));
+        assert!(about_html.contains("href=\"https://republish.localhost/about\""));
+        let robots = serve_key(state.clone(), headers.clone(), "robots.txt".into()).await;
+        assert!(String::from_utf8(axum::body::to_bytes(robots.into_body(), 100_000).await.unwrap().to_vec()).unwrap().contains("Disallow: /private"));
+        let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let sitemap = String::from_utf8(axum::body::to_bytes(sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(sitemap.contains("/about"));
+        assert!(!sitemap.contains("untitled"));
+        let listed = modules::read(&state, &deployment);
+        assert!(listed["modules"]["seo"]["current"]["excluded"].to_string().contains("untitled.html"));
+        let domain_file = crate::layout::private(&root, &deployment.id).join(crate::domain::RECORD_FILE);
+        tokio::fs::create_dir_all(domain_file.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&domain_file, serde_json::to_vec(&json!({"hostname":"app.example.test","token":"test","verified":true,"createdAt":0})).unwrap()).await.unwrap();
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&old_etag).unwrap());
+        let changed = serve_key(state.clone(), headers, "about.html".into()).await;
+        assert_eq!(changed.status(), StatusCode::OK);
+        let changed = String::from_utf8(axum::body::to_bytes(changed.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(changed.contains("https://app.example.test/about"));
+        state.deployments.write().await.get_mut(&host).unwrap().manifest["routing"] = json!("spa");
+        let fallback = serve_key(state.clone(), HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]), "deep/page".into()).await;
+        assert_eq!(fallback.headers()["x-robots-tag"], "noindex");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

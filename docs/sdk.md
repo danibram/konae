@@ -536,4 +536,4 @@ Limits:
 
 ## The seo module, declared, with no browser call
 
-Search listing and page cards, once the Kernel implements this module.
+Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.

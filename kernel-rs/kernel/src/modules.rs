@@ -128,13 +128,13 @@ pub fn preserve_release_state(
     complete(&mut next.modules);
 }
 
-pub fn read(deployment: &crate::Deployment) -> Value {
+pub fn read(state: &crate::AppState, deployment: &crate::Deployment) -> Value {
     let descriptions = registry();
     let modules = descriptions["modules"].as_object().into_iter().flatten().map(|(name, description)| {
         let switch = description["switch"] == true;
-        let state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
-        (name.clone(), json!({
-            "state": state,
+        let module_state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
+        let mut module = json!({
+            "state": module_state,
             "switch": switch,
             "message": if switch { Value::Null } else { json!("This module cannot be changed yet.") },
             "summary": description["summary"],
@@ -143,9 +143,29 @@ pub fn read(deployment: &crate::Deployment) -> Value {
             "requires": description["requires"],
             "permission": description["permission"],
             "agentRule": description["agentRule"],
-        }))
+        });
+        if name == "seo" {
+            let address = crate::seo::address(state, deployment);
+            let root = crate::layout::dist(&state.data_root, &deployment.id);
+            let mut excluded = Vec::new();
+            collect_pages(&root, &root, &mut excluded);
+            module["current"] = json!({"canonical":{"url":address.url,"reason":address.reason},"excluded":excluded});
+        }
+        (name.clone(), module)
     }).collect::<Map<String, Value>>();
     json!({"projectId":deployment.id,"modules":modules})
+}
+
+fn collect_pages(root: &std::path::Path, dir: &std::path::Path, excluded: &mut Vec<Value>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() { collect_pages(root, &path, excluded); continue; }
+        if !path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")) { continue; }
+        let Some(relative) = path.strip_prefix(root).ok().map(|path| path.to_string_lossy().replace('\\', "/")) else { continue };
+        let has_title = std::fs::read(&path).ok().is_some_and(|html| crate::seo::title(&html).is_some());
+        if !has_title { excluded.push(json!({"page":relative,"reason":"The page has no title."})); }
+    }
 }
 
 pub async fn set(
@@ -293,7 +313,8 @@ mod tests {
             hostname: "app.example.test".into(), created_at: 0, released_at: None,
             source_digest: None, actions: "{}".into(), artifact_version: "v1".into(), released: None,
         }, "https://example.test");
-        let observed = read(&observed);
+        let app_state = crate::AppState::for_test(&root);
+        let observed = read(&app_state, &observed);
         assert_eq!(observed["modules"]["seo"]["state"]["on"], true);
         assert_eq!(observed["modules"]["seo"]["state"]["canonical"], "path");
         let error = set(&root, "app", "seo", Some(false), None, Some(&expected)).await.unwrap_err();

@@ -1,0 +1,94 @@
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
+
+let root: string;
+let kernel: Kernel;
+let deployment: { id: string; hostname: string; url: string };
+
+beforeAll(async () => {
+  await buildKernel();
+  root = await mkdtemp(path.join(tmpdir(), "konae-seo-"));
+  const port = Number(process.env.KONAE_SEO_TEST_PORT) || 20500 + Math.floor(Math.random() * 80);
+  kernel = await startKernel({ port, data: path.join(root, "data"), setupKey: "seo-test-secret", ownerEmail: "owner@seo.test", env: { KONAE_DOMAIN: "apps.example.org" } });
+  const id = "seo_test_app";
+  await kernel.owner.call("project_create", { projectId: id, name: "SEO test" });
+  const payload = {
+    project: { id, name: "SEO test", slug: "seo-test", manifest: { version: 1, visibility: "public" }, files: { "schema.sql": "", "actions.json": JSON.stringify({ version: 1, actions: {} }) } },
+    visibility: "public",
+    artifact: { version: 1, entrypoint: "index.html", files: {
+      "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"A small app\"></head><body><a href=\"/about\">About</a></body></html>",
+      "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
+      "escaped.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title></head><body>Escaped</body></html>",
+      "untitled.html": "<!doctype html><html><body>No title</body></html>",
+      "robots.txt": "User-agent: special\nDisallow: /private\n",
+      "card.png": "image",
+    } },
+  };
+  deployment = (await release(kernel.owner, payload, id)).receipt;
+}, 300_000);
+
+afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursive: true, force: true }); });
+
+test("seo controls listing, cards, discovery files and canonical validators", async () => {
+  const off = await appFetch(kernel, deployment.hostname, "/");
+  expect(off.headers.get("x-robots-tag")).toBe("noindex");
+  const offState = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
+  await kernel.owner.call("module_set", { projectId: deployment.id, module: "seo", on: true, options: { image: "card.png" }, expected: offState.modules.seo.state });
+  const readback = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
+  expect(readback.modules.seo.state.on).toBe(true);
+  expect(readback.modules.seo.current.canonical.url).toBe(deployment.url);
+  await kernel.owner.call("module_set", { projectId: deployment.id, module: "seo", options: { canonical: "domain" }, expected: readback.modules.seo.state });
+  const domainChoice = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
+  expect(domainChoice.modules.seo.current.canonical.reason).toContain("not verified");
+
+  const page = await appFetch(kernel, deployment.hostname, "/about");
+  expect(page.headers.get("x-robots-tag")).toBeNull();
+  const tag = page.headers.get("etag")!;
+  const html = await page.text();
+  expect(html.length).toBeLessThan(300_000);
+  expect(html).toContain(`href="${deployment.url}/about"`);
+  expect(html).toContain(`property="og:url" content="${deployment.url}/about"`);
+  expect(html).toContain("property=\"og:title\" content=\"Owner title\"");
+  expect(html).toContain("property=\"og:description\"");
+  expect(html).toContain(`property="og:image" content="${deployment.url}/card.png"`);
+  const escaped = await appFetch(kernel, deployment.hostname, "/escaped");
+  expect(await escaped.text()).toContain("property=\"og:title\" content=\"A &quot;small&quot; &lt;app&gt; &amp; more\"");
+  const untitled = await appFetch(kernel, deployment.hostname, "/untitled");
+  expect(untitled.headers.get("x-robots-tag")).toBe("noindex");
+
+  const withoutExtension = await appFetch(kernel, deployment.hostname, "/about.html");
+  expect(await withoutExtension.text()).toContain(`href="${deployment.url}/about"`);
+  const robots = await appFetch(kernel, deployment.hostname, "/robots.txt");
+  const ownRobots = await robots.text();
+  expect(ownRobots).toContain("Disallow: /private");
+  expect(ownRobots).toContain(`Sitemap: ${deployment.url}/sitemap.xml`);
+  await rm(path.join(kernel.data, "apps", deployment.id, "dist", "robots.txt"));
+  const generatedRobots = await appFetch(kernel, deployment.hostname, "/robots.txt");
+  expect(await generatedRobots.text()).toContain(`Sitemap: ${deployment.url}/sitemap.xml`);
+  const sitemap = await appFetch(kernel, deployment.hostname, "/sitemap.xml");
+  const xml = await sitemap.text();
+  expect(xml).toContain(`${deployment.url}/about`);
+  expect(xml).not.toContain("untitled");
+  const omitted = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
+  expect(JSON.stringify(omitted.modules.seo.current.excluded)).toContain("untitled.html");
+  expect(JSON.stringify(omitted.modules.seo.current.excluded)).toContain("no title");
+
+  const conditional = await appFetch(kernel, deployment.hostname, "/about", { headers: { "if-none-match": tag } });
+  expect(conditional.status).toBe(304);
+  await kernel.owner.call("domain_set", { projectId: deployment.id, hostname: "verified.example.org" });
+  const domainRecord = path.join(kernel.data, "apps", deployment.id, ".konae", "domain.json");
+  await mkdir(path.dirname(domainRecord), { recursive: true });
+  await writeFile(domainRecord, JSON.stringify({ hostname: "verified.example.org", token: "test", verified: true, createdAt: Date.now() }));
+  const verified = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
+  expect(verified.modules.seo.current.canonical.reason).toContain("verified custom domain");
+  const afterDomain = await appFetch(kernel, deployment.hostname, "/about", { headers: { "if-none-match": tag } });
+  expect(afterDomain.status).toBe(200);
+  const customCanonical = `http://verified.example.org:${new URL(kernel.url).port}/about`;
+  expect(await afterDomain.text()).toContain(customCanonical);
+  await kernel.owner.call("path_set", { projectId: deployment.id, enabled: true, acceptSharedOrigin: true });
+  const pathAddress = await appFetch(kernel, "apps.example.org", `/p/${deployment.id}/about`);
+  expect(await pathAddress.text()).toContain(customCanonical);
+}, 120_000);

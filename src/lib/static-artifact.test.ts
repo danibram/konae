@@ -133,10 +133,17 @@ describe("the artifact", () => {
     expect(Object.keys(artifact.files)).toEqual(["index.html"]);
   });
 
-  test("only the elements a fragment opens with move: a stylesheet link or a later title stays in the body", () => {
-    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: "", body: '<link rel="stylesheet" href="x.css"><title>A</title><main></main>' });
+  test("metadata moves from the fragment lead while a title after body content stays there", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<link rel="stylesheet" href="x.css"><title>A</title>', body: '<main></main>' });
     expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
     expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
+  });
+
+  test("a fragment moves description metadata and JSON-LD into the document head", () => {
+    expect(splitFragmentHead('<meta name="description" content="Details"><link rel="canonical" href="/about"><script type="application/ld+json">{"@type":"Thing"}</script><main>Body</main>')).toEqual({
+      head: '<meta name="description" content="Details"><link rel="canonical" href="/about"><script type="application/ld+json">{"@type":"Thing"}</script>',
+      body: '<main>Body</main>',
+    });
   });
 
   test("a Capsule without index.html gets the default fragment home page", async () => {
