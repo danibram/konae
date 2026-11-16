@@ -300,6 +300,10 @@ impl Settings {
         let raw: Value = serde_json::from_slice(&bytes)?;
         let mut settings: Self = serde_json::from_slice(&bytes)?;
         modules::complete(&mut settings.modules);
+        if let Err(refusal) = modules::validate_state(&settings.modules) {
+            eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
+            anyhow::bail!("{}", refusal.message);
+        }
         let old_file_access = raw["manifest"]["fileAccess"] == "app-users" || raw["released"]["manifest"]["fileAccess"] == "app-users";
         if raw["modules"]["files"].is_null() && old_file_access {
             let files = settings.modules.get_mut("files").expect("files is switchable");
@@ -3701,6 +3705,7 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
         let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
+        crate::folder::decide_files_module(root, &id).await?;
         let settings = Settings::read(root, &id).with_context(|| format!("{} is not readable.", layout::settings(root, &id).display()))?;
         let deployment = settings.deployment(installed, public_origin);
         result.insert(deployment.hostname.clone(), deployment);

@@ -47,9 +47,10 @@ pub async fn open_all(state: &AppState, confirmation: Option<&str>) -> Result<Ve
 pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Result<Deployment> {
     let root = &state.data_root;
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
-    decide_files_module(root, id).await?;
     let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
+    decide_files_module(root, id).await?;
+    settings = Settings::read(root, id)?;
     let sources = layout::sources(root, id);
     let stored = match tokio::fs::read(layout::record(root, id)).await {
         Ok(bytes) => Some(serde_json::from_slice::<Installed>(&bytes).with_context(|| format!("apps/{id}/.konae/deployment.json is malformed"))?),
@@ -184,14 +185,16 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
 }
 
 pub async fn decide_files_module(root: &Path, id: &str) -> Result<Option<bool>> {
+    ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let raw_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(root, id)).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?)?;
+    ensure!(raw_settings["id"].as_str() == Some(id), "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", raw_settings["id"].as_str().unwrap_or(""));
     if !raw_settings["modules"]["files"].is_null() {
         if raw_settings["manifest"]["fileAccess"].is_null() && raw_settings["released"]["manifest"]["fileAccess"].is_null() { return Ok(None); }
         let settings = Settings::read(root, id)?;
         settings.write(root).await?;
         return Ok(None);
     }
-    let legacy_file_access = raw_settings["manifest"]["fileAccess"].as_str().or(raw_settings["released"]["manifest"]["fileAccess"].as_str());
+    let legacy_file_access = raw_settings["released"]["manifest"]["fileAccess"].as_str();
     let used = crate::modules::uses_files(root, id, &json!({"fileAccess": legacy_file_access}));
     let mut settings = Settings::read(root, id)?;
     let files_state = settings.modules.get_mut("files").expect("files is switchable");
@@ -569,10 +572,11 @@ mod tests {
         let root = scratch();
         let state = AppState::for_test(&root);
         write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        open(&state, "notes_app", None).await.unwrap();
         let path = layout::settings(&root, "notes_app");
         let mut settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         settings.as_object_mut().unwrap().remove("modules");
-        settings["manifest"]["fileAccess"] = serde_json::json!("app-users");
+        settings["released"]["manifest"]["fileAccess"] = serde_json::json!("app-users");
         std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
         let deployment = open(&state, "notes_app", None).await.unwrap();
         assert_eq!(deployment.modules["files"]["on"], true);

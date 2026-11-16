@@ -707,7 +707,8 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
         tool("modules_read", "Read every module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
     ]);
-    if owner.scopes.iter().any(|scope| ["publish", "write", "manage_users"].contains(&scope.as_str())) {
+    let module_registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json")).expect("module registry is valid JSON");
+    if owner.scopes.iter().any(|scope| module_registry["modules"].as_object().into_iter().flatten().any(|(_, module)| module["switch"] == true && module["permission"] == scope.as_str())) {
         tools.push(tool("module_set", "Turn a module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
     }
     if owner.scopes.iter().any(|s| s == "export_data") {
@@ -1897,7 +1898,7 @@ async fn admin_call(
                 } else {
                     Value::Null
                 };
-                super::refusal::check_setting_expected(a.get("expected"), current)?;
+                super::refusal::check_setting_expected_read(a.get("expected"), current, owner.scopes.iter().any(|scope| scope == "read"))?;
             }
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
@@ -2042,7 +2043,7 @@ async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Optio
         return Ok(given);
     }
     let kept = deployment.and_then(|deployment| deployment.contact_email);
-    Ok(kept.or_else(|| owner_email(state, &owner.id)))
+    Ok(kept.or(given).or_else(|| owner_email(state, &owner.id)))
 }
 
 
