@@ -675,6 +675,15 @@ describe("konae CLI", () => {
     expect(calls.map((call) => call.name)).toContain("contact_email_read");
   });
 
+  test("a later publish warns when konae.json names module settings", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    answers.project_inspect = { deployment: { id: "dep_1" }, sourcesRevision: 1 };
+    const warnings: string[] = [];
+    const config = { url: origin(), modules: { seo: { on: true } }, project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    await publishLocal(directory, config, "token", (message) => warnings.push(message));
+    expect(warnings).toContain("konae.json modules apply only to the first publish. This release keeps the Deployment's module state. Read it with modules_read and change it with module_set.");
+  });
+
   test("a trailing --dir with no value is an error, not the current directory", async () => {
     const run = cli("build", "--dir");
     expect(await run.exited).toBe(1);
