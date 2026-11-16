@@ -371,11 +371,11 @@ fn schema_connection(schema: &str) -> Result<Connection> {
             .map_err(|error| anyhow::anyhow!("schema.sql is not idempotent: it fails when it is run a second time. {error}"))?;
         connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
         let reserved: Option<String> = connection.query_row(
-            "SELECT name FROM sqlite_schema WHERE type='table' AND lower(name) IN ('__konae_schema_state','__konae_schema_history') LIMIT 1",
+            "SELECT name FROM sqlite_schema WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history') ORDER BY lower(name), name LIMIT 1",
             [], |row| row.get(0),
         ).optional()?;
         if let Some(name) = reserved {
-            anyhow::bail!("schema.sql cannot create the reserved table {name}.");
+            anyhow::bail!(refuse("schema.statement-refused", format!("schema.sql cannot create the reserved name {name}.")));
         }
         Ok(connection)
 }
@@ -583,6 +583,15 @@ fn column_definition(sql: &str, column: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{ActionDefinition, ActionProgram};
+
+    #[test]
+    fn reserved_schema_names_match_the_gate() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("schema-reserved-cases.json")).unwrap();
+        for case in cases {
+            let error = schema_connection(case["schema"].as_str().unwrap()).unwrap_err();
+            crate::refusal::assert_case::<()>(&case, Err(crate::refusal::of(&error).expect("coded schema refusal").clone()));
+        }
+    }
 
     fn program(statements: &[(&str, &str)]) -> ActionProgram {
         let actions = statements

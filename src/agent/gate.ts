@@ -143,6 +143,11 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           detail: `${describe(error)}. The preview runs schema.sql again on every open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.`,
         }, checked);
       }
+      const reserved = fresh.exec("SELECT name FROM sqlite_master WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history') ORDER BY lower(name), name LIMIT 1")[0]?.values[0]?.[0];
+      if (typeof reserved === "string") return failure({
+        stage: "schema", code: "schema.statement-refused", hint: hintOf("schema.statement-refused"),
+        message: `schema.sql cannot create the reserved name ${reserved}.`,
+      }, checked);
       checked.push("schema");
 
       let program: ServerActionProgram | undefined;

@@ -1,0 +1,26 @@
+[
+  {
+    "case": "state table",
+    "schema": "CREATE TABLE IF NOT EXISTS __konae_schema_state(v TEXT);",
+    "error": "schema.sql cannot create the reserved name __konae_schema_state.",
+    "code": "schema.statement-refused"
+  },
+  {
+    "case": "quoted history table",
+    "schema": "CREATE TABLE IF NOT EXISTS \"__KONAE_SCHEMA_HISTORY\"(v TEXT);",
+    "error": "schema.sql cannot create the reserved name __KONAE_SCHEMA_HISTORY.",
+    "code": "schema.statement-refused"
+  },
+  {
+    "case": "single-quoted state table",
+    "schema": "CREATE TABLE IF NOT EXISTS '__konae_schema_state'(v TEXT);",
+    "error": "schema.sql cannot create the reserved name __konae_schema_state.",
+    "code": "schema.statement-refused"
+  },
+  {
+    "case": "reserved index name",
+    "schema": "CREATE TABLE IF NOT EXISTS tasks(v TEXT); CREATE INDEX IF NOT EXISTS __konae_schema_history ON tasks(v);",
+    "error": "schema.sql cannot create the reserved name __konae_schema_history.",
+    "code": "schema.statement-refused"
+  }
+]
