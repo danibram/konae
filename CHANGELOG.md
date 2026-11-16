@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The installation home is redesigned. The hero shows the editor building an example app, then the page covers how an app is made, what every app has, the move to another server, the example apps, the developer paths and the questions people ask before asking for an invitation. Layouts name their columns at each width, and the Spanish and English texts are written together.
+
 ## [0.9.0] - 2026-11-16
 
 ### Added
