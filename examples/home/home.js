@@ -1,8 +1,10 @@
 import { limitIndex, unboundedQueryReason } from "./query-bound.ts";
 import { sqlTokens } from "./sql-tokens.ts";
-import { es, words } from "./i18n.js";
+import { words } from "./i18n.js";
 
 const { protocol, hostname, port, pathname } = location;
+const lang = document.documentElement.lang === "es" ? "es" : "en";
+if (pathname === "/" && new URLSearchParams(location.search).get("lang") === "es") location.replace("/es/");
 const labels = hostname.split(".");
 const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
 const domain = ownHostname ? labels.slice(1).join(".") : hostname;
@@ -30,7 +32,9 @@ const links = {
   examples: docs("examples"),
 };
 const point = () => {
-  for (const element of document.querySelectorAll("[data-link]")) element.href = links[element.dataset.link];
+  for (const element of document.querySelectorAll("[data-link]")) {
+    element.href = element.dataset.link === "invite" ? `${links.invite}?lang=${lang}` : links[element.dataset.link];
+  }
 };
 point();
 for (const element of document.querySelectorAll("[data-text]")) element.textContent = links[element.dataset.text];
@@ -39,35 +43,8 @@ for (const pre of document.querySelectorAll("figure.code pre")) {
   pre.innerHTML = pre.innerHTML.split("\n").map((line) => `<span class="line">${line.replace(/(--[a-z-]+)/g, '<span class="flag">$1</span>') || " "}</span>`).join("");
 }
 
-const marked = [...document.querySelectorAll("[data-t]")];
-const english = new Map(marked.map((element) => [element, element.innerHTML]));
-const stored = (() => { try { return localStorage.getItem("konae-home-lang"); } catch { return null; } })();
-const asked = new URLSearchParams(location.search).get("lang");
-let lang = [asked, stored, navigator.language?.slice(0, 2)].find((value) => value === "en" || value === "es") ?? "en";
-let w = words[lang];
+const w = words[lang];
 const redraw = [];
-const speak = () => {
-  w = words[lang];
-  document.documentElement.lang = lang;
-  document.title = w.title;
-  document.querySelector('meta[name="description"]').content = w.description;
-  for (const element of marked) element.innerHTML = lang === "es" && es[element.dataset.t] ? es[element.dataset.t] : english.get(element);
-  for (const element of document.querySelectorAll("[data-t-label]")) element.setAttribute("aria-label", w.labels[element.dataset.tLabel] ?? element.getAttribute("aria-label"));
-  point();
-  for (const element of document.querySelectorAll('[data-link="invite"]')) element.href = `${links.invite}?lang=${lang}`;
-  for (const draw of redraw) draw();
-};
-const switcher = document.querySelector("[data-lang]");
-redraw.push(() => { switcher.textContent = w.other; switcher.lang = lang === "es" ? "en" : "es"; });
-switcher.hidden = false;
-switcher.addEventListener("click", () => {
-  lang = lang === "es" ? "en" : "es";
-  try { localStorage.setItem("konae-home-lang", lang); } catch {}
-  const here = new URL(location.href);
-  here.searchParams.set("lang", lang);
-  history.replaceState(null, "", here);
-  speak();
-});
 
 const here = domain === "localhost" || /^[\d.]+$/.test(domain) ? "konae.example.com" : domain;
 const hosts = () => [here, w.otherHost];
@@ -438,4 +415,4 @@ if (!ownHostname) for (const element of document.querySelectorAll("[data-legal]"
   fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
 }
 
-speak();
+for (const draw of redraw) draw();

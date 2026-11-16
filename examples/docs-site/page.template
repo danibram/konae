@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{title}} · Konae docs</title>
-  <meta name="description" content="Documentation for Konae, for people and for agents.">
+  <meta name="description" content="{{description}}">
   <link rel="icon" href="data:,">
   <link rel="alternate" type="text/markdown" href="{{root}}content/{{route}}.md" title="This page as markdown">
   <link rel="stylesheet" href="{{root}}styles.css?v={{v}}">
@@ -28,10 +28,7 @@
 {{nav}}
     </nav>
     <main id="main" class="main" tabindex="-1">
-      <article id="content" class="content" aria-busy="true">
-        <h1>{{title}}</h1>
-        <p class="loading">Loading <a href="{{root}}content/{{route}}.md">the markdown of this page</a>.</p>
-      </article>
+      <article id="content" class="content">{{body}}</article>
     </main>
     <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
   </div>

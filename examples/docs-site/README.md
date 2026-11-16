@@ -1,14 +1,15 @@
 # The docs site
 
-The Konae docs, published as a Konae app. The markdown under `docs/` is the only source. This app publishes those files as they are and renders them in the browser, so the page a person reads and the `.md` an agent fetches are the same text.
+The Konae docs, published as a Konae app. The markdown under `docs/` is the only source. `bun run docs:site` renders each markdown file into its page with `marked`. The browser adds navigation and search without rendering the body again.
 
 ## What it shows
 
 | Piece | Where |
 | --- | --- |
 | Static files published as they are | `public/content/*.md`, `public/llms.txt` |
-| One page per address under `pages/` | Each page is the same shell with a different `data-route` |
-| An npm package in the bundle | `shell.js` imports `marked`, pinned in `package.json` |
+| One page per address under `pages/` | Each page has its own title, first-paragraph description and rendered body |
+| An npm package for the generator | `render.js` uses the pinned `marked` package for page bodies and descriptions |
+| A card image | `public/card.png`, editable at `public/card.svg`, rebuilt for both apps with `bash scripts/render-card-images.sh`, and set as the `seo` module's `image` option to `card.png` |
 | A large script a page loads only when it needs it | `public/vendor/mermaid.js`, which draws the diagrams, loaded by the pages that hold one |
 | An anonymous Server Action | `docs.search` in `actions.json`, a query with a `LIMIT` over the `sections` table |
 | A public app with no accounts | `visibility: "public"` and signup `closed` in `konae.json` |
@@ -18,13 +19,14 @@ The Konae docs, published as a Konae app. The markdown under `docs/` is the only
 
 | File | Role |
 | --- | --- |
-| `page.template` | The shell of every page: header, navigation, search box and an empty article. It asks for the styles and `shell.js` with `?v=`, a name `bun run docs:site` derives from their bytes, so a proxy that lets browsers keep CSS and JavaScript for hours serves a change at once. |
-| `shell.js` | Fetches `content/<route>.md`, renders it with `marked`, gives headings the ids GitHub gives them, points `.md` links at pages, draws each `mermaid` block as a diagram, builds the table of contents and runs the search. |
+| `page.template` | The shell of every page: header, navigation, search box and rendered article. It asks for the styles and `shell.js` with `?v=`, a name `bun run docs:site` derives from their bytes, so a proxy that lets browsers keep CSS and JavaScript for hours serves a change at once. |
+| `render.js` | Uses the pinned `marked` renderer for page bodies and first-paragraph descriptions. |
+| `shell.js` | Loads the docs index, gives headings the ids GitHub gives them, points `.md` links at pages, draws each `mermaid` block as a diagram, builds the table of contents and runs the search. |
 | `slug.js` | The heading id rule, shared with the generator. |
 | `site.css` | Styles. |
 | `schema.sql`, `actions.json` | The `sections` table and the search action. |
 
-`bun run docs:site` writes the rest from `docs/` and `docs/site.json`, and git ignores all of it: `index.html`, `pages/`, `public/content/`, `public/vendor/`, `public/llms.txt` and `seed.sql`.
+`bun run docs:site` writes the pages from `docs/` and `docs/site.json`. Git ignores generated files: `index.html`, `pages/`, `public/content/`, `public/vendor/`, `public/llms.txt` and `seed.sql`.
 
 ## Publish it
 
@@ -45,7 +47,7 @@ bun run konae -- publish --dir /tmp/konae-docs
 bun run docs:site --seed /tmp/konae-docs
 ```
 
-`publish` sends the pages and the markdown. `--seed` loads the search rows, one per `## ` section, with `database_execute`, and reads the count back. When a page changes, run `bun run docs:site`, copy `examples/docs-site` into `/tmp/konae-docs/app` again, and run both again.
+`publish` sends the pages and the markdown. `--seed` loads the search rows, one per `## ` section, with `database_execute`, and reads the count back.
 
 ## Add or change a page
 
