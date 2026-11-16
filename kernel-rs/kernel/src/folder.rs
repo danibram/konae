@@ -78,6 +78,11 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     } else if let Some(record) = stored.as_ref() {
         record.actions.clone()
     } else { source_actions().await? };
+    let program = crate::action_shape::read(&actions)?;
+    for (name, action) in &program.actions {
+        let Some(file) = action.page.as_ref().and_then(|page| page.get("file")).and_then(Value::as_str) else { continue };
+        ensure!(dist.contains_key(file), "Action {name} names {file} as its page file, but the Build Artifact does not contain it.");
+    }
     let schema = if candidate_sources || rebuilt || (released.is_none() && stored.is_none()) {
         source_schema().await
     } else if let Some(snapshot) = released.as_ref() {
@@ -339,6 +344,17 @@ mod tests {
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_folder_with_a_missing_page_template_is_refused() {
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "notes_app", "CREATE TABLE notes(id INTEGER PRIMARY KEY);");
+        std::fs::write(layout::sources(&root, "notes_app").join("actions.json"), r#"{"version":1,"actions":{"posts.head":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts LIMIT 1","bindings":[],"page":{"path":"/posts","file":"post.html"}}}}"#).unwrap();
+        let error = refused(open(&state, "notes_app", None).await);
+        assert!(error.contains("Action posts.head names post.html as its page file, but the Build Artifact does not contain it."), "{error}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
