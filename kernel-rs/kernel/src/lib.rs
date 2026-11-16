@@ -3763,6 +3763,8 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
         let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
+        folder::decide_files_module(root, &id).await?;
+        folder::decide_auth_module(root, &id).await?;
         let settings = Settings::read(root, &id).with_context(|| format!("{} is not readable.", layout::settings(root, &id).display()))?;
         let deployment = settings.deployment(installed, public_origin);
         result.insert(deployment.hostname.clone(), deployment);
@@ -5448,6 +5450,29 @@ pub mod tests {
         assert_eq!(record["releasedAt"], second["releasedAt"]);
         let loaded = load_deployments(&root, "http://localhost").await.unwrap();
         assert_eq!(json!(loaded.values().next().unwrap().released_at), second["releasedAt"]);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn konae_load_decides_legacy_auth_before_existing_accounts_sign_in() {
+        let root = std::env::temp_dir().join(format!("konae-legacy-auth-load-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let released = deploy_files(&state, json!({"index.html": "<p>Members</p>"})).await;
+        let id = released["id"].as_str().unwrap();
+        let original = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+        let auth = accounts::app_store(&state, &original).unwrap();
+        auth.signup("member@example.test", "correct horse battery").unwrap();
+        let settings_path = layout::settings(&root, id);
+        let mut old: Value = serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+        old["modules"].as_object_mut().unwrap().remove("auth");
+        std::fs::write(&settings_path, serde_json::to_vec(&old).unwrap()).unwrap();
+
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        let deployment = loaded.values().find(|deployment| deployment.id == id).unwrap();
+        assert_eq!(deployment.modules["auth"]["on"], true);
+        let session = accounts::app_store(&state, deployment).unwrap().login("member@example.test", "correct horse battery").unwrap();
+        assert!(accounts::app_store(&state, deployment).unwrap().authenticate(Some(&session.token)).unwrap().is_some());
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

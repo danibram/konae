@@ -967,7 +967,9 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
         }
       ],
       "permission": "publish",
-      "requires": [],
+      "requires": [
+        "auth"
+      ],
       "state": {
         "fileAccess": null,
         "on": false
@@ -1042,7 +1044,9 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
         }
       ],
       "permission": "publish",
-      "requires": [],
+      "requires": [
+        "auth"
+      ],
       "state": {
         "fileAccess": null,
         "on": true
