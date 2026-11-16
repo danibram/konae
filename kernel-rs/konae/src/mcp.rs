@@ -2496,10 +2496,12 @@ mod tests {
         });
         assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
         store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_modules','o','{}')", []).unwrap();
-        let publisher = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
+        let publisher = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into(),"manage_users".into()], projects:vec![], session:false };
         let reader = Owner { scopes:vec!["read".into()], ..publisher.clone() };
         let before = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
-        let file_state = before["modules"]["files"]["state"].clone();
+        admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"auth","on":true})).await.unwrap();
+        let auth_on = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        let file_state = auth_on["modules"]["files"]["state"].clone();
         admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"files","on":true,"options":{"fileAccess":"app-users"},"expected":file_state})).await.unwrap();
         let files_after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
         assert_eq!(files_after["modules"]["files"]["state"]["on"], true);
