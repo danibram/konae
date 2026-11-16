@@ -22,12 +22,12 @@ Suppose the old schema has a `todos` table and the final schema calls it `tasks`
 
 ```sql
 -- Prior app/schema.sql
-CREATE TABLE todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
 ```
 
 ```sql
 -- Current app/schema.sql
-CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
 ```
 
 The transition states that rename directly, so SQLite keeps the rows and their values:
@@ -58,7 +58,7 @@ The Kernel does not guess that a dropped table and a new table are a rename. Wri
 
 The supported statements are `CREATE TABLE`, `CREATE INDEX`, `ALTER TABLE ... RENAME TO`, `ALTER TABLE ... RENAME COLUMN`, `ALTER TABLE ... ADD COLUMN`, `INSERT` and `UPDATE`. The v1 validator refuses `CREATE TABLE AS SELECT`, `DROP`, `DELETE`, `REPLACE`, `INSERT OR ROLLBACK`, `UPDATE OR ROLLBACK`, `ON CONFLICT ROLLBACK`, triggers, views, `PRAGMA`, attachments, transaction control, external functions and access to SQLite or Konae's reserved metadata tables. The transformer is not an OS sandbox.
 
-Set `maxRows` from 1 through 100000 on each transition. The Kernel measures it with SQLite `total_changes`, including DML writes from triggers and foreign-key cascades. DDL counts as zero. SQLite's progress handler cancels work after 30 seconds. The app database keeps its 256 MiB quota.
+Set `maxRows` from 1 through 100000 on each transition. The Kernel measures it with SQLite `total_changes`, including foreign-key cascade writes. DDL counts as zero. SQLite's progress handler cancels work after 30 seconds. The app database keeps its 256 MiB quota.
 
 Any transition with `INSERT` or `UPDATE` needs explicit confirmation. The plan binds the confirmation to the transition definitions and the observed change counts. The Kernel rolls back the whole database transaction if a step fails, a row limit is exceeded, the final schema differs from `schema.sql`, an app action no longer prepares, or foreign-key checks fail.
 
@@ -78,4 +78,4 @@ The angle-bracket values are placeholders. Copy the confirmation from the matchi
 
 The Kernel keeps the transition journal inside `data/database.sqlite`. Export, copy and restore carry it with the rows. A fresh database installs `schema.sql` directly and records each listed transition as `baselineSkipped`; it does not replay those steps against an empty database. A local test run records history only in its own database. Publish reads the production database's journal, so test-mode history does not make production skip a step. `push` explicitly replaces production data and its journal together, after a backup.
 
-Fingerprints hash sorted table and index definitions with conservative token normalization. The tokenizer ignores whitespace and comments and normalizes recognized identifiers using the existing SQL token rules. It preserves string literal case and ambiguous double-quoted values. A fingerprint does not claim general SQL semantic equivalence.
+Fingerprints hash sorted SQLite schema definitions with conservative token normalization. The tokenizer ignores whitespace and comments and normalizes recognized identifiers using the existing SQL token rules. It preserves string literal case and ambiguous double-quoted values. A fingerprint does not claim general SQL semantic equivalence.
