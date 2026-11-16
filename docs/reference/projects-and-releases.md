@@ -154,7 +154,7 @@ An expression column without `AS`, such as `count(*)`, is listed under `unnamed`
 
 ## Contact email
 
-`"notify": { "to": "owner" }` sends to the app's contact email, `contactEmail` in `konae.json`, so an export carries it and a `kernel` binary sends there too. A first publish from Konae fills it with the owner's email when Konae knows it; an owner who signs in through Clerk has none in Konae and sets it. `konae publish` sends the one `konae.json` names.
+`"notify": { "to": "owner" }` sends to the app's contact email, `contactEmail` in `konae.json`, so an export carries it and a `kernel` binary sends there too. A first publish from Konae takes the folder's address, or fills it with the owner's email when Konae knows it. An owner who signs in through Clerk has none in Konae and sets it. Later publishes keep the Deployment's address and warn when the folder names another one.
 
 `contact_email_set { projectId, email }` sets it, or clears it with `email: null`, and needs `publish`. `contact_email_read { projectId }` answers `{ deploymentId, contactEmail, ownerNotices }`, where `ownerNotices` names the actions that send to it. With `contactEmail` null and `ownerNotices` listed, those notices are not sent and Usage counts each as `owner-has-no-email`. App settings in the editor has the same field.
 

@@ -263,8 +263,8 @@ export function readMaintenance(deploymentId: string) {
 }
 
 /** Puts the app in maintenance or takes it out, and answers with the state the Kernel kept. */
-export function setMaintenance(deploymentId: string, on: boolean) {
-  return platformMcp.call<MaintenanceState>("maintenance_set", { projectId: deploymentId, on });
+export function setMaintenance(deploymentId: string, on: boolean, expected: boolean) {
+  return platformMcp.call<MaintenanceState>("maintenance_set", { projectId: deploymentId, on, expected });
 }
 
 /**
@@ -279,6 +279,6 @@ export function readContactEmail(deploymentId: string) {
 }
 
 /** Sets the app's contact email in konae.json, or clears it with null, and answers with what the Kernel kept. */
-export function setContactEmail(deploymentId: string, email: string | null) {
-  return platformMcp.call<ContactEmailState>("contact_email_set", { projectId: deploymentId, email });
+export function setContactEmail(deploymentId: string, email: string | null, expected: string | null) {
+  return platformMcp.call<ContactEmailState>("contact_email_set", { projectId: deploymentId, email, expected });
 }

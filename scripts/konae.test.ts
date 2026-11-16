@@ -606,12 +606,14 @@ describe("konae CLI", () => {
 
   test("domain checks the hostname by the Kernel's rules before domain_set and prints the TXT record", async () => {
     const calls: string[] = [];
+    const expectedValues: unknown[] = [];
     const rules = { suffix: "apps.example.com", installationHosts: ["konae.example.com"] };
     let state: Record<string, unknown> = { hostname: null, status: "none", generatedUrl: "https://notes-1a2b3c.apps.example.com", rules };
     const client = {
       async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
         calls.push(`${name} ${input.hostname ?? ""}`.trim());
         if (name === "domain_set") {
+          expectedValues.push(input.expected);
           state = { ...state, hostname: input.hostname, status: calls.filter((call) => call.startsWith("domain_set")).length > 1 ? "active" : "pending",
             url: `https://${input.hostname}`, dns: "No TXT record at _konae.notes.example.org yet.",
             record: { type: "TXT", name: `_konae.${input.hostname}`, value: "konae-verify-abc" } };
@@ -631,6 +633,7 @@ describe("konae CLI", () => {
     expect(await domainLocal(client, "d1", { set: "notes.example.org" })).toEqual([
       "https://notes.example.org serves this app, next to https://notes-1a2b3c.apps.example.com. Your proxy must terminate TLS for notes.example.org and forward Host unchanged.",
     ]);
+    expect(expectedValues).toEqual([null, "notes.example.org"]);
     expect(await domainLocal(client, "d1", { clear: true })).toEqual(["notes.example.org no longer serves this app. https://notes-1a2b3c.apps.example.com keeps answering."]);
   });
 
@@ -639,7 +642,9 @@ describe("konae CLI", () => {
     const client = {
       async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
         if (name === "domain_read") return { generatedUrl: "https://notes-1a2b3c.apps.example.com" } as T;
+        if (name === "project_inspect") return { deployment: { hostname: "notes-1a2b3c.apps.example.com" } } as T;
         if (input.name === "other") throw Error(refusal);
+        expect(input.expected).toBe("notes-1a2b3c.apps.example.com");
         return { url: `https://${input.name}.apps.example.com`, changed: true, previousHostnames: ["notes-1a2b3c.apps.example.com"],
           googleCallback: `https://${input.name}.apps.example.com/_konae/auth/google/callback` } as T;
       },

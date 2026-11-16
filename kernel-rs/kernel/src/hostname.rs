@@ -250,7 +250,7 @@ pub async fn forget(state: &AppState, id: &str) -> Result<()> {
 
 pub async fn admin_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     match name {
-        "hostname_set" => set(state, &deployment.id, a["name"].as_str().unwrap_or_default()).await,
+        "hostname_set" => set_expected(state, &deployment.id, a["name"].as_str().unwrap_or_default(), a.get("expected")).await,
         _ => anyhow::bail!("Unknown tool."),
     }
 }
@@ -268,6 +268,10 @@ fn view(state: &AppState, deployment: &Deployment, changed: bool) -> Value {
 
 /// Moves the Deployment `id` to the generated hostname `raw` names.
 pub async fn set(state: &AppState, id: &str, raw: &str) -> Result<Value> {
+    set_expected(state, id, raw, None).await
+}
+
+async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&Value>) -> Result<Value> {
     let hostname = check_name(raw, &state.host_suffix)?;
     let found = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
     // Releases and every settings change hold the project lock, so none of
@@ -275,6 +279,9 @@ pub async fn set(state: &AppState, id: &str, raw: &str) -> Result<Value> {
     let _project = database_lock(state, &format!("project:{}", found.project_id)).await;
     let _names = database_lock(state, "hostnames").await;
     let current = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
+    if expected.is_some_and(|expected| expected != &json!(current.hostname)) {
+        return Err(refuse("setting.changed", format!("The setting changed since you read it. Its current value is {}. Read it again before changing it.", json!(current.hostname))).into());
+    }
     if current.hostname == hostname {
         return Ok(view(state, &current, false));
     }

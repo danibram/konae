@@ -183,6 +183,17 @@ fn source_revision_refusal(observed: u64) -> anyhow::Error {
     super::refusal::refuse("sources.revision-conflict", format!("Sources changed since revision {observed}. Run konae pull --dir <folder>, then publish again.")).into()
 }
 
+fn setting_refusal(current: &Value) -> anyhow::Error {
+    super::refusal::refuse("setting.changed", format!("The setting changed since you read it. Its current value is {}. Read it again before changing it.", current)).into()
+}
+
+fn check_setting_expected(arguments: &Value, current: Value) -> Result<()> {
+    if arguments.get("expected").is_some_and(|expected| expected != &current) {
+        return Err(setting_refusal(&current));
+    }
+    Ok(())
+}
+
 fn store_at(root: &Path) -> Result<Connection> {
     let db = Connection::open(root.join("mcp.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -786,15 +797,15 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ));
         tools.push(tool(
             "contact_email_set",
-            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it, unless the folder's konae.json names contactEmail, which konae publish sends. Requires publish. Read back with contact_email_read.",
-            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254}}),
+            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. A later publish keeps it. Pass expected from contact_email_read to refuse a change made since that read. Requires publish. Read back with contact_email_read.",
+            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254},"expected":{"type":["string","null"],"maxLength":254}}),
             &["projectId", "email"],
             false,
         ));
         tools.push(tool(
             "maintenance_set",
-            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
-            json!({"projectId":text,"on":{"type":"boolean"}}),
+            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Pass expected from maintenance_read to refuse a change made since that read. Requires publish. Read back with maintenance_read.",
+            json!({"projectId":text,"on":{"type":"boolean"},"expected":{"type":"boolean"}}),
             &["projectId", "on"],
             false,
         ));
@@ -839,8 +850,8 @@ fn domain_tools() -> Vec<Value> {
     vec![
         tool(
             "domain_set",
-            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
+            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Pass expected from domain_read to refuse a change made since that read. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260},"expected":{"type":["string","null"],"maxLength":260}}),
             &["projectId", "hostname"],
             false,
         ),
@@ -853,8 +864,8 @@ fn domain_tools() -> Vec<Value> {
         ),
         tool(
             "hostname_set",
-            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260}}),
+            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Pass expected from project_inspect's deployment.hostname to refuse a change made since that read. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260},"expected":{"type":"string","minLength":1,"maxLength":260}}),
             &["projectId", "name"],
             false,
         ),
@@ -953,12 +964,13 @@ fn path_tools() -> Vec<Value> {
     vec![
         tool(
             "path_set",
-            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Read back with path_read. Requires publish.",
+            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Pass expected from path_read as { enabled, name, acceptSharedOrigin } to refuse a change made since that read. Requires publish.",
             json!({
                 "projectId":{"type":"string","minLength":1},
                 "enabled":{"type":"boolean"},
                 "name":{"type":["string","null"],"minLength":1,"maxLength":260},
-                "acceptSharedOrigin":{"type":"boolean"}
+                "acceptSharedOrigin":{"type":"boolean"},
+                "expected":{"type":"object","properties":{"enabled":{"type":"boolean"},"name":{"type":["string","null"]},"acceptSharedOrigin":{"type":"boolean"}},"required":["enabled","name","acceptSharedOrigin"],"additionalProperties":false}
             }),
             &["projectId", "enabled"],
             false,
@@ -1710,11 +1722,17 @@ async fn admin_call(
             // Releases hold the same lock, so a publish cannot put back the email it read before.
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
+            check_setting_expected(&a, json!(current.contact_email))?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let found = owned_deployment(state, owner, id, "publish").await?;
+            let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
+            let deployment = owned_deployment(state, owner, id, "publish").await?;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
+            let current = super::maintenance::read(&state.data_root, &deployment.id)["maintenance"].clone();
+            check_setting_expected(&a, current)?;
             super::maintenance::set(&state.data_root, &deployment.id, on)
         }
         "signup_policy_set" => {
@@ -1857,7 +1875,21 @@ async fn admin_call(
         }
         name if name.starts_with("domain_") || name.starts_with("path_") || name.starts_with("hostname_") => {
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), scope).await?;
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let found = owned_deployment(state, owner, id, scope).await?;
+            let _guard = if scope == "publish" && !name.starts_with("hostname_") { Some(database_lock(state, &format!("project:{}", found.project_id)).await) } else { None };
+            let deployment = owned_deployment(state, owner, id, scope).await?;
+            if a.get("expected").is_some() && name != "hostname_set" {
+                let current = if name == "domain_set" {
+                    json!(super::domain::admin_call(state, &deployment, "domain_read", &a).await?["hostname"])
+                } else if name == "path_set" {
+                    let view = super::path::admin_call(state, &deployment, "path_read", &a).await?;
+                    json!({"enabled":view["enabled"],"name":view["name"],"acceptSharedOrigin":view["acceptSharedOrigin"]})
+                } else {
+                    Value::Null
+                };
+                check_setting_expected(&a, current)?;
+            }
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
             } else if name.starts_with("hostname_") {
@@ -2329,6 +2361,18 @@ mod tests {
         for case in fixture["cases"].as_array().unwrap() {
             let refusal = source_revision_refusal(case["observed"].as_u64().unwrap());
             let refusal = refusal.downcast_ref::<super::super::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, case["code"].as_str().unwrap());
+            assert_eq!(refusal.message, case["error"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn setting_conflicts_match_the_shared_case() {
+        let fixture: Value = serde_json::from_str(include_str!("../../kernel/src/setting-cases.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let arguments = json!({"expected":case["expected"]});
+            let error = check_setting_expected(&arguments, case["current"].clone()).unwrap_err();
+            let refusal = error.downcast_ref::<super::super::refusal::Refusal>().unwrap();
             assert_eq!(refusal.code, case["code"].as_str().unwrap());
             assert_eq!(refusal.message, case["error"].as_str().unwrap());
         }

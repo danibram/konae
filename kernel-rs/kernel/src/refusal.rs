@@ -102,7 +102,7 @@ mod tests {
     /// installation the owner names outside it.
     const GROUPS: &[&str] = &[
         "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
-        "secret", "signal", "signature", "signin", "sources", "statement",
+        "secret", "setting", "signal", "signature", "signin", "sources", "statement",
     ];
 
     /// Every refusal case in every shape case file, as (file, case, code).

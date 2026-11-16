@@ -47,7 +47,7 @@ export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: s
     setError("");
     setNotice("");
     try {
-      await setContactEmail(deploymentId, next);
+      await setContactEmail(deploymentId, next, state?.contactEmail ?? null);
       const readBack = await readContactEmail(deploymentId);
       if (!alive.current) return;
       setState(readBack);
@@ -78,7 +78,7 @@ export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: s
       {missing && <div className="domain-status"><Badge tone="warning">Notices not sent</Badge></div>}
       <p>{missing ?? (state.contactEmail ? `Notices to the owner go to ${state.contactEmail}. ${kept}` : `Where the app sends a notice to its owner. ${kept}`)}</p>
       <form onSubmit={submit} className="domain-form">
-        <Field label="Email" help="Publishing keeps this address, unless the folder you publish from names another in konae.json. Without one, Konae uses your owner email when it knows it.">
+        <Field label="Email" help="Publishing keeps this address. A publish from an app folder with an older address does not replace it.">
           <Input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setNotice(""); setError(""); }} autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="email" placeholder="owner@example.org" disabled={busy} />
         </Field>
         <div className="domain-actions">

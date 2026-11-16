@@ -34,7 +34,7 @@ export function AppMaintenance({ deploymentId, onSignedOut }: { deploymentId: st
     setBusy(true);
     setError("");
     try {
-      const next = await setMaintenance(deploymentId, on);
+      const next = await setMaintenance(deploymentId, on, state?.maintenance ?? false);
       if (alive.current) setState(next);
     } catch (cause) {
       if (!alive.current) return;

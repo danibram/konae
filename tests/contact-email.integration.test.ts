@@ -40,6 +40,8 @@ test("the owner sets the app's contact email in konae.json, and a later publish 
   expect(await kernel.owner.call("contact_email_set", { projectId: receipt.id, email: " Team@Contact.test " })).toMatchObject({ contactEmail: "team@contact.test" });
   expect((await settings()).contactEmail).toBe("team@contact.test");
   await expect(kernel.owner.call("contact_email_set", { projectId: receipt.id, email: "not an address" })).rejects.toThrow("The contact email is not a valid email address.");
+  await expect(kernel.owner.call("contact_email_set", { projectId: receipt.id, email: "stale@contact.test", expected: "a@example.org" })).rejects.toMatchObject({ refusal: { code: "setting.changed" } });
+  expect((await read()).contactEmail).toBe("team@contact.test");
 
   await release(kernel.owner, payload(id, { contactEmail: "a@example.org" }), id);
   expect((await read()).contactEmail).toBe("team@contact.test");
