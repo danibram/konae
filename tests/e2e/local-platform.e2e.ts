@@ -674,7 +674,7 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   await expect(settings.locator(".module-settings-card").filter({ hasText: "File storage" })).toContainText("files");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "App accounts" })).toContainText("auth");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "Search listing" })).toContainText("seo");
-  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(5);
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(4);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");
