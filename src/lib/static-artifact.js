@@ -134,15 +134,28 @@ export function renderCapsuleDocument(input) {
 
 
 export function splitFragmentHead(fragment) {
-  const lead = /^\s*(?:<!--[\s\S]*?-->|<title\b[^>]*>[\s\S]*?<\/title\s*>|<meta\b(?=[^>]*\b(?:name|property)\s*=)[^>]*>|<link\b(?=[^>]*\brel\s*=\s*["'][^"']*(?:canonical|alternate|icon|apple-touch-icon))[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[\s\S]*?<\/script\s*>)/i;
+  const lead = /^\s*(<!--[^]*?-->|<title\b[^>]*>[^]*?<\/title\s*>|<meta\b[^>]*>|<link\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[^]*?<\/script\s*>)/i;
   const moved = [];
   let rest = fragment;
   for (let match = lead.exec(rest); match; match = lead.exec(rest)) {
     const element = match[0].trim();
-    if (!element.startsWith("<!--")) moved.push(element);
+    const eligible = /^<title\b/i.test(element) || /^<meta\b(?=[^>]*\b(?:name|property)\s*=)/i.test(element)
+      || /^<link\b(?=[^>]*\brel\s*=\s*["'][^"']*(?:canonical|alternate|icon|apple-touch-icon))/i.test(element)
+      || /^<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])/i.test(element);
+    if (eligible) moved.push(element);
     rest = rest.slice(match[0].length);
   }
-  return moved.length ? { head: moved.join(""), body: rest.replace(/^\s+/, "") } : { head: "", body: fragment };
+  const body = rest;
+  if (!moved.length) return { head: "", body: fragment };
+  const consumed = fragment.slice(0, fragment.length - rest.length);
+  const kept = consumed.replace(/\s*(<!--[^]*?-->|<title\b[^>]*>[^]*?<\/title\s*>|<meta\b[^>]*>|<link\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[^]*?<\/script\s*>)/gi, (token) => {
+    const element = token.trim();
+    const eligible = /^<title\b/i.test(element) || /^<meta\b(?=[^>]*\b(?:name|property)\s*=)/i.test(element)
+      || /^<link\b(?=[^>]*\brel\s*=\s*["'][^"']*(?:canonical|alternate|icon|apple-touch-icon))/i.test(element)
+      || /^<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])/i.test(element);
+    return eligible || element.startsWith("<!--") ? "" : token;
+  });
+  return { head: moved.join(""), body: `${kept}${body}`.replace(/^\s+/, "") };
 }
 
 /**
