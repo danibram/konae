@@ -165,7 +165,7 @@ pub fn page_canonical(base: &str, file: &str) -> String {
     if path == "index" {
         path.clear();
     } else if let Some(directory) = path.strip_suffix("/index") {
-        path = directory.to_owned();
+        path = format!("{directory}/");
     }
     format!(
         "{}{}",

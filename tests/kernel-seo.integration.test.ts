@@ -22,6 +22,7 @@ beforeAll(async () => {
       "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"A small app\"></head><body><a href=\"/about\">About</a></body></html>",
       "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
       "escaped.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title></head><body>Escaped</body></html>",
+      "guide/index.html": "<!doctype html><html><head><title>Guide home</title></head><body>Guide</body></html>",
       "untitled.html": "<!doctype html><html><body>No title</body></html>",
       "robots.txt": "User-agent: special\nDisallow: /private\n",
       "card.png": "image",
@@ -61,6 +62,10 @@ test("seo controls listing, cards, discovery files and canonical validators", as
 
   const withoutExtension = await appFetch(kernel, deployment.hostname, "/about.html");
   expect(await withoutExtension.text()).toContain(`href="${deployment.url}/about"`);
+  const directoryIndex = await appFetch(kernel, deployment.hostname, "/guide/");
+  const directoryHtml = await directoryIndex.text();
+  expect(directoryIndex.status).toBe(200);
+  expect(directoryHtml).toContain(`href="${deployment.url}/guide/"`);
   const robots = await appFetch(kernel, deployment.hostname, "/robots.txt");
   const ownRobots = await robots.text();
   expect(ownRobots).toContain("Disallow: /private");
@@ -71,6 +76,7 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   const sitemap = await appFetch(kernel, deployment.hostname, "/sitemap.xml");
   const xml = await sitemap.text();
   expect(xml).toContain(`${deployment.url}/about`);
+  expect(xml).toContain(`${deployment.url}/guide/`);
   expect(xml).not.toContain("untitled");
   const omitted = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
   expect(JSON.stringify(omitted.modules.seo.current.excluded)).toContain("untitled.html");
