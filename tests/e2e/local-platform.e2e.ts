@@ -259,6 +259,7 @@ async function askFixture(page: Page, prompt: string) {
 async function fromMore(page: Page, item: "Export" | "App settings") {
   await page.getByRole("banner").getByRole("button", { name: "More" }).click();
   await page.getByRole("menuitem", { name: item, exact: true }).click();
+  if (item === "App settings") await expect(page.getByRole("dialog", { name: "App settings", exact: true })).toBeVisible();
 }
 
 async function openExplorer(page: Page) {
