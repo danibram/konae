@@ -1,14 +1,13 @@
 import { expect, test } from "bun:test";
-import { defaultModuleStates } from "./app-folder";
+import { defaultModuleStates, generatedFiles, type AppSettings } from "./app-folder";
 
-test("module defaults include only modules whose switch is available", () => {
-  expect(defaultModuleStates()).toEqual({ files: { on: false, fileAccess: null }, seo: { on: false, canonical: null, image: null } });
+test("module defaults preserve only module choices that already exist", () => {
+  expect(defaultModuleStates()).toEqual({});
   expect(defaultModuleStates({ seo: { on: true, canonical: "path", image: "social.png" }, actions: { on: false } })).toEqual({
     seo: { on: true, canonical: "path", image: "social.png" },
-    files: { on: false, fileAccess: null },
   });
+  expect(defaultModuleStates({ files: { on: true } })).toEqual({ files: { on: true, fileAccess: null } });
 });
-import { generatedFiles, type AppSettings } from "./app-folder";
 
 const settings: AppSettings = {
   id: "notes-1", name: "Notes", slug: "notes", visibility: "private",
