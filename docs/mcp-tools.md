@@ -46,9 +46,9 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | Permission | Tools |
 | --- | --- |
 | None | `platform_describe`, `platform_guide`, `session_inspect` and `mail_status` |
-| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
+| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `modules_read`, `secrets_list`, `api_keys_list`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` writes |
-| `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `project_import`, and `initialSignupPolicy` on a first release |
+| `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `module_set`, `project_import`, and `initialSignupPolicy` on a first release |
 | `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
 | `export_data` | `project_export` and reading its downloads |
 | The owner's browser session | `tokens_list`, `token_create`, `token_revoke` and `app_user_enter` |
@@ -77,6 +77,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Path address | `path_read`, `path_set`, `path_clear` |
 | Maintenance | `maintenance_read`, `maintenance_set` |
 | Contact email | `contact_email_read`, `contact_email_set` |
+| Modules | `modules_read`, `module_set` |
 | Usage and Signals | `usage_summary`, `signals_read`, `usage_overview` |
 | Calls and notices | `calls_read`, `notices_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
@@ -121,6 +122,7 @@ Two writes answer with their own observation, so no second call follows them. `t
 | `path_clear` | `path_read` |
 | `maintenance_set` | `maintenance_read` |
 | `contact_email_set` | `contact_email_read` |
+| `module_set` | `modules_read` |
 | `transfer_begin` | `transfer_status` |
 | `transfer_complete` | `transfer_status` |
 | `transfer_cancel` | `transfer_status` |

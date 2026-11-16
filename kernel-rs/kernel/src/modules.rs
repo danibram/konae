@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value, json};
 
 use crate::Settings;
 
-fn registry() -> Value {
-    serde_json::from_str(include_str!("modules.json")).expect("modules.json is generated JSON")
+fn registry() -> &'static Value {
+    static REGISTRY: OnceLock<Value> = OnceLock::new();
+    REGISTRY.get_or_init(|| serde_json::from_str(include_str!("modules.json")).expect("modules.json is generated JSON"))
 }
 
 pub fn defaults() -> BTreeMap<String, Value> {
@@ -134,7 +136,6 @@ pub fn read(deployment: &crate::Deployment) -> Value {
         (name.clone(), json!({
             "state": state,
             "switch": switch,
-            "canChange": switch,
             "message": if switch { Value::Null } else { json!("This module cannot be changed yet.") },
             "summary": description["summary"],
             "options": description["options"],

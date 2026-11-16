@@ -2551,7 +2551,8 @@ mod tests {
         assert_eq!(after["modules"]["seo"]["state"]["canonical"], "path");
         assert_eq!(state.deployments.read().await.values().find(|item| item.id == "app_modules").unwrap().modules["seo"]["canonical"], "path");
         assert_eq!(after["modules"]["actions"]["state"]["on"], true);
-        assert_eq!(after["modules"]["actions"]["canChange"], false);
+        assert_eq!(after["modules"]["actions"]["switch"], false);
+        assert!(after["modules"]["actions"].get("canChange").is_none());
         let stale = admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false,"expected":expected})).await.unwrap_err();
         let refusal = stale.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.changed");
