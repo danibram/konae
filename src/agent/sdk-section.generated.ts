@@ -1,4 +1,3 @@
-
 export const sdkPromptSection = `# The miniapp SDK, the only host surface
 
 const session = await miniapp.auth.session();                    // { userId, name, role }; role is "anonymous" when signed out
