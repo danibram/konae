@@ -92,6 +92,13 @@ export const runtimeClient = String.raw`
   }
 
   window.miniapp = {
+    page: {
+      get params() { return {}; },
+      url: (path) => {
+        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) throw Error('An app page path must start with one slash.');
+        return path;
+      },
+    },
     actions: {
       call: (name, input = {}) => request('actions.invoke', { name, input })
     },

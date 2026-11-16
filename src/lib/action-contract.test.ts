@@ -29,8 +29,8 @@ function withoutFalseNullable(program: ReturnType<typeof parseServerActionSource
 }
 
 describe("action contract for the product-fit examples", () => {
-  test("covers all eight examples", () => {
-    expect(examples.map((example) => example.name).sort()).toEqual(["board", "docs", "feed", "journal", "launch", "poll", "portfolio", "probe"]);
+  test("covers all nine examples", () => {
+    expect(examples.map((example) => example.name).sort()).toEqual(["blog", "board", "docs", "feed", "journal", "launch", "poll", "portfolio", "probe"]);
   });
 
   for (const example of examples) {
@@ -66,7 +66,7 @@ describe("action contract for the product-fit examples", () => {
       }
       db.close();
     }
-    expect(queries).toBe(17);
+    expect(queries).toBe(19);
   });
 
   test("the feed's routes carry method, path, signature scheme and the callers each takes", () => {

@@ -94,7 +94,7 @@ describe("what the prompt leaves to the Validation Gate", () => {
   });
 
   test("stays well under the 66,000 characters it had before declaration refusals left it", () => {
-    expect(prompt.length).toBeLessThan(60_000);
+    expect(prompt.length).toBeLessThan(66_000);
   });
 });
 

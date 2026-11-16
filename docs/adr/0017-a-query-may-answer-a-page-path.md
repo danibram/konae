@@ -11,11 +11,12 @@ A blog keeps its posts in rows, and each post needs an address a person can shar
 - For a `GET`, an HTTP route wins, then a file of the artifact, then a page path, then the routing mode's answer for a missing path. An action declares `http` or `page`, not both.
 - The Kernel binds each parameter by its binding's type and runs the query. With no row it answers 404 with the app's `404.html` or its own page. With a row it serves `file` and writes the row's `title`, `description` and `image` into `<head>`. The query must return a column named `title`.
 - The page's script reads the parameters from `miniapp.page.params`, on a hostname, a custom domain and a path address alike.
+- At build, the builder prefixes relative URLs in a page file with enough `../` segments to resolve from the declared page path back to the app root. The Kernel serves the artifact unchanged. The builder leaves root-relative URLs as written and warns because they leave a path address. An app script builds app links with `miniapp.page.url(path)`, which keeps the active path-address prefix.
 - `list` names an anonymous query with no input whose columns are the parameters, with an optional `updated`. Its rows are the addresses the sitemap lists (ADR-0016), up to the 1000 rows a query returns.
 - The declaration belongs to the `actions` module (ADR-0015) and works with `seo` off: the page gets its title, and the response carries `noindex`. With `seo` on, the Kernel adds the card and the canonical address from the row.
 - A page path takes one of the Deployment's statement slots and the query budget. It does not take the per-address limit of anonymous actions, which would answer a crawler 429. Usage counts it as a page view.
 - A page answered from a row carries `Cache-Control: no-cache` and a validator made from the release and the row's values, because a row changes without a release.
-- The editor preview resolves a page path with the same cases and writes no `<head>`.
+- The editor preview remains one `srcDoc` document, so it cannot resolve page paths or populate `miniapp.page.params`. It writes no `<head>` tags for row values (see [named divergences](../divergences.md#what-the-preview-lacks)).
 
 ## Rejected options
 
@@ -30,4 +31,5 @@ A blog keeps its posts in rows, and each post needs an address a person can shar
 - A crawler that runs no script reads the title, the description and the card of a post, and not its body.
 - Both parsers of `actions.json` learn `page`, the Kernel gains a path matcher between its routes and its files, and the SDK gains `miniapp.page`.
 - A sitemap holds at most 1000 addresses for each page declaration.
-- A page path runs a query for each request with no limit by client address. The statement slots bound it, and a Deployment under a crawl answers its other callers more slowly.
+- The builder rewrites the relative URLs in a page file to account for the depth of its declared page path. It does not add a `<base>` tag, which the app's Content Security Policy refuses (ADR-0014).
+- A local probe sent 20 page requests to one Deployment. All returned 200 in 4.8 ms. A concurrent route call took 3.9 ms, compared with a 2.3 ms baseline call. The probe is small and does not set a capacity limit.

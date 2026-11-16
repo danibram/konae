@@ -674,7 +674,7 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   await expect(settings.locator(".module-settings-card").filter({ hasText: "File storage" })).toContainText("files");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "App accounts" })).toContainText("auth");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "Search listing" })).toContainText("seo");
-  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(3);
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(5);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");
@@ -738,7 +738,6 @@ test("the build agent confirms module changes and reads them back", async ({ pag
   const authPath = await createProject(page, "Agent auth settings");
   await publish(page);
   await installModuleSetFixture(page, { module: "auth", on: true, options: { signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } } });
-  await connectProposalFixture(page);
   await askFixture(page, "Set signup to the example.test allowlist.");
   const authConfirm = page.getByRole("dialog", { name: "Allow the agent to do this?" });
   await expect(authConfirm.getByText("The agent will turn on App accounts (auth) and set Who can create an account to Allowlist (@example.test).", { exact: true })).toBeVisible({ timeout: 30_000 });

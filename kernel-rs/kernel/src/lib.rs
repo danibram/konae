@@ -53,6 +53,7 @@ pub mod modules;
 pub mod notify;
 pub mod operator;
 pub mod package;
+pub mod page;
 pub mod path;
 pub mod path_name;
 pub mod provider;
@@ -620,6 +621,9 @@ pub struct ActionDefinition {
     pub http: Option<Value>,
 
     #[serde(default)]
+    pub page: Option<Value>,
+
+    #[serde(default)]
     pub signal: Option<Value>,
 
     #[serde(default)]
@@ -958,6 +962,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             None => return error(StatusCode::BAD_REQUEST, &error_value.to_string()),
         },
     };
+    for (name, action) in &program.actions {
+        let Some(file) = action.page.as_ref().and_then(|page| page.get("file")).and_then(Value::as_str) else { continue };
+        if !input.artifact.files.contains_key(file) {
+            return refusal_error(&refusal::refuse("page.file-missing", format!("Action {name} names {file} as its page file, but the Build Artifact does not contain it.")));
+        }
+    }
     if !runtime::valid_app_id(&input.project.id) {
         return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
     }
@@ -2221,6 +2231,15 @@ pub async fn serve_artifact(
 }
 
 pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Response {
+    serve_key_with_routes(state, headers, path, None).await
+}
+
+pub(crate) async fn serve_key_with_routes(
+    state: AppState,
+    headers: HeaderMap,
+    path: String,
+    routes: Option<Arc<http::RouteTable>>,
+) -> Response {
     let deployment = match deployment_for(&state, &headers).await {
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Konae deployment not found."),
@@ -2274,6 +2293,13 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
                 }
             }
             return cache.respond(&headers, bytes, &candidate);
+        }
+    }
+
+    if let Some(routes) = routes.as_ref() {
+        let page_path = format!("/{}", path.trim_start_matches('/'));
+        if let Some(response) = http::serve_page_path(&state, &deployment, routes, &page_path, &headers).await {
+            return response;
         }
     }
 
@@ -3193,6 +3219,7 @@ pub fn resolve_bindings(
 
 pub fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Result<(), refusal::Refusal> {
     validate_declarations(name, action)?;
+    page::validate_action(name, action)?;
     action_shape::check_keys(name, action)
 }
 
@@ -4446,6 +4473,7 @@ pub mod tests {
             statement: statement.into(),
             bindings,
             http: None,
+            page: None,
             signal: None,
             guard: None,
             notify: None,

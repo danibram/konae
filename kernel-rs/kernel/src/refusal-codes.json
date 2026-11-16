@@ -81,6 +81,18 @@
   "notify.recipient-invalid": { "fix": "capsule", "remedy": "Set notify \"to\" to \"owner\", \"actor\" or {\"column\": \"<name>\"}." },
   "notify.subject-invalid": { "fix": "capsule", "remedy": "Write a notify subject of 1 to 120 characters on one line." },
 
+  "page.bindings": { "fix": "capsule", "remedy": "Make the page path parameters match the query's input bindings." },
+  "page.duplicate": { "fix": "capsule", "remedy": "Give each page path its own pattern." },
+  "page.file-missing": { "fix": "capsule", "remedy": "Add the named page file to the Build Artifact." },
+  "page.invalid": { "fix": "capsule", "remedy": "Give page a path and a file, with an optional list query." },
+  "page.list-columns": { "fix": "capsule", "remedy": "Return each page parameter from the list query, with optional updated." },
+  "page.list-invalid": { "fix": "capsule", "remedy": "Name an anonymous query with no input bindings as the page list." },
+  "page.list-undeclared": { "fix": "capsule", "remedy": "Declare the anonymous query named by page.list." },
+  "page.path-invalid": { "fix": "capsule", "remedy": "Use a leading slash and valid path segments, with parameters after the first segment." },
+  "page.query": { "fix": "capsule", "remedy": "Declare page on an anonymous query." },
+  "page.route-conflict": { "fix": "capsule", "remedy": "Declare either http or page on an action." },
+  "page.title": { "fix": "capsule", "remedy": "Return a column named title from the page query." },
+
   "path.hyphen-edge": { "fix": "owner", "remedy": "Start and end the path name with a letter or digit.", "tool": "path_set" },
   "path.length": { "fix": "owner", "remedy": "Name a path of 3 to 40 characters.", "tool": "path_set" },
   "path.missing": { "fix": "owner", "remedy": "Name a path, such as spring-menu.", "tool": "path_set" },

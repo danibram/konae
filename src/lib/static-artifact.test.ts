@@ -26,6 +26,44 @@ function assemble(files: Record<string, string | Uint8Array>, options: { routing
   });
 }
 
+describe("page path assets", () => {
+  test("the builder moves relative URLs up to the app root by the declared page depth", async () => {
+    const files = {
+      "index.html": page("Blog", "<main></main>"),
+      "post.html": page("Post", '<link rel="stylesheet" href="styles/post.css"><img src="images/post.png"><script>const source = "src=app.js";</script><script type="module" src="app.js"></script><a href="posts/next">Next</a>'),
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+      "app.js": "document.body.dataset.loaded = 'yes';",
+      "styles/post.css": "body { background: url('../images/background.png'); }",
+      "images/post.png": "image",
+      "images/background.png": "background",
+    };
+    const artifact = await assemble(files);
+    expect(artifact.files["post.html"]).toContain('href="../styles/post.css"');
+    expect(artifact.files["post.html"]).toContain('src="../images/post.png"');
+    expect(artifact.files["post.html"]).toContain('src="../app.js"');
+    expect(artifact.files["post.html"]).toContain('const source = "src=app.js";');
+    expect(artifact.files["post.html"]).toContain('href="../posts/next"');
+    expect(artifact.files["styles/post.css"]).toContain("url('../images/background.png')");
+  });
+
+  test("the builder rewrites relative URLs in a fragment page named by a page path", async () => {
+    const files = {
+      "index.html": page("Home", '<script type="module" src="app.js"></script>'),
+      "post.html": '<img src="cover.png"><a href="about">About</a>',
+      "about.html": page("About"),
+      "cover.png": "image",
+      "styles.css": "body { background-image: url('cover.png'); }",
+      "app.js": "document.body.dataset.loaded = 'yes';",
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+    };
+    const artifact = await assemble(files);
+    expect(artifact.files["post.html"]).toContain('src="../cover.png"');
+    expect(artifact.files["post.html"]).toContain('href="../about"');
+    expect(artifact.files["post.html"]).toContain("url('../cover.png')");
+  });
+
+});
+
 describe("which Capsule files become pages", () => {
   test("schema-transforms.json stays in sources and is never served in the Build Artifact", async () => {
     const artifact = await assemble({ "index.html": "<main id=app></main>", "schema-transforms.json": "{\"version\":1,\"transitions\":[]}" });

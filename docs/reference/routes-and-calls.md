@@ -2,6 +2,26 @@
 
 Declare an HTTP route to receive a request or a call action to send one, and read here who may use each and what the Kernel refuses.
 
+## Page paths
+
+An anonymous query may answer an app-defined page path. The query binds each `:parameter` to an input and names the HTML file that renders the body.
+
+```json
+"posts.head": {
+  "kind": "query",
+  "access": "anonymous",
+  "page": { "path": "/posts/:slug", "file": "post.html", "list": "posts.published" },
+  "statement": "SELECT title, summary AS description, cover AS image FROM posts WHERE slug = ?1 LIMIT 1",
+  "bindings": [{ "source": "input", "key": "slug", "type": "string", "maxLength": 120 }]
+}
+```
+
+The query returns a `title` column. The Kernel escapes its value before writing `<title>` and, when `seo` is on, the social card and canonical address. The page's script reads its path values from `miniapp.page.params`. A missing row answers the app's `404.html` or the Kernel's 404 page. HTTP routes win first, then artifact files, then page paths, then the routing mode's fallback.
+
+An optional `list` names an anonymous query with no input bindings. Its columns match the path parameters, with optional `updated`, and its rows add addresses to the sitemap. A page query uses a statement slot and the query budget. It does not use the anonymous action limit by client address.
+
+The editor preview opens one `srcDoc` document without an app URL or page history. It cannot resolve page paths or fill `miniapp.page.params`, and it writes no head tags for row values. Check page paths on `konae dev` or a Deployment.
+
 ## HTTP routes
 
 An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.

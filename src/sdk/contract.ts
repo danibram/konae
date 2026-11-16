@@ -210,6 +210,20 @@ export const sdkContract = {
       declarations: [
         {
           file: "actions.json",
+          key: "page",
+          summary: "{ path, file, list? } on an anonymous query. The Kernel binds path parameters to the query's input bindings, serves the named file with the row's title and card, and exposes parameters as miniapp.page.params. list names an anonymous query with no inputs for the sitemap.",
+          errors: [
+            { message: "Action <name> declares a page path, so it must be an anonymous query.", when: "page is set on any other action or an authenticated query", source: "kernel" },
+            { message: "Action <name> declares page parameters that do not match its input bindings.", when: "the named parameters and input binding keys differ", source: "kernel" },
+            { message: "Actions <name> and <name> both bind page path <key>.", when: "two page declarations have the same literal and parameter pattern", source: "kernel" },
+            { message: "Action <name> names <key> as its page file, but the Build Artifact does not contain it.", when: "the named file is absent from the Build Artifact at release", source: "kernel" },
+            { message: "Action <name> has a page query that does not return a title column.", when: "the query does not select a column named title", source: "kernel" },
+            { message: "Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated.", when: "the list query's selected columns differ", source: "kernel" },
+          ],
+          limits: ["The first path segment is literal.", "The page query returns at most one row.", "The list query returns at most 1000 rows."],
+        },
+        {
+          file: "actions.json",
           key: "kind",
           summary: "Each kind takes its own top-level keys. A query takes kind, access, statement, bindings and http. A mutation takes kind, access, statement, bindings, http, signal, guard, notify and schedule. A signal action takes kind, access, bindings, signal and an empty statement. A call takes kind, access, bindings, url, method, body, headers, auth, then and an empty statement. Any other key is refused, so a misspelled or misplaced key cannot pass and do nothing. A key set to null counts as absent. A key with its own refusal, such as a guard on a query, gets that refusal instead. The Validation Gate and the Kernel refuse the same declarations with the same messages.",
           errors: [
@@ -361,6 +375,18 @@ export const sdkContract = {
           preview: "Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or on konae dev. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.",
         },
       ],
+    },
+    {
+      name: "page",
+      title: "Page address values",
+      summary: "Values from the page address. The Kernel fills params when a declared page path answers.",
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
+      declarations: [],
+      calls: [
+        { name: "params", signature: "miniapp.page.params", summary: "Read the values captured by the page path, or an empty object on a file page.", signedOut: true, tools: [], args: [], returns: "An object keyed by page path parameter, such as { slug: \"hello\" }", errors: [], limits: [], examples: [{ code: "const { slug } = miniapp.page.params;" }], preview: "Always returns an empty object because the editor preview has no page URL." },
+        { name: "url", signature: "miniapp.page.url(path)", summary: "Build an app link that keeps the current hostname or path address.", signedOut: true, tools: [], args: [{ name: "path", type: "string", required: true, description: "An app path starting with one slash, such as /posts/hello." }], returns: "The path with the current /p/<name> prefix when the app uses a path address.", errors: [{ message: "An app page path must start with one slash.", when: "path does not start with one slash", source: "sdk" }], limits: [], examples: [{ code: "link.href = miniapp.page.url(`/posts/${encodeURIComponent(slug)}`);" }], preview: "Returns the app path unchanged." },
+      ],
+      notes: [],
     },
     {
       name: "files",

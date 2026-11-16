@@ -1,0 +1,7 @@
+[
+  {
+    "case": "release requires the page file in its Build Artifact",
+    "code": "page.file-missing",
+    "error": "Action posts.head names post.html as its page file, but the Build Artifact does not contain it."
+  }
+]
