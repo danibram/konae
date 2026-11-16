@@ -1,12 +1,12 @@
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkPackageManifest, packageComponentFiles, type PackageComponentName } from "../src/lib/portable-package";
-import { dataEntries, SETTINGS_FILE, type AppSettings } from "../src/lib/app-folder";
+import { checkPackageManifest } from "../src/lib/portable-package";
+import { SETTINGS_FILE, type AppSettings } from "../src/lib/app-folder";
 import { sourceFilesFrom } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
-import { PULL_DIRECTORY, readPulled } from "./pull";
+import { extractVerifiedPulledData, readPulled } from "./pull";
 
 /** Evidence returned after the Kernel imports the immutable snapshot from pull. */
 export type RehearsalEvidence = { snapshotId: string; candidateSourceDigest: string; sourceBaselineDigest: string | null; sourceBaselineRevision: number | null; snapshotDigest: string; packageId: string };
@@ -42,7 +42,6 @@ export async function importWithLocalKernel(kernel: { binary: string; env: Recor
 
 /** Copies current app sources and build into scratch, then imports the immutable pulled data. */
 export async function rehearsePulledSnapshot(root: string, settings: AppSettings, importSnapshot: (appFolder: string, snapshotFolder: string) => Promise<unknown>): Promise<RehearsalEvidence> {
-  const pull = path.join(root, PULL_DIRECTORY);
   const pulled = await readPulled(root);
   if (!pulled) throw Error("Run konae pull before rehearse so the exact published snapshot is available.");
   const scratch = await mkdtemp(path.join(tmpdir(), "konae-rehearsal-"));
@@ -52,29 +51,15 @@ export async function rehearsePulledSnapshot(root: string, settings: AppSettings
     await writeFile(path.join(scratch, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`);
     const manifest = checkPackageManifest(pulled.manifest);
     const snapshot = path.join(scratch, "snapshot");
-    await mkdir(path.join(snapshot, "data"), { recursive: true });
-    const snapshotComponents: string[] = [];
-    for (const component of manifest.contents) {
-      const name = component.name as PackageComponentName;
-      const source = path.join(pull, packageComponentFiles[name]);
-      const bytes = new Uint8Array(await readFile(source));
-      const digest = createHash("sha256").update(bytes).digest("hex");
-      if (bytes.length !== component.size || digest !== component.sha256) throw Error(`Pulled ${component.name} no longer matches snapshot ${manifest.packageId}. Run konae pull again.`);
-      snapshotComponents.push(`${name}:${component.sha256}:${component.size}`);
-      for (const entry of dataEntries(name, bytes)) {
-        const target = path.resolve(snapshot, entry.path);
-        if (!target.startsWith(snapshot + path.sep)) throw Error(`Invalid snapshot path ${entry.path}.`);
-        await mkdir(path.dirname(target), { recursive: true });
-        await writeFile(target, entry.contents);
-      }
-    }
+    await extractVerifiedPulledData(root, snapshot, pulled);
+    const snapshotComponents = manifest.contents.map(({ name, sha256, size }) => `${name}:${sha256}:${size}`);
     const candidateSourceDigest = await sourceDigest(sourceFilesFrom(await listSourceFiles(path.join(scratch, "app"))));
-    const sourceBaseline = (pulled as typeof pulled & { sourceBaseline?: { sourceDigest?: string; sourcesRevision?: number } }).sourceBaseline;
+    const sourceBaseline = pulled.sourceBaseline;
     const sourceBaselineDigest = sourceBaseline?.sourceDigest ?? pulled.sourceDigest ?? null;
     const sourceBaselineRevision = sourceBaseline?.sourcesRevision ?? pulled.sourcesRevision ?? null;
     const snapshotDigest = createHash("sha256").update(`${manifest.packageId}\n${snapshotComponents.sort().join("\n")}`).digest("hex");
     await importSnapshot(scratch, snapshot);
-    return { snapshotId: manifest.packageId, packageId: manifest.packageId, candidateSourceDigest, sourceBaselineDigest, sourceBaselineRevision, snapshotDigest };
+    return { snapshotId: pulled.snapshotId ?? manifest.packageId, packageId: manifest.packageId, candidateSourceDigest, sourceBaselineDigest, sourceBaselineRevision, snapshotDigest };
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

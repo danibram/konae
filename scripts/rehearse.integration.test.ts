@@ -50,7 +50,7 @@ test.skipIf(!process.env.KONAE_REHEARSAL_KERNEL_BIN)("Kernel rehearsal checks th
     deploymentId: settings.id, projectId: settings.id, visibility: settings.visibility, publishedRevision: 1,
     contents: contents.map(({ name, size, sha256 }) => ({ name, size, sha256 })), excluded: [],
   };
-  await writeFile(path.join(pull, "pull.json"), JSON.stringify({ manifest, from: "http://published.test", at: Date.now(), sourceBaseline: { packageId: manifest.packageId, sourceDigest: "published-source", sourcesRevision: 1, capturedAt: Date.now() } }));
+  await writeFile(path.join(pull, "pull.json"), JSON.stringify({ manifest, snapshotId: "snapshot-kernel-rehearsal", from: "http://published.test", at: Date.now(), sourceBaseline: { packageId: manifest.packageId, sourceDigest: "published-source", sourcesRevision: 1, capturedAt: Date.now() } }));
   const localDatabase = path.join(root, "data/database.sqlite");
   await kernel.run(["sql", "ALTER TABLE tasks ADD COLUMN required TEXT NOT NULL DEFAULT 'hand-fixed'"]);
   const editedLocalDb = new Uint8Array(await readFile(localDatabase));
@@ -72,7 +72,8 @@ test.skipIf(!process.env.KONAE_REHEARSAL_KERNEL_BIN)("Kernel rehearsal checks th
     return importWithLocalKernel(cleanKernel, snapshot);
   });
   expect(evidence.candidateSourceDigest).not.toBe(evidence.sourceBaselineDigest);
-  expect(evidence.snapshotId).toBe(manifest.packageId);
+  expect(evidence.snapshotId).toBe("snapshot-kernel-rehearsal");
+  expect(evidence.packageId).toBe(manifest.packageId);
   expect(await readFile(localDatabase)).toEqual(editedLocalDb);
   expect(await readFile(path.join(pull, packageComponentFiles.database))).toEqual(pulledBase);
 });
