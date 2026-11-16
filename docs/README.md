@@ -92,5 +92,7 @@ An agent that connects over MCP calls `platform_describe` and `projects_list` fi
 - [Concepts](./concepts.md), the words the rest of the docs use
 - [The Capsule](./capsule.md), the files of an app
 - [Pick the smallest piece](./pieces.md), which declaration fits a need
+- [Rehearse a source change locally](./guides/rehearse-locally.md), against a fresh snapshot of published data
+- [Carry data through schema changes](./guides/schema-transformations.md), with explicit transitions and portable history
 - [Example apps](./examples.md)
 - [Operate an installation](./operate.md), for whoever runs a Kernel

@@ -111,7 +111,7 @@ bun run konae -- dev --dir /tmp/my-list --reset
 
 `push --yes` sends the local `data/` and replaces published data after a backup. Rows are not merged.
 
-To rehearse a source change against a fresh snapshot of published data, run `konae pull --data-only`, `dev --reset`, local tests and `rehearse`. Then review `publish --plan` and publish the sources. `publish` never sends local rows; `push --yes` remains a separate data replacement. Read the [local rehearsal guide](./docs/guides/rehearse-locally.md) for the full path.
+To rehearse a source change against a fresh snapshot of published data, run `konae pull --data-only`, `dev --reset`, local tests and `rehearse`. Then review `publish --plan` and publish the sources. `publish` never sends local rows; `push --yes` remains a separate data replacement. Read the [local rehearsal guide](./docs/guides/rehearse-locally.md) for the full path, and [schema transformations](./docs/guides/schema-transformations.md) when a change needs explicit renames or data backfills.
 
 [Edit files with the CLI](./docs/guides/edit-files-with-the-cli.md) explains each step, and [the CLI reference](./docs/cli.md) covers `sql`, `events`, `contract` and `conform`.
 
