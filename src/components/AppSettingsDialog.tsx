@@ -16,15 +16,15 @@ import "./app-settings.css";
 
 type Props = {
   projectName: string;
-  /** The app an import replaces, and the visibility its imported sources keep. */
+
   importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
   onClose: () => void;
   onSignedOut: () => void;
-  /** The generated address moved; the editor shows the new url everywhere. */
+
   onAddressMoved?: (url: string) => void;
   signInHref: string;
-  /** Downloads the app folder, as More > Export does. */
+
   onExport?: () => void;
 };
 
@@ -36,12 +36,12 @@ const sections: { id: Section; label: string }[] = [
 ];
 
 export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
-  // Everyday settings apart from moving the app; every part stays mounted, so a switch loses nothing typed.
+
   const [section, setSection] = useState<Section>("addresses");
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
   const [reading, setLoading] = useState(Boolean(deploymentId));
-  // The loader follows the hold. A quick read shows none, and once shown it stays 400 ms.
+
   const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -102,7 +102,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
         try {
           const current = await readDomain(deploymentId);
           if (alive.current) { setView(current); setHostname(current.hostname ?? ""); setConfirmation(null); }
-        } catch { /* Keep the refusal visible if the read-back fails. */ }
+        } catch {  }
       }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }
@@ -239,7 +239,7 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
         try {
           const readBack = await readDomain(deploymentId);
           if (alive.current) onMoved(readBack.generatedUrl);
-        } catch { /* Keep the refusal visible if the read-back fails. */ }
+        } catch {  }
       }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) onSignedOut();

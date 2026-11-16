@@ -137,13 +137,13 @@ pub struct Deployment {
     pub slug: String,
     pub url: String,
     pub created_at: u64,
-    /// When the release `dist/` holds was installed: the last publish,
-    /// import or folder start that brought new files.
+
+
     #[serde(default)]
     pub released_at: u64,
-    /// The digest of the sources that release was built from
-    /// (`sources::digest`). Absent on a record written before the Kernel
-    /// kept it.
+
+
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<String>,
     pub manifest: Value,
@@ -157,16 +157,16 @@ pub struct Deployment {
     pub sign_in_methods: Vec<SignInMethod>,
     #[serde(default = "modules::defaults")]
     pub modules: std::collections::BTreeMap<String, Value>,
-    /// Where `"notify": { "to": "owner" }` sends. A publish from Konae fills
-    /// it with the owner's email; the Kernel keeps no record of owners.
+
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
     #[serde(skip, default)]
     pub released_schema: String,
 }
 
-/// `konae.json`: the app's settings, the part of an app an export hands over
-/// and `konae init` writes.
+
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -192,25 +192,25 @@ pub struct Settings {
     pub released: Option<ReleasedSettings>,
 }
 
-/// `.konae/deployment.json`: what this installation adds to the settings to
-/// serve the app. It never leaves the installation.
+
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Installed {
     pub hostname: String,
     pub created_at: u64,
-    /// When the release `dist/` holds was installed. A record written before
-    /// the Kernel kept it reads as `created_at`.
+
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub released_at: Option<u64>,
-    /// The digest of the sources the release `dist/` holds was built from.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<String>,
     /// The `actions.json` of the release `dist/` holds.
     pub actions: String,
     pub artifact_version: String,
-    /// Access settings of the artifact currently served. Editable konae.json
-    /// may describe a draft that has not been released yet.
+
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub released: Option<ReleasedSettings>,
 }
@@ -338,7 +338,7 @@ impl Settings {
     }
 }
 
-/// A way a person signs in to a Deployment's app accounts.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SignInMethod {
@@ -370,7 +370,7 @@ pub fn sign_in_methods_from_input(methods: &[SignInMethod]) -> std::result::Resu
 pub enum SignupMode {
     #[default]
     Open,
-    /// No signup without an invitation from the owner. See `invitations.rs`.
+
     Invitation,
     Allowlist,
     Closed,
@@ -380,7 +380,7 @@ pub enum SignupMode {
 #[serde(rename_all = "camelCase")]
 pub struct SignupPolicy {
     pub mode: SignupMode,
-    /// Exact emails and `@domain` entries, stored trimmed and lowercased.
+
     #[serde(default)]
     pub allowlist: Vec<String>,
 }
@@ -486,14 +486,14 @@ pub struct DeployInput {
     pub initial_sign_in_methods: Option<Vec<SignInMethod>>,
     #[serde(default)]
     pub initial_modules: Option<std::collections::BTreeMap<String, Value>>,
-    /// A chunked package whose components were uploaded as transfers.
+
     #[serde(default)]
     pub initial_package: Option<package::InitialPackage>,
-    /// The email `notify` to the owner reaches. Konae's release_apply sets it.
+
     #[serde(default)]
     pub contact_email: Option<String>,
-    /// The confirmation of a schema change that loses data, as release_plan
-    /// gave it. release_apply sets it from its confirmSchema argument.
+
+
     #[serde(default)]
     pub schema_confirmation: Option<String>,
 }
@@ -504,9 +504,9 @@ pub struct ProjectInput {
     pub id: String,
     pub name: String,
     pub slug: String,
-    /// The files of `app/` by path. A path `encodings` names is base64.
-    /// Konae's `release_plan` fills them from the sources transfer when the
-    /// payload leaves them out.
+
+
+
     #[serde(default)]
     pub files: HashMap<String, String>,
     #[serde(default)]
@@ -528,7 +528,7 @@ pub struct BuildArtifact {
     pub version: u8,
     pub entrypoint: String,
     pub files: HashMap<String, String>,
-    /// Paths whose value in `files` is base64; every other file is UTF-8 text.
+
     #[serde(default)]
     pub encodings: HashMap<String, String>,
 }
@@ -541,9 +541,9 @@ pub struct DatabaseBackup {
     pub created_at: u64,
     pub size_bytes: u64,
     pub key: String,
-    /// What a backup before an import holds: `data` (the database,
-    /// accounts, files and Usage in the folder `key`) and `sources` (the
-    /// saved sources). Empty for a Data panel backup of the database alone.
+
+
+
     #[serde(default)]
     pub holds: Vec<String>,
 }
@@ -565,34 +565,34 @@ pub struct ActionProgram {
 pub struct ActionDefinition {
     pub kind: String,
     pub access: String,
-    /// Empty for a `"kind": "signal"` action, which runs no SQL.
+
     #[serde(default)]
     pub statement: String,
     pub bindings: Vec<ActionBinding>,
-    /// The action's HTTP route, checked by `http::binding`.
+
     #[serde(default)]
     pub http: Option<Value>,
-    /// The Signal the action records, checked by `usage::declaration`.
+
     #[serde(default)]
     pub signal: Option<Value>,
-    /// A mutation's refusal when it changes no row, checked by `guard::declaration`.
+
     #[serde(default)]
     pub guard: Option<Value>,
-    /// The email a mutation queues when it changes a row, checked by `notify::declaration`.
+
     #[serde(default)]
     pub notify: Option<Value>,
-    /// When the Kernel's timer runs a mutation, checked by `schedule::declaration`.
+
     #[serde(default)]
     pub schedule: Option<Value>,
-    /// Refused by `schedule::check_subscribe`: the Kernel pushes nothing.
+
     #[serde(default)]
     pub subscribe: Option<Value>,
-    /// An action of `"kind": "call"`: its url, method, body, auth and then,
-    /// checked by `calls::check_kind`.
+
+
     #[serde(flatten)]
     pub call: calls::CallKeys,
-    /// Every other key, refused by `action_shape::check_keys`. It comes after
-    /// `call` so serde hands it only the keys no field took.
+
+
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
@@ -612,8 +612,8 @@ pub struct ActionBinding {
     pub value: Option<Value>,
 }
 
-/// A whole number, also when written as `100.0`, which is the integer 100 to
-/// the editor's JSON reader.
+
+
 fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<usize>, D::Error> {
     Option::<f64>::deserialize(deserializer)?
         .map(|number| {
@@ -688,8 +688,8 @@ pub async fn start(
     }
     schedule::spawn(state.clone(), schedule_clock);
     if let Some(queue) = state.accounts.queue.clone() {
-        // A public installation starts anyway: refusing would take a live
-        // one down at its next restart. It says so loudly instead.
+
+
         if let Some(mailbox) = queue.local_mailbox().filter(|_| security::https(&state)) {
             eprintln!(
                 "WARNING: {} serves over https with KONAE_MAIL_TRANSPORT=development. No email leaves this server. Invitations, confirmation and recovery links and notices all go to {} instead. Set KONAE_MAIL_TRANSPORT to resend or smtp.",
@@ -713,7 +713,7 @@ pub async fn state_from_env(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<(AppState, Option<copies::CopyConfig>)> {
-    // Before any connection opens, so no statement runs without the ceiling.
+
     heap::limit_from_env()?;
     let data_root = startup.data_root.clone();
     let public_origin = startup.hosts.public_origin.clone();
@@ -958,9 +958,9 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         None => None,
     };
-    // A package keeps the methods it carries even on an installation without
-    // a Google client: the sign-in page then offers only the password and the
-    // owner is told why (sign_in_methods_read).
+
+
+
     let package_methods = input.initial_package.as_ref().and_then(|package| package.manifest.sign_in_methods.as_ref());
     let initial_sign_in_methods = match input.initial_sign_in_methods.as_ref().or(package_methods) {
         Some(methods) => match sign_in_methods_from_input(methods) {
@@ -969,11 +969,11 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         None => None,
     };
-    // The app keeps one ID: its folder, its project and its Deployment share it.
+
     let id = input.project.id.clone();
     let release_directories = input.project.directories.clone();
-    // Same rule as a bare Kernel folder: the slug is the address when free.
-    // The name stays held until this release serves on it.
+
+
     let (hostname, _taking) = match existing.as_ref() {
         Some(item) => (item.hostname.clone(), None),
         None => {
@@ -1026,11 +1026,11 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if let Err(error_value) = tokio::fs::create_dir_all(&data).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-    // One release of an app at a time, so the cleanup of one never removes
-    // the files another is still staging.
+
+
     let _release_guard = named_lock(&state, &format!("publish:{id}"), true).await;
-    // Every step that can fail runs before the app changes. Readers keep the
-    // previous files until the record names this release and dist/ switches.
+
+
     if let Err(error_value) = stage_local_artifact(&state, &id, &artifact_version, &artifact_files)
         .await
         .and_then(|()| release_step(&id, "stage_local_artifact"))
@@ -1048,7 +1048,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             file_store::forget_deployment(state.files.store.as_ref(), &id).await;
             return error(StatusCode::BAD_REQUEST, &format!("Package import failed: {error_value:#}"));
         }
-        // The path keeps the owner's choice where it can. What it changed comes back as the import notice.
+
         match path::arrive(&state, &deployment, package.manifest.path.as_ref()).await {
             Ok(lines) => notices = lines,
             Err(error_value) => {
@@ -1084,8 +1084,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-    // From here until the new release serves, no Server Action runs on this
-    // Database, so none writes a row the copy below would miss.
+
+
     let database_guard = database_lock(&state, &id).await;
     let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
     let staged = stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref())
@@ -1101,7 +1101,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             };
         }
     };
-    // These sources travel with this build, so app/ and dist/ change together.
+
     let source_metadata = json!({
         "name": deployment.project_name, "slug": deployment.slug, "manifest": deployment.manifest,
         "directories": input.project.directories, "updatedAt": now_ms(),
@@ -1120,8 +1120,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-    // The database, the record, app/, dist/ and the Deployment in memory
-    // change together. A step that fails puts back the ones before it.
+
+
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
     let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
@@ -1153,8 +1153,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
-    // A swap that fails part way puts the old app/ back itself, so only a
-    // swap that went through needs putting back.
+
+
     let swapped_sources = match staged_sources.swap().await {
         Err(error_value) => Err((error_value, false)),
         Ok(()) => release_step(&id, "swap_sources").map_err(|error_value| (error_value, true)),
@@ -1239,15 +1239,15 @@ pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::
     moved
 }
 
-/// Copies the live database with `VACUUM INTO` and applies `schema` to the
-/// copy, so a change that fails, or a release that fails after it, leaves the
-/// live database as it was. The caller holds the database lock alone.
+
+
+
 fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, transforms: Option<&str>, confirmation: Option<&str>) -> Result<schema_change::Change> {
     remove_database_files(staged);
     Connection::open(live)?.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
     let change = schema_change::apply_with_transforms(staged, schema, program, transforms, schema_change::Mode::Apply(confirmation))?;
-    // The copy leaves in rollback mode. Closing this connection checkpoints
-    // and removes its WAL, so only the file moves into place.
+
+
     Connection::open(staged)?.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
     Ok(change)
 }
@@ -1264,8 +1264,8 @@ fn remove_database_files(path: &Path) {
     }
 }
 
-/// Moves the live database and its WAL files to `replaced` and the staged
-/// copy into its place. A move that fails puts back what moved before it.
+
+
 fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result<()> {
     std::fs::rename(live, replaced)?;
     for suffix in ["-wal", "-shm"] {
@@ -1284,7 +1284,7 @@ fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result
     Ok(())
 }
 
-/// Puts the database `swap_database` moved to `replaced` back in place.
+
 fn restore_database(live: &Path, replaced: &Path) -> std::io::Result<()> {
     for suffix in ["-wal", "-shm"] {
         let from = database_sidecar(replaced, suffix);
@@ -1297,8 +1297,8 @@ fn restore_database(live: &Path, replaced: &Path) -> std::io::Result<()> {
     std::fs::rename(replaced, live)
 }
 
-/// `konae.json` and the record as they were before a release, to put back
-/// when the release fails after writing them.
+
+
 struct Recorded(Vec<(PathBuf, Option<Vec<u8>>)>);
 
 impl Recorded {
@@ -1324,7 +1324,7 @@ impl Recorded {
     }
 }
 
-/// The release steps a test makes fail, by app.
+
 #[cfg(test)]
 static FAILING_RELEASE_STEPS: std::sync::Mutex<Vec<(String, &'static str)>> = std::sync::Mutex::new(Vec::new());
 
@@ -1409,7 +1409,7 @@ pub async fn invoke_action(
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only after the call {call} answers."));
     }
     // A scheduled mutation with no route belongs to the Kernel's timer
-    // (ADR-0011).
+
     if action.schedule.is_some() && action.http.is_none() {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only on its schedule."));
     }
@@ -1420,7 +1420,7 @@ pub async fn invoke_action(
     if action.access == "granted" {
         return error(StatusCode::FORBIDDEN, "action-grant-required");
     }
-    // Private apps need a session even for anonymous actions, like their shell.
+
     if (action.access != "anonymous" || is_private(&deployment)) && actor.is_none() {
         return error(StatusCode::UNAUTHORIZED, "authentication-required");
     }
@@ -1432,7 +1432,7 @@ pub async fn invoke_action(
         Ok(value) => value,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
     };
-    // A call is queued for the Kernel's worker and answered with its ID.
+
     if action.kind == "call" {
         let response = calls::enqueue(&state, &deployment, &name, &input).await;
         if response.status().is_success() && !enter::entered(actor.as_ref()) {
@@ -1444,8 +1444,8 @@ pub async fn invoke_action(
     }
     let db_path = crate::layout::database(&state
         .data_root, &deployment.id);
-    // A signal action runs no SQL. The Signal is queued for the Usage store and
-    // the answer does not wait for the write.
+
+
     let result = if action.kind == "signal" {
         Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
     } else {
@@ -1456,7 +1456,7 @@ pub async fn invoke_action(
         }
     };
     let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
-    // Usage and Signals do not count what someone who entered as this account does.
+
     let counted = !enter::entered(actor.as_ref());
     match result {
         Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
@@ -1511,8 +1511,8 @@ pub async fn session(State(state): State<AppState>, headers: HeaderMap) -> Respo
 #[derive(Deserialize)]
 pub struct AuthInput {
     pub email: String,
-    /// Not read by a signup that requires verification: the person chooses
-    /// the password when they answer the link.
+
+
     #[serde(default)]
     pub password: String,
 }
@@ -1576,8 +1576,8 @@ pub async fn auth_request(
         };
     }
     if signup {
-        // Check the input first and give closed and unlisted the same answer,
-        // so a signup attempt does not reveal who is on the allowlist.
+
+
         if let Err(error_value) = auth::normalize_email(&input.email)
             .and_then(|_| auth::validate_password(&input.password))
         {
@@ -1587,9 +1587,9 @@ pub async fn auth_request(
             return error(StatusCode::FORBIDDEN, SIGNUP_REFUSED);
         }
     }
-    // The identity lock covers only SQLite reads and writes. The password
-    // hash runs between them without it, so slow hashes never queue other
-    // logins, logouts or releases behind them.
+
+
+
     let identity = format!("identity:{}", deployment.id);
     let (email, password) = (input.email, input.password);
     let failed_email = email.clone();
@@ -1598,8 +1598,8 @@ pub async fn auth_request(
         match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
             Ok(account) => {
                 let _identity_guard = database_lock(state, &identity).await;
-                // The policy may have changed during the hash. Check the
-                // current one under the identity lock before creating the account.
+
+
                 let allowed = state
                     .deployments
                     .read()
@@ -1648,8 +1648,8 @@ pub async fn auth_request(
             let cookie_name = app_cookie_name(state, &deployment.id, headers);
             accounts::app_session_response(&cookie_name, session)
         }
-        // The password matched, so naming a waiting invitation reveals
-        // nothing to someone who only knows the email.
+
+
         Err(AuthError::AccountPending) => {
             let invited = accounts::invitation_pending(state, &deployment, &failed_email).await;
             error(StatusCode::FORBIDDEN, &accounts::pending_message(state, invited))
@@ -2031,8 +2031,8 @@ pub async fn file_response(state: &AppState, deployment: &str, metadata: &Value,
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
     let Some(id) = metadata["id"].as_str() else { return not_found() };
     let size = metadata["size"].as_u64().unwrap_or(0);
-    // The bytes of a file ID never change, so its tag needs no read of the
-    // store, and a browser that holds them gets 304 without one.
+
+
     let Ok(etag) = HeaderValue::from_str(&format!("\"{id}-{size}\"")) else { return not_found() };
     if if_none_match(headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
@@ -2108,7 +2108,7 @@ pub async fn file_response(state: &AppState, deployment: &str, metadata: &Value,
 /// right answers 404 at once. No shared cache keeps them.
 pub const FILE_CACHE_CONTROL: &str = "private, no-cache";
 
-/// Whether `If-None-Match` names `etag`, weakly compared as RFC 9110 asks.
+
 fn if_none_match(headers: &HeaderMap, etag: &HeaderValue) -> bool {
     let Some(value) = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok()) else { return false };
     let Ok(etag) = etag.to_str() else { return false };
@@ -2168,10 +2168,10 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
     let seo_on = modules::is_on(&deployment.modules, "seo");
     let address = seo_on.then(|| seo::address(&state, &deployment));
     let cache = ArtifactCache::of(&deployment);
-    // A publish writes a new artifact version, so within one version an address
-    // always resolves to the same bytes. An asset the browser already holds is
-    // answered before the artifact is read. A navigation still resolves its file
-    // so the page view counts by the file served.
+
+
+
+
     let navigation = headers
         .get("sec-fetch-dest")
         .and_then(|value| value.to_str().ok())
@@ -2203,8 +2203,8 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
             return cache.respond(&headers, bytes, &candidate);
         }
     }
-    // A browser asks for /favicon.ico on every first visit. An app without one answers
-    // with nothing instead of a 404 that every visitor's console reports as an error.
+
+
     if path == "favicon.ico" {
         return StatusCode::NO_CONTENT.into_response();
     }
@@ -2263,8 +2263,8 @@ pub async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str
 }
 
 pub fn private_login_page(policy: &SignupPolicy, verification: auth::Verification, google: bool) -> Response {
-    // With verification required, signup takes only the email: the password
-    // is chosen on the page the emailed link opens.
+
+
     let verified = verification == auth::Verification::Required;
     let (note, create) = match policy.mode {
         SignupMode::Open if verified => (
@@ -2480,7 +2480,7 @@ pub fn database_path(state: &AppState, id: &str) -> PathBuf {
 /// callers that pass many distinct names cannot grow the map.
 pub type LockMap = Arc<std::sync::Mutex<HashMap<String, Arc<RwLock<()>>>>>;
 
-/// The guard is kept only so that dropping it releases the lock.
+
 #[allow(dead_code)]
 pub enum Held {
     Shared(OwnedRwLockReadGuard<()>),
@@ -2499,12 +2499,12 @@ pub struct NamedLockGuard {
 impl Drop for NamedLockGuard {
     fn drop(&mut self) {
         let mut locks = self.locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Release while holding the map lock, so no caller can insert a fresh
-        // lock for this name while the old one is still held.
+
+
         self.guard.take();
         let entry = self.entry.take();
-        // The map and this guard's handle are the only owners left when
-        // nobody else holds or waits for the name.
+
+
         if entry.is_some_and(|entry| Arc::strong_count(&entry) == 2) {
             locks.remove(&self.name);
         }
@@ -2519,8 +2519,8 @@ pub async fn named_lock(state: &AppState, name: &str, alone: bool) -> NamedLockG
             .or_insert_with(|| Arc::new(RwLock::new(())))
             .clone()
     };
-    // Built before waiting, so a caller cancelled while waiting still removes
-    // the entry it may have created.
+
+
     let mut held = NamedLockGuard {
         guard: None,
         entry: Some(entry.clone()),
@@ -2539,8 +2539,8 @@ pub async fn named_lock(state: &AppState, name: &str, alone: bool) -> NamedLockG
 /// no one else holds the name, until the guard drops.
 pub async fn database_lock(state: &AppState, id: &str) -> NamedLockGuard {
     let held = named_lock(state, id, true).await;
-    // What runs under this lock may copy, replace or remove the file, so
-    // no connection kept for a Server Action outlives it.
+
+
     app_db::forget(&database_path(state, id));
     held
 }
@@ -2906,7 +2906,7 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
     if backup_id.is_empty() || backup_id.contains('/') || backup_id.contains("..") {
         anyhow::bail!("Invalid backup ID.");
     }
-    // The metadata file proves the backup exists before anything changes.
+
     let record: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
     if !record.holds.is_empty() {
         let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().context("Deployment not found.")?;
@@ -2997,8 +2997,8 @@ pub fn run_query(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) 
 pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue>) -> Result<Ran> {
     let mut connection = app_db::open(path)?;
     let transaction = connection.transaction()?;
-    // A notice that lists or addresses rows reads them back with a RETURNING
-    // clause the Kernel appends; the author's statement cannot hold one.
+
+
     let columns = action.notify.as_ref().map(|_| notify::returning("", action)).unwrap_or_default();
     let mut rows = Vec::new();
     let mut budget = ResultBudget::default();
@@ -3008,8 +3008,8 @@ pub fn run_mutation(path: &Path, action: &ActionDefinition, params: Vec<SqlValue
         let mut statement = transaction.prepare_cached(&notify::with_returning(&action.statement, &columns))?;
         let mut cursor = statement.query(params_from_iter(params))?;
         let mut serialized_bytes = 2usize;
-        // SQLite makes every change on the first step, so the rows past the
-        // cap are skipped, not left unchanged.
+
+
         while let Some(row) = cursor.next()? {
             if rows.len() < notify::MAX_RETURNED_ROWS {
                 let mut object = serde_json::Map::new();
@@ -3092,13 +3092,13 @@ pub fn resolve_bindings(
                         .as_str()
                         .filter(|value| !value.trim().is_empty())
                         .ok_or_else(|| format!("{key} must be a non-empty string."))?;
-                    // Count UTF-16 code units so the limit matches the browser's String.length.
+
                     if text.encode_utf16().count() > binding.max_length.unwrap_or(10_000) {
                         return Err(format!("{key} is too long."));
                     }
                     Ok(SqlValue::Text(text.to_owned()))
                 } else if binding.value_type.as_deref() == Some("number") {
-                    // Integers bind as INTEGER like sql.js, so a TEXT column stores "5", not "5.0".
+
                     value
                         .as_i64()
                         .map(SqlValue::Integer)
@@ -3717,7 +3717,7 @@ pub async fn deployment_for_host(state: &AppState, headers: &HeaderMap) -> Optio
     if let Some(deployment) = deployments.get(host) {
         return Some(deployment.clone());
     }
-    // A verified custom domain answers as the Deployment's own host.
+
     let id = domain::serving(state, host)?;
     deployments.values().find(|deployment| deployment.id == id).cloned()
 }
@@ -3755,8 +3755,8 @@ pub async fn set_signup_policy(state: &AppState, id: &str, mode: SignupMode, ent
     let current = served(&*state.deployments.read().await)?;
     let entries = entries.unwrap_or_else(|| current.signup_policy.allowlist.clone());
     let policy = SignupPolicy::from_input(mode, &entries).map_err(anyhow::Error::msg)?;
-    // Releases hold the same lock, so a publish cannot overwrite this change
-    // with the policy it read before.
+
+
     let _guard = database_lock(state, &format!("project:{}", current.project_id)).await;
     let mut updated = served(&*state.deployments.read().await)?;
     let previous = updated.signup_policy.mode;
@@ -3878,23 +3878,23 @@ pub fn denied_function(name: &str) -> bool {
 }
 
 pub fn restrict_database(db: &Connection) -> Result<()> {
-    // Readers share a Database with its one writer (`action_lock`), so a
-    // connection waits for a lock instead of failing on the first try.
+
+
     db.busy_timeout(std::time::Duration::from_secs(5))?;
-    // In WAL mode a reader never waits for the writer, and a commit appends
-    // to the log instead of rewriting a journal. NORMAL syncs at checkpoints,
-    // not at every commit: a Kernel that crashes loses nothing, and a host
-    // that loses power can lose the last commits but never corrupts the file.
+
+
+
+
     db.pragma_update(None, "synchronous", "NORMAL")?;
     use_wal(db);
-    // Runs before the authorizer below, which refuses this pragma.
+
     limit_database_size(db, MAX_APP_DATABASE_BYTES)?;
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_SQL_LENGTH, 100_000)?;
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_ATTACHED, 0)?;
-    // LIKE and GLOB compare a value against the pattern inside one step, so
-    // the deadline below cannot stop them; a short pattern keeps that step
-    // short. SQLite's default is 50,000 bytes.
+
+
+
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LIKE_PATTERN_LENGTH, MAX_LIKE_PATTERN_BYTES)?;
     arm_deadline(db);
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
@@ -5030,7 +5030,7 @@ pub mod tests {
 
     /// ADR-0012: a notice that lists or addresses rows reads them back
     /// through the Kernel's RETURNING clause; the answer stays changes and
-    /// lastInsertId.
+
     #[test]
     fn a_mutation_reads_back_its_changed_rows_for_the_notice_only() {
         let program: ActionProgram = serde_json::from_value(json!({"version": 1, "actions": {
@@ -5061,7 +5061,7 @@ pub mod tests {
     fn string_max_length_counts_utf16_code_units() {
         let two = action("mutation", "SELECT ?", vec![input_binding("title", "string", Some(2))]);
         let one = action("mutation", "SELECT ?", vec![input_binding("title", "string", Some(1))]);
-        // One emoji is 4 UTF-8 bytes and 2 UTF-16 code units, like "\u{1F600}".length in a browser.
+
         let emoji = json!({"title": "\u{1F600}"});
         assert!(resolve_bindings(&two, &emoji, None).is_ok());
         assert!(resolve_bindings(&one, &emoji, None).unwrap_err().contains("too long"));
@@ -5136,7 +5136,7 @@ pub mod tests {
         assert_eq!(get("index.html", &navigation).await.status(), StatusCode::OK);
         assert_eq!(get("about", &navigation).await.status(), StatusCode::OK);
         assert_eq!(get("about", &navigation).await.status(), StatusCode::OK);
-        // None of these is a person opening a page.
+
         get("index.html", &[]).await;
         get("index.html", &[("sec-fetch-dest", "script")]).await;
         get("app.js", &navigation).await;
@@ -5150,8 +5150,8 @@ pub mod tests {
             json!({"kind": "page_view", "name": "about.html", "count": 2}),
             json!({"kind": "page_view", "name": "index.html", "count": 1}),
         ]);
-        // A single-page app answers every address with index.html. A deep link
-        // counts as its first load; a missing chunk the page asks for does not.
+
+
         for deployment in state.deployments.write().await.values_mut() {
             deployment.manifest["routing"] = json!("spa");
         }
@@ -5509,7 +5509,7 @@ pub mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Release folders beside `dist/` that a publish left behind.
+
     fn staged_or_retired(root: &Path, id: &str) -> Vec<String> {
         std::fs::read_dir(layout::private(root, id))
             .unwrap()
@@ -5518,7 +5518,7 @@ pub mod tests {
             .collect()
     }
 
-    /// A release body for `id` with these tables and actions and one page.
+
     fn release_body(id: &str, schema: &str, actions: Value, page: &str, confirmation: Option<String>) -> Value {
         json!({
             "project": {
@@ -5625,7 +5625,7 @@ pub mod tests {
             let first_actions = std::fs::read(app.join("actions.json")).unwrap();
             assert!(!crate::layout::private(&root, &id).join("sources.json").exists());
 
-            // The next release drops tags, confirmed as release_plan would confirm it.
+
             let mut second = release_body(&id, notes_only, json!({"notes.list": list("notes", "body")}), "<p>two</p>", None);
             let input: DeployInput = serde_json::from_value(second.clone()).unwrap();
             let confirmation = runtime::validate_release(&state, &input, None).await.unwrap().confirmation();
@@ -5885,8 +5885,8 @@ pub mod tests {
         (value, COLUMNS_CONVERTED.with(|count| count.get()))
     }
 
-    /// K-03. Three 700,000 byte blobs cost 4.2 MB as hex. The result is
-    /// refused when the second column passes 2 MiB, and the third is not read.
+
+
     const THREE_BLOBS: &str = "SELECT zeroblob(700000) a, zeroblob(700000) b, zeroblob(700000) c";
 
     #[test]
@@ -6002,8 +6002,8 @@ pub mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// K-04. One Deployment may run four statements at once; the others wait
-    /// two seconds and are refused as a client over its rate limit is.
+
+
     async fn statement_cap_state(root: &Path) -> (AppState, HeaderMap, String) {
         let (mut state, headers) = login_test_state(root, "public").await;
         let program = json!({"version": 1, "actions": {

@@ -44,22 +44,18 @@ type EmbeddedResources = { templates: string; runtime: string; staticArtifact: s
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
-/** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
-/** What a publish sends. `contactEmail` is where notices to the owner go, from konae.json. */
+
+
 type Config = { url?: string; project: Project; contactEmail?: string; modules?: AppSettings["modules"] };
 type SignupMode = "open" | "invitation" | "closed" | "allowlist";
 export type SignupPolicy = { mode: SignupMode; allowlist: string[] };
 
 const SIGNUP_MODES: readonly SignupMode[] = ["open", "invitation", "closed", "allowlist"];
 const MODE_LABELS: Record<SignupMode, string> = { open: "Open", invitation: "Invitation only", closed: "Closed", allowlist: "Allowlist" };
-/** What `init` writes: a private app that admits the people its owner invites. */
+
 export const INIT_SIGNUP_POLICY = { mode: "invitation" } as const;
 
-/**
- * `project.manifest.signupPolicy` in konae.json: who may create an app
- * account when the first release goes out. Checked before anything is sent;
- * the Kernel checks the allowlist entries again.
- */
+
 export function manifestSignupPolicy(manifest: Record<string, unknown>): SignupPolicy | undefined {
   const value = manifest.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
   if (value === undefined) return undefined;
@@ -88,33 +84,29 @@ export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy)
   return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.`;
 }
 
-/**
- * The scopes `login` asks for: read, write and publish always, and each
- * permission a flag names. A delegated token cannot widen itself later, so
- * the flags are the only way the CLI gets them.
- */
+
 export function loginScopes(args: string[]) {
   return ["read", "write", "publish",
     ...(args.includes("--manage-users") ? ["manage_users"] : []),
     ...(args.includes("--export-data") ? ["export_data"] : [])];
 }
 
-/** The templates `init --template` takes: the ids of src/lib/templates, which the editor's new-project dialog and project_create offer too. */
+
 export const INIT_TEMPLATES = ["tasks", "notes", "members", "form", "webhook", "digest", "gallery"] as const;
 
-/** Where a running `dev` leaves the address of its events page for `events`. */
+
 const DEV_SESSION = ".konae/dev.json";
 
-/** What publish, pull and export say when nothing names the installation. */
+
 export const NO_INSTALLATION = "No installation to talk to. Pass --url <installation URL>, or run login in this folder, which saves the one it signed in to. login --browser signs in through the browser without a password.";
 
-/** What domain says when neither --deployment nor a --dir with konae.json names the Deployment. */
+
 export const DOMAIN_NEEDS_DEPLOYMENT = "Name the Deployment with --deployment <id>, or with --dir <folder> whose konae.json carries its id. project_inspect shows the ID.";
 
-/** The commands of the server binary `konae` (kernel-rs/konae), which this CLI does not run. */
+
 export const SERVER_COMMANDS = ["owner-code-create", "owner-code-list", "owner-code-revoke", "owner-account-suspend", "owner-account-resume", "restore", "reconcile", "files-migrate", "files-reconcile"];
 
-/** What the CLI answers when a server command is typed here. */
+
 export function serverCommandMessage(command: string) {
   return `${command} is a command of the konae server binary, not of this CLI. Run KONAE_DATA_DIR=data/kernel-local kernel-rs/target/debug/konae ${command} for bun run dev:local, or docker compose exec --user konae kernel konae ${command} under Compose.`;
 }
@@ -232,20 +224,16 @@ http://app.localhost:8080 under Compose.`;
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
-/** What login says when the account it created waits for its emailed link. */
+
 export const VERIFY_BY_LINK = "This installation verifies email, so the account waits for the link sent to your address. Open it, choose KONAE_PASSWORD as the password, then run login again with the same KONAE_EMAIL and KONAE_PASSWORD and without the code or key, which are used now. On a Kernel on this machine, run login with --verify-from <its data folder>/mailbox.jsonl to do both in one step.";
 
-/** Whether a Kernel URL names this machine, the only place a development mailbox can be read. */
+
 export function isLoopbackUrl(url: string) {
   const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
   return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
 }
 
-/**
- * The newest owner verification token for `email` among the development
- * mailbox's lines past the first `seen`. Lines for app accounts, other
- * addresses and other purposes are skipped.
- */
+
 export function creatorVerificationToken(mailbox: string, email: string, seen = 0): string | undefined {
   const lines = mailbox.split("\n").filter(Boolean).slice(seen);
   const message = lines.map((line) => { try { return JSON.parse(line) as { to?: string; scope?: string; purpose?: string; link?: string }; } catch { return {}; } })
@@ -258,7 +246,7 @@ async function mailboxLines(file: string) {
   return (await readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
 }
 
-/** Polls the development mailbox every 200 ms for up to `seconds` until `pick` finds what it waits for. */
+
 export async function waitForMailbox<T>(file: string, pick: (mailbox: string) => T | undefined, seconds = 15): Promise<T | undefined> {
   for (const deadline = Date.now() + seconds * 1000; Date.now() < deadline; await Bun.sleep(200)) {
     const found = pick(await readFile(file, "utf8").catch(() => ""));
@@ -266,7 +254,7 @@ export async function waitForMailbox<T>(file: string, pick: (mailbox: string) =>
   }
 }
 
-/** Waits for the Kernel's mail worker to write the link, then answers it with the password. */
+
 async function verifyFromMailbox(url: string, file: string, email: string, password: string, seen: number) {
   const token = await waitForMailbox(file, (mailbox) => creatorVerificationToken(mailbox, email, seen));
   if (token) return fetch(new URL("/_konae/owner/verify", url), {
@@ -745,7 +733,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   return Object.assign(receipt, { first });
 }
 
-/** What a first publish prints before the release fixes the app's generated address. */
+
 export const firstReleaseAddress = (url: string, id: string) =>
   `This first release names the app ${url}, and every later release keeps that name. To use another name under the same suffix, run konae hostname --deployment ${id} --set <name> before you register Google sign-in or share links.`;
 
@@ -1054,12 +1042,12 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
     KONAE_EXECUTION_MODE: "test",
-    // Account links and notices land in a file on this machine, never a provider.
+
     KONAE_MAIL_TRANSPORT: "development",
-    // The per-file limit is the Kernel's own, so a file refused here is refused on a Deployment. KONAE_FILE_MAX_BYTES raises it.
+
     KONAE_FILES_QUOTA_BYTES: process.env.KONAE_FILES_QUOTA_BYTES || LOCAL_FILES_QUOTA,
     ...(process.env.KONAE_FILE_MAX_BYTES ? { KONAE_FILE_MAX_BYTES: process.env.KONAE_FILE_MAX_BYTES } : {}),
-    // Shortens every schedule so a run can be watched; the Kernel takes it only on loopback.
+
     ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),
     ...(options.confirmSchema ? { KONAE_CONFIRM_SCHEMA: options.confirmSchema } : {}),
   };
@@ -1365,11 +1353,7 @@ export async function domainLocal(client: Pick<McpClient, "call">, deploymentId:
   ];
 }
 
-/**
- * The arguments `tool` sends: a JSON object, or {} when none is given.
- * `piped` is the one argument `--stdin <key>` reads from standard input,
- * without its final line break, as `kernel secret set` reads a value.
- */
+
 export function toolArguments(text?: string, piped?: { key: string; value: string }): Record<string, unknown> {
   let value: unknown = {};
   if (text !== undefined) {

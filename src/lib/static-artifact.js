@@ -1,36 +1,29 @@
-// The static publishing contract: which Capsule files become a Build Artifact
-// and at which path each one is served. The CLI (`konae build`), the
-// editor's browser build and an app folder's scripts/build.mjs all run this
-// file, so it is plain JavaScript with no imports. Each door supplies how to
-// read a file and how to bundle a module; the rules below are the same for all.
-//
-// Pages are every .html at the Capsule root and every .html under pages/, which
-// is served without its pages/ prefix. Files under public/ are served as they
-// are, without the public/ prefix. Every other file ships only when a page, or
-// a stylesheet a page loads, references it. A page that is a fragment runs in
-// the Capsule document with styles.css and the bundled app inline. A page that
-// is a full document keeps its own head and loads the SDK through a loader that
-// writes its script tag under the page's base path.
 
-/** The attribute that marks the SDK script, so tools that rebuild a document can find it. */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export const runtimeScriptAttribute = "data-konae-runtime";
 
-/** The SDK file a document page loads. The build adds it; a Capsule cannot hold its own. */
+
 export const runtimeFile = "runtime.js";
-/** Source metadata stays in app/ and never enters a Build Artifact. */
+
 export const sourceOnlyFiles = ["schema-transforms.json"];
 
-/**
- * The rule that finds the base path of a path address: /p/<id-or-name> and
- * everything under it. The Kernel strips that prefix before routing, so the
- * SDK and the inline pages build their Kernel URLs with it. Keep this text
- * in step with src/mcp/runtime.js, runtimeLoaderScript below and the inline
- * page in kernel-rs/kernel/src/accounts.rs. The tests
- * check that each of them carries it.
- */
+
 export const pathPrefixPattern = /^\/p\/([^\/]+)(\/|$)/;
 
-/** The base path of a pathname: /p/<segment> on a path address, empty at the home or on a generated hostname. */
+
 export function basePath(pathname) {
   const match = pathPrefixPattern.exec(pathname);
   return match ? `/p/${match[1]}` : "";
@@ -275,7 +268,7 @@ export async function assembleStaticArtifact(input) {
 
 /**
  * Drops the comment esbuild writes above each module it bundles, such as
- * `// app.js` or `/* lib/b.css *\/`. The name is relative to the folder the
+ * `
  * builder ran in, so it would ship the builder's directory layout to every
  * visitor and make two builds of one Capsule from two folders differ. Only a
  * line that names a file the Capsule holds is dropped, with the `konae:`
@@ -291,10 +284,7 @@ function withoutModulePaths(output, held) {
   return { ...output, script: stripModulePaths(output.script, held), styles: output.styles && stripModulePaths(output.styles, held) };
 }
 
-/**
- * The served path a reference names, or null when it is not a Capsule file:
- * another origin, a fragment, a data URL or a Kernel path under /_konae.
- */
+
 export function resolveReference(raw, from) {
   const value = raw.trim();
   if (!value || value.startsWith("#") || value.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
@@ -364,7 +354,7 @@ export function scanCss(css, from, reference) {
 
 /**
  * True for a URL that starts at the origin root: `/about`, `/`, `/?q=1`,
- * `/_konae/...`. A protocol-relative `//host` is not, and neither is the
+ * `/_konae/...`. A protocol-relative `
  * SDK file the build supplies. On a path address such a URL leaves the app's
  * prefix, so the build and the Validation Gate warn about it.
  */
@@ -439,7 +429,7 @@ function verbFor(tag, attribute) {
   return "loads";
 }
 
-/** Calls `visit(raw, tag, attribute, rels)` for each URL-bearing attribute and each url() or @import in a page's markup and styles. */
+
 function walkHtml(html, from, visit) {
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   const tags = /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g;
