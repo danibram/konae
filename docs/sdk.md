@@ -277,7 +277,7 @@ Limits:
 
 Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or on konae dev. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.
 
-### undefined (`page`)
+### Page address values (`page`)
 
 Values from the page address. The Kernel fills params when a declared page path answers.
 

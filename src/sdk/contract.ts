@@ -375,6 +375,7 @@ export const sdkContract = {
     },
     {
       name: "page",
+      title: "Page address values",
       summary: "Values from the page address. The Kernel fills params when a declared page path answers.",
       switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
       declarations: [],

@@ -54,7 +54,7 @@ describe("the SDK contract", () => {
       ],
     });
     expect(seo?.uses).toBeDefined();
-    expect(sdkContract.modules.map((module) => module.title)).toEqual(["Accounts", "App actions", "File storage", "Calls to other services", "HTTP routes", "Search listing"]);
+    expect(sdkContract.modules.map((module) => module.title)).toEqual(["Accounts", "App actions", "Page address values", "File storage", "Calls to other services", "HTTP routes", "Search listing"]);
     expect(seo?.options[0].valueLabels).toEqual({ domain: "Custom domain", hostname: "Generated hostname", path: "Path address" });
     expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["files", "seo"]);
     const files = sdkContract.modules.find((module) => module.name === "files");
