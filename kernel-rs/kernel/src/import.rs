@@ -1,26 +1,3 @@
-//! Import into an existing app, and the backup that comes before it
-//! (ADR-0008).
-//!
-//! An import replaces the app's sources, its data or both, as whoever
-//! manages it chooses. It never merges rows. First it writes a backup of
-//! what it replaces into the app's backups, where the Data panel lists it
-//! beside the database backups and `restore-backup` brings it back.
-//!
-//! The data arrives as the components of an export. They are staged beside
-//! the app and put in place under the app's data and identity locks:
-//!
-//! - `database.sqlite` takes the schema the app will run: the release's when
-//!   the sources change too, else the one the live database has now. A
-//!   change that loses data needs the confirmation of its plan.
-//! - `identity.sqlite` keeps the live app's sessions and API keys, so
-//!   people stay signed in and keys keep working, as after a restore.
-//!   Sessions of accounts the new data does not hold end.
-//! - `files/` takes the new index, and the store keeps only the files it names.
-//! - `usage.sqlite` is replaced, or removed when the export had none.
-//!
-//! The sources travel as a release, which the caller applies after the data
-//! is in place. A backup keeps the editor's saved sources of `app/` too, so a
-//! restore gives the editor its files back; the owner publishes them again.
 
 use std::path::{Path, PathBuf};
 
@@ -36,7 +13,6 @@ use super::*;
 pub const HOLDS_DATA: &str = "data";
 pub const HOLDS_SOURCES: &str = "sources";
 
-/// Free space kept on the volume after a backup or an import.
 const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 const SOURCES_FILE: &str = "sources.json";
 
@@ -90,13 +66,10 @@ fn read_optional_transform_document(path: &Path) -> Result<Option<String>> {
 
 /// What an import did, or the plan it needs confirmed before it does anything.
 pub enum Outcome {
-    /// The schema change loses data and the confirmation does not match its
-    /// plan. Nothing changed and no backup was written.
     NeedsConfirmation(Change),
     Imported { backup: Value, change: Change },
 }
 
-/// The data an import or a restore puts in place, one file per component.
 struct Incoming {
     database: PathBuf,
     identity: Option<PathBuf>,
@@ -126,8 +99,6 @@ pub fn live_schema(path: &Path) -> Result<String> {
     let mut schema = String::new();
     for sql in rows {
         let sql = sql?;
-        // SQLite keeps each statement as it was written, so only its opening
-        // keywords change to make the text safe to run twice.
         let created = ["CREATE TABLE", "CREATE UNIQUE INDEX", "CREATE INDEX"].iter().find_map(|keyword| {
             let head = sql.get(..keyword.len()).filter(|head| head.eq_ignore_ascii_case(keyword))?;
             let rest = &sql[head.len()..];
@@ -149,7 +120,6 @@ fn remove_database(path: &Path) {
     }
 }
 
-/// The change `target` makes to a copy of the database at `database`.
 fn plan(state: &AppState, database: &Path, target: &Target) -> Result<Change> {
     let scratch = state.data_root.join("transfers").join(format!(".import-plan-{}.sqlite", Uuid::new_v4()));
     std::fs::create_dir_all(state.data_root.join("transfers"))?;
@@ -257,8 +227,6 @@ pub async fn backup_sources(state: &AppState, deployment: &Deployment) -> Result
     backup_held(state, deployment, "Before import", &[HOLDS_SOURCES]).await
 }
 
-/// Writes a backup of the parts `holds` names into the app's backups. The
-/// caller holds the project and data locks; this takes the identity lock.
 async fn backup_held(state: &AppState, deployment: &Deployment, label: &str, holds: &[&str]) -> Result<Value> {
     let id = Uuid::new_v4().to_string();
     let backups = layout::backups(&state.data_root, &deployment.id);
@@ -344,9 +312,6 @@ pub async fn restore_held(state: &AppState, deployment: &Deployment, record: &Da
     Ok(json!({"id": record.id, "holds": record.holds, "before": before}))
 }
 
-/// Stages `incoming`, brings its database to `schema` when one is given,
-/// and puts it in place of the app's data. The caller holds the project and
-/// data locks; this takes the identity lock for the swap.
 async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incoming, schema: Option<(&Target, Option<&str>)>) -> Result<Change> {
     let stage = state.data_root.join("transfers").join(format!(".import-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&stage).await?;
@@ -413,12 +378,6 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
     result
 }
 
-/// Copies the live app's sessions and API keys into the incoming identity
-/// file, in place of whatever it carries. A session whose account the
-/// incoming file lacks is dropped. Open email links and entry links of the
-/// incoming file go, since they were issued elsewhere. The incoming file's
-/// own key table goes too: the file ends with the Kernel's table, which holds
-/// only the live app's keys.
 fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
     let connection = Connection::open(incoming)?;
     connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON;")?;
@@ -426,9 +385,6 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
         connection.execute(&format!("DELETE FROM \"{table}\""), [])?;
     }
     super::invitations::forget_tokens(&connection)?;
-    // The key table comes from the Kernel's own DDL, never from text in a file.
-    // It is made before the attach, because `IF NOT EXISTS` also looks at the
-    // attached database's tables.
     connection.execute_batch("DROP TABLE IF EXISTS main.api_keys")?;
     super::http::keys_table(&connection)?;
     if !live.exists() {
@@ -443,14 +399,11 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
         [],
     )?;
     if live_has_keys {
-        // The schema goes in as the pragma's argument, because a `main.` prefix
-        // on the function still reads the attached database's table.
         let live_keys = {
             let mut statement = connection.prepare("SELECT name FROM pragma_table_info('api_keys', 'live')")?;
             let names = statement.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             names
         };
-        // Only the Kernel's own column names reach SQL, never a name from a file.
         let shared = super::http::API_KEY_COLUMNS
             .iter()
             .filter(|name| live_keys.iter().any(|live| live.eq_ignore_ascii_case(name)))
@@ -463,7 +416,6 @@ fn carry_access(incoming: &Path, live: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes from the store every file of the app that its index does not name.
 async fn forget_unlisted(state: &AppState, deployment: &Deployment) -> Result<()> {
     let listed: std::collections::HashSet<String> = file_store::indexed_files(&state.data_root, &deployment.id)
         .await?
@@ -573,7 +525,6 @@ mod tests {
             super::super::http::keys_table(&db).unwrap();
             db.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
         }
-        // The incoming file is an export of the same app: Ana is there, Bo is not, and its key arrived revoked.
         let incoming_path = root.join("incoming.sqlite");
         let incoming = AuthService::open(&incoming_path).unwrap();
         incoming
@@ -621,7 +572,6 @@ mod tests {
             let db = Connection::open(&live_path).unwrap();
             super::super::http::keys_table(&db).unwrap();
             db.execute_batch("INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES('k1', 'h1', 'live key', '[]', '[]', 1);").unwrap();
-            // An earlier import installed this file byte for byte, so its schema text is the uploader's.
             let evil = format!("; ATTACH DATABASE '{}' AS o; UPDATE o.t SET v = 'changed'", victim.display());
             db.execute_batch("PRAGMA writable_schema=ON;").unwrap();
             db.execute("UPDATE sqlite_master SET sql = sql || ?1 WHERE type='table' AND name='api_keys'", [evil]).unwrap();

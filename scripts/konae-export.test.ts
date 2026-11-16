@@ -10,7 +10,6 @@ const settings = {
   signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: "0.1.0", manifest: { version: 1 },
 };
 
-/** An app folder with konae.json and app/, as init writes it. */
 async function appFolder(prefix: string) {
   const root = await mkdtemp(path.join(tmpdir(), prefix));
   await mkdir(path.join(root, "app"));
@@ -52,7 +51,6 @@ test("export writes the app folder offline: settings, sources, dist and the gene
   }
 }, 30_000);
 
-/** A Kernel stand-in that answers project_export with one database and the folder download. */
 async function exportServer(refuse = false) {
   const database = new TextEncoder().encode("SQLite snapshot");
   const filesTar = createTar([{ path: "index.json", contents: "[]" }]);
@@ -91,7 +89,6 @@ test("export --with-data writes the published app's data into data/ and releases
     expect(await exportLocal(root, output, { url: `http://127.0.0.1:${server.port}`, token: "owner-token" })).toEqual({ output, data: true });
     expect(new Uint8Array(await readFile(path.join(output, "data/database.sqlite")))).toEqual(database);
     expect(await readFile(path.join(output, "data/files/index.json"), "utf8")).toBe("[]");
-    // The two data downloads and the folder download are each released.
     expect(calls.filter((call) => call === "transfer_cancel").length).toBeGreaterThanOrEqual(3);
   } finally {
     server.stop(true);

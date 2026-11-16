@@ -1,28 +1,16 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 
 export type ModalDialog = {
-  /** Goes on the dialog element: the trap needs to know what is inside it. */
   ref: RefObject<HTMLElement | null>;
-  /** Goes on the same element, never on window: a dialog above this one keeps its own Escape. */
   onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
 };
 
 type Options = {
-  /** False while the dialog is mounted but not shown. A dialog that unmounts to close may omit it. */
   open?: boolean;
   onClose: () => void;
-  /** Where focus lands when it opens; the first focusable control otherwise. */
   initialFocus?: RefObject<HTMLElement | null>;
 };
 
-/**
- * The behaviour `aria-modal="true"` claims: focus moves into the dialog when it
- * opens, Escape closes it, Tab cannot leave it, and focus returns to whatever
- * opened it. Declaring the attribute without doing this leaves a keyboard user
- * operating the editor behind a backdrop that says it is unreachable — so the
- * behaviour lives here, once, rather than in each dialog that remembers to.
- */
-/** Open dialogs, newest last. Only the topmost one answers a key that reached the document. */
 const openDialogs: object[] = [];
 
 export function useModalDialog({ open = true, onClose, initialFocus }: Options): ModalDialog {
@@ -31,9 +19,6 @@ export function useModalDialog({ open = true, onClose, initialFocus }: Options):
   const close = useRef(onClose);
   close.current = onClose;
 
-  // Focus can still fall out of the dialog, for example when the focused
-  // control is removed or disabled. Escape and Tab then reach the document
-  // instead of the dialog, so the topmost dialog listens there too.
   useEffect(() => {
     if (!open) return;
     const token = {};
@@ -70,7 +55,6 @@ export function useModalDialog({ open = true, onClose, initialFocus }: Options):
     }
     restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     (initialFocus?.current ?? focusableElements(ref.current)[0] ?? ref.current)?.focus();
-    // Closing by unmounting has to give focus back too.
     return restoreFocus;
   }, [open, initialFocus]);
 

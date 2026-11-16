@@ -4,7 +4,6 @@ import path from "node:path";
 
 export const TEST_KERNEL_REQUIRED = "This Kernel does not support isolated local testing. Update the Kernel or set KONAE_KERNEL_BIN to a compatible binary before running dev. Local data was not imported.";
 
-/** Probes an empty directory because older binaries may start a server for an unknown command. */
 export async function requireTestKernel(binary: string, timeoutMs = 5000): Promise<{ executionTest: 1; schemaTransforms?: number }> {
   const directory = await mkdtemp(path.join(tmpdir(), "konae-capabilities-"));
   try {

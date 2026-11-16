@@ -1,10 +1,5 @@
 import type { AgentKeyStore, ProviderId } from "./contracts";
 
-/**
- * Provider keys live under their own localStorage namespace, separate from
- * `konae:projects` / `konae:deployments`, so no Project, Capsule file,
- * Deployment or export can carry one. Keys are never logged.
- */
 const keyNamespace = "konae:agent-key:";
 
 export type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -30,7 +25,6 @@ export function createAgentKeyStore(storage: KeyStorage = localStorage, ownerId?
   };
 }
 
-/** A store that holds nothing for tests and callers that do not persist keys. */
 export function emptyAgentKeyStore(): AgentKeyStore {
   return { getKey: () => null, setKey: () => {}, clearKey: () => {} };
 }

@@ -3,32 +3,17 @@ import { checkSources } from "./source-rules";
 export type ProjectTree = {
   files: Record<string, string>;
   directories: string[];
-  /** The files that are not text, as src/lib/source-files.ts describes. A move or a delete takes them along. */
   encodings?: Record<string, "base64">;
 };
 
-/**
- * Files every project has, which the editor never creates, renames, moves or
- * deletes as ordinary tree entries.
- */
 export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]);
 const reservedProjectPaths = new Set([...protectedProjectPaths, "schema-transforms.json"]);
 const optionalProtectedFiles = new Set(["schema-transforms.json"]);
 
-/**
- * The key two project paths share when a case-insensitive filesystem (the
- * default on macOS and Windows) would write them to the same place. An export
- * of `App.js` next to `app.js` keeps only one of them.
- */
 export function foldPath(path: string): string {
   return path.normalize("NFC").toLowerCase();
 }
 
-/**
- * The protected path that `path` is or would sit inside, or null. The match
- * ignores case: `App.js` or `SCHEMA.SQL` overwrites the real file once the
- * project is exported to a case-insensitive filesystem.
- */
 export function reservedPathConflict(path: string): string | null {
   const folded = foldPath(path);
   for (const reserved of reservedProjectPaths) {
@@ -37,7 +22,6 @@ export function reservedPathConflict(path: string): string | null {
   return null;
 }
 
-/** The existing file at `path`, compared without case, or null. */
 export function existingFile(files: Record<string, string>, path: string): string | null {
   const folded = foldPath(path);
   for (const name of Object.keys(files)) {
@@ -46,7 +30,6 @@ export function existingFile(files: Record<string, string>, path: string): strin
   return null;
 }
 
-/** The existing directory at `path`, compared without case, or null. */
 export function existingDirectory(directories: Iterable<string>, path: string): string | null {
   const folded = foldPath(path);
   for (const name of directories) {
@@ -60,7 +43,6 @@ export function requireUnreservedPath(path: string) {
   if (reserved) throw new Error(`${reserved} is a reserved project file. Choose another name.`);
 }
 
-/** Refuses a new path the sources cannot hold, such as .env or node_modules/x.js, with the sentence the save and the Kernel give. */
 export function requireHeldPath(path: string) {
   checkSources([[path, 0]]);
 }
@@ -74,12 +56,6 @@ export function normalizeProjectPath(input: string): string | null {
   return parts.join("/");
 }
 
-/**
- * The existing file that sits where one of `path`'s parent directories would
- * have to be, or null. A tree holding both `app.js` and `app.js/x.js` cannot be
- * written to disk, so the export and every builder would trip over it. Case is
- * ignored, for the reason `reservedPathConflict` gives.
- */
 export function fileAncestor(files: Record<string, string>, path: string): string | null {
   const parts = path.split("/");
   for (let index = 1; index < parts.length; index += 1) {

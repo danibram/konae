@@ -1,6 +1,3 @@
-// `konae pull` stages the published sources, artifact, settings and data in
-// .konae/pull. A clean source tree receives app/ and konae.json; `dev --reset`
-// imports the staged data, and push.ts sends local data/ back to the Deployment.
 import { cp, mkdir, mkdtemp, readFile, readdir, rename as fsRename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -15,21 +12,13 @@ import { sourceFilesFrom } from "../src/lib/source-files";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 
-/** Where the exported data sits in the app folder. .konae is already kept out of Git. */
 export const PULL_DIRECTORY = ".konae/pull";
 const RECORD = "pull.json";
 
-/** What pull.json holds: the export's manifest, the installation it came from and when. */
 export type Pulled = { manifest: PackageManifest; from: string; at: number; snapshotId?: string; dataOnly?: boolean; sourceBaseline?: { packageId: string; sourceDigest?: string; sourcesRevision?: number; capturedAt: number }; sourcesRevision?: number; sourceDigest?: string; sourcesInstalled?: boolean };
 
 export const NEEDS_EXPORT_DATA = "Downloading live data needs a credential with the export_data permission. Run login with --export-data, or create a token with export_data for this project.";
 
-/**
- * Exports the app with project_export and writes each data component into
- * `directory` under its file name, checked against the manifest's size and
- * SHA-256. Every download transfer is released, the folder download too,
- * whether it was read or not.
- */
 export async function downloadPackage(client: McpClient, deploymentId: string, directory: string, includeFolder = true) {
   let exported: { manifest: unknown; downloads: Record<string, Transfer>; folder?: Transfer };
   try {
@@ -60,10 +49,6 @@ export async function downloadPackage(client: McpClient, deploymentId: string, d
   }
 }
 
-/**
- * Exports the published app's data into the data/ of the app folder
- * `folder`, laid out as an export lays it out. Answers the export's manifest.
- */
 export async function downloadData(client: McpClient, deploymentId: string, folder: string) {
   const scratch = await mkdtemp(path.join(tmpdir(), "konae-data-"));
   try {
@@ -82,11 +67,6 @@ export async function downloadData(client: McpClient, deploymentId: string, fold
   }
 }
 
-/**
- * Exports the published app's data into .konae/pull/data. The download
- * lands in a folder beside it first, so a pull that fails keeps the data an
- * earlier pull left.
- */
 export async function pullLocal(root: string, client: McpClient, from: string, projectId: string, options: { rename?: typeof fsRename; dataOnly?: boolean } = {}): Promise<Pulled> {
   const operations = { rename: options.rename ?? fsRename };
   if (options.dataOnly) return pullDataOnly(root, client, from, projectId, operations);
@@ -220,7 +200,6 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
   }
 }
 
-/** Refreshes only the staged data while retaining staged sources and local source markers. */
 async function pullDataOnly(root: string, client: McpClient, from: string, projectId: string, operations: { rename: typeof fsRename }): Promise<Pulled> {
   const remote = await client.call<{ deployment?: { id: string } | null }>("project_inspect", { projectId });
   if (!remote.deployment) throw Error("This project has no Deployment to pull from. Publish it first.");
@@ -300,7 +279,6 @@ async function listFiles(directory: string): Promise<[string, Uint8Array][]> {
   return files;
 }
 
-/** The data a pull exported into the folder, or undefined when there is none. */
 export async function readPulled(root: string): Promise<Pulled | undefined> {
   let text: string;
   try { text = await readFile(path.join(root, PULL_DIRECTORY, RECORD), "utf8"); }
@@ -309,7 +287,6 @@ export async function readPulled(root: string): Promise<Pulled | undefined> {
   return { ...pulled, manifest: checkPackageManifest(pulled.manifest) };
 }
 
-/** Rebuilds the import tree from immutable raw components after checking the recorded manifest. */
 export async function extractVerifiedPulledData(root: string, target: string, pulled: Pulled): Promise<void> {
   const manifest = checkPackageManifest(pulled.manifest);
   await mkdir(target, { recursive: true });
@@ -335,7 +312,6 @@ export async function extractVerifiedPulledData(root: string, target: string, pu
   }
 }
 
-/** One phrase for the exported data: where it came from, when, and each component with its size. */
 export function describePulled(pulled: Pulled) {
   const size = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
   const parts = pulled.manifest.contents.map((content) => `${content.name} ${size(content.size)}`).join(", ");

@@ -9,16 +9,12 @@ import { createDefaultManifest, normalizeManifest } from "../deployments/manifes
 import type { MiniAppProject } from "./types";
 import { assembleStaticArtifact, basePath, checkRouting, isDocument, pathPrefixPattern, resolveReference, routingMessage, runtimeFile, runtimeLoaderScript, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
-// esbuild-wasm starts only in a browser. The editor's build runs here on native
-// esbuild with the editor's own plugin, which resolves every import from the
-// project's files and never from disk.
 mock.module("esbuild-wasm", () => ({ initialize: async () => {}, build: esbuild.build }));
 const { buildProjectInBrowser } = await import("../runtime/browser-build");
 
 const runtime = "window.miniapp = {};";
 const page = (title: string, body = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
-/** The module as both doors call it, over files held in memory. */
 function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; bundle?: (path: string) => { script: string; styles: string } } = {}) {
   return assembleStaticArtifact({
     paths: Object.keys(files),
@@ -133,10 +129,17 @@ describe("the artifact", () => {
     expect(Object.keys(artifact.files)).toEqual(["index.html"]);
   });
 
-  test("only the elements a fragment opens with move: a stylesheet link or a later title stays in the body", () => {
-    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: "", body: '<link rel="stylesheet" href="x.css"><title>A</title><main></main>' });
+  test("metadata moves from the fragment lead while a title after body content stays there", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<link rel="stylesheet" href="x.css"><title>A</title>', body: '<main></main>' });
     expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
     expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
+  });
+
+  test("a fragment moves description metadata and JSON-LD into the document head", () => {
+    expect(splitFragmentHead('<meta name="description" content="Details"><link rel="canonical" href="/about"><script type="application/ld+json">{"@type":"Thing"}</script><main>Body</main>')).toEqual({
+      head: '<meta name="description" content="Details"><link rel="canonical" href="/about"><script type="application/ld+json">{"@type":"Thing"}</script>',
+      body: '<main>Body</main>',
+    });
   });
 
   test("a Capsule without index.html gets the default fragment home page", async () => {
@@ -194,13 +197,10 @@ describe("refusals", () => {
 
   test("a whole document with no script passes while the app runs elsewhere, or when there is no app", async () => {
     const passes = (files: Record<string, string>) => expect(assemble(files)).resolves.toBeDefined();
-    // A fragment, or the default fragment a Capsule without index.html gets, runs the entry.
     await passes({ "index.html": "<div id=root></div>", "404.html": page("Not found"), "app.js": "" });
     await passes({ "about.html": page("About"), "app.js": "" });
-    // A document that loads its own script, inline or by src, and a static 404 beside it.
     await passes({ "index.html": page("App", '<script type="module" src="app.js"></script>'), "404.html": page("Not found"), "app.js": "" });
     await passes({ "index.html": page("App", "<script>document.title = 'x'</script>"), "app.js": "" });
-    // No entry: a page with no script is a static page.
     await passes({ "index.html": page("Chores") });
   });
 
@@ -235,7 +235,6 @@ describe("the CLI and the editor build the same artifact", () => {
   };
 
   async function onDisk(files: Record<string, string>) {
-    // An app folder: konae.json at the root, the sources in app/.
     const root = await mkdtemp(path.join(tmpdir(), "konae-static-"));
     for (const [file, contents] of Object.entries(files)) {
       const target = file === "konae.json" ? path.join(root, file) : path.join(root, "app", file);
@@ -283,7 +282,6 @@ describe("the CLI and the editor build the same artifact", () => {
       for (const comment of ["// app.js", "// lib/greet.js", "/* lib/card.css */"]) expect(one).not.toContain(comment);
       expect(one).toContain("Kept: a legal comment.");
       expect(one).toContain(".card{");
-      // The editor names modules with its own namespace; its page carries the same script and styles.
       const editor = await buildProjectInBrowser(project(modular));
       expect(editor.files["index.html"]).toBe(JSON.parse(one).files["index.html"]);
     } finally {

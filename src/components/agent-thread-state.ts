@@ -10,15 +10,10 @@ import type {
 } from "../agent/contracts";
 import type { ProjectFile } from "../lib/types";
 
-/**
- * View model for the agent thread. The component paints this and nothing else;
- * every transition lives in `agentThreadReducer` so it can be tested without a DOM.
- */
 export type ThreadMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
-  /** Assistant messages stay open so deltas keep appending until the turn ends. */
   streaming: boolean;
 };
 
@@ -36,11 +31,8 @@ export type AgentThreadState = {
   tools: ToolChip[];
   busy: boolean;
   error: string;
-  /** Last snapshot read from the agent; the payload handed to onApply. */
   proposal: AgentProposal | null;
-  /** The Validation Gate's own verdict — the only source allowed to enable Apply. */
   gate: ApplyGateStatus;
-  /** Last `validation` event, used only to block earlier than the gate would. */
   validation: ValidationResult | null;
   seq: number;
 };
@@ -101,7 +93,6 @@ export function agentThreadReducer(state: AgentThreadState, action: AgentThreadA
     case "dismiss-error":
       return state.error ? { ...state, error: "" } : state;
     case "discard":
-      // Drops the footer only; the thread is the record of what was asked.
       return { ...state, proposal: null, gate: { state: "empty" }, validation: null };
     case "reset":
       return initialAgentThreadState;
@@ -144,7 +135,6 @@ function appendDelta(state: AgentThreadState, text: string): AgentThreadState {
   };
 }
 
-/** Matched by tool call id: two concurrent calls of one tool must not be confused. */
 function endTool(tools: ToolChip[], id: string, ok: boolean, detail: string): ToolChip[] {
   const index = tools.findIndex((chip) => chip.id === id);
   if (index < 0) return tools;
@@ -160,7 +150,6 @@ function closeStream(messages: ThreadMessage[]): ThreadMessage[] {
     : messages;
 }
 
-/** A run that ends without a tool-end left that tool unfinished — never spinning. */
 function settleRun(state: AgentThreadState): AgentThreadState {
   return {
     ...state,
@@ -174,7 +163,6 @@ function withSnapshot(state: AgentThreadState, snapshot?: AgentThreadSnapshot): 
   return { ...state, proposal: snapshot.proposal, gate: snapshot.gate };
 }
 
-// --- Derived view model -------------------------------------------------------
 
 export type ProposalFooter =
   | { kind: "empty"; canApply: false }
@@ -187,16 +175,10 @@ export type ProposalFooter =
    */
   | { kind: "validated"; changedFiles: ProjectFile[]; canApply: true; checked: ValidationStage[]; owner?: OwnerRefusal; warnings: ValidationWarning[] };
 
-/** The Kernel's sentence for a refusal the owner clears in Access > Integrations, and who acts. */
 export type OwnerRefusal = { message: string; detail?: string };
 
 const stageOrder: ValidationStage[] = ["sources", "schema", "preview-rows", "actions"];
 
-/**
- * What a passing gate is entitled to say. Naming the stages that ran is the
- * difference between "preview rows hold" and "nobody looked": the preview-rows stage
- * is skipped whenever the live database could not be read.
- */
 export function validationSummary(checked: ValidationStage[]): string {
   const ran = stageOrder.filter((stage) => checked.includes(stage)).map((stage) => stage.replace("-", " "));
   if (ran.length === 0) return "Validated.";
@@ -205,11 +187,6 @@ export function validationSummary(checked: ValidationStage[]): string {
   return `Validated. ${held[0].toUpperCase()}${held.slice(1)} hold.${skipped}`;
 }
 
-/**
- * Apply is enabled only when the Validation Gate itself reports "ready". A
- * `validation` event may downgrade an unvalidated proposal to blocked, never
- * upgrade one to applicable.
- */
 export function proposalFooter(state: AgentThreadState): ProposalFooter {
   const gate = state.gate;
   if (gate.state === "empty") return { kind: "empty", canApply: false };
@@ -253,30 +230,16 @@ export function canSubmit(state: AgentThreadState, draft: string, busy: boolean,
   return !busy && !state.busy && blocker.length === 0 && draft.trim().length > 0;
 }
 
-/**
- * Why the composer cannot send yet, in the owner's words. Without this the model
- * layer's own failure ("Provider is not configured", "No model id for provider")
- * only arrives after the draft was cleared and shown as if it had been sent.
- */
 export function submitBlocker(provider: ProviderConfig, hasKey: boolean, modelId: string): string {
   if (keyState(hasKey) === "missing") return `Add your ${provider.label} API key first.`;
   if (modelId.trim().length === 0) return "Choose a model id first.";
   return "";
 }
 
-/**
- * A proposal can only change when a tool finished or the run settled, so text
- * deltas must not trigger a full workspace snapshot — that is a copy of all five
- * files per streamed token.
- */
 export function carriesSnapshot(event: AgentUiEvent): boolean {
   return event.type === "tool-end" || event.type === "turn-end" || event.type === "validation" || event.type === "error";
 }
 
-/**
- * The panel's own line after an Apply or a Descartar — UI feedback, not model
- * output, so it never streams and never re-opens a closed turn.
- */
 export function noteAction(text: string): AgentThreadAction {
   return { type: "note", text };
 }

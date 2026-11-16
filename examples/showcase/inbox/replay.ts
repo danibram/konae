@@ -1,11 +1,3 @@
-// Replays the inbox showcase against its own Kernel: publish, the signed webhook,
-// a GitHub-style and a Stripe-style webhook in the providers' own schemes, the keyed read route, invitations and suspension, Signals and Usage, the LIMIT
-// refusal in the Gate and the Kernel, the Action Contract, and a browser pass.
-//
-//   KONAE_SHOWCASE_PORT=19470 bun run examples/showcase/inbox/replay.ts
-//
-// KONAE_SHOWCASE_BROWSER=0 skips Chrome. KONAE_SHOWCASE_SCREENSHOTS=<dir>
-// keeps the light and dark screenshots there.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -30,12 +22,9 @@ const setupKey = crypto.randomUUID();
 const password = crypto.randomUUID();
 const webhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
 const feedSecret = `feed_${crypto.randomUUID().replaceAll("-", "")}`;
-// A signature names no app, so the Kernel refuses one owner's second project
-// holding the same value; each variant project gets its own secrets.
 const openWebhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
 const signedWebhookSecret = `whk_${crypto.randomUUID().replaceAll("-", "")}`;
 const signedFeedSecret = `feed_${crypto.randomUUID().replaceAll("-", "")}`;
-// The two providers' secrets, one per project for the same reason.
 const providerSecrets = (label: string) => ({
   github_webhook: `gh_${label}_${crypto.randomUUID().replaceAll("-", "")}`,
   payments_webhook: `whsec_${label}_${crypto.randomUUID().replaceAll("-", "")}`,
@@ -69,7 +58,6 @@ async function rejects(promise: Promise<unknown>, pattern: RegExp | string): Pro
 }
 
 try {
-  // ---------------------------------------------------------------- Kernel
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
   kernel = Bun.spawn([path.join(repo, "kernel-rs/target/debug/konae")], {
@@ -101,7 +89,6 @@ try {
     return fetch(input, { ...init, headers });
   } });
 
-  // --------------------------------------------------------------- Publish
   const root = path.join(scratch, "inbox");
   await cp(source, appDir(root), { recursive: true, filter: (from) => !from.endsWith("replay.ts") && !from.endsWith("README.md") });
   const project = { id: "showcase_inbox", name: "Inbox", slug: "inbox", manifest: { version: 1, visibility: "private" } };
@@ -117,8 +104,6 @@ try {
   }
 
   const compiled = await buildLocal(root);
-  // One refusal names every unset secret, so one failed plan tells the owner everything to set.
-  // The feed takes an API key; the inbox's own webhook, the critical page and the two providers' routes name three secrets.
   const unsetSecret = await rejects(release(project, compiled.files, compiled.artifact), /which are not set for this project/);
   for (const name of ["events.receive", "github.receive", "pages.critical", "payments.receive", "events_webhook", "github_webhook", "payments_webhook"]) assert(unsetSecret.includes(name), unsetSecret);
   refused("Publish before secret_set", unsetSecret);
@@ -142,7 +127,6 @@ try {
   } });
   const action = <T = any>(client: McpClient, name: string, input: object = {}) => client.call<T>("actions_invoke", { name, input });
 
-  // ------------------------------------------- Private shell, signed route
   const shell = await fetch(`${url}/`, { headers: host(), redirect: "manual" });
   assert.match(await shell.text(), /<title>Sign in<\/title>/);
   const visitorCall = await rejects(action(runtime(), "events.list"), /Sign in/);
@@ -185,7 +169,6 @@ try {
   const tampered = await post(first.replace("critical", "info"), await sign(first));
   assert.deepEqual(tampered, { status: 401, body: { error: "invalid-signature" } });
   refused("A body changed after signing", tampered.body.error, tampered.status);
-  // A t outside the window has its own answer, whatever the secret, so a sender with a skewed clock can tell.
   const stale = await post(first, await sign(first, webhookSecret, Math.floor(Date.now() / 1000) - 400));
   assert.deepEqual(stale, { status: 401, body: { error: "stale-timestamp" } });
   refused("A correct signature with t 400 seconds old", stale.body.error, stale.status);
@@ -197,8 +180,6 @@ try {
   assert.deepEqual(unsigned, { status: 401, body: { error: "invalid-signature" } });
   refused("An unsigned request", unsigned.body.error, unsigned.status);
 
-  // A retry in the same second signs again with a new nonce, so it is a new request:
-  // 200, and the ON CONFLICT clause stores nothing new. So does one with a later t.
   const sameSecond = await post(first, await sign(first, webhookSecret, firstAt, "first-delivery-retry"));
   assert.deepEqual(sameSecond, { status: 200, body: { result: { changes: 0, lastInsertId: 0 } } });
   delivered++;
@@ -215,7 +196,6 @@ try {
   const undeclared = await post(extraField, await sign(extraField));
   assert.deepEqual(undeclared, { status: 400, body: { error: "Unexpected action input: priority" } });
   refused("A sender payload with a field the action does not declare", undeclared.body.error, 400);
-  // A route belongs to the Deployment; the editor's own login cookie does not replace a signature.
   const ownerCookieOnRoute = await post(first, undefined, { cookie: ownerCookie });
   assert.equal(ownerCookieOnRoute.status, 401);
 
@@ -225,14 +205,12 @@ try {
   await deliver({ source: "backups", id: "nightly-1106", severity: "info", title: "Nightly copy finished", body: "1.8 GiB in 4 min." });
   pass("Signed webhook on a private app", `With no session the shell answers the sign-in page, yet POST /hooks/events stores ${delivered - storedNothing} events; two retries, one in the same second with a new nonce, answer 200 and store nothing. Replayed, wrong-secret, tampered and unsigned requests are refused, and a stale or future t answers stale-timestamp.`);
 
-  // ------------------------------------------------------- Keyed read route
   const feed = async (query = "", authorization?: string) => {
     const headers: Record<string, string> = host();
     if (authorization) headers.authorization = `Bearer ${authorization}`;
     const response = await fetch(`${url}/api/events${query}`, { headers });
     return { status: response.status, body: await response.json() as any };
   };
-  // events.feed declares "callers": ["key"], so a caller without a key is refused.
   const anonymousFeed = await feed();
   assert.deepEqual(anonymousFeed, { status: 401, body: { error: "authentication-required" } });
   refused("GET /api/events with no key", anonymousFeed.body.error, 401);
@@ -275,7 +253,6 @@ try {
   const routeReads = 2;
   pass("Keyed read route", "events.feed declares callers [\"key\"]: a caller without a key gets 401 authentication-required, a key naming events.feed reads 5 rows and filters with ?after, a key naming nothing cannot be created, a files-only key gets 403, the runtime endpoint refuses keys with 403, and after revocation the key gets 401 invalid-api-key.");
 
-  // Two more projects change only events.feed: one without callers, one signed.
   const variant = async (id: string, slug: string, feedHttp: Record<string, unknown>, secrets: Record<string, string>) => {
     const variantRoot = path.join(scratch, slug);
     await cp(root, variantRoot, { recursive: true });
@@ -290,7 +267,6 @@ try {
     await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "INSERT INTO events(source, external_id, severity, title, body, received_at) VALUES('payroll','run-11','critical','Payroll export failed','Bank file rejected',0)" } });
     return { receipt, root: variantRoot };
   };
-  // Without callers or a signature, a private app's GET route takes a key or a session, as its shell does.
   const open = (await variant("showcase_inbox_open", "inbox-open", { method: "GET", path: "/api/events" }, { events_webhook: openWebhookSecret, ...providerSecrets("open") })).receipt;
   const openShell = await fetch(`${url}/`, { headers: { host: open.hostname } });
   assert.match(await openShell.text(), /<title>Sign in<\/title>/);
@@ -298,7 +274,6 @@ try {
   assert.deepEqual({ status: unproven.status, body: await unproven.json() }, { status: 401, body: { error: "authentication-required" } });
   pass("Unsigned read route on a private app", "With no callers and no signature, GET /api/events on a private app answers 401 authentication-required to a request with no session and no key, as its shell asks for sign-in.");
 
-  // A signed GET: the MAC covers the method, the path and the query string, and a nonce keeps two requests in one second apart.
   const signedProviders = providerSecrets("signed");
   const signedVariant = await variant("showcase_inbox_signed", "inbox-signed", { method: "GET", path: "/api/events", signature: { header: "X-Inbox-Signature", secret: "events_feed" } }, { events_webhook: signedWebhookSecret, events_feed: signedFeedSecret, ...signedProviders });
   const signedHost = signedVariant.receipt.hostname;
@@ -313,7 +288,6 @@ try {
   assert.equal((await signedGet("after=0", forAfterOne)).status, 409, "The first signature, sent again, is a replay.");
   pass("Signed GET route", "A GET signed for ?after=0 answers 200 and the same header on ?after=4 answers 401 invalid-signature; a second GET in the same second with a new nonce answers 200, and the first header sent again answers 409.");
 
-  // ------------------------------------------------------- Team by invitation
   const invited = await owner.call<{ policy: any; results: Array<{ email: string; status: string; invitationId: string; acceptable: boolean; delivery: string }> }>(
     "app_invitations_create", { deploymentId: inbox.id, emails: ["ana@team.example", "ben@team.example"], idempotencyKey: "inbox-team-first-batch" });
   assert.deepEqual(invited.results.map((result) => [result.email, result.status, result.acceptable]), [["ana@team.example", "invited", true], ["ben@team.example", "invited", true]]);
@@ -322,8 +296,6 @@ try {
   for (const deadline = Date.now() + 10_000; mails.length < 2 && Date.now() < deadline; mails = await mailbox()) await Bun.sleep(100);
   assert.equal(mails.length, 2);
   const linkFor = (email: string) => mails.find((message) => message.to === email);
-  // The development mailbox keeps to, purpose, scope, link and expiry; the subject
-  // that names the inviting owner is not written, so this run cannot check it.
   assert.deepEqual(Object.keys(linkFor("ana@team.example")).sort(), ["expiresAt", "link", "purpose", "scope", "to"]);
   assert.equal(linkFor("ana@team.example").scope, `deployment:${inbox.id}`);
   const appPost = (route: string, body: object, cookie?: string) => fetch(`${url}${route}`, {
@@ -357,7 +329,6 @@ try {
   assert(invitationsList.invitations.every((invitation) => invitation.status === "accepted"));
   pass("Team by invitation", "The owner invites two addresses, both links arrive in the development mailbox scoped to the Deployment, both accept and land active, a used link answers 410, and a stranger cannot sign up.");
 
-  // ------------------------------------------ Nullable filters and a LIMIT
   const all = await action<any[]>(anaClient, "events.list");
   assert.equal(all.length, 5);
   assert.deepEqual(await action(anaClient, "events.list", { severity: null, state: null }), all);
@@ -369,7 +340,6 @@ try {
   const ackGuard = "Someone acknowledged this event first, or it does not exist.";
   const ack = await action(anaClient, "events.acknowledge", { id: id["inv-4471"] });
   assert.equal(ack.changes, 1);
-  // A second acknowledgement changes no row, so the guard refuses it and no Signal is recorded.
   await rejects(action(benClient, "events.acknowledge", { id: id["inv-4471"] }), ackGuard);
   assert.equal((await action(benClient, "events.acknowledge", { id: id["rel-812"] })).changes, 1);
   const openOnly = await action<any[]>(anaClient, "events.list", { state: "open" });
@@ -379,18 +349,14 @@ try {
   assert.deepEqual(await action(anaClient, "events.counts"), [{ total: 5, acknowledged: 2 }]);
   pass("In-app list", `events.list with {} and with explicit nulls returns the same 5 rows, severity and state filters narrow them, a second acknowledgement is refused with "${ackGuard}", and counts follow.`);
 
-  // The signed webhook route is its action's only door, so a member cannot store an event through actions_invoke.
   const memberReceive = await rejects(action(benClient, "events.receive", { source: "ben", id: "typed-by-hand", severity: "critical", title: "Typed by a member, no signature" }),
     "Action events.receive answers only on its HTTP route, POST /hooks/events.");
   refused("A member calls events.receive through actions_invoke", memberReceive);
-  // The Signal lives on the mutation now, so an event nobody acknowledged records nothing.
   await rejects(action(benClient, "events.acknowledge", { id: 999 }), ackGuard);
-  // members.hello trusts the email the page sends.
   assert.equal((await action(benClient, "members.hello", { email: "ana@team.example" })).changes, 1);
   await action(benClient, "members.hello", { email: "ben@team.example" });
   pass("What the actions let a member do", `A member calling events.receive through actions_invoke gets "${memberReceive}"; acknowledging event 999 is refused with the guard and records no Signal; members.hello still lets a member claim another member's email.`);
 
-  // ------------------------------------------------------------- Suspension
   const benId = users.users.find((user) => user.email === "ben@team.example")!.userId;
   const suspended = await owner.call<{ state: string }>("app_user_suspend", { deploymentId: inbox.id, userId: benId });
   assert.equal(suspended.state, "suspended");
@@ -410,7 +376,6 @@ try {
   assert.equal(anaLogin.status, 200);
   pass("Suspension", "After app_user_suspend, Ben's open session is refused, the right password answers 403, the shell asks for sign-in again, and a new invitation to that address answers suspended. Ana's session and sign-in keep working.");
 
-  // ------------------------------------------------- LIMIT: Gate and Kernel
   const unbounded = JSON.parse(compiled.files["actions.json"]);
   unbounded.actions["events.list"].statement = unbounded.actions["events.list"].statement.replace(/ LIMIT 50$/, "");
   const unboundedSource = JSON.stringify(unbounded, null, 2);
@@ -429,7 +394,6 @@ try {
   assert(gateText.includes(sentence) && kernelText.includes(sentence), "The Gate and the Kernel give the same sentence.");
   pass("LIMIT in both doors", `The Validation Gate and release_plan refuse events.list without a LIMIT with the same sentence: "${sentence}"`);
 
-  // -------------------------------------------------------- Usage and Signals
   const usage = await owner.call<{ totals: Array<{ kind: string; name: string; count: number }> }>("usage_read", { deploymentId: inbox.id, from: today, to: today });
   const total = (kind: string, name = "") => usage.totals.find((row) => row.kind === kind && row.name === name)?.count ?? 0;
   assert.equal(total("route", "POST /hooks/events"), delivered, "Only accepted webhook calls count.");
@@ -449,9 +413,6 @@ try {
   refused("An app user calls usage_read on the runtime endpoint", runtimeUsage);
   pass("Usage and Signals", `usage_read counts ${delivered} POST /hooks/events and ${routeReads} GET /api/events, none of the refused requests, 2 events.acknowledge and 2 refused by its guard, 2 signups; signals_read returns ${received.signals.length} event.received, one per stored event, and 2 event.acknowledged naming Ana and Ben as actor.`);
 
-  // ------------------------------------------------- Critical page by email
-  // A sender posts a critical event to its own signed route, and the owner
-  // gets an email. A retry stores nothing and sends nothing.
   const page = async (event: object, nonce?: string) => {
     const body = JSON.stringify(event);
     const signature = await signRoute(webhookSecret, { method: "POST", path: "/hooks/critical", body }, Math.floor(Date.now() / 1000), nonce);
@@ -484,7 +445,6 @@ try {
   assert.equal(status.queue.notices.delivered, 1);
   pass("Critical page by email", `POST /hooks/critical, signed like /hooks/events, stores a critical event and pages.critical's "notify": { "to": "owner" } emails owner@inbox.example "${pageMail.subject}". The sender's body with a Bcc line arrives as one line of text. A signed retry stores nothing and sends nothing. usage_read lists "pages.critical: queued" once; mail_status counts ${status.queue.notices.delivered} delivered notice.`);
 
-  // ----------------------------------------------------------------- Browser
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     const { chromium } = await import("playwright");
     const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
@@ -512,12 +472,8 @@ try {
         assert.equal(await page.locator("#who").textContent(), "Signed in as ana@team.example");
         assert.equal(await page.locator("#open-count").textContent(), String(before.total - before.acknowledged - (colorScheme === "light" ? 0 : 2)));
         if (colorScheme === "light") {
-          // Acknowledge one event from the page, which also records its Signal.
           await page.locator(".event", { hasText: "api.eu answers" }).getByRole("button", { name: "Acknowledge" }).click();
           await page.locator(".event", { hasText: "api.eu answers" }).locator(".acked").waitFor({ timeout: 10_000 });
-          // Ana acknowledges, from another session, an event this page still shows as open.
-          // The page's click is refused by the guard, and the refusal stays on screen after
-          // the list reloads.
           const [stale] = await action<Array<{ id: number; title: string }>>(anaClient, "events.list", { state: "open" });
           assert.equal((await action(anaClient, "events.acknowledge", { id: stale.id })).changes, 1);
           await page.locator(".event", { hasText: stale.title }).getByRole("button", { name: "Acknowledge" }).click();
@@ -536,9 +492,6 @@ try {
   }
 
 
-  // ------------------------------------------- Webhooks from outside services
-  // A code host and a payment provider post their own payloads, signed their own way. The replay
-  // signs each with node:crypto as the provider's documentation says, not with Konae's signer.
   const providerPost = async (route: string, body: string, headers: Record<string, string>) => {
     const response = await fetch(`${url}${route}`, { method: "POST", headers: host({ "content-type": "application/json", ...headers }), body });
     return { status: response.status, body: await response.json() as any };
@@ -587,7 +540,6 @@ try {
   const chargeStale = await providerPost("/hooks/payments", charge, stripe(charge, Math.floor(Date.now() / 1000) - 400));
   assert.deepEqual(chargeStale, { status: 401, body: { error: "stale-timestamp" } });
   refused("A Stripe-style delivery with t 400 seconds old", chargeStale.body.error, 401);
-  // The provider's retry signs again with a new t; the UNIQUE (source, external_id) stores it once.
   const chargeRetry = await providerPost("/hooks/payments", charge, stripe(charge, Math.floor(Date.now() / 1000) + 1));
   assert.deepEqual(chargeRetry, { status: 200, body: { result: { changes: 0, lastInsertId: 0 } } });
 
@@ -605,7 +557,6 @@ try {
   assert.equal(routeCount("POST /hooks/payments"), 2, "The delivery and its retry ran; the refused ones count nothing.");
   pass("Webhooks from outside services", "A GitHub-style issues event, signed sha256=<hex> over its body, and a Stripe-style charge.failed, signed t=...,v1=... over <t>.<body>, are stored from their nested payloads through fields, with every other key left out. A second copy of each answers 409 replayed-signature, a wrong secret and a changed byte answer 401 invalid-signature, a Stripe t 400 seconds old answers 401 stale-timestamp, and the provider's retry with a new t answers 200 and stores nothing. Usage counts the three deliveries that ran and none of the refused ones.");
 
-  // ------------------------------------------------- Action Contract, conform
   const contractDir = path.join(scratch, "contract");
   await cp(root, contractDir, { recursive: true });
   const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
@@ -629,13 +580,10 @@ try {
     const lines = out.trim().split("\n");
     return { code, out: out + err, totals: lines.at(-1) ?? "", failures: lines.filter((line) => line.startsWith("FAIL")) };
   };
-  // The program that reads /api/events holds a key, so conform reads it with the key.
   const providerArgs = (secrets: Record<string, string>) => Object.entries(secrets).map(([name, value]) => `${name}=${value}`);
   const keyed = await runConform([`events_webhook=${webhookSecret}`, ...providerArgs(inboxProviders)]);
   assert.equal(keyed.code, 0, keyed.out);
   assert.match(keyed.totals, /^\d+ passed, 0 failed, 0 skipped/);
-  // The signed variant's contract, checked with both secrets and no other credential:
-  // every signed probe carries its own nonce, so none lands as a replay of another.
   const signedContractDir = path.join(scratch, "signed-contract");
   await cp(signedVariant.root, signedContractDir, { recursive: true });
   const signedContract = cli(["contract", "--dir", signedContractDir]);

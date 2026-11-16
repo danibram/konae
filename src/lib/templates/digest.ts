@@ -1,9 +1,7 @@
 import { templateHelpers, templateStyles } from "./shared";
 import type { TemplateSource } from "./types";
 
-const schema = `-- What members write during the day. The nightly digest stamps digested_at
--- on the entries it mailed, so an entry goes out once.
-CREATE TABLE IF NOT EXISTS entries (
+const schema = `CREATE TABLE IF NOT EXISTS entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
   body TEXT NOT NULL CHECK (length(trim(body)) BETWEEN 1 AND 500),
@@ -31,8 +29,6 @@ const actions = {
         { source: "kernel", field: "now" },
       ],
     },
-    // Every entry written before today's UTC midnight and not yet mailed. The
-    // Kernel sends each author one email listing only the entries they wrote.
     "digest.send": {
       kind: "mutation",
       access: "authenticated",

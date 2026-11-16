@@ -7,7 +7,6 @@ import type { RuntimeActionAccess } from "../deployments/manifest";
 
 export type DescribedAction = {
   name: string; kind: string; access: RuntimeActionAccess; statement?: string; http?: HttpBinding; guard?: string;
-  /** In parameter order, so binding i fills ?i+1. Only `source` is read here, to find the actor. */
   bindings?: ReadonlyArray<{ source: string }>;
 };
 type Visibility = "public" | "private";
@@ -15,14 +14,6 @@ type Visibility = "public" | "private";
 export { ownerFixes };
 export type { ReleaseFacts };
 
-/**
- * What the Deploy dialog may say before a publish. actions.json goes through
- * the parser both doors share, so a refusal here is the sentence the Kernel
- * answers at release_plan, and a query that parsed already names its LIMIT.
- * With the project's secret names and the installation's hosts, the release
- * check the Validation Gate runs adds the sentences the Kernel says only at
- * publish. `ownerActs` is true when the owner, not an edit, clears the refusal.
- */
 export function deployReadiness(
   project: { files: Record<string, string | undefined> },
   facts: ReleaseFacts = {},
@@ -36,11 +27,6 @@ export function deployReadiness(
   }
 }
 
-/**
- * Every secret actions.json names, each with the actions that use it: a
- * route's signature and a call's auth. A name the project does not have
- * refuses the publish.
- */
 export function namedSecrets(source: string | undefined): Map<string, { actions: string[]; route: boolean }> {
   const named = new Map<string, { actions: string[]; route: boolean }>();
   let program;
@@ -64,12 +50,6 @@ export function namedSecrets(source: string | undefined): Map<string, { actions:
   return named;
 }
 
-/**
- * One line for an action: who may run it on a Deployment of this visibility,
- * where it stops, and what its guard answers. On a private Deployment even an
- * anonymous action needs a session, and an action whose route does not answer
- * anyone runs only on that route, as `routeCallers` decides for both doors.
- */
 export function actionSentence(action: DescribedAction, visibility: Visibility): string {
   const only = action.http ? routeCallers(action.http, visibility) : null;
   const route = action.http ? `${action.http.method} ${action.http.path}` : "";
@@ -84,11 +64,6 @@ export function actionSentence(action: DescribedAction, visibility: Visibility):
   return `${who} ${queryRows(action.statement)}${own ? " It reads only their own rows." : ""}`;
 }
 
-/**
- * How many rows a query that passed the LIMIT rule hands back, from the same
- * reading the Validation Gate makes (src/lib/query-bound.ts): a literal LIMIT,
- * a total with no GROUP BY, or a select with no table.
- */
 function queryRows(statement: string | undefined): string {
   if (statement === undefined) return "It returns at most 1000 rows.";
   const limit = topLevelLimit(statement);
@@ -101,20 +76,9 @@ function queryRows(statement: string | undefined): string {
     const columns = top.slice(select + 1, words.indexOf("FROM")).filter((token) => token.kind === "symbol" && token.text === ",").length + 1;
     return columns === 1 ? "It returns one number." : "It returns one row of totals.";
   }
-  // A LIMIT taken from a binding still stops at 1000 rows, the Kernel's ceiling for every result.
   return "It returns at most 1000 rows.";
 }
 
-/**
- * True only when the statement's top-level WHERE requires a column to equal
- * the actor binding, as one of its AND-joined conditions, with no top-level
- * OR or NOT that could let other rows through. Anything else, an actor checked inside a subquery or EXISTS
- * included, is false, so a line never claims a row filter the SQL does not
- * prove. Parameters number as SQLite numbers them. ?N is N, and a bare ? is
- * one past the largest number so far. A named parameter (:name, @name, $name)
- * takes a number too, so a statement with one claims nothing, and so does a
- * filter on a name the SELECT list defines as an alias.
- */
 export function actorFiltered(statement: string, bindings: ReadonlyArray<{ source: string }>): boolean {
   const actorAt = new Set(bindings.flatMap((binding, index) => binding.source === "actor" ? [index + 1] : []));
   if (actorAt.size === 0) return false;
@@ -136,8 +100,6 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
   });
   const top = tokens.map((token, index) => ({ token, index })).filter(({ token }) => token.depth === 0);
   const word = (at: number) => { const token = top[at]?.token; return token?.kind === "word" ? token.text.toUpperCase() : ""; };
-  // One table read or changed by one statement. A join, a second table, a nested SELECT or an
-  // UPDATE ... FROM can hand back rows the actor filter does not cover, so they claim nothing.
   const first = word(0);
   if (!["SELECT", "UPDATE", "DELETE"].includes(first)) return false;
   if (tokens.some((token, index) => index > 0 && token.kind === "word" && token.text.toUpperCase() === "SELECT")) return false;
@@ -147,7 +109,6 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
   if (first === "UPDATE" && tableAt !== -1) return false;
   const whereAt = top.findIndex((_, at) => word(at) === "WHERE");
   if (tableAt !== -1 && top.slice(tableAt, whereAt).some(({ token }) => token.kind === "symbol" && token.text === ",")) return false;
-  // Names the SELECT list defines: the last word of an item that is more than a bare column, as in `?1 AS me` or `?1 me`.
   const aliases = new Set<string>();
   if (first === "SELECT" && tableAt !== -1) {
     let item: SqlToken[] = [];
@@ -166,13 +127,10 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
   const from = whereAt + 1;
   let to = top.findIndex((_, at) => at >= from && ["GROUP", "ORDER", "LIMIT", "HAVING", "RETURNING", "WINDOW"].includes(word(at)));
   if (to === -1) to = top.length;
-  // The clause as terms: AND, a column (qualified or not), the actor parameter, `=`, or anything else.
   const terms: string[] = [];
-  // The unqualified name of each "column" term, so a filter on an alias is not taken for a column.
   const names = new Map<number, string>();
   for (let at = from; at < to; at += 1) {
     const { token, index } = top[at];
-    // OR and NOT can let other rows through; BETWEEN and CASE carry an AND that joins no condition.
     if (token.kind === "word" && ["OR", "NOT", "BETWEEN", "CASE"].includes(token.text.toUpperCase())) return false;
     if (token.kind === "word" && token.text.toUpperCase() === "AND") terms.push("AND");
     else if (token.kind === "word" || token.kind === "identifier") {
@@ -191,7 +149,6 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
       terms.push(joined ? "other" : "=");
     } else terms.push("other");
   }
-  // One AND-joined term must read `column = actor` or `actor = column` on its own, on a column that is not an alias.
   let start = 0;
   for (let at = 0; at <= terms.length; at += 1) {
     if (at < terms.length && terms[at] !== "AND") continue;
@@ -203,12 +160,10 @@ export function actorFiltered(statement: string, bindings: ReadonlyArray<{ sourc
   return false;
 }
 
-/** An identifier as SQLite compares it: without its quotes, in lower case. */
 function unquote(text: string) {
   return text.replace(/^["`[]|["`\]]$/g, "").toLowerCase();
 }
 
-/** Who may call an action that the runtime endpoint answers. */
 export function actionWho(access: string, visibility: Visibility): "Anyone" | "A signed-in person" {
   return access === "anonymous" && visibility === "public" ? "Anyone" : "A signed-in person";
 }
@@ -218,7 +173,6 @@ function callerWords(callers: RouteCaller[]): string {
   return words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
 }
 
-/** The literal row count after a top-level LIMIT, or null when it is a parameter or missing. */
 export function topLevelLimit(statement: string): number | null {
   const top = sqlTokens(statement).filter((token) => token.depth === 0);
   const at = limitIndex(top);
@@ -226,7 +180,6 @@ export function topLevelLimit(statement: string): number | null {
   return value && value.kind !== "string" && /^\d+$/.test(value.text) ? Number(value.text) : null;
 }
 
-/** The readout above actions.json in the file editor: the parser's refusal, or one line per action. */
 export function actionReadout(source: string, visibility: Visibility): { refusal: string | null; lines: string[] } {
   try {
     const actions = Object.values(parseServerActionSource(source).actions);
@@ -240,11 +193,6 @@ function actionDoes(name: string): string {
   return actionTitle(name);
 }
 
-/**
- * A person's words for an action, from the verb at the end of its name and the
- * words before it. A name proves nothing about whose rows the action reads, so
- * no title says "their own"; actionSentence says it when the SQL proves it.
- */
 export function actionTitle(name: string): string {
   const parts = name.split(".");
   const verb = parts.pop() ?? name;
@@ -260,17 +208,11 @@ export function actionTitle(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/**
- * Where in actions.json a refusal points: the action it names, and inside it
- * the statement when the action has one. Null when the refusal names no action
- * the file holds, such as a file that is not JSON.
- */
 export function refusedSpot(source: string, refusal: string | null): { action: string; index: number; value?: { start: number; end: number } } | null {
   const action = refusal?.match(/(?:Action|server action:?) ([A-Za-z0-9_.-]*[A-Za-z0-9_-])/)?.[1];
   if (!action) return null;
   const key = source.search(new RegExp(`"${action.replace(/\./g, "\\.")}"\\s*:`));
   if (key < 0) return null;
-  // The statement counts only while it belongs to this action, before the next one opens.
   const after = key + action.length + 2;
   const next = source.slice(after).search(/"[A-Za-z0-9_.-]+"\s*:\s*\{/);
   const end = next < 0 ? source.length : after + next;
@@ -279,7 +221,6 @@ export function refusedSpot(source: string, refusal: string | null): { action: s
   return { action, index: statement, ...stringValueAfter(source, statement + '"statement"'.length) };
 }
 
-/** The span of the JSON string that follows `"key":` at `from`, quotes excluded, when the file has one there. */
 function stringValueAfter(source: string, from: number): { value?: { start: number; end: number } } {
   const open = /^\s*:\s*"/.exec(source.slice(from));
   if (!open) return {};

@@ -4,26 +4,14 @@ import { checkArtifact, checkRelease } from "../lib/size";
 import { checkSourceFiles } from "../lib/source-rules";
 import type { SchemaChange } from "./release";
 
-/** What an import replaces in the app. Nothing is merged. */
 export type ImportReplace = "sources" | "data" | "both";
 
 export type ImportBackup = { id: string; label: string; createdAt: number; sizeBytes: number; holds: string[] };
 
-/**
- * `project_import`'s answer. `imported` is false when the schema change loses
- * data and needs the owner's confirmation; then nothing changed.
- */
 export type ImportResult =
   | { imported: false; replace: ImportReplace; schema: SchemaChange }
   | { imported: true; replace: ImportReplace; backup: ImportBackup; schema: SchemaChange; deployment?: { id: string; url: string } };
 
-/**
- * Imports a folder into the published app: its sources as a release, its
- * data from its export, or both. The sources, the artifact and the release
- * JSON meet the Kernel's limits before a byte travels. The Kernel backs up
- * what it replaces first. Call again with the plan's confirmation when the
- * first answer asks for one.
- */
 export async function importFolder(input: {
   folder: ImportedFolder;
   replace: ImportReplace;

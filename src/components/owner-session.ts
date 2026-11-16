@@ -10,7 +10,6 @@ export type OwnerSession =
 
 const emailKey = "konae:owner-email";
 
-/** The email this browser last signed in with. The session check only returns an opaque ID. */
 export function rememberOwnerEmail(email: string | null) {
   try {
     if (email) localStorage.setItem(emailKey, email);
@@ -25,11 +24,6 @@ export function isSignedOutError(error: unknown): boolean {
   return error instanceof Error && /sign in to use/i.test(error.message);
 }
 
-/**
- * Asks the Kernel who this browser is. A signed-out visit is a normal 200
- * answer there, not a 401, so the first paint of a logged-out browser
- * logs nothing to the console.
- */
 export async function checkOwnerSession(): Promise<OwnerSession> {
   try {
     const response = await fetch("/_konae/owner/session", { cache: "no-store", headers: { accept: "application/json" } });
@@ -45,10 +39,6 @@ export async function checkOwnerSession(): Promise<OwnerSession> {
   }
 }
 
-/**
- * The owner's platform session, checked on load and again whenever the tab
- * regains focus, so signing in from another tab shows up without a reload.
- */
 export function useOwnerSession(): [OwnerSession, () => void] {
   const [session, setSession] = useState<OwnerSession>({ state: "checking" });
   const lastCheck = useRef(0);
@@ -63,7 +53,6 @@ export function useOwnerSession(): [OwnerSession, () => void] {
 
   useEffect(() => {
     refresh();
-    // Focus also moves in and out of the preview iframe; one check every few seconds is plenty.
     const onFocus = () => {
       if (Date.now() - lastCheck.current > 5_000) refresh();
     };
@@ -82,11 +71,6 @@ export function useOwnerSession(): [OwnerSession, () => void] {
   return [session, refresh];
 }
 
-/**
- * The owner page the server serves, with a way back to where the owner came
- * from. It sends an installation that signs owners in with Clerk on to the
- * editor's /platform-access, so the editor links straight to it.
- */
 export function platformAccessHref(returnTo?: string): string {
   return returnTo ? `/_konae/owner/login?returnTo=${encodeURIComponent(returnTo)}` : "/_konae/owner/login";
 }

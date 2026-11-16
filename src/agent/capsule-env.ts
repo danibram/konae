@@ -14,7 +14,6 @@ import type {
   Result,
 } from "./contracts";
 
-/** The scratch copy is mounted here; a Capsule has no other directory. */
 export const capsuleRoot = "/workspace";
 
 export const capsuleFileNames: readonly ProjectFile[] = [
@@ -31,12 +30,6 @@ export function capsulePathFor(file: ProjectFile): string {
   return `${capsuleRoot}/${file}`;
 }
 
-/**
- * Resolve an agent-supplied path to a safe file inside the Capsule, or null.
- * The name must also be one the project tree accepts (no control characters,
- * at most 240 characters), or the agent could write a file the editor, the
- * build and the export all refuse.
- */
 export function capsuleFileFor(path: string): ProjectFile | null {
   const normalized = normalizePath(path);
   if (!normalized || !normalized.startsWith(`${capsuleRoot}/`)) return null;
@@ -44,13 +37,8 @@ export function capsuleFileFor(path: string): ProjectFile | null {
   return name && normalizeProjectPath(name) === name ? name : null;
 }
 
-/**
- * The seven templates, read-only beside the workspace, so the build agent can
- * load a shape the Gate already passes instead of rewriting it from the prompt.
- */
 export const templateRoot = "/templates";
 
-/** The text of `/templates/<id>/<file>`, or an error that names what exists. */
 export function readTemplateFile(path: string): Result<string, FileError> {
   const normalized = normalizePath(path) ?? path;
   const [id = "", ...rest] = normalized.slice(templateRoot.length + 1).split("/");
@@ -79,11 +67,6 @@ type Located = { path: string; file: ProjectFile | null; kind: FileKind | null }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/**
- * An in-memory `ExecutionEnv` over a disposable copy of a Project's files.
- * Every write is a proposal: it stays in this workspace until the Validation
- * Gate clears it. `exec` is deliberately unavailable.
- */
 class CapsuleEnvWorkspace implements CapsuleWorkspace {
   readonly env: ExecutionEnv;
   private readonly seed: CapsuleFiles;
@@ -161,13 +144,6 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
     const unsupported = <T>(message: string, path?: string) =>
       err<T, FileError>(new FileError("not_supported", message, path));
 
-    /**
-     * Why the agent may not write `file`, or null. Anything inside a protected
-     * file, and case variants of one such as App.js, are refused: a merged proposal
-     * lands them in the project, and the export would then write them over the
-     * real files. A new path that differs from an existing one only by case is
-     * refused too, because a case-insensitive filesystem stores both as one.
-     */
     const refusedWrite = <T>(file: ProjectFile) => {
       const path = capsulePathFor(file);
       const blocking = fileAncestor(workspace.current, file);
@@ -186,7 +162,6 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
       return null;
     };
 
-    /** Locate a path that must already exist. The error branch is assignable to any `Result`. */
     const locateFile = (path: string, signal?: AbortSignal): Result<ProjectFile, FileError> => {
       const stop = stopped<ProjectFile>(signal);
       if (stop) return stop;
@@ -198,7 +173,6 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
         );
       }
       if (!located.file) return missing<ProjectFile>(located.path);
-      // A Capsule record hand-edited or persisted before a file existed has no such key.
       if (typeof workspace.current[located.file] !== "string") return missing<ProjectFile>(located.path);
       return ok<ProjectFile, FileError>(located.file);
     };
@@ -422,7 +396,6 @@ function asText(content: string | Uint8Array): string {
   return typeof content === "string" ? content : decoder.decode(content);
 }
 
-/** Normalize a Capsule path. Relative paths resolve against the workspace root; returns null when unusable. */
 function normalizePath(input: string): string | null {
   if (typeof input !== "string" || !input.trim()) return null;
   const absolute = input.startsWith("/") ? input : `${capsuleRoot}/${input}`;

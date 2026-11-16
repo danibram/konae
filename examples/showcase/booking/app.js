@@ -1,5 +1,3 @@
-// Room board. Visitors read which hours are taken; signed-in staff book,
-// cancel and see who holds a room. Every read and write is a declared action.
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
@@ -13,9 +11,6 @@ let day = localDay();
 let rooms = [];
 let picked = null;
 
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 function reason(error) {
   if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
   if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The board could not reach its server. Check the connection and try again.";
@@ -56,7 +51,6 @@ async function renderGrid() {
   const rows = staff
     ? await miniapp.actions.call("bookings.day", { day: shown })
     : await miniapp.actions.call("availability.day", { day: shown });
-  // A slower answer for a day the person already left is dropped.
   if (shown !== day) return;
   const held = new Map(rows.map((row) => [`${row.room}/${row.hour}`, row]));
   const past = shown < localDay();
@@ -141,7 +135,6 @@ $("#book").addEventListener("submit", async (event) => {
     closeForm();
     await render();
   } catch (error) {
-    // A booking that inserts nothing is refused with the action's guard, which names the rules.
     say(reason(error), "error");
     await render().catch(() => {});
   } finally {
@@ -152,7 +145,6 @@ $("#mine").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-cancel]");
   if (!button) return;
   button.disabled = true;
-  // A cancel that changes nothing is refused with the action's guard, which run() shows.
   await run("bookings.cancel", { ref: button.dataset.cancel }, "Booking cancelled. The hours are free again.");
 });
 const go = (next) => {
@@ -164,7 +156,6 @@ $("#next").addEventListener("click", () => go(shiftDay(day, 1)));
 $("#today").addEventListener("click", () => go(localDay()));
 $("#day").addEventListener("change", (event) => { if (event.target.value) go(event.target.value); });
 
-// Nothing pushes changes to the page, so the open board asks again.
 setInterval(() => { if (document.visibilityState === "visible" && !picked) render().catch(() => {}); }, 30_000);
 
 try {

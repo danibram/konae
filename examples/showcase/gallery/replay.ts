@@ -1,14 +1,3 @@
-// Replays the gallery on its own Kernel: publishes it as a Public Deployment
-// with Closed signup, admits one curator by invitation, uploads public photos
-// and private drafts, reads them as a visitor, sends contact messages until the
-// rate limit answers, reads /feed.json as a program, walks the multi-page
-// artifact, writes the Action Contract and runs conform. Exits 0 when every
-// assertion holds; removes its Kernel and data either way.
-//
-//   KONAE_SHOWCASE_PORT=19620 bun run examples/showcase/gallery/replay.ts
-//
-// KONAE_SHOWCASE_BROWSER=0 skips Chrome. KONAE_SHOWCASE_SCREENSHOTS=<dir>
-// writes a light and a dark screenshot of the published home page there.
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -45,7 +34,6 @@ const errorText = async (promise: Promise<unknown>) => {
   throw Error("Expected a refusal, but the call succeeded.");
 };
 
-// Photographs: 640x480 PNG landscapes drawn here, so the replay carries no binaries.
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (bytes: Uint8Array) => { let c = 0xffffffff; for (const b of bytes) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 const pngChunk = (type: string, data: Uint8Array) => {
@@ -87,7 +75,6 @@ function landscape(seed: number, width = 640, height = 480): Uint8Array {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk("IHDR", header), pngChunk("IDAT", deflateSync(raw)), pngChunk("IEND", new Uint8Array())]);
 }
 
-// The studio's own domain. A fake resolver answers the Kernel's TXT lookup.
 const dns = await fakeResolver();
 const studioDomain = "gallery.studio.example";
 
@@ -114,7 +101,6 @@ try {
   }
   assert(ready, "The Kernel did not start.");
 
-  // The owner of the installation and of the project.
   const signup = await fetch(`${url}/_konae/owner/signup`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@studio.example", password: ownerPassword, setupKey }),
@@ -126,14 +112,12 @@ try {
     return fetch(input, { ...init, headers });
   } });
 
-  // konae build publishes every page at the Capsule root with the files they load.
   const cliCopy = path.join(scratch, "cli-build");
   await cp(here, appDir(cliCopy), { recursive: true, filter: (source) => !source.endsWith("replay.ts") && !source.endsWith("README.md") });
   const { artifact } = await buildLocal(cliCopy);
   assert.deepEqual(Object.keys(artifact.files).sort(), ["404.html", "about.html", "app.js", "index.html", "runtime.js", "styles.css"]);
   assert(!("schema.sql" in artifact.files) && !("actions.json" in artifact.files));
   pass("CLI build", `konae build writes an artifact with ${Object.keys(artifact.files).sort().join(", ")}: the three pages, the stylesheet and module they load, and the SDK. schema.sql and actions.json stay out.`);
-  // A page that names a file the Capsule does not hold stops the build with the path.
   const brokenCopy = path.join(scratch, "cli-broken");
   await cp(cliCopy, brokenCopy, { recursive: true });
   await writeFile(path.join(appDir(brokenCopy), "about.html"), (await readFile(path.join(appDir(brokenCopy), "about.html"), "utf8")).replace("</main>", '<img src="/portrait.jpg" alt=""></main>'));
@@ -157,7 +141,6 @@ try {
     } finally { await owner.cancel(upload.transferId).catch(() => {}); }
   };
 
-  // A mutation with RETURNING is refused when the release is planned.
   const returning = JSON.parse(capsule["actions.json"]);
   returning.actions["contact.send"].statement += " RETURNING id";
   const returningMessage = await errorText(release({ ...capsule, "actions.json": JSON.stringify(returning) }));
@@ -165,7 +148,6 @@ try {
   refused("Publish contact.send with `... RETURNING id`", returningMessage);
   pass("RETURNING refused", returningMessage);
 
-  // First release: public, signup Closed from the first request.
   const receipt = await release(capsule, { initialSignupPolicy: { mode: "closed", allowlist: [] } });
   const host = receipt.hostname;
   const policy = await owner.call<{ mode: string }>("signup_policy_read", { deploymentId: receipt.id });
@@ -184,14 +166,11 @@ try {
   });
   const get = (route: string, init: RequestInit = {}) => appFetch()(url + route, { redirect: "manual", ...init });
 
-  // Closed: a stranger cannot create an account, and neither can the curator yet.
   const stranger = await post("/_konae/auth/signup", { email: "stranger@example.test", password: crypto.randomUUID() });
   const strangerBody = await stranger.json();
   assert.equal(stranger.status, 403);
   refused("A visitor signs up while signup is Closed (POST /_konae/auth/signup)", strangerBody.error, 403);
 
-  // The owner invites the curator. Closed refuses self-signup, not the
-  // owner's invitation (ADR-0003).
   const invited = await owner.call<{ policy: string; results: any[] }>("app_invitations_create", {
     deploymentId: receipt.id, emails: [curatorEmail], idempotencyKey: crypto.randomUUID(),
   });
@@ -220,11 +199,9 @@ try {
   assert.deepEqual(users.users.map((user) => user.email), [curatorEmail]);
   pass("Closed signup, one account", `A stranger's signup answers 403 "${strangerBody.error}". The owner's invitation answers acceptable: true under Closed and the curator accepts it with 200, while the curator's own signup answers 403; the policy stays Closed throughout, and the app has exactly one account and still refuses new ones.`);
 
-  // The curator's account becomes the studio. Only the owner can say so, with SQL.
   const curator = runtime(curatorCookie);
   const curatorSession = await curator.call<{ userId: string; role: string }>("auth_session");
   assert.equal(curatorSession.role, "member");
-  // Before the owner names the curator in the studio table, photos.add's guard refuses her.
   const beforeStudio = await errorText(curator.call<any>("actions_invoke", { name: "photos.add", input: { file_id: "none", title: "Before the studio row", caption: null, status: "draft" } }));
   assert.equal(beforeStudio, "Only the studio's curator can add photographs.");
   await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `INSERT INTO studio (user_id) VALUES ('${curatorSession.userId.replaceAll("'", "''")}')` } });
@@ -256,7 +233,6 @@ try {
   assert.equal((await action(curator, "studio.photos")).length, 5);
   pass("Curator uploads", "The curator stores three public photographs and two private drafts; photos.add was refused with its guard before the owner added the account to the studio table.");
 
-  // A visitor sees published photographs only, by every door.
   const visitor = runtime();
   const published = await action(visitor, "photos.published");
   assert.deepEqual(published.map((row: any) => row.title).sort(), photos.slice(0, 3).map((p) => p.title).sort());
@@ -282,12 +258,10 @@ try {
   refused("A visitor uploads a file (transfer_begin)", visitorUpload);
   pass("Visitor view", `photos.published returns 3 rows, files_list lists the 3 public files, a draft answers "${draftRead}" over MCP and 404 at the file path, a public file answers 200 image/png inline with CORP same-origin, and studio actions answer "${studioAsVisitor}".`);
 
-  // Publishing a draft makes its own file public; nothing is uploaded twice.
   const madePublic = await curator.call<{ id: string; visibility: string; url?: string }>("files_update", { fileId: drafts[0].fileId, visibility: "public" });
   assert.equal(madePublic.id, drafts[0].fileId);
   assert.equal(madePublic.visibility, "public");
   assert.equal((await action(curator, "photos.publish", { id: drafts[0].id })).changes, 1);
-  // The row keeps its own file, so publish takes only the photograph's ID, and a second publish is refused.
   assert.equal(await errorText(action(curator, "photos.publish", { id: drafts[0].id })), "Only the studio's curator can publish, and only a photograph that is still a draft.");
   assert.equal(await errorText(action(curator, "photos.publish", { id: drafts[0].id, file_id: stored[0].fileId })), "Unexpected action input: file_id");
   assert.equal((await action(visitor, "photos.published")).length, 4);
@@ -301,7 +275,6 @@ try {
   const unknownVisibility = await errorText(curator.call("files_update", { fileId: drafts[1].fileId, visibility: "friends" }));
   assert.equal(unknownVisibility, "Value is outside the allowed choices.");
   refused("files_update with visibility \"friends\"", unknownVisibility);
-  // A wrong upload is deleted, and its bytes stop counting against the quota.
   const stray = await upload(images[4], "wrong-crop.png");
   assert.equal((await curator.call<any[]>("files_list")).length, 6);
   assert.deepEqual(await curator.call("files_delete", { fileId: stray.id }), { id: stray.id, deleted: true });
@@ -315,12 +288,10 @@ try {
   refused("Delete a file that was already deleted (files_delete)", deletedAgain);
   pass("Publish a draft", `files_update makes the draft's own file public under the same ID and photos.publish marks the row published, a second publish is refused with its guard, so the curator holds 5 files for 5 photographs. A stray upload is deleted with files_delete: files_list drops it, files_read answers "${deletedRead}", the file path answers 404, and its size no longer counts against the 20 MiB quota.`);
 
-  // /feed.json: a public GET route any program reads without a signature or a key.
   const feed = await fetch(`${url}/feed.json`, { headers: { host, "x-forwarded-for": freshAddress(), origin: "https://reader.example" } });
   assert.equal(feed.status, 200);
   assert.equal(feed.headers.get("content-type"), "application/json");
   assert.equal(feed.headers.get("cache-control"), "no-store");
-  // An open GET route allows every origin since ADR-0013.
   assert.equal(feed.headers.get("access-control-allow-origin"), "*");
   const feedBody = await feed.json();
   assert.deepEqual(Object.keys(feedBody), ["result"]);
@@ -331,7 +302,6 @@ try {
   const head = await get("/feed.json", { method: "HEAD" });
   assert.equal(head.status, 405);
   assert.equal(head.headers.get("allow"), "GET");
-  // HTTP strips the body of a HEAD answer, so the documented message never reaches the caller.
   const headBody = await head.text();
   refused("HEAD /feed.json", `405 with Allow: GET and ${headBody ? `body ${headBody}` : "an empty body"}`, 405);
   const postFeed = await get("/feed.json", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
@@ -349,7 +319,6 @@ try {
   refused("Let a browser cache /feed.json", "No primitive: Cache-Control: no-store on every answer. A page on another origin reads it, since the route answers Access-Control-Allow-Origin: *.");
   pass("/feed.json", `GET with no signature or key answers 200 application/json { result: [4 items] } newest first, with image paths that load; HEAD answers 405 Allow: GET with ${headBody ? "a body" : "no body"}; POST answers 405 Allow: GET "${postFeedBody.error}"; ?page=2 answers 400 "${feedQueryBody.error}".`);
 
-  // contact.send: anonymous, records a Signal, and trips the per-address limit.
   const message = (n: number) => ({ name: `Reader ${n}`, email: `reader${n}@example.test`, topic: n % 2 ? "print" : "commission", message: `Is print ${n} still available?` });
   let lastResponse: Response | undefined;
   const limitedAddress = freshAddress();
@@ -380,7 +349,6 @@ try {
   assert.equal(inbox.length, sent + 1);
   pass("contact.send", `One address sends ${sent} messages, call ${limitedAt} answers "rate-limited" (HTTP 200, isError, Retry-After: ${retryAfter}), another address sends at once; ${signals.signals.length} contact.received Signals carry only the topic, and the curator's studio.messages lists ${inbox.length}. A topic outside the CHECK answers SQLite's text: "${badTopic}".`);
 
-  // The multi-page artifact and unknown paths.
   const title = (html: string) => html.match(/<title>([^<]*)<\/title>/)?.[1] ?? "(no title)";
   const paths = ["/", "/index.html", "/about.html", "/about", "/about/", "/missing-page", "/photos/2026/fog.jpg", "/styles.css", "/feed"];
   const walk: { path: string; status: number; type: string; title: string }[] = [];
@@ -405,14 +373,12 @@ try {
   assert.equal(headStyles.headers.get("content-type"), "text/css; charset=utf-8");
   pass("Multi-page artifact", `about.html serves its own page at /about.html and /about; /missing-page, /about/, /photos/2026/fog.jpg and /feed answer 404 with 404.html ("${at("/missing-page").title}"), never the home page. HEAD /styles.css answers ${headStyles.status} text/css.`);
 
-  // Usage counts the route under its method and path.
   const today = new Date().toISOString().slice(0, 10);
   const usage = await owner.call<{ totals: { kind: string; name: string; count: number }[] }>("usage_read", { deploymentId: receipt.id, from: today, to: today });
   const routeCount = usage.totals.find((row) => row.kind === "route" && row.name === "GET /feed.json")?.count ?? 0;
   assert.equal(routeCount, 1);
   pass("Usage", `usage_read counts GET /feed.json ${routeCount} time (the 400 and 405 answers count nothing) and contact.send ${usage.totals.find((row) => row.kind === "action" && row.name === "contact.send")?.count} times.`);
 
-  // The studio's own domain: proved with a TXT record, then the same app on its own origin.
   const aliasHost = `${studioDomain}:${port}`;
   const aliasOrigin = `http://${aliasHost}`;
   const onAlias = (path: string, init: RequestInit = {}) => {
@@ -460,7 +426,6 @@ try {
   refused(`A page on ${host} calls the runtime on ${studioDomain}`, crossOrigin, 403);
   pass("Custom domain", `domain_set ${studioDomain} answers pending with ${claim.record.name}; a record holding another value is refused and the alias answers 404; once the fake resolver returns the token the alias serves: / answers 200 with the app policy, /about 200, /missing-page 404 with 404.html, /feed.json the same 4 items, the first image 200 image/png from /_konae/files/<id>, and photos.published over the runtime with Origin ${aliasOrigin} returns 4 rows. The generated hostname keeps answering, and a page on it cannot call the runtime on the alias.`);
 
-  // The published pages in Chrome, under the Kernel's Content Security Policy.
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     const browser = await chromium.launch({ channel: "chrome" });
     const shots = process.env.KONAE_SHOWCASE_SCREENSHOTS;
@@ -505,8 +470,6 @@ try {
       assert.equal(await studio.page.locator("#drafts .draft").count(), 1);
       if (shots) await studio.page.screenshot({ path: path.join(shots, "gallery-studio-light.png"), fullPage: true });
       assert.deepEqual(studio.violations, [], "The studio view broke under the Content Security Policy.");
-      // The page re-reads a draft's bytes from files.url, publishes and hides it
-      // through the SDK, and the SDK refuses a visibility the Kernel lacks.
       const sdk = await studio.page.evaluate(async (draftId) => {
         const miniapp = (window as any).miniapp;
         const url = await miniapp.files.url(draftId);
@@ -522,8 +485,6 @@ try {
       refused("miniapp.files.upload(file, { visibility: \"organizers\" }) in the page", sdk.refusal);
       await studio.page.waitForTimeout(300);
       assert.deepEqual(studio.violations, [], "Reading a file through files.url broke under the Content Security Policy.");
-      // The owner takes the account out of the studio table while the studio page is open.
-      // A refused upload leaves no file, and a refused publish puts the draft's file back to private.
       await owner.call("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: "DELETE FROM studio" } });
       await studio.page.locator("#upload input[name=file]").setInputFiles({ name: "late.png", mimeType: "image/png", buffer: Buffer.from(images[0]) });
       await studio.page.getByLabel("Title").fill("After the studio row");
@@ -540,7 +501,6 @@ try {
     } finally { await browser.close(); }
   }
 
-  // The Action Contract, written by the CLI, and conform with no credential.
   const contractDir = path.join(scratch, "contract");
   const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
   const written = cli(["contract", "--dir", cliCopy, "--out", contractDir]);

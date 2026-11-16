@@ -33,18 +33,12 @@ describe("landing a proposal", () => {
       .toEqual({ ok: false, reason: "unvalidated" });
   });
 
-  /**
-   * The bug this pins: an action validated against the schema the agent was
-   * shown was written onto a schema the owner had edited in the meantime, and
-   * the panel still reported the combination as validated.
-   */
   test("refuses when a file the proposal did not change has moved since it was validated", () => {
     const seen = capsule({ "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER, due_at INTEGER);" });
     const proposal = proposalFor({ ...seen, "actions.json": "{ \"version\": 1, \"actions\": {} }" }, ["actions.json"]);
 
     const handEdited = capsule({ "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER);" });
     expect(mergeProposal(handEdited, proposal)).toEqual({ ok: false, reason: "drifted" });
-    // The same proposal is still applicable to the Capsule it was validated against.
     expect(mergeProposal(seen, proposal).ok).toBe(true);
   });
 

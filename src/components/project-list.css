@@ -1,5 +1,3 @@
-/* The project list: a heading with New project, a search and a sort, then Published and Drafts as cards.
-   Every colour is a --ds-* token, so light and dark come from the tokens alone. */
 .account-content.project-list { background: var(--ds-surface); color: var(--ds-text); }
 .project-list-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 32px 0 20px; }
 .project-list-head h1 { margin: 0; color: var(--ds-text); font: 700 28px/1.2 var(--ds-font); letter-spacing: -.03em; }
@@ -16,7 +14,6 @@
 .project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
 .project-list-none { margin: 28px 0; color: var(--ds-muted); font: 400 14px/1.5 var(--ds-font); }
 
-/* One card is one link: the name's link stretches over the card; the address and the menu sit above it. */
 .project-card-item {
   position: relative; min-width: 0;
   display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name menu" "purpose purpose" "status status" "meta meta";
@@ -43,7 +40,6 @@
 .project-card-item .project-card-menu .ui-button.project-card-more[aria-expanded="true"] { border-color: var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); }
 .project-card-item .project-card-menu .ui-button.project-card-more:active:not(:disabled) { translate: none; }
 
-/* A fresh owner sees one thing: describe the first app. */
 .project-list-empty.ui-empty { min-height: 50vh; }
 .project-list-empty.ui-empty h3 { font-size: 20px; }
 .project-list-empty.ui-empty p { font-size: 14px; }
@@ -51,7 +47,6 @@
 .project-list-empty-actions > p { margin: 10px 0 0; color: var(--ds-muted); font: 500 13px/1.4 var(--ds-font); }
 .project-list-empty-actions > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 
-/* New project: what it should do first, the name second, templates last. */
 .new-project.ui-dialog { width: min(600px, 100%); }
 .new-project .new-project-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; display: grid; gap: 18px; padding: var(--ds-space-6); }
 .new-project-body .ui-field { font-size: 13px; }
@@ -59,7 +54,6 @@
 .new-project-body .ui-textarea { min-height: 96px; resize: vertical; font-size: 14px; }
 .new-project-body .ui-input { font-size: 14px; }
 .new-project-templates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
-/* The templates sit behind one line; the chosen one's name shows on it while it is closed. */
 .new-project-more > summary { min-height: 36px; }
 .new-project-more[open] > summary { margin-bottom: 4px; }
 .new-project-chosen { margin-left: auto; color: var(--ds-muted); font-weight: 400; }
@@ -73,12 +67,9 @@
 .new-project-templates strong { font: 650 14px/1.35 var(--ds-font); }
 .new-project-templates small { color: var(--ds-muted); font: 400 12px/1.45 var(--ds-font); }
 .new-project-templates label.is-selected small { color: var(--ds-text); }
-/* The boot frame's placeholder bars span the card, not its name and menu columns. */
 .project-list-boot .project-card-item > * { grid-column: 1 / -1; }
 .project-delete-failure { margin: 12px 0 0; color: var(--ds-danger); font: 600 13px/1.5 var(--ds-font); }
-/* Keeping the data comes first in the delete dialog's footer, apart from Cancel and Delete. */
 .project-delete-keep { margin-right: auto; }
-/* Without a model, New project says in one line where the app starts and where the words wait. */
 .new-project-model { margin: -8px 0 0; padding: 8px 10px; border-left: 3px solid var(--ds-stroke); background: var(--ds-subtle); color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
 .project-list-head h1:focus { outline: none; }
 .project-list-head h1:focus-visible { outline: 2px solid var(--ds-blue); outline-offset: 4px; }
@@ -91,13 +82,11 @@
   .project-cards { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .new-project-templates { grid-template-columns: minmax(0, 1fr); }
 }
-/* On a card the address takes its own line under the state, so it is not cut to a few letters. */
 .project-card-status.app-status { flex-wrap: wrap; row-gap: 4px; }
 .project-card-status .app-status-address { order: 2; flex: 0 1 auto; max-width: 100%; }
 .project-card-status .app-status-time { order: 1; }
 .project-card-status[data-state="published"]::after { content: ""; order: 1; flex-basis: 100%; height: 0; }
 
-/* The developer's door, folded under the last line so the person who describes an app never has to read it. */
 .new-project-folder > summary { min-height: 36px; }
 .new-project-folder { min-width: 0; }
 .new-project-folder-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; justify-items: start; min-width: 0; padding: 0 0 4px; }

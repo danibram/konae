@@ -1,36 +1,3 @@
-//! Scheduled work, ADR-0011.
-//!
-//! A mutation may declare `"schedule": { "every": "15m" }` or
-//! `"schedule": { "daily": "02:00" }` (UTC). The Kernel runs it from one timer
-//! task inside its one process, as `copies.rs` runs copies: no process per
-//! app, no code of the app's own. Each tick reads the Deployments the Kernel
-//! holds, so a republish takes effect at the next tick.
-//!
-//! Time is cut into slots: `every` cuts it into periods counted from
-//! 1970-01-01 00:00 UTC, and `daily` into days that start at its time. An
-//! action runs once in a slot, at the first tick after the slot opens. The
-//! slot it last ran for is kept in the Deployment's `usage.sqlite`, so a
-//! restart, a copy, or an export and its import resumes from it and a daily job
-//! does not run twice. A Kernel that was down for many slots runs the action
-//! once, not once per missed slot. The first slot an action is seen in counts
-//! as done, so publishing never runs it.
-//!
-//! A run takes the Deployment's data lock and runs the statement as an
-//! action call does, with the 2-second statement budget. The timer runs one
-//! Deployment's actions one after another and skips a Deployment whose last
-//! tick is still running, so runs never pile up. A Deployment in maintenance
-//! is skipped and runs once when it leaves it. A run binds `kernel.now`, its
-//! literals and NULL for `actor.id`, since nobody called it; a statement can
-//! test `?n IS NULL` to tell the timer from a person, because a call from a
-//! person always binds an ID. A guard does not apply: a run that changes no
-//! row had nothing to do. A Signal is recorded when the run changed a row.
-//! Each run is recorded under Usage's `scheduled` kind with its outcome and
-//! changes. A run that fails leaves its slot open and the next tick tries
-//! again.
-//!
-//! `parseSchedule` in src/kernel/actions.ts makes the same checks in the same
-//! order with the same messages, and kernel-rs/kernel/src/schedule-cases.json holds
-//! the cases both test suites run.
 
 use super::refusal::{refuse, Refusal};
 use super::{usage, ActionDefinition, ActionProgram, AppState};
@@ -46,9 +13,7 @@ pub const MIN_MINUTES: u64 = 5;
 /// The longest period, one day.
 pub const MAX_MINUTES: u64 = 24 * 60;
 const DAY_MS: u64 = 86_400_000;
-/// How often the timer looks for due work on a real clock.
 const TICK: Duration = Duration::from_secs(60);
-/// The test clock's variable and its largest value.
 const TEST_CLOCK: &str = "KONAE_SCHEDULE_MIN_SECONDS";
 const MAX_TEST_SECONDS: u64 = 300;
 
@@ -67,7 +32,6 @@ impl Schedule {
         }
     }
 
-    /// The slot that holds `now`: whole periods since the first slot opened.
     fn slot(&self, now: u64) -> i64 {
         let (period, offset) = match self {
             Schedule::Every { minutes } => (minutes * 60_000, 0),
@@ -77,8 +41,6 @@ impl Schedule {
     }
 }
 
-/// When scheduled work runs. A real clock follows each declaration; the test
-/// clock runs every declared schedule once every few seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
     test_seconds: Option<u64>,
@@ -111,9 +73,6 @@ impl Clock {
         }
     }
 
-    /// The slot that holds `now`, and the key the store keeps the schedule
-    /// under. The test clock's key names its period, so a Kernel started
-    /// without it later starts the schedule afresh.
     fn place(&self, schedule: &Schedule, now: u64) -> (i64, String) {
         match self.test_seconds {
             Some(seconds) => ((now / (seconds * 1000)) as i64, format!("{} (test clock {seconds}s)", schedule.key())),
@@ -125,7 +84,6 @@ impl Clock {
 /// Parses and checks one action's `schedule` key. `Ok(None)` when it has none.
 pub fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Schedule>, Refusal> {
     let Some(value) = action.schedule.as_ref() else { return Ok(None) };
-    // Each message is written out so src/sdk/contract.test.ts finds it.
     if action.kind == "query" {
         return Err(refuse("schedule.not-mutation", format!("Action {name} is a query, so it cannot declare a schedule. Declare it on a mutation.")));
     }
@@ -257,8 +215,6 @@ pub async fn run_manually(state: &AppState, deployment: &super::Deployment, name
     }
 }
 
-/// Starts a run for each Deployment with scheduled work that is not in
-/// maintenance and whose previous run has finished.
 async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String>>>) {
     let deployments = state.deployments.read().await.values().cloned().collect::<Vec<_>>();
     for deployment in deployments {
@@ -288,8 +244,6 @@ async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String
     }
 }
 
-/// Runs each of one Deployment's actions whose slot has not run yet. `now`
-/// is the clock in milliseconds, which tests replace.
 async fn run_due(
     state: &AppState,
     clock: Clock,
@@ -308,7 +262,6 @@ async fn run_due(
         match done.get(name) {
             Some((ran_under, ran_slot)) if *ran_under == key && *ran_slot >= slot => continue,
             Some((ran_under, _)) if *ran_under == key => {}
-            // Never seen, or declared differently since: start from the next slot.
             _ => {
                 let (name, key) = (name.clone(), key.clone());
                 blocking(&folder, move |folder| usage::schedule_baseline(folder, &name, &key, slot)).await?;
@@ -316,7 +269,6 @@ async fn run_due(
             }
         }
         let _lock = super::action_lock(state, id, &action.kind).await;
-        // Maintenance may have begun while an earlier action ran.
         if super::maintenance::pause(&state.data_root, id).is_some() || !folder.is_dir() {
             return Ok(());
         }
@@ -337,7 +289,6 @@ async fn run_due(
         .await?;
         if let Some(ran) = ran.filter(|_| changes.is_some_and(|changes| changes > 0)) {
             usage::signal(&state.data_root, id, name, action, &json!({}), None);
-            // The notice shows the run's own time, the one kernel.now bound.
             super::notify::record(
                 state, deployment, name, action, &json!({}),
                 super::notify::Caller { account: None, actor_id: None },
@@ -348,9 +299,6 @@ async fn run_due(
     Ok(())
 }
 
-/// The values a scheduled run binds: `kernel.now`, the literals, and NULL
-/// for `actor.id`. The parser refuses input
-/// bindings on a scheduled action.
 fn parameters(action: &ActionDefinition, now: u64) -> Vec<SqlValue> {
     action
         .bindings
@@ -379,8 +327,6 @@ mod tests {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()
     }
 
-    /// The editor runs the same file in src/kernel/actions.test.ts and
-    /// through the Validation Gate in src/agent/gate.test.ts.
     #[test]
     fn schedules_refuse_what_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("schedule-cases.json")).unwrap();
@@ -402,14 +348,12 @@ mod tests {
         assert_eq!(quarter.slot(at("2026-11-07T10:15:00")), quarter.slot(at("2026-11-07T10:00:00")) + 1);
         let two = Schedule::Daily { minute_of_day: 120 };
         assert_eq!(two.key(), "daily 02:00");
-        // 01:59 belongs to the day that opened at 02:00 yesterday; 02:00 opens a new one.
         assert_eq!(two.slot(at("2026-11-07T01:59:59")), two.slot(at("2026-11-06T02:00:00")));
         assert_eq!(two.slot(at("2026-11-07T02:00:00")), two.slot(at("2026-11-06T02:00:00")) + 1);
         assert_eq!(two.slot(at("2026-11-07T23:00:00")), two.slot(at("2026-11-07T02:00:00")));
         assert_eq!(Schedule::Every { minutes: 1440 }.slot(at("2026-11-07T23:59:59")), Schedule::Every { minutes: 1440 }.slot(at("2026-11-07T00:00:00")));
     }
 
-    /// Seconds since 1970 for `YYYY-MM-DDTHH:MM:SS` in UTC, in milliseconds.
     fn utc(text: &str) -> u64 {
         let number = |range: std::ops::Range<usize>| text[range].parse::<i64>().unwrap();
         let (y, m, d) = (number(0..4), number(5..7), number(8..10));
@@ -444,7 +388,6 @@ mod tests {
         assert_eq!((slot, key.as_str()), (5, "daily 00:00 (test clock 2s)"));
     }
 
-    /// A Deployment with a `holds` table, its scheduled work, and a clock the test moves.
     struct Rig {
         root: std::path::PathBuf,
         state: AppState,
@@ -489,7 +432,6 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM holds WHERE released_at IS NOT NULL", [], |row| row.get(0)).unwrap()
         }
 
-        /// The runs `usage_summary` returns for the whole of November 2026, oldest first.
         fn runs(&self) -> Vec<(String, String, i64)> {
             usage::flush();
             let path = crate::layout::usage(&self.root, &self.id);
@@ -525,29 +467,24 @@ mod tests {
         let actions = release(json!({"every": "15m"}));
         rig.sql(&format!("INSERT INTO holds(until) VALUES ({}), ({}), ({})", utc("2026-11-07T10:00:00"), utc("2026-11-07T10:10:00"), utc("2026-11-07T12:00:00")));
 
-        // Publishing at 10:07 runs nothing: the first slot counts as done.
         rig.at("2026-11-07T10:07:00");
         rig.run(&actions, real).await;
         assert_eq!((rig.released(), rig.runs().len()), (0, 0));
 
-        // 10:15 opens a slot: one run releases the two lapsed holds.
         rig.at("2026-11-07T10:16:00");
         rig.run(&actions, real).await;
         assert_eq!(rig.released(), 2);
         assert_eq!(rig.runs(), vec![("holds.release".into(), "ok".into(), 2)]);
 
-        // A second tick in the same slot, and a restart in it, run nothing.
         rig.at("2026-11-07T10:29:59");
         rig.run(&actions, real).await;
         rig.run(&actions, real).await;
         assert_eq!(rig.runs().len(), 1);
 
-        // A run that changes no row is a run, not a guard refusal.
         rig.at("2026-11-07T10:30:00");
         rig.run(&actions, real).await;
         assert_eq!(rig.runs()[1], ("holds.release".into(), "ok".into(), 0));
 
-        // A failure leaves the slot open: the next tick tries again, once.
         rig.sql("ALTER TABLE holds RENAME TO holds_away");
         rig.at("2026-11-07T10:45:00");
         rig.run(&actions, real).await;
@@ -561,14 +498,12 @@ mod tests {
         let outcomes = rig.runs().into_iter().skip(2).map(|run| run.1).collect::<Vec<_>>();
         assert_eq!(outcomes, ["failed", "failed", "ok"]);
 
-        // A Kernel that was down from 10:48 to 13:05 runs once, not once per missed slot.
         rig.at("2026-11-07T13:05:00");
         rig.run(&actions, real).await;
         rig.run(&actions, real).await;
         assert_eq!(rig.runs().len(), 6);
         assert_eq!(rig.released(), 3);
 
-        // Maintenance skips the run; leaving it runs the open slot once.
         crate::maintenance::pause_for_test(&rig.root, &rig.id, true);
         rig.at("2026-11-07T13:15:00");
         rig.run(&actions, real).await;
@@ -577,8 +512,6 @@ mod tests {
         rig.run(&actions, real).await;
         assert_eq!(rig.runs().len(), 7);
 
-        // Usage counts every run under scheduled, and the runs that changed
-        // a row record their Signal with no actor.
         let path = crate::layout::usage(&rig.root, &rig.id);
         let usage = usage::read_usage(&path, "2026-11-07", "2026-11-07").unwrap();
         assert!(usage["totals"].as_array().unwrap().contains(&json!({"kind": "scheduled", "name": "holds.release", "count": 7})), "{usage}");
@@ -622,11 +555,9 @@ mod tests {
         assert!(rig.runs().is_empty(), "nothing before 02:00");
         rig.at("2026-11-08T02:00:30");
         rig.run(&daily, real).await;
-        // A restart at 03:00 the same day finds the run in the store.
         rig.at("2026-11-08T03:00:00");
         rig.run(&daily, real).await;
         assert_eq!(rig.runs().len(), 1);
-        // A republish that moves it to 04:00 starts from the slot it is in, so it does not run at once.
         let moved = release(json!({"daily": "04:00"}));
         rig.at("2026-11-08T05:00:00");
         rig.run(&moved, real).await;
@@ -634,7 +565,6 @@ mod tests {
         rig.at("2026-11-09T04:00:00");
         rig.run(&moved, real).await;
         assert_eq!(rig.runs().len(), 2);
-        // The test clock keys its own slots, so it starts afresh too.
         rig.run(&moved, Clock { test_seconds: Some(2) }).await;
         assert_eq!(rig.runs().len(), 2);
         rig.at("2026-11-09T04:00:02");

@@ -1,9 +1,3 @@
-//! Bounded, portable schema transitions for an app's SQLite database.
-//!
-//! Planning reads schema and transformation metadata only. Callers apply a
-//! plan to a throwaway database to collect affected-row counts, then apply it
-//! again inside the caller's live transaction after confirmation. This module
-//! never commits that transaction.
 
 use std::{
     collections::HashSet,
@@ -1775,7 +1769,6 @@ mod tests {
                 .code,
             AFTER_MISMATCH
         );
-        // The engine removes its authorizer even when a transition refuses.
         tx.execute_batch("CREATE TABLE caller_owned(id INTEGER);")
             .unwrap();
         tx.rollback().unwrap();

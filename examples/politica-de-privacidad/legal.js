@@ -1,5 +1,3 @@
-// Points the bar links at this installation. The page answers on
-// <domain>/p/<name>/ and on its own hostname, so the domain comes from location.
 const { protocol, hostname, port, pathname } = location;
 const labels = hostname.split(".");
 const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);

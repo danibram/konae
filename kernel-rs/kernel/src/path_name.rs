@@ -1,15 +1,6 @@
-//! The name an app may answer on under `<domain>/p/<name>`
-//! (docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md).
-//!
-//! The owner names the path with `path_set`. The Kernel checks the name here,
-//! and the editor checks it in `src/lib/path-name.ts`. Both run the rules in
-//! `path-cases.json` and give the same codes and words.
 
 use super::refusal::{refuse, Refusal};
 
-/// Names Konae serves on its own paths, or that would read as one of its
-/// own addresses. A reserved name is refused before its length or characters
-/// are checked, so `p` and `runtime.js` say why they are refused.
 const RESERVED: &[&str] = &["_konae", "p", "app", "mcp", "www", "api", "admin", "runtime.js"];
 
 const MIN_LENGTH: usize = 3;
@@ -56,8 +47,6 @@ pub fn check_name(raw: &str) -> Result<String, Refusal> {
     Ok(name)
 }
 
-/// True for the 8-4-4-4-12 hex form with hyphens and for the 32 hex digits
-/// without them. Both are the id the Kernel gives a Deployment.
 fn is_uuid_shape(name: &str) -> bool {
     let bytes = name.as_bytes();
     match bytes.len() {
@@ -74,7 +63,6 @@ fn is_uuid_shape(name: &str) -> bool {
 mod tests {
     use serde_json::Value;
 
-    /// The CLI runs the same file in src/lib/path-name.test.ts.
     #[test]
     fn names_are_refused_with_the_words_the_cli_uses() {
         let file: Value = serde_json::from_str(include_str!("path-cases.json")).unwrap();

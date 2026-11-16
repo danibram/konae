@@ -1,17 +1,5 @@
 import type { AgentSessionConfig, ProviderConfig, ProviderId } from "./contracts";
 
-/**
- * The curated provider catalogue. It lives in its own module, free of `pi-ai`
- * imports, so the editor can render the model picker without pulling the agent
- * chunk (and its provider catalogs) into the cold start.
- *
- * Every id here was checked against the shipped 0.84.2 catalogs.
- * `supportsCustomModelId` is the escape hatch for everything else.
- *
- * Each `keyPage` is the page the provider's own docs link to for creating a key
- * (docs.claude.com API overview, OpenAI's quickstart, OpenRouter's
- * authentication guide); the pi-ai catalogs record only API endpoints.
- */
 export const PROVIDERS: readonly ProviderConfig[] = [
   {
     id: "anthropic",
@@ -59,7 +47,6 @@ export function defaultSessionConfig(provider: ProviderId = "anthropic"): AgentS
   return { provider, modelId: providerConfig(provider).defaultModels[0].id };
 }
 
-/** Tolerant lookup for the pickers: an unknown id falls back to the first provider. */
 export function resolveProvider(providers: readonly ProviderConfig[], id: ProviderId): ProviderConfig {
   return providers.find((provider) => provider.id === id) ?? providers[0];
 }
@@ -68,7 +55,6 @@ export function isCustomModelId(provider: ProviderConfig, modelId: string): bool
   return !provider.defaultModels.some((model) => model.id === modelId);
 }
 
-/** Switching provider must not leave a model id the new provider cannot serve. */
 export function defaultModelIdFor(provider: ProviderConfig): string {
   return provider.defaultModels[0]?.id ?? "";
 }

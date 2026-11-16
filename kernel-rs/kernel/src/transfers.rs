@@ -1,9 +1,3 @@
-//! Transfers: how bytes travel over MCP in blocks, 4 MiB for an
-//! administrative upload or download such as a release or an export. The SDK
-//! sends an app user's file in one request body, `PUT /_konae/transfers/<id>`,
-//! on a transfer opened the same way. Each transfer is a file under `transfers/` and a row in
-//! `transfers.sqlite`, which also keeps the receipt of each finished file
-//! upload so a retry gets the same answer.
 
 use super::*;
 use rusqlite::params;
@@ -121,14 +115,6 @@ pub async fn new_transfer(state: &AppState, principal: &str, value: Value) -> Re
         [principal],
         |r| r.get(0),
     )?;
-    // App users share one pool per deployment and administrative callers
-    // share another, so runtime traffic cannot exhaust the slots releases and
-    // exports need.
-    // App user transfers also expire sooner, so abandoned ones free the
-    // Deployment's pool quickly.
-    // Signed-out visitors of a public app, one principal per client address,
-    // share a smaller pool of their own, so visitors from a handful of
-    // networks cannot hold the slots signed-in users upload with.
     let (pool, excluded, limit, per_principal, ttl) = match principal.strip_prefix("runtime:") {
         Some(rest) => {
             let deployment = rest.split(':').next().unwrap_or("");
@@ -291,14 +277,9 @@ pub async fn transfer_call(
     let path = transfer_path(state, id)?;
     let _guard = database_lock(state, &format!("transfer:{id}")).await;
     if name == "transfer_cancel" && !principal.starts_with("runtime:") {
-        // A guessed transfer ID must never let one owner remove another
-        // owner's file, even though cancellation of a missing ID is a no-op.
         if owned_transfer(state, principal, a)?.is_none() {
             return Ok(json!({"ok":true}));
         }
-        // Remove bytes before the row. If unlinking fails, the upload remains
-        // discoverable and a later cancel can retry. If deleting the row
-        // fails, a missing file is harmless on retry.
         match tokio::fs::remove_file(&path).await {
             Ok(()) => {}
             Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {}
@@ -376,7 +357,6 @@ pub async fn transfer_call(
         }
         "transfer_complete" => {
             anyhow::ensure!(t["direction"] == "upload", "Not an upload.");
-            // Hashes in 64 KiB reads, so a package component never sits in memory.
             let (size, sha256) =
                 tokio::task::spawn_blocking(move || super::copies::checksum_file(&path)).await??;
             anyhow::ensure!(
@@ -407,16 +387,12 @@ mod tests {
         let id = begun["transferId"].as_str().unwrap();
         let path = transfer_path(&state, id).unwrap();
 
-        // A directory at the transfer path makes remove_file fail on each
-        // supported platform, while retaining the same transfer row.
         tokio::fs::remove_file(&path).await.unwrap();
         tokio::fs::create_dir(&path).await.unwrap();
         let failed = transfer_call(&state, "owner:alice", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap_err();
         assert!(!failed.to_string().is_empty(), "{failed}");
         assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_some());
 
-        // A different owner gets the idempotent missing/foreign no-op, and
-        // cannot unlink the original owner's path.
         transfer_call(&state, "owner:bob", "transfer_cancel", &json!({"transferId":id}), false).await.unwrap();
         assert!(tokio::fs::metadata(&path).await.unwrap().is_dir());
         assert!(owned_transfer(&state, "owner:alice", &json!({"transferId":id})).unwrap().is_some());

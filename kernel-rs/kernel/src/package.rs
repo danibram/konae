@@ -1,23 +1,3 @@
-//! The export of one app, and the import of its data.
-//!
-//! `project_export` hands over the app folder in pieces that travel as
-//! transfers. The `folder` download holds `konae.json`, `app/` and `dist/`.
-//! The data is captured under the app's locks, the same way a scheduled copy
-//! does, and each part of `data/` is one component: database, identity,
-//! files and usage. A versioned manifest lists every component with its size
-//! and SHA-256 and names the revisions that produced the app. Secrets, owners
-//! and the installation's `.konae/` never leave.
-//!
-//! An import uploads the same components as transfers started with their
-//! component name, then names them in the release payload as
-//! `initialPackage`. `release_plan` verifies the manifest, the checksums, the
-//! references between files and accounts and the free space before any
-//! Deployment exists; `release_apply` copies the components into the new
-//! app's `data/`. Only a project without a Deployment accepts a package
-//! this way; `import.rs` replaces the data of an app that already runs.
-//!
-//! Every step reads and writes components in 64 KiB blocks or lets SQLite
-//! page through them, so no component sits in memory on the Kernel.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -34,19 +14,12 @@ pub const PACKAGE_FORMAT: &str = "konae-package";
 pub const PACKAGE_VERSION: u64 = 1;
 /// `usage` travels when the Deployment has a Usage store, ADR-0010.
 pub const COMPONENT_NAMES: [&str; 4] = ["database", "identity", "files", "usage"];
-/// The download that holds `konae.json`, `app/` and `dist/`. An import
-/// takes sources and built files from its release, so the manifest does not list it.
 const FOLDER_DOWNLOAD: &str = "folder";
 const MIB: u64 = 1024 * 1024;
 /// The largest component a transfer may carry, a database at its quota.
 pub const MAX_COMPONENT_BYTES: u64 = MAX_APP_DATABASE_BYTES;
-/// `index.json` inside the files component.
 const MAX_FILE_INDEX_BYTES: u64 = 32 * MIB;
-/// Free space kept on the volume after a capture or an import.
 const SPACE_MARGIN: u64 = 64 * MIB;
-/// Rows that let someone in without a password. They never leave the origin
-/// and an import deletes any it finds. API keys travel instead, revoked at
-/// import, so the destination lists them (`http::revoke_imported_keys`).
 const ACCESS_TABLES: [&str; 3] = ["app_sessions", "account_challenges", "entry_links"];
 const EXCLUDED: [&str; 5] = [
     "app sessions",
@@ -75,29 +48,20 @@ pub struct Manifest {
     pub visibility: String,
     #[serde(default)]
     pub signup_policy: Option<SignupPolicy>,
-    /// How people sign in. Absent in packages written before Google sign-in,
-    /// which import with password only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in_methods: Option<Vec<SignInMethod>>,
-    /// Releases applied to the project when the package was captured.
     #[serde(default)]
     pub published_revision: u64,
     #[serde(default)]
     pub artifact_version: Option<String>,
-    /// Saves of the project's sources. It counts saves, not releases, so a
-    /// package never claims the saved sources are the published ones.
     #[serde(default)]
     pub sources_revision: Option<u64>,
     #[serde(default)]
     pub contents: Vec<Content>,
     #[serde(default)]
     pub excluded: Vec<String>,
-    /// The custom domain's hostname, without its token. The destination
-    /// issues its own token (`domain::arrive`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
-    /// The path address: whether it is on, its name and the owner's acceptance.
-    /// Never the Deployment id. The destination keeps a free name (`path::arrive`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<super::path::Carried>,
 }
@@ -109,7 +73,6 @@ pub struct Content {
     pub sha256: String,
 }
 
-/// The `initialPackage` field of a release payload.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitialPackage {
@@ -123,10 +86,6 @@ pub fn component_limit(name: &str, files: &file_store::FileLimits) -> Result<u64
     match name {
         "database" => Ok(MAX_APP_DATABASE_BYTES),
         "identity" => Ok(auth::MAX_IDENTITY_DATABASE_BYTES),
-        // The files check caps the file data at this installation's quota.
-        // Each file adds a header and padding of at most 1 KiB to the
-        // archive, and the index adds its own size, so the archive gets that
-        // much room, and never less than the largest component.
         "files" => Ok(MAX_COMPONENT_BYTES.max(
             files.quota_bytes + MAX_FILE_INDEX_BYTES + (files::MAX_FILES as u64 + 2) * 1024,
         )),
@@ -192,7 +151,6 @@ pub fn ensure_upload_space(state: &AppState, size: u64) -> Result<()> {
 pub fn free_bytes(path: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    // SAFETY: statvfs writes into the zeroed struct and reads a NUL-terminated path.
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
     let status = unsafe { libc::statvfs(path.as_ptr(), &mut stat) };
     ensure!(status == 0, "Could not read the free space on the Kernel volume.");
@@ -205,8 +163,6 @@ pub fn free_bytes(_path: &Path) -> Result<u64> {
     Ok(u64::MAX)
 }
 
-// ---------------------------------------------------------------------------
-// Export
 
 /// The revisions an export's manifest names: the release the app serves
 /// and the saved sources, when the caller keeps a count of saves.
@@ -245,7 +201,6 @@ pub async fn export(
         let _data = database_lock(state, &deployment.id).await;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
         open_auth(state, &deployment)?;
-        // Bytes in a bucket are not in the folder, but the archive holds them.
         let elsewhere: u64 = match state.files.store.kind() {
             "local" => 0,
             _ => file_store::indexed_files(&state.data_root, &deployment.id).await?.unwrap_or_default().iter().map(|(_, size)| size).sum(),
@@ -261,7 +216,6 @@ pub async fn export(
         let saved_actions = tokio::fs::read_to_string(app_sources.join("actions.json")).await.ok();
         let mut sources_ahead = saved_actions.is_some_and(|saved| saved != deployment.actions);
         if let Some(released) = deployment.source_digest.as_deref() {
-            // Saved editor files can include paths that a folder publish skips.
             let saved = crate::sources::digest_folder(&app_sources).await?;
             sources_ahead |= saved != released;
         }
@@ -349,8 +303,6 @@ pub fn folder_size(folder: &Path) -> Result<u64> {
     Ok(total)
 }
 
-/// Writes the components into `scratch` and returns each with its size and
-/// SHA-256. `usage` is left out when the Deployment has no Usage store yet.
 fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles) -> Result<Vec<(String, PathBuf, u64, String)>> {
     let components = snapshot(folder, scratch, blobs)?;
     revoke_access(&components[1].1)?;
@@ -405,17 +357,11 @@ pub fn revoke_access(path: &Path) -> Result<usize> {
         }
     }
     removed += super::http::revoke_imported_keys(&connection)?;
-    // An invitation's link opens nothing outside the installation that sent it.
     super::invitations::forget_tokens(&connection)?;
     Ok(removed)
 }
 
-// ---------------------------------------------------------------------------
-// The files component: a ustar archive of `index.json` followed by one
-// `<id>.blob` per indexed file, in index order.
 
-/// Writes the files component from the index in `directory` and the bytes
-/// `open` reads for each file it lists.
 fn write_files_tar<R: Read>(directory: &Path, target: &Path, open: impl Fn(&str) -> Result<Option<(u64, R)>>) -> Result<()> {
     let index: Vec<Value> = match std::fs::read(directory.join("index.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -454,8 +400,6 @@ pub fn folder_files_tar(directory: &Path, target: &Path) -> Result<()> {
     })
 }
 
-/// Writes the part of the app folder that is not data: `konae.json`,
-/// `app/` and `dist/`, as a ustar archive whose names are folder paths.
 fn write_folder_tar(folder: &Path, target: &Path, settings: &[u8]) -> Result<()> {
     let mut output = std::io::BufWriter::new(std::fs::File::create(target)?);
     let mut entries = vec![crate::layout::SETTINGS_FILE.to_owned()];
@@ -494,8 +438,6 @@ fn write_folder_tar(folder: &Path, target: &Path, settings: &[u8]) -> Result<()>
     Ok(())
 }
 
-/// A header for a path of up to 255 bytes: ustar keeps what does not fit in
-/// the 100-byte name in its 155-byte prefix, split at a slash.
 fn path_header(path: &str, size: u64) -> Result<[u8; 512]> {
     if path.len() <= 100 {
         return Ok(tar_header(path, size));
@@ -539,7 +481,6 @@ fn tar_header(name: &str, size: u64) -> [u8; 512] {
     header
 }
 
-/// Reads one header. Returns `None` at the end-of-archive block.
 fn read_tar_header(input: &mut impl Read) -> Result<Option<(String, u64)>> {
     let mut header = [0u8; 512];
     input.read_exact(&mut header).context("The files component ends early.")?;
@@ -563,9 +504,6 @@ fn parse_octal(field: &[u8]) -> Result<u64> {
     u64::from_str_radix(text, 8).context("The files component has a damaged header.")
 }
 
-/// Reads the files component, checks it and, with a destination, writes the
-/// blobs and a normalized `index.json` there. A file owner must be an
-/// account in `accounts`.
 fn unpack_files(
     archive: &Path,
     accounts: Option<&Connection>,
@@ -624,7 +562,6 @@ fn unpack_files(
         let mut body = (&mut input).take(size);
         let copied = match destination {
             Some((directory, blobs)) => {
-                // Each file lands beside the index first, then goes to the store.
                 let temp = directory.join(format!(".{id}.import-{}", Uuid::new_v4()));
                 let stored = (|| {
                     let copied = std::io::copy(&mut body, &mut std::fs::File::create(&temp)?)?;
@@ -664,11 +601,7 @@ fn skip(input: &mut impl Read, bytes: u64) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Import
 
-/// The uploads named by the payload, checked against the manifest. With a
-/// principal the transfers must belong to that caller and project.
 fn component_uploads(state: &AppState, principal: Option<&str>, project_id: &str, package: &InitialPackage) -> Result<Vec<(Content, PathBuf)>> {
     check_manifest(&package.manifest, &state.files.limits)?;
     for name in package.components.keys() {
@@ -715,7 +648,6 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
     let uploads = component_uploads(state, Some(principal), project_id, package)?;
     let database = uploads.iter().find(|(c, _)| c.name == "database").map(|(c, _)| c.size).unwrap_or(0);
     let total: u64 = uploads.iter().map(|(c, _)| c.size).sum();
-    // The release check copies the database once more to try the schema.
     ensure_space(free_bytes(&state.data_root)?, total + database + SPACE_MARGIN, "import this app")?;
     let file_limits = state.files.limits;
     tokio::task::spawn_blocking(move || {
@@ -739,9 +671,6 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
 pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits) -> Result<()> {
     let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
     let database = path("database").context("The package has no database.")?;
-    // The integrity check connects every virtual table and runs its module on
-    // the file's shadow tables, so no component is checked before all three are
-    // known to hold no trigger, view or virtual table.
     no_trigger_or_view(&database, "database", "database")?;
     for (name, label, what) in [("identity", "accounts", "accounts component"), ("usage", "usage", "usage component")] {
         if let Some(component) = path(name) {
@@ -759,8 +688,6 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
                 |r| r.get(0),
             )?;
             ensure!(has_users, "The accounts component has no app_users table.");
-            // Only a missing column means there are no hashes. A generated
-            // column is hidden from `pragma_table_info`, so the scan asks for it by name.
             match db.prepare("SELECT password_hash FROM app_users") {
                 Ok(mut hashes) => {
                     let rows = hashes.query_map([], |row| row.get::<_, rusqlite::types::Value>(0))?;
@@ -785,8 +712,6 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     Ok(())
 }
 
-/// Refuses a component that holds a trigger, a view or a virtual table. The
-/// Kernel creates none of them in any of its files.
 fn no_trigger_or_view(path: &Path, label: &str, what: &str) -> Result<()> {
     let stored = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .and_then(|db| match super::sql_rules::stored_trigger_or_view(&db, what)? {
@@ -964,7 +889,6 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("identity.sqlite");
         let db = Connection::open(&path).unwrap();
-        // The keys table as a Kernel from before `revoked_reason` wrote it.
         db.execute_batch(
             "CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');
              CREATE TABLE app_sessions(token_hash TEXT); INSERT INTO app_sessions VALUES('secret-session-hash');
@@ -1025,8 +949,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Writes a Deployment's files into an archive from one store and unpacks
-    /// it into another, on a blocking thread as the capture and the import do.
     async fn round_trip(source: Arc<dyn file_store::FileStore>, target: Arc<dyn file_store::FileStore>, root: &Path) {
         let (a, b) = ("00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b");
         let deployment = Uuid::new_v4().to_string();
@@ -1105,7 +1027,6 @@ mod tests {
             let accounts = Connection::open_in_memory().unwrap();
             accounts.execute_batch("CREATE TABLE app_users(id TEXT PRIMARY KEY); INSERT INTO app_users VALUES('u1');").unwrap();
 
-            // A destination whose limits are below the package's files.
             let small = file_store::FileLimits::parse(Some("1000"), Some("1000")).unwrap();
             assert_eq!(
                 unpack_files(&archive, Some(&accounts), None, &small).unwrap_err().to_string(),
@@ -1117,7 +1038,6 @@ mod tests {
                 format!("File {b} exceeds this installation's 999 bytes limit per file.")
             );
 
-            // An archive with data the index does not list.
             let mut bytes = std::fs::read(&archive).unwrap();
             bytes.truncate(bytes.len() - 1024);
             bytes.extend_from_slice(&tar_header("00000000-0000-4000-8000-00000000000c.blob", 1));
@@ -1132,7 +1052,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// A database file with a trigger whose `type` the way a hand edit spells it.
     fn file_with(root: &Path, name: &str, statements: &str, edit_type: Option<&str>) -> PathBuf {
         let path = root.join(name);
         let db = Connection::open(&path).unwrap();
@@ -1176,7 +1095,6 @@ mod tests {
             assert_eq!(error.to_string(), refused, "{hash}");
             std::fs::remove_file(root.join("bad.sqlite")).unwrap();
         }
-        // What the Kernel itself writes: a signup, a pending account and a Google-only account.
         let identity = root.join("identity.sqlite");
         let auth = AuthService::open(&identity).unwrap();
         auth.signup("ana@example.test", "ana's password").unwrap();
@@ -1229,8 +1147,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A file whose FTS5 shadow table is damaged, so SQLite's integrity check, which
-    /// runs the module's own code on the shadow tables, reports a problem.
     fn damaged_fts(root: &Path, name: &str, base: &str) -> PathBuf {
         let path = file_with(root, name, &format!("{base}; CREATE VIRTUAL TABLE notes USING fts5(body); INSERT INTO notes VALUES('one two three');"), None);
         let db = Connection::open(&path).unwrap();
@@ -1258,7 +1174,6 @@ mod tests {
         );
         let error = check_components(&components(&root, database.clone(), Some(identity), None), &Default::default()).unwrap_err();
         assert_eq!(error.to_string(), "The accounts component holds a password hash this Kernel did not write.");
-        // An accounts file with no such column at all has no hashes to read and still imports.
         let bare = file_with(&root, "bare.sqlite", "CREATE TABLE app_users(id TEXT PRIMARY KEY, email TEXT)", None);
         check_components(&components(&root, database, Some(bare), None), &Default::default()).unwrap();
         let _ = std::fs::remove_dir_all(root);

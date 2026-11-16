@@ -28,7 +28,8 @@ pub fn defaults() -> BTreeMap<String, Value> {
 
 pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files: bool) -> BTreeMap<String, Value> {
     let mut modules = initial.cloned().unwrap_or_else(defaults);
-    if initial.is_none() && uses_files {
+    complete(&mut modules);
+    if initial.is_none_or(|state| !state.contains_key("files")) && uses_files {
         modules.get_mut("files").expect("files is switchable")["on"] = json!(true);
     }
     modules
@@ -55,65 +56,23 @@ pub fn complete(modules: &mut BTreeMap<String, Value>) {
 }
 
 pub fn uses_files(root: &std::path::Path, id: &str, options: &Value) -> bool {
-    if options["fileAccess"] == "app-users" {
-        return true;
-    }
-    let index = crate::layout::files(root, id).join("index.json");
-    match std::fs::read(&index) {
-        Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
-            Ok(files) if !files.is_empty() => return true,
-            Ok(_) => {}
-            Err(_) => return true,
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return true,
-    }
+    if options["fileAccess"] == "app-users" || file_index_has_files(root, id) { return true; }
     let dist = crate::layout::dist(root, id);
-    let mut entries = match std::fs::read_dir(&dist) {
-        Ok(entries) => entries,
-        Err(_) => return true,
-    };
-    while let Some(entry) = entries.next() {
-        let Ok(entry) = entry else { return true };
-        let path = entry.path();
-        let Ok(kind) = entry.file_type() else { return true };
-        if kind.is_symlink() { return true; }
-        if kind.is_dir() {
-            if uses_files_in_dir(&path) { return true; }
-        } else {
-            match std::fs::read(path) {
-                Ok(bytes) if artifact_uses_files([bytes.as_slice()]) => return true,
-                Ok(_) => {}
-                Err(_) => return true,
-            }
-        }
-    }
+    if walk(&dist, &|bytes| artifact_uses_files([bytes])) { return true; }
     let sources = crate::layout::sources(root, id);
-    if sources.is_dir() && sources_use_files_in_dir(&sources) { return true; }
-    false
+    walk(&sources, &|bytes| sources_use_files([bytes]))
 }
 
-fn uses_files_in_dir(directory: &std::path::Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(directory) else { return true };
-    for entry in entries {
-        let Ok(entry) = entry else { return true };
-        let path = entry.path();
-        let Ok(kind) = entry.file_type() else { return true };
-        if kind.is_symlink() { return true; }
-        if kind.is_dir() {
-            if uses_files_in_dir(&path) { return true; }
-        } else {
-            match std::fs::read(path) {
-                Ok(bytes) if artifact_uses_files([bytes.as_slice()]) => return true,
-                Ok(_) => {}
-                Err(_) => return true,
-            }
-        }
+fn file_index_has_files(root: &std::path::Path, id: &str) -> bool {
+    let index = crate::layout::files(root, id).join("index.json");
+    match std::fs::read(index) {
+        Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes).map_or(true, |files| !files.is_empty()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
     }
-    false
 }
 
-fn sources_use_files_in_dir(directory: &std::path::Path) -> bool {
+fn walk(directory: &std::path::Path, matches: &dyn Fn(&[u8]) -> bool) -> bool {
     let Ok(entries) = std::fs::read_dir(directory) else { return true };
     for entry in entries {
         let Ok(entry) = entry else { return true };
@@ -121,10 +80,10 @@ fn sources_use_files_in_dir(directory: &std::path::Path) -> bool {
         let Ok(kind) = entry.file_type() else { return true };
         if kind.is_symlink() { return true; }
         if kind.is_dir() {
-            if sources_use_files_in_dir(&path) { return true; }
+            if walk(&path, matches) { return true; }
         } else {
             match std::fs::read(path) {
-                Ok(bytes) if sources_use_files([bytes.as_slice()]) => return true,
+                Ok(bytes) if matches(&bytes) => return true,
                 Ok(_) => {}
                 Err(_) => return true,
             }
@@ -227,13 +186,13 @@ pub fn preserve_release_state(
     complete(&mut next.modules);
 }
 
-pub fn read(deployment: &crate::Deployment) -> Value {
+pub fn read(state: &crate::AppState, deployment: &crate::Deployment) -> Value {
     let descriptions = registry();
     let modules = descriptions["modules"].as_object().into_iter().flatten().map(|(name, description)| {
         let switch = description["switch"] == true;
-        let state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
-        (name.clone(), json!({
-            "state": state,
+        let module_state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
+        let mut module = json!({
+            "state": module_state,
             "switch": switch,
             "message": if switch { Value::Null } else { json!("This module cannot be changed yet.") },
             "summary": description["summary"],
@@ -242,9 +201,29 @@ pub fn read(deployment: &crate::Deployment) -> Value {
             "requires": description["requires"],
             "permission": description["permission"],
             "agentRule": description["agentRule"],
-        }))
+        });
+        if name == "seo" {
+            let address = crate::seo::address(state, deployment);
+            let root = crate::layout::dist(&state.data_root, &deployment.id);
+            let mut excluded = Vec::new();
+            collect_pages(&root, &root, &mut excluded);
+            module["current"] = json!({"canonical":{"url":address.url,"reason":address.reason},"excluded":excluded});
+        }
+        (name.clone(), module)
     }).collect::<Map<String, Value>>();
     json!({"projectId":deployment.id,"modules":modules})
+}
+
+fn collect_pages(root: &std::path::Path, dir: &std::path::Path, excluded: &mut Vec<Value>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() { collect_pages(root, &path, excluded); continue; }
+        if !path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")) { continue; }
+        let Some(relative) = path.strip_prefix(root).ok().map(|path| path.to_string_lossy().replace('\\', "/")) else { continue };
+        let has_title = std::fs::read(&path).ok().is_some_and(|html| crate::seo::title(&html).is_some());
+        if !has_title { excluded.push(json!({"page":relative,"reason":"The page has no title."})); }
+    }
 }
 
 pub async fn set(
@@ -278,8 +257,7 @@ pub async fn set(
                 }
             }
         } else {
-            let used = module == "files" && used_files(root, id, &current)?;
-            require_not_in_use(module, used)?;
+            require_not_in_use(module, published_app_uses_module(root, id, module, &current))?;
         }
         current["on"] = json!(on);
     }
@@ -297,19 +275,11 @@ pub async fn set(
     Ok(json!({"projectId":id,"module":module,"state":current}))
 }
 
-fn used_files(root: &std::path::Path, id: &str, state: &Value) -> Result<bool> {
-    let index = crate::layout::files(root, id).join("index.json");
-    match std::fs::read(index) {
-        Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
-            Ok(files) if !files.is_empty() => return Ok(true),
-            Ok(_) => {}
-            Err(_) => return Ok(true),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, state: &Value) -> bool {
+    match module {
+        "files" => uses_files(root, id, state),
+        _ => false,
     }
-    if state["fileAccess"] == "app-users" { return Ok(true); }
-    Ok(uses_files(root, id, state))
 }
 
 #[cfg(test)]
@@ -337,6 +307,17 @@ mod tests {
     }
 
     #[test]
+    fn file_use_cases_match_the_kernel_rule() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        for case in cases {
+            let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            let artifact = case["artifact"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            let used = sources_use_files(sources) || artifact_uses_files(artifact);
+            assert_eq!(used, case["usesFiles"], "{}", case["case"]);
+        }
+    }
+
+    #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
         assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["files", "seo"]);
@@ -354,6 +335,8 @@ mod tests {
     fn a_first_release_turns_on_files_when_its_artifact_uses_the_sdk() {
         let inferred = initial_for_release(None, true);
         assert_eq!(inferred["files"]["on"], true);
+        let seo_only = BTreeMap::from([("seo".to_owned(), json!({"on":false}))]);
+        assert_eq!(initial_for_release(Some(&seo_only), true)["files"]["on"], true);
         let explicit = BTreeMap::from([("files".to_owned(), json!({"on":false,"fileAccess":null}))]);
         assert_eq!(initial_for_release(Some(&explicit), true)["files"]["on"], false);
         assert_eq!(initial_for_release(None, false)["files"]["on"], false);
@@ -421,7 +404,8 @@ mod tests {
             hostname: "app.example.test".into(), created_at: 0, released_at: None,
             source_digest: None, actions: "{}".into(), artifact_version: "v1".into(), released: None,
         }, "https://example.test");
-        let observed = read(&observed);
+        let app_state = crate::AppState::for_test(&root);
+        let observed = read(&app_state, &observed);
         assert_eq!(observed["modules"]["seo"]["state"]["on"], true);
         assert_eq!(observed["modules"]["seo"]["state"]["canonical"], "path");
         let error = set(&root, "app", "seo", Some(false), None, Some(&expected)).await.unwrap_err();

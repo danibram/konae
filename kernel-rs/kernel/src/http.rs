@@ -1,26 +1,3 @@
-//! The HTTP module: Server Actions that answer on a path of their Deployment
-//! host, the owner-set secrets that sign them, API keys, and the file read
-//! path `GET /_konae/files/<id>`.
-//!
-//! An `http` key in `actions.json` binds one action to one method and path.
-//! The action keeps its access level, bindings, query bound and rate limit.
-//! Only `anonymous` actions may bind a route (ADR-0013). A route has three
-//! kinds of caller, resolved before any SQL runs:
-//!
-//! | Caller            | Proof                                  | Actor ID       |
-//! | ----------------- | -------------------------------------- | -------------- |
-//! | Third-party sender| the binding's signature                | none           |
-//! | Owner's program   | `Authorization: Bearer lbk_...`        | the key's ID   |
-//! | Signed-in person  | the app session cookie, same origin    | the user's ID  |
-//!
-//! The binding's `callers` names which proofs the route takes. Without it, a
-//! signed route takes the signature or a key, an unsigned route on a private
-//! Deployment a key or a session, and an unsigned route on a public one
-//! anyone (`route_callers`). An action whose route does not answer anyone
-//! answers only there: `actions_invoke` refuses it (`route_only`).
-//! docs/reference/routes-and-calls.md, "HTTP routes", states the signature scheme a sender computes.
-//! A route may instead declare a provider's own scheme and a `fields` map
-//! that reads a nested payload; provider.rs holds both (ADR-0013).
 
 use super::refusal::{refuse, Refusal};
 use super::*;
@@ -30,12 +7,8 @@ use std::sync::{Arc, OnceLock};
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 /// How far a signature's timestamp may sit from the Kernel's clock, both ways.
 pub const SIGNATURE_WINDOW_SECONDS: u64 = 300;
-/// `v1=` values a signature header may carry: one for the old secret and one
-/// for the new while a secret rotates. A value that is not a 32-byte hex
-/// HMAC-SHA256 is ignored.
 const MAX_SIGNATURE_TAGS: usize = 2;
 const SIGNATURE_TAG_BYTES: usize = 32;
-/// Live keys a Deployment may hold at once.
 const MAX_LIVE_KEYS: i64 = 50;
 const KEY_PREFIX: &str = "lbk_";
 
@@ -45,9 +18,6 @@ pub fn routes() -> Router<AppState> {
     Router::new().route("/_konae/files/{id}", get(read_file))
 }
 
-// ---------------------------------------------------------------------------
-// Declarations. The same checks, order and messages as `parseHttpBinding` in
-// src/kernel/actions.ts; kernel-rs/kernel/src/http-binding-cases.json holds the cases.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpBinding {
@@ -203,10 +173,6 @@ pub fn validate_routes(program: &ActionProgram) -> Result<(), Refusal> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Secrets. They belong to the app, in `data/secrets.sqlite`, so a first
-// publish finds them before its Deployment exists and a copy carries them.
-// Values never leave the Kernel: not in a listing, an export or a log.
 
 /// Opens the app's secrets.
 pub fn secrets_store(root: &Path, project: &str) -> Result<Connection> {
@@ -216,7 +182,6 @@ pub fn secrets_store(root: &Path, project: &str) -> Result<Connection> {
     }
     let db = Connection::open(path)?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
-    // `use` is "route", "call" (ADR-0013) or "google".
     db.execute_batch("CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL, use TEXT NOT NULL)")?;
     Ok(db)
 }
@@ -233,13 +198,10 @@ fn secret_for_calls_only(db: &Connection, name: &str) -> Result<bool> {
         .unwrap_or(false))
 }
 
-/// A secret a route or a call may use. The app's Google client is never one.
 fn secret_value(db: &Connection, name: &str) -> Result<Option<String>> {
     stored_secret(db, name, false)
 }
 
-/// One stored value. With `google` it is a half of the app's Google client,
-/// otherwise a secret a route or a call may use. Neither kind ever reads the other.
 fn stored_secret(db: &Connection, name: &str, google: bool) -> Result<Option<String>> {
     Ok(db
         .query_row(
@@ -294,8 +256,6 @@ pub fn require_secrets(db: &Connection, program: &ActionProgram) -> Result<()> {
                     secrets.push(signature.secret.clone());
                 }
             }
-            // A svix secret is a key in base64, so a value that does not
-            // decode could never verify a delivery.
             Some(value) if signature.scheme == super::provider::Scheme::Svix && super::provider::svix_key(&value).is_none() => {
                 let secret = &signature.secret;
                 anyhow::bail!(refuse(
@@ -309,9 +269,6 @@ pub fn require_secrets(db: &Connection, program: &ActionProgram) -> Result<()> {
     unset_secrets_message(&actions, &secrets).map_or(Ok(()), |message| Err(anyhow::anyhow!(refuse("route.signature-secret-unset", message))))
 }
 
-/// One refusal that names every action whose secret is unset and every such
-/// secret, so an owner learns them all from one failed publish. One action
-/// keeps the sentence the SDK contract has listed since routes shipped.
 fn unset_secrets_message(actions: &[String], secrets: &[String]) -> Option<String> {
     let list = |items: &[String]| match items {
         [] => String::new(),
@@ -343,8 +300,6 @@ pub const SECRET_REUSED: &str = "Another of your projects already uses this secr
 pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployment>, name: &str, a: &Value) -> Result<Value> {
     match name {
         "secrets_list" => {
-            // svixKey says whether the value decodes as a svix key, so the
-            // editor can refuse a svix route before publish without the value.
             let mut query = db.prepare("SELECT name, updated_at, use, value FROM secrets ORDER BY name")?;
             let secrets = query
                 .query_map([], |row| {
@@ -387,7 +342,6 @@ pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployme
         "secret_delete" => {
             let secret = a["name"].as_str().unwrap_or("");
             if let Some(deployment) = deployment {
-                // Turning Google off is the owner's decision, so a delete does not make it.
                 if super::google::is_client_name(secret) && deployment.sign_in_methods.contains(&super::SignInMethod::Google) {
                     return Err(refuse("secret.google-still-on", super::google::still_on(secret)).into());
                 }
@@ -421,10 +375,6 @@ pub fn secrets_call(db: &Connection, project: &str, deployment: Option<&Deployme
     }
 }
 
-// ---------------------------------------------------------------------------
-// API keys. A key is a Runtime Actor of kind `service` on one Deployment. Its
-// row lives in the Deployment's identity.sqlite, so an export carries it with
-// the accounts; the import revokes every key, as it deletes sessions.
 
 #[derive(Clone, Debug)]
 pub struct ApiKey {
@@ -437,8 +387,6 @@ pub struct ApiKey {
 /// owner revoked has no reason.
 pub const REVOKED_AT_IMPORT: &str = "import";
 
-/// The columns of `api_keys`, as `keys_table` and `add_revoked_reason` write
-/// them. An import copies only these names, so none from a file reaches SQL.
 pub(crate) const API_KEY_COLUMNS: [&str; 8] = ["id", "token_hash", "name", "actions", "files", "created_at", "revoked_at", "revoked_reason"];
 
 pub(crate) fn keys_table(db: &Connection) -> rusqlite::Result<()> {
@@ -465,8 +413,6 @@ pub fn add_revoked_reason(db: &Connection) -> rusqlite::Result<()> {
 }
 
 fn identity_connection(state: &AppState, deployment: &Deployment) -> Result<Connection> {
-    // Opening the store installs the account tables an import or a fresh
-    // Deployment may not have yet.
     open_auth(state, deployment).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))?;
     let db = Connection::open(crate::layout::identity(&state.data_root, &deployment.id))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -478,7 +424,6 @@ fn key_hash(token: &str) -> String {
     super::digest(token.as_bytes())
 }
 
-/// The key a bearer token names, if it is a live key of this Deployment.
 fn find_key(state: &AppState, deployment: &Deployment, token: &str) -> Result<Option<ApiKey>> {
     let db = identity_connection(state, deployment)?;
     let row: Option<(String, String, String)> = db
@@ -594,8 +539,6 @@ pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str
     }
 }
 
-// ---------------------------------------------------------------------------
-// Callers.
 
 enum Caller {
     Key(ApiKey),
@@ -621,18 +564,11 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.strip_prefix("Bearer "))
 }
 
-/// A session cookie counts only on a request from the app's own origin.
-/// Every app host is same-site with the others, so `SameSite=Lax` alone would
-/// let one app's page call another app's route as its signed-in user.
 fn own_origin(headers: &HeaderMap) -> bool {
     let site = headers.get("sec-fetch-site").and_then(|value| value.to_str().ok());
     same_origin(headers) && !matches!(site, Some("same-site" | "cross-site"))
 }
 
-/// Resolves the caller, or the answer that refuses it. A bearer token with
-/// the key prefix is only ever looked up as a key. A client whose unknown or
-/// revoked keys used up its bucket is refused before the lookup, as a client
-/// that sent too many wrong passwords is.
 fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap, client: std::net::IpAddr) -> Result<Caller, Response> {
     if let Some(token) = bearer(headers).filter(|token| token.starts_with(KEY_PREFIX)) {
         if let Err(wait) = state.guards.key_attempt(&deployment.id, client) {
@@ -672,29 +608,11 @@ fn refusal(status: StatusCode, message: &str) -> Response {
     response
 }
 
-// ---------------------------------------------------------------------------
-// Signatures. The header carries `t=<unix seconds>,n=<nonce>,v1=<hex
-// HMAC-SHA256>`. The MAC is keyed with the secret and covers, joined by "\n",
-// `t`, the nonce, the method, the path, the canonical query string and the raw
-// body. `t` must be within SIGNATURE_WINDOW_SECONDS of the Kernel's clock. A
-// verified signature is remembered for twice the window in the Deployment's
-// identity.sqlite, so the same request is refused if replayed, across Kernel
-// restarts too. The nonce makes two requests in one second differ, and a
-// sender signs a retry with a new one.
-//
-// identity.sqlite rather than usage.sqlite: Usage is written by one background
-// thread that drops entries when its queue is full, and a replay check must
-// be synchronous and must not drop. identity.sqlite already holds the
-// Deployment's other caller proofs, sessions and API keys, and the key lookup
-// opens it on the same request. The table travels in an export with the
-// accounts, so the destination also refuses a request replayed from the origin.
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SignatureCheck {
     Valid,
     Invalid,
-    /// `t` is outside the window. Checked before the MAC, so it says nothing
-    /// about the secret.
     Stale,
     Replayed,
 }
@@ -806,7 +724,6 @@ fn peer(request: &Request) -> Option<std::net::SocketAddr> {
 /// A Deployment's routes, parsed once from its `actions.json`.
 pub struct RouteTable {
     program: ActionProgram,
-    /// `"<method> <path>"` to the action's name and binding.
     routes: HashMap<String, (String, HttpBinding)>,
 }
 
@@ -829,7 +746,6 @@ impl RouteTable {
         self.routes.get(&format!("{method} {path}"))
     }
 
-    /// The `Allow` header for a path. A GET route does not answer HEAD.
     fn allowed(&self, path: &str) -> &'static str {
         if self.find("GET", path).is_some() { "GET" } else { "GET, HEAD" }
     }
@@ -863,9 +779,6 @@ fn cache_table(deployment: &Deployment) -> Arc<RouteTable> {
     table
 }
 
-/// The routes of the Deployment's current release. Only the first request
-/// after a Kernel start parses `actions.json`; a publish parses it in
-/// `routes_published`.
 fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
     {
         let cache = route_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -892,8 +805,6 @@ pub async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPa
     if let Some(deployment) = deployment_for(&state, request.headers()).await {
         let table = route_table(&deployment);
         if let Some((name, http)) = table.find("GET", &path) {
-            // HEAD would run the query only to drop its rows, and its headers
-            // depend on the answer, so a route refuses it before any check.
             if request.method() == axum::http::Method::HEAD {
                 let mut response = error(StatusCode::METHOD_NOT_ALLOWED, "A route does not answer HEAD. Send GET.");
                 response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET"));
@@ -906,16 +817,12 @@ pub async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPa
             };
             let client = state.guards.client_ip(peer(&request), request.headers());
             let mut response = run_route(&state, &deployment, &table, name, http, request.headers(), client, input, raw_query, b"").await;
-            // A GET route that answers anyone hands every caller the same rows,
-            // with no cookie or key counted from another origin, so a page on
-            // another origin may read it (ADR-0013, "connects").
             if route_callers(http, is_private(&deployment)).is_none() {
                 response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
             }
             return response;
         }
     }
-    // Every other GET keeps serving the Build Artifact.
     serve_artifact(State(state), AxumPath(relative), request.headers().clone()).await
 }
 
@@ -940,10 +847,6 @@ pub async fn post_route(State(state): State<AppState>, request: Request) -> Resp
 }
 
 /// A call from an app of this installation to one of `deployment`'s routes,
-/// answered by the route code a request from outside meets: the same callers
-/// check, signature check, rate limit, guard, Usage and Signal. `calls.rs`
-/// sends it with the host, signature or key headers a request would carry and
-/// no cookie. A method and path no route binds answer 404.
 #[allow(clippy::too_many_arguments)]
 pub async fn call_route(
     state: &AppState,
@@ -970,9 +873,6 @@ pub async fn call_route(
     run_route(state, deployment, &table, name, http, headers, client, query, raw_query, body).await
 }
 
-/// Turns a query string into action input, typed by the action's bindings, so
-/// `?since=5` binds the number 5. A value that does not parse as its type is
-/// passed on as text and refused by the usual binding check.
 fn query_input(program: &ActionProgram, name: &str, query: &str) -> Result<Value, String> {
     let action = &program.actions[name];
     let mut input = serde_json::Map::new();
@@ -1022,9 +922,6 @@ async fn run_route(
         Ok(caller) => caller,
         Err(response) => return response,
     };
-    // `None` answers anyone. Otherwise each proof counts only when the route
-    // lists it: a key the route does not take is refused, and a session it
-    // does not take leaves the person a visitor who must sign.
     let callers = route_callers(http, is_private(deployment));
     let accepts = |proof: &str| callers.as_ref().is_none_or(|list| list.iter().any(|caller| caller == proof));
     match &caller {
@@ -1035,8 +932,6 @@ async fn run_route(
         Caller::Person(_) if !accepts("session") => caller = Caller::Visitor,
         _ => {}
     }
-    // Rate limits match the runtime endpoint: one bucket per client address
-    // for callers with no account, one per user or key otherwise.
     let limited = match &caller {
         Caller::Visitor => state.guards.anonymous_actions.check(&format!("{}|{}", deployment.id, limits::client_key(client))),
         Caller::Person(user) => state.guards.signed_in_actions.check(&format!("runtime:{}:{}", deployment.id, user.user_id)),
@@ -1049,7 +944,6 @@ async fn run_route(
     if signs && !accepts("signature") {
         return refusal(StatusCode::UNAUTHORIZED, "authentication-required");
     }
-    // Konae's own scheme here; a provider's scheme below.
     let konae = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Konae);
     if let (Some(signature), true) = (konae, signs) {
         let secret = match secrets_store(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
@@ -1069,9 +963,6 @@ async fn run_route(
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
         }
     }
-    // A provider's delivery is remembered before the action runs, so two
-    // copies sent at once cannot both run, and forgotten if the action does
-    // not succeed, so the provider's retry of it runs.
     let mut delivery = None;
     if let (Some(signature), true) = (&http.signature, signs) {
         if signature.scheme != super::provider::Scheme::Konae {
@@ -1105,7 +996,6 @@ async fn run_route(
     response
 }
 
-/// Runs a route's action once its caller is resolved and its signature checked.
 #[allow(clippy::too_many_arguments)]
 async fn run_verified(
     state: &AppState,
@@ -1144,9 +1034,7 @@ async fn run_verified(
         Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
         Err(wait) => return rate_limited(wait),
     };
-    // A notice below writes mail.sqlite; the app's other calls need not wait for it.
     drop(_guard);
-    // Usage and Signals do not count what someone who entered as an account does.
     let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
     match result {
         Ok(ran) => {
@@ -1162,7 +1050,6 @@ async fn run_verified(
             };
             if counted {
                 super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
-                // A route counts under its method and path, not again as an action.
                 super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
             }
             if changed {
@@ -1189,11 +1076,6 @@ async fn run_verified(
     }
 }
 
-// ---------------------------------------------------------------------------
-// The file read path. A key reads the visibilities it names and, like a
-// visitor, public files of a public Deployment; a person reads what
-// `file_readable` allows; a visitor reads public files of a public
-// Deployment. A file another caller may not read answers 404, as a missing one.
 
 async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>, request: Request) -> Response {
     let client = state.guards.client_ip(peer(&request), request.headers());
@@ -1209,8 +1091,6 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
     let mut response = match caller {
         Caller::Key(key) => read_file_as_key(&state, &deployment, &key, &id, &headers).await,
         Caller::Person(_) => serve_file(State(state.clone()), AxumPath(id), headers).await,
-        // A cookie from another origin must not reach the file, so the
-        // visitor's request goes on without it.
         Caller::Visitor => {
             let mut visitor = headers.clone();
             visitor.remove(header::COOKIE);
@@ -1221,18 +1101,13 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
     if response.status().is_success() && counted {
         super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::FileRead);
     }
-    // Only the app's own pages may embed the file; programs are unaffected.
     response.headers_mut().insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
-    // A refusal is never kept; the bytes carry their own policy.
     if !response.headers().contains_key(header::ETAG) {
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
     }
     response
 }
 
-/// Whether a key reads a file of this visibility. It reads the visibilities
-/// it names, and a public file of a public Deployment as a visitor would, so
-/// a key never sees less than a request with no credential.
 fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
     (visibility == "public" && !private_deployment) || key.files.iter().any(|named| named == visibility)
 }
@@ -1262,7 +1137,6 @@ mod tests {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()
     }
 
-    /// The editor runs the same file in src/kernel/actions.test.ts.
     #[test]
     fn bindings_refuse_what_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("http-binding-cases.json")).unwrap();
@@ -1294,9 +1168,7 @@ mod tests {
             verify_signature(db, request, secret, header, at).unwrap()
         };
         assert_eq!(verify(&open(), &post("/hooks/orders"), secret, Some(&header), now + 10), SignatureCheck::Valid);
-        // A new connection stands in for a restarted Kernel.
         assert_eq!(verify(&open(), &post("/hooks/orders"), secret, Some(&header), now + 20), SignatureCheck::Replayed);
-        // The same second with another nonce is another request, which is how a sender retries.
         let retry = sign(secret, now, "n2", &post("/hooks/orders"));
         assert_eq!(verify(&open(), &post("/hooks/orders"), secret, Some(&retry), now + 20), SignatureCheck::Valid);
         let db = open();
@@ -1319,7 +1191,6 @@ mod tests {
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, None, now), SignatureCheck::Invalid, "missing");
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some("n=a,v1=00"), now), SignatureCheck::Invalid, "no timestamp");
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&fresh("a")), now), SignatureCheck::Valid);
-        // A rotation sends two values; a third, or values that are not 32 bytes, cost no MAC.
         let crowded = fresh("c").replacen("v1=", &format!("{}v1=", "v1=,v1=00,".repeat(5000)), 1);
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&crowded), now), SignatureCheck::Valid, "short values are ignored");
         let third = fresh("d").replacen("v1=", &format!("v1={0},v1={0},v1=", "ab".repeat(32)), 1);
@@ -1328,7 +1199,6 @@ mod tests {
         assert_eq!(verify(&db, &post("/hooks/fresh"), secret, Some(&rotated), now), SignatureCheck::Valid, "two tags, the second one valid");
         let stored = |db: &Connection| db.query_row("SELECT COUNT(*) FROM route_signatures", [], |row| row.get::<_, i64>(0)).unwrap();
         assert_eq!(stored(&db), 5);
-        // A verification past twice the window prunes what came before it.
         let later = now + 2 * SIGNATURE_WINDOW_SECONDS + 30;
         let late = sign(secret, later, "n3", &post("/hooks/orders"));
         assert_eq!(verify(&db, &post("/hooks/orders"), secret, Some(&late), later), SignatureCheck::Valid);
@@ -1438,8 +1308,6 @@ mod tests {
     }
 
     /// A provider's delivery on a live route: the fields map reads the nested
-    /// payload and ignores the rest, a replay answers 409, a changed byte 401,
-    /// and a delivery whose action fails is forgotten so its retry runs.
     #[tokio::test]
     async fn a_provider_delivery_runs_once_and_a_failed_one_can_be_retried() {
         let root = std::env::temp_dir().join(format!("konae-provider-route-{}", Uuid::new_v4()));
@@ -1493,10 +1361,8 @@ mod tests {
     #[test]
     fn a_key_reads_what_a_visitor_reads_and_the_visibilities_it_names() {
         let key = |files: &[&str]| ApiKey { id: "key".into(), actions: Vec::new(), files: files.iter().map(|f| f.to_string()).collect() };
-        // A key that names no file visibility still reads a public file of a public app.
         assert!(key_reads(&key(&[]), "public", false));
         assert!(!key_reads(&key(&[]), "private", false));
-        // On a private app a visitor reads nothing, so the key reads only what it names.
         assert!(!key_reads(&key(&[]), "public", true));
         assert!(key_reads(&key(&["public"]), "public", true));
         assert!(!key_reads(&key(&["public"]), "private", true));
@@ -1519,7 +1385,6 @@ mod tests {
         assert_eq!(set("project_a", "google_client_id", id, Some("route")).unwrap_err(), super::super::google::NAMES_RESERVED);
         assert_eq!(set("project_a", "client_id", id, Some("google")).unwrap_err(), super::super::google::NAMES_ONLY);
         assert_eq!(set("project_a", "google_client_id", "GOCSPX-pasted-in-the-wrong-field", None).unwrap_err(), super::super::google::ID_LOOKS_LIKE_SECRET);
-        // The name implies the use; two apps of one owner may share a client.
         assert_eq!(set("project_a", "google_client_id", id, None).unwrap()["use"], "google");
         set("project_a", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
         set("project_b", "google_client_secret", "GOCSPX-shared-secret-value", Some("google")).unwrap();
@@ -1527,7 +1392,6 @@ mod tests {
         assert_eq!((client.id.as_deref(), client.secret.as_deref()), (Some(id), Some("GOCSPX-shared-secret-value")));
         let client = google_client(&store("project_b")).unwrap();
         assert_eq!((client.id.as_deref(), client.secret.as_deref()), (None, Some("GOCSPX-shared-secret-value")));
-        // secrets_list answers each one's use; a route or a call never reads its value.
         let listed = secrets_call(&store("project_a"), "project_a", None, "secrets_list", &json!({})).unwrap();
         assert_eq!(listed["secrets"].as_array().unwrap().iter().map(|row| row["use"].clone()).collect::<Vec<_>>(), vec![json!("google"), json!("google")]);
         assert!(!listed.to_string().contains("GOCSPX"));
@@ -1570,7 +1434,6 @@ mod tests {
         assert!(secrets_call(&db, "project_a", None, "secret_set", &json!({"name": "orders_webhook", "value": "short"})).is_err());
         assert!(holds_route_secret(&db, "a-long-enough-secret").unwrap(), "Konae asks this before another app of the owner takes the value");
         assert!(!holds_route_secret(&other, "a-long-enough-secret").unwrap());
-        // A svix secret is a base64 key, so a value that does not decode is refused at publish.
         let svix = program(&json!({"emails.receive": {"kind": "mutation", "access": "anonymous",
             "statement": "INSERT INTO orders (external_id) VALUES (?1)", "bindings": [{"source": "input", "key": "id", "type": "string"}],
             "http": {"method": "POST", "path": "/hooks/email", "signature": {"scheme": "svix", "secret": "resend_webhook"}}}}));

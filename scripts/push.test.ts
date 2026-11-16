@@ -21,7 +21,6 @@ async function appFolder(files: { id: string; name: string; size: number; ownerI
   db.run("INSERT INTO notes(body) VALUES ('a'), ('b')");
   await writeFile(path.join(root, "data/files/index.json"), JSON.stringify(files.map((file) => ({ ...file, type: "text/plain", visibility: "public" }))));
   for (const file of files) await writeFile(path.join(root, `data/files/${file.id}.blob`), new Uint8Array(file.size));
-  // What macOS leaves beside a copied file, and what the Kernel refuses inside the archive.
   await writeFile(path.join(root, "data/files/._index.json"), "apple double");
   await writeFile(path.join(root, "data/secrets.sqlite"), "never sent");
   return { root, db };

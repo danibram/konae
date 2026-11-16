@@ -22,15 +22,9 @@ describe("editor shortcuts", () => {
     expect(shortcutFor(chord("k"))).toBeNull();
   });
 
-  /**
-   * The bug this pins: ⌘↵ in the SQL console ran the query *and* reloaded the
-   * preview, because the window listener fired even though CodeMirror had
-   * already handled the chord.
-   */
   test("Return belongs to the surface being typed in", () => {
     expect(shortcutFor(chord("Enter"))).toEqual({ kind: "run" });
     expect(shortcutFor(chord("Enter", true))).toBeNull();
-    // Panel chords stay global: they are how a panel is reached from anywhere.
     expect(shortcutFor(chord("2", true))).toEqual({ kind: "reveal", panel: "data" });
   });
 });

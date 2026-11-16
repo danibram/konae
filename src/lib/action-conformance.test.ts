@@ -21,23 +21,13 @@ type Quirks = Partial<{
   acceptUnsigned: boolean;
   unsignedStatus: number;
   rateLimitFirst: number;
-  /** Answers as a private Deployment: an unsigned route takes a key or a session and is the action's only door. */
   private: boolean;
-  /** Answers { changes: 0 } where a guarded mutation should refuse with its guard. */
   dropGuard: boolean;
-  /** The caller holds no role: every guarded mutation refuses with its guard, as for a member on an admin's action. */
   withoutRole: boolean;
-  /** An API key the backend accepts on a route that takes keys, as the caller's ID. */
   key: string;
-  /** Runs a GET route for HEAD instead of refusing it with 405. */
   answerHead: boolean;
 }>;
 
-/**
- * A backend that follows the contract the way the Kernel does, with quirks
- * that each break one rule. The runner must pass the honest one and catch
- * every quirk.
- */
 function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = true): ConformanceTarget & { calls: number } {
   let limited = quirks.rateLimitFirst ?? 0;
   const seen = new Set<string>();
@@ -59,7 +49,6 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
     }
     return null;
   };
-  // A guarded mutation changes a row the first time and nothing after, as an UPDATE with a state check does.
   const ran = new Map<string, number>();
   const answer = (action: ContractAction): unknown => {
     if (action.output.kind === "changes") {
@@ -89,7 +78,6 @@ function fakeBackend(contract: ActionContract, quirks: Quirks = {}, session = tr
       if ((action.http?.onlyDoor === "always" || (action.http && quirks.private)) && !quirks.anyoneMayCall) {
         return { ok: false, message: `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` };
       }
-      // Only the Kernel runs a call's then mutation (ADR-0013).
       if (action.thenOf) return { ok: false, message: `Action ${name} runs only after the call ${action.thenOf} answers.` };
       if (action.access === "authenticated" && !actor && !quirks.anyoneMayCall) return { ok: false, message: "authentication-required" };
       const refused = bind(action, input as Record<string, unknown>, actor || Boolean(quirks.anyoneMayCall));
@@ -200,7 +188,6 @@ describe("conformance runner", () => {
       "entries.delete: answers a valid call", "entries.delete: refuses bad input",
       "entries.list: answers a valid call", "entries.list: refuses bad input",
     ]);
-    // Without a session, the access refusal is still checked.
     expect(report.results.filter((result) => result.check === "refuses a caller without a session" && result.outcome === "pass")).toHaveLength(3);
   });
 
@@ -261,7 +248,6 @@ describe("conformance runner", () => {
     const checks = member.results.filter((result) => result.action === "updates.publish").map((result) => `${result.outcome} ${result.check}: ${result.detail}`);
     expect(checks).toContain('pass answers without the nullable body: Refused with its guard, "Only team admins can publish an update.": the bindings accepted the call without body.');
     expect(checks).toContain('pass refuses with its guard when no row changes: Refused with "Only team admins can publish an update.".');
-    // A backend that drops the guard still fails, and so does another refusal on the nullable probe.
     const dropped = await runConformance(contract, fakeBackend(contract, { withoutRole: true, dropGuard: true }), noWait);
     expect(failures(dropped).some((result) => result.action === "updates.publish")).toBe(true);
     const strict = fakeBackend(contract, { withoutRole: true });
@@ -295,7 +281,6 @@ describe("conformance runner", () => {
     expect(lines).toContain("pass updates.mine: answers GET /api/mine with an API key");
     expect(lines).toContain("pass updates.post: refuses an undeclared input on the route");
     expect(keyOnly.results.filter((result) => result.outcome === "skip").map((result) => `${result.action}: ${result.check}`)).toEqual([
-      // A key works only on routes; the runtime endpoint needs a session.
       "updates.mine: answers a valid call", "updates.mine: refuses bad input",
     ]);
     const without = await runConformance(contract, fakeBackend(contract, {}, false), noWait);
@@ -328,7 +313,6 @@ describe("example inputs", () => {
     const invoke = backend.invoke.bind(backend);
     backend.invoke = async (name, input, as) => {
       const ids = (input as Record<string, unknown>)?.ids;
-      // Like the Kernel, the bindings are checked before SQLite reads the value.
       const answer = await invoke(name, input, as);
       if (answer.ok && name === "items.jsonin" && typeof ids === "string" && !ids.startsWith("[")) return { ok: false, message: "malformed JSON" };
       return answer;

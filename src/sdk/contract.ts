@@ -1,18 +1,4 @@
-/**
- * The miniapp SDK contract: every module on `window.miniapp`, every call, its
- * arguments, what it returns, what it refuses and the limits that apply.
- *
- * This file is the single source. `bun run sdk:render` writes four readers
- * from it: the SDK section of the build agent's prompt
- * (src/agent/sdk-section.generated.ts), the `sdk` topic of `platform_guide`
- * (kernel-rs/konae/src/sdk-guide.json) and docs/sdk.md. src/sdk/contract.test.ts
- * fails when src/mcp/runtime.js, the preview client or any reader disagrees.
- *
- * Error messages are the exact text the published app sees: the Kernel's,
- * or the SDK's own when `source` is "sdk". `preview` records where the
- * editor preview differs: absent means the same text, null means the preview
- * never refuses that case, a list holds the preview's own messages for it.
- */
+
 
 export type SdkArgument = {
   name: string;
@@ -69,7 +55,6 @@ export type SdkDeclaration = {
 export type SdkModule = {
   name: string;
   summary: string;
-  /** Whether the owner can turn this module on yet. */
   switch: boolean;
   options: SdkModuleOption[];
   permission: string;
@@ -648,7 +633,7 @@ export const sdkContract = {
     },
     {
       name: "seo",
-      summary: "Search listing and page cards, once the Kernel implements this module.",
+      summary: "Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.",
       switch: true,
       options: [
         { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },

@@ -22,7 +22,6 @@ type Transition = {
   statements: string[];
 };
 
-/** Checks document shape, order, bounds and the SQL allowlist without simulating data or history. */
 export function schemaTransformsRefusal(source: string): RefusalError | null {
   if (new TextEncoder().encode(source).length > MAX_DOCUMENT_BYTES) {
     return refusal("schema-transform.document-invalid", `schema-transforms.json must be at most ${MAX_DOCUMENT_BYTES} bytes.`);

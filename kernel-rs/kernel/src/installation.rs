@@ -1,10 +1,6 @@
-//! What an installation keeps at the root of the data directory, beside the
-//! app folders. The Kernel lists its own stores here, and whoever starts the
-//! Kernel adds the stores it keeps there too.
 
 use std::path::Path;
 
-/// A SQLite database at the data root.
 #[derive(Clone, Debug)]
 pub struct RootDatabase {
     pub file: &'static str,
@@ -23,8 +19,6 @@ pub struct AccountDatabase {
     pub file: &'static str,
 }
 
-/// The stores a copy carries and a restore installs, and where email and the
-/// revocation record find the accounts that no app holds.
 #[derive(Clone, Debug)]
 pub struct Installation {
     pub databases: Vec<RootDatabase>,
@@ -49,9 +43,6 @@ impl Installation {
         }
     }
 
-    /// The Kernel's stores and one account database of the installation's
-    /// own, `accounts.sqlite`, as a starter adds one, with every app counted
-    /// under one email allowance.
     #[cfg(any(test, feature = "testing"))]
     pub fn for_test() -> Self {
         let mut installation = Self::kernel();

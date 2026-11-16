@@ -1,6 +1,3 @@
-// A hostile program on the internet and a hostile app user against the
-// showcase apps' HTTP routes, API keys and the file read path. Each test is
-// one attempt from the security review.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { cp } from "node:fs/promises";
 import path from "node:path";
@@ -16,10 +13,6 @@ afterAll(async () => { await lab?.stop(); });
 const day = () => new Date().toISOString().slice(0, 10);
 const checkin = (body: string, headers: Record<string, string> = {}, route = "/api/checkin") =>
   hostFetch(lab, lab.apps.booking.hostname, route, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
-/**
- * A request whose signature verified: no booking holds room "none", so the
- * action's guard answers, which only happens after the signature passed.
- */
 async function expectAccepted(response: Promise<Response>) {
   expect(await answerOf(await response)).toEqual({ status: 403, body: { error: "No booking holds this room at this hour, or it is already checked in." } });
 }
@@ -34,9 +27,7 @@ describe("route signatures", () => {
     for (const route of ["/api/checkin/", "/API/checkin", "/api/%63heckin", "/api/checkin;x"]) {
       expect((await checkin(body, { "x-panel-signature": signature }, route)).status).toBe(405);
     }
-    // The query string is signed, so adding one breaks the signature.
     expect((await checkin(body, { "x-panel-signature": signature }, "/api/checkin?room=other")).status).toBe(401);
-    // The signed path is the route's own, so a signature for another path fails on this one.
     const forOther = await panelSign(body, { path: "/api/other" });
     expect(await (await checkin(body, { "x-panel-signature": forOther })).json()).toEqual({ error: "invalid-signature" });
     await expectAccepted(checkin(body, { "x-panel-signature": signature }));
@@ -45,15 +36,12 @@ describe("route signatures", () => {
   test("the MAC covers the raw bytes: re-encoded JSON, duplicate keys and a method override header are refused", async () => {
     const body = JSON.stringify({ room: "none", day: day(), hour: 9 });
     const signature = await panelSign(body);
-    // The same JSON value written with other whitespace or key order is other bytes.
     for (const other of [JSON.stringify({ day: day(), room: "none", hour: 9 }), JSON.stringify(JSON.parse(body), null, 1), `${body} `]) {
       expect(await (await checkin(other, { "x-panel-signature": signature })).json()).toEqual({ error: "invalid-signature" });
     }
-    // A duplicate key is part of the signed bytes; changing it breaks the MAC.
     const duplicate = `{"room":"none","day":"${day()}","hour":9,"hour":10}`;
     const signedDuplicate = await panelSign(duplicate);
     expect((await checkin(duplicate.replace('"hour":10', '"hour":11'), { "x-panel-signature": signedDuplicate })).status).toBe(401);
-    // No method override is read: a GET with X-HTTP-Method-Override is a GET, which the POST route does not answer.
     const overridden = await hostFetch(lab, lab.apps.booking.hostname, "/api/checkin", { headers: { "x-http-method-override": "POST", "x-panel-signature": signature } });
     expect(overridden.status).not.toBe(200);
     await expectAccepted(checkin(body, { "x-panel-signature": signature }));
@@ -83,13 +71,11 @@ describe("route signatures", () => {
     const fresh = await panelSign(body);
     const three = fresh.replace("v1=", `v1=${"ab".repeat(32)},v1=${"cd".repeat(32)},v1=`);
     expect(await (await checkin(body, { "x-panel-signature": three })).json()).toEqual({ error: "invalid-signature" });
-    // Two values, as during a rotation, still verify.
     const two = fresh.replace("v1=", `v1=${"ab".repeat(32)},v1=`);
     await expectAccepted(checkin(body, { "x-panel-signature": two }));
   });
 
   test("a signature captured on one Deployment cannot be replayed on another of the same owner", async () => {
-    // The replay worked while two projects could hold one value: the owner can no longer set it.
     const copy = path.join(lab.root, "booking-copy");
     await cp(path.join(lab.root, "booking"), copy, { recursive: true });
     const compiled = await buildLocal(copy);
@@ -118,7 +104,6 @@ describe("route-only actions and API keys", () => {
       const answer = await rawCall(lab, "/_konae/mcp", inbox.hostname, "actions_invoke", { name, input: {} }, { cookie: member.cookie });
       expect(answerText(answer.body)).toContain(`Action ${name} answers only on its HTTP route`);
     }
-    // A session does not replace the key the feed asks for.
     expect((await hostFetch(lab, inbox.hostname, "/api/events", { headers: { cookie: member.cookie } })).status).toBe(401);
   });
 
@@ -136,7 +121,6 @@ describe("route-only actions and API keys", () => {
     const runtime = await rawCall(lab, "/_konae/mcp", inbox.hostname, "actions_invoke", { name: "events.list", input: {} }, bearer);
     expect(runtime.status).toBe(403);
     expect(await lab.kernel.owner.call("api_keys_list", { projectId: inbox.id }).then(JSON.stringify)).not.toContain(feed.key);
-    // An owner credential is not a key either.
     expect((await hostFetch(lab, inbox.hostname, "/api/events", { headers: { authorization: `Bearer ${lab.kernel.ownerCookie.split("=")[1]}` } })).status).toBe(401);
   });
 
@@ -150,7 +134,6 @@ describe("route-only actions and API keys", () => {
     }
     expect(statuses.slice(0, 10).every((status) => status === 401)).toBe(true);
     expect(statuses.slice(10)).toEqual([429, 429]);
-    // The bucket answers before any lookup, so a real key from that address waits too.
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { client, headers: { authorization: `Bearer ${real.key}` } })).status).toBe(429);
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${real.key}` } })).status).toBe(200);
   });
@@ -218,7 +201,6 @@ describe("quotas a visitor can reach", () => {
     const transfer = await member.upload(new TextEncoder().encode("public"));
     const file = await member.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "p.txt", type: "text/plain", visibility: "public" });
     await member.cancel(transfer.transferId);
-    // Eight addresses read twice each and never cancel: the visitors' pool of 16 is full.
     for (let address = 0; address < 8; address++) {
       const visitor = runtimeClient(lab, gallery.hostname, undefined, freshClient());
       for (let read = 0; read < 2; read++) await visitor.call("files_read", { fileId: file.id });

@@ -1,6 +1,5 @@
 export type SourceRevisionScope = { installation: string; projectId: string };
 
-/** The MCP origin and project whose source counter the local marker observed. */
 export function sourceRevisionScope(url: string, projectId: string): SourceRevisionScope {
   return { installation: new URL("/mcp", url).href, projectId };
 }

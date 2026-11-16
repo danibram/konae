@@ -1,10 +1,3 @@
-//! The account flows that run on top of `auth.rs` for both scopes: signup
-//! that waits for verification, recovery, the pages a challenge link opens,
-//! the mail seam that carries links, and the operator's suspension command.
-//!
-//! A challenge link opens a page with GET, which reads nothing from the
-//! token and changes nothing. The page posts the token and the new password,
-//! and only that POST consumes the token.
 
 use super::*;
 use auth::{
@@ -12,7 +5,6 @@ use auth::{
     deployment_scope,
 };
 
-/// How this installation treats new accounts and how it sends their links.
 #[derive(Clone)]
 pub struct AccountSettings {
     pub verification: Verification,
@@ -27,7 +19,6 @@ pub struct AccountSettings {
 }
 
 impl AccountSettings {
-    /// Local development: unverified signup and no mail.
     #[cfg(any(test, feature = "testing"))]
     pub fn local() -> Self {
         Self {
@@ -49,8 +40,6 @@ impl AccountSettings {
     }
 }
 
-/// One account email: a challenge link for one recipient. The link carries
-/// the token in its fragment, so it never reaches a server log or a Referer.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountMessage {
@@ -105,7 +94,6 @@ impl DevelopmentMailbox {
     }
 }
 
-/// Keeps messages in memory so tests can follow the links.
 #[cfg(any(test, feature = "testing"))]
 #[derive(Default)]
 pub struct MemoryMailbox(pub std::sync::Mutex<Vec<AccountMessage>>);
@@ -126,8 +114,6 @@ pub fn routes() -> Router<AppState> {
         .route("/_konae/auth/recover", post(app_recover))
 }
 
-/// The answer to a signup or recovery request, the same whether or not an
-/// account exists.
 const LINK_SENT: &str = "If this email can use the app, a link is on its way. Open it to choose your password.";
 
 /// The answer to a sign-in that failed in a browser that started a signup
@@ -238,8 +224,6 @@ pub fn app_store(state: &AppState, deployment: &Deployment) -> Result<AuthServic
     )
 }
 
-/// How a challenge's message leaves: the persistent queue, or a direct
-/// transport in tests.
 #[derive(Clone)]
 pub enum Outbox {
     Queue(Arc<mail::MailQueue>),
@@ -448,7 +432,6 @@ pub async fn complete_app(
         })
     })
     .await?;
-    // An answered verification link activates an account; a recovery signs one in.
     let operation = if purpose == Purpose::Recovery { super::usage::Operation::Login } else { super::usage::Operation::Signup };
     super::usage::count(&state.data_root, &deployment.id, operation);
     Ok(session)
@@ -572,7 +555,6 @@ pub async fn runtime_tool(
     outcome.map_err(|error_value| anyhow::anyhow!(error_value.to_string()))
 }
 
-/// A signup on an installation in local mode: the account is active at once.
 async fn signup_app_unverified(
     state: &AppState,
     deployment: &Deployment,
@@ -652,8 +634,6 @@ pub fn html_page(body: impl Into<Body>) -> Response {
         .into_response()
 }
 
-/// The page an app's account link opens. It reads the token from the
-/// fragment and posts it with the new password; GET does nothing else.
 const APP_ACCOUNT_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Your account</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}#error{min-height:1.5em;margin:0;color:#a32727}[hidden]{display:none}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}</style><link rel="icon" href="data:,">
 <main><h1 id="title">Reset your password</h1><p id="note">Enter the email of your account. If it can use this app, we send a link to choose a new password.</p>
 <form id="recover"><label>Email <input name="email" type="email" required autocomplete="email"></label><button>Send link</button></form>
@@ -836,12 +816,8 @@ pub mod tests {
         let link = fixture.mailbox.0.lock().unwrap()[0].link.clone();
         assert!(link.starts_with(&format!("http://{APP_HOST}/_konae/account#verification=")));
         assert_eq!(fixture.app_state_of(APP_HOST, "person@example.test").await, "pending");
-        // The signup password was not stored, and the pending account cannot sign in.
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::UNAUTHORIZED);
 
-        // A mail scanner opening the link gets the form and nothing else. The
-        // page handler receives no URI, so a token in the query cannot reach
-        // it, and `routes()` binds the answer routes to POST only.
         let page = app_account_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
         assert_eq!(page.status(), StatusCode::OK);
         assert!(page.headers().get(header::SET_COOKIE).is_none());
@@ -858,7 +834,6 @@ pub mod tests {
         assert_eq!(again.status(), StatusCode::GONE, "a link works once");
         assert_eq!(app_login(&fixture, APP_HOST, "person@example.test", "the chosen password").await.status(), StatusCode::OK);
 
-        // Signing up again with an active email answers the same and sends nothing.
         let repeated = app_signup(&fixture, APP_HOST, "person@example.test").await;
         assert_eq!(repeated.status(), StatusCode::ACCEPTED);
         assert_eq!(fixture.sent(), 1);
@@ -880,7 +855,6 @@ pub mod tests {
         let plain = (StatusCode::UNAUTHORIZED, "Email or password is incorrect.".to_owned());
         let hinted = (StatusCode::UNAUTHORIZED, SIGNUP_HINT.to_owned());
 
-        // Ana asks for a link and signs in before opening it, in the same browser.
         let started = app_signup(&fixture, APP_HOST, "ana@example.test").await;
         assert_eq!(started.status(), StatusCode::ACCEPTED);
         let set = started.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_owned();
@@ -889,17 +863,11 @@ pub mod tests {
         let hint = cookie_of(&started).unwrap();
         assert_eq!(app_login_with(&fixture, APP_HOST, &hint, "ana@example.test", PASSWORD).await, hinted);
         assert_eq!(app_login_with(&fixture, APP_HOST, &hint, "ANA@example.test", PASSWORD).await, hinted, "the email matches as typed in any case");
-        // Another browser, another email, or another app gets the plain answer.
         assert_eq!(app_login(&fixture, APP_HOST, "ana@example.test", PASSWORD).await.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(app_login_with(&fixture, APP_HOST, "other=1", "ana@example.test", PASSWORD).await, plain);
         assert_eq!(app_login_with(&fixture, APP_HOST, &hint, "ben@example.test", PASSWORD).await, plain);
         assert_eq!(app_login_with(&fixture, OTHER_HOST, &hint, "ana@example.test", PASSWORD).await, plain);
 
-        // Someone testing addresses learns nothing. A signup request for an
-        // address with an active account answers the same 202 and sets the
-        // same kind of cookie, and a wrong password then gets the same hint
-        // a pending account gets.
-        // Every request here comes from one test address; start its rate limits over.
         fixture.state.guards = Arc::new(Guards::new(Vec::new()));
         let first = app_signup(&fixture, APP_HOST, "dora@example.test").await;
         let token = fixture.last_link().1;
@@ -911,10 +879,8 @@ pub mod tests {
         assert_eq!(app_login_with(&fixture, APP_HOST, &probe_cookie, "dora@example.test", "a guessed password").await, hinted);
         let fresh = app_signup(&fixture, APP_HOST, "nobody@example.test").await;
         assert_eq!(app_login_with(&fixture, APP_HOST, &cookie_of(&fresh).unwrap(), "nobody@example.test", "a guessed password").await, hinted);
-        // The right password still signs in with the cookie.
         assert_eq!(app_login_with(&fixture, APP_HOST, &probe_cookie, "dora@example.test", "dora's real password").await.0, StatusCode::OK);
 
-        // The runtime endpoint's auth_signup sets the same cookie.
         fixture.state.guards = Arc::new(Guards::new(Vec::new()));
         let over_mcp = rpc(&fixture, APP_HOST, None, "tools/call", json!({"name": "auth_signup", "arguments": {"email": "cara@example.test"}})).await;
         let cara = cookie_of(&over_mcp).unwrap();
@@ -922,7 +888,6 @@ pub mod tests {
         assert_eq!(app_login_with(&fixture, APP_HOST, &cara, "cara@example.test", PASSWORD).await, hinted);
     }
 
-    /// Stands in for the development transport, which only writes a file.
     struct Development;
 
     impl mail::Transport for Development {
@@ -1065,7 +1030,6 @@ pub mod tests {
         assert_eq!(app_signup(&required, APP_HOST, "new@example.test").await.status(), StatusCode::SERVICE_UNAVAILABLE);
         let recover = app_recover(State(required.state.clone()), request("POST", APP_HOST, "/_konae/auth/recover", json!({"email": "person@example.test"}))).await;
         assert_eq!(recover.status(), StatusCode::SERVICE_UNAVAILABLE);
-        // The local account never verified, so required mode moved it to pending.
         assert_eq!(app_login(&required, APP_HOST, "person@example.test", PASSWORD).await.status(), StatusCode::FORBIDDEN);
         assert_eq!(local.app_state_of(APP_HOST, "person@example.test").await, "pending");
         let _ = app;
@@ -1094,7 +1058,6 @@ pub mod tests {
         for item in fixture.state.deployments.write().await.values_mut() {
             item.manifest = json!({"visibility": "private"});
         }
-        // Signed out on a private app: no tool list and no other tool.
         assert_eq!(rpc(&fixture, APP_HOST, None, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
         let refused = rpc(&fixture, APP_HOST, None, "tools/call", json!({"name": "actions_invoke", "arguments": {"name": "x"}})).await;
         assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);

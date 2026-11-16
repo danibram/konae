@@ -7,7 +7,6 @@ import { Badge, Button, EmptyState, LoadingBlock, Select } from "./ui";
 import "./what-happened.css";
 
 type Props = {
-  /** The published app. The preview sends no email, calls nothing and runs no schedule. */
   deployment?: { id: string; url: string };
   onOpen?: (place: Place) => void;
 };
@@ -28,7 +27,6 @@ const places: Record<Place, string> = {
   capsule: "Open actions.json",
 };
 
-/** What left or ran on the published app, newest first, each with its outcome and who acts when it failed. */
 export function WhatHappenedView({ deployment, onOpen }: Props) {
   const [days, setDays] = useState(7);
   const [read, setRead] = useState<Read | null>(null);

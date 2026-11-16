@@ -47,7 +47,6 @@ describe("a project born from a template", () => {
     const created = applyTemplate({ ...cloneStarter(), id: "app_default", name: "Default", slug: "default" }, templates.defaultTemplate);
     expect(created.manifest.visibility).toBe("private");
     const dashboard = readFileSync(path.join(import.meta.dir, "../../components/ProjectDashboard.tsx"), "utf8");
-    // New project opens with nothing chosen: a description picks "No template", or the person clicks one.
     expect(dashboard).toContain("setCreating({ template: null })");
     expect(dashboard).not.toContain("setCreating(defaultTemplate)");
   });
@@ -58,7 +57,8 @@ describe("a project born from a template", () => {
 
   test("only templates whose app code calls miniapp.files turn on the files module", () => {
     for (const { id } of templateChoices) {
-      expect(born(id).modules?.files?.on, id).toBe(Object.values(born(id).files).some((source) => /miniapp\s*\.\s*files/.test(source)));
+      const usesFiles = Object.values(born(id).files).some((source) => /miniapp\s*\.\s*files/.test(source));
+      expect(born(id).modules?.files?.on, id).toBe(usesFiles ? true : undefined);
     }
   });
 

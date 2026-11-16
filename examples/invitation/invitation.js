@@ -1,5 +1,3 @@
-// Points the links at this installation. The page answers on
-// <domain>/p/<name>/ and on its own hostname, so the domain comes from location.
 const { protocol, hostname, port, pathname } = location;
 const labels = hostname.split(".");
 const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
@@ -14,8 +12,6 @@ const links = {
 };
 const point = () => { for (const element of document.querySelectorAll("[data-link]")) element.href = links[element.dataset.link]; };
 
-// The page is written in English and carries its Spanish text here. ?lang=
-// wins, then the visitor's last choice, then the browser's language.
 const es = {
   skip: "Saltar al contenido",
   docs: "Docs",
@@ -48,7 +44,6 @@ const form = document.querySelector("[data-form]");
 const status = document.querySelector("[data-status]");
 const done = document.querySelector("[data-done]");
 const switcher = document.querySelector("[data-lang]");
-// The last thing the status line said, by name, so a change of language says it again.
 let said = "";
 const speak = () => {
   const w = words[lang];
@@ -66,8 +61,6 @@ switcher.addEventListener("click", () => {
   speak();
 });
 
-// A refusal's message is the guard's sentence. The rate limit answers with a
-// code and an unreachable Kernel with a browser error, so those get their own.
 const guard = "That address has already asked, or it is not an email address.";
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -90,7 +83,6 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-// The privacy and terms links show only where the installation has those pages.
 for (const element of document.querySelectorAll("[data-legal]")) {
   fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
 }

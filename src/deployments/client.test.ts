@@ -28,7 +28,6 @@ describe("signup policy", () => {
       return Response.json({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: value }, content: [], isError: false } });
     }) as typeof fetch;
     expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open", visibility: "private" });
-    // A saved draft may have a different visibility from the published app.
     publishedVisibility = "public";
     draftVisibility = "private";
     expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open", visibility: "public" });
@@ -97,14 +96,12 @@ describe("deployment transfer cleanup", () => {
       }) as typeof fetch;
       await expect(deployProject(starterProject, "public", { version: 1, entrypoint: "index.html", files: { "index.html": "<main>Test</main>" } }, askNever)).rejects.toThrow(`${failedTool} refused`);
       expect(calls.at(-1)).toBe("transfer_cancel");
-      // Both uploads, the files of app/ and the release, are cancelled.
       expect(cancelled).toEqual(["publish-upload-1", "publish-upload-2"]);
       if (failedTool === "release_plan") expect(calls).not.toContain("release_apply");
     });
   }
 });
 
-/** Answers every tool with `answer(name, args)` and records the calls. */
 function fakeKernel(answer: (name: string, args: Record<string, unknown>) => unknown = () => ({})) {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

@@ -1,11 +1,3 @@
-//! The Kernel's half of the static publishing contract: how a Build Artifact
-//! carries binary files, and which artifact file answers a path.
-//!
-//! The builders (`konae build`, the editor and an app folder's build) share
-//! `src/lib/static-artifact.js`. They decide which Capsule files ship. The
-//! Kernel accepts an artifact from any builder, so it checks the encodings and
-//! the routing mode itself and refuses the same routing values with the same
-//! text.
 
 use std::collections::HashMap;
 
@@ -20,12 +12,9 @@ use serde_json::Value;
 use super::BuildArtifact;
 
 pub const ROUTING_MESSAGE: &str = "Routing must be \"pages\" or \"spa\".";
-/// How a path the artifact does not hold is answered.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Routing {
-    /// A missing page answers 404, with the artifact's `404.html` when it has one.
     Pages,
-    /// Every path the artifact does not hold serves `index.html` with 200.
     Spa,
 }
 

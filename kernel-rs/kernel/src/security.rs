@@ -1,28 +1,8 @@
-//! Response headers that keep hosted code on its own origin.
-//!
-//! Every app is served from `<slug>-<id>.<suffix>`, so a creator's JavaScript
-//! runs next to other apps and next to the editor host. One layer adds the
-//! headers below to every response the Kernel sends.
-//!
-//! - App hosts get a Content Security Policy. A Build Artifact inlines the
-//!   Konae runtime and the compiled module in `index.html`, so the policy
-//!   allows those exact scripts by their SHA-256 hashes instead of allowing
-//!   inline script in general. Inline event handler attributes, `eval` and
-//!   scripts from other origins stay blocked.
-//! - Every host gets `frame-ancestors 'none'` and `X-Frame-Options: DENY`, so
-//!   an app cannot frame the editor, another app or itself in another origin.
-//! - Every host gets HSTS when the installation is served over HTTPS, and a
-//!   custom domain gets it without `includeSubDomains`.
-//! - A path address on `<domain>` (ADR-0014) is an app host for these headers.
-//!   The layer runs outside the router, so the home page and the redirects of
-//!   the path router get the same headers as an app response.
 
 use super::*;
 use axum::middleware::Next;
 use sha2::{Digest, Sha256};
 
-/// HTML larger than this is served without script hashes, so its inline
-/// scripts do not run. Deployments are capped below this size.
 const MAX_HASHED_HTML: usize = 32 * 1024 * 1024;
 
 /// The policy for a response from an app host, given the hash sources of its
@@ -209,6 +189,7 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     let deployment = deployment_for_request(&state, request.headers(), request.uri().path()).await;
     let app = deployment.is_some();
     let private = deployment.as_ref().is_some_and(super::is_private);
+    let seo_off = deployment.as_ref().is_some_and(|deployment| !super::modules::is_on(&deployment.modules, "seo"));
     if state.execution_mode.is_test() && app {
         request.headers_mut().remove(header::IF_NONE_MATCH);
     }
@@ -247,7 +228,7 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     };
     parts.headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    if private {
+    if private || (app && seo_off) {
         parts.headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     }
     if let Some(hsts) = hsts {

@@ -1,11 +1,8 @@
-// Streams the parts of an export between MCP transfers and files in blocks of
-// the transfer's chunkBytes, so a 256 MiB database never sits in memory.
 import { createHash } from "node:crypto";
 import { open, rm } from "node:fs/promises";
 import { blockLimit, decodeBase64, McpError, type McpClient, type Transfer } from "../src/mcp/client";
 import { normalizeArchivePath, tarHeader, tarPadding, type TarEntry } from "../src/lib/tar";
 
-/** Reads a download transfer into `file`, checks size and SHA-256, and releases the transfer. */
 export async function downloadToFile(client: McpClient, transfer: Transfer, file: string) {
   if (!Number.isSafeInteger(transfer.size) || transfer.size < 0) throw new McpError("Invalid MCP download size.");
   const block = blockLimit(transfer);
@@ -31,7 +28,6 @@ export async function downloadToFile(client: McpClient, transfer: Transfer, file
   }
 }
 
-/** Size and SHA-256 of `file`, read in 1 MiB blocks. */
 export async function checksumFile(file: string) {
   const hash = createHash("sha256");
   const input = await open(file, "r");
@@ -50,11 +46,6 @@ export async function checksumFile(file: string) {
   return { size, sha256: hash.digest("hex") };
 }
 
-/**
- * Uploads `file` as one owner transfer, in blocks of the `chunkBytes` that
- * transfer_begin answers, and completes it. `component` names the part of
- * an export it carries. A failed upload is cancelled.
- */
 export async function uploadFromFile(client: McpClient, file: string, sized: { size: number; sha256: string }, args: { projectId: string; component: string }, begun?: (transfer: Transfer) => void): Promise<Transfer> {
   const transfer = await client.call<Transfer>("transfer_begin", { size: sized.size, sha256: sized.sha256, ...args });
   begun?.(transfer);
@@ -82,7 +73,6 @@ export async function uploadFromFile(client: McpClient, file: string, sized: { s
 
 export type FileTarEntry = { path: string; file: string; size: number; mode?: number };
 
-/** Writes a ustar archive to `output`, copying file entries from disk in 1 MiB reads. Refuses to overwrite. */
 export async function writeTarFile(output: string, entries: readonly (TarEntry | FileTarEntry)[]) {
   const target = await open(output, "wx", 0o600);
   const buffer = new Uint8Array(1024 * 1024);

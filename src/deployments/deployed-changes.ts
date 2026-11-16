@@ -4,12 +4,10 @@ import type { DeploymentRecord } from "./manifest";
 type Released = Pick<DeploymentRecord, "createdAt" | "releasedAt">;
 type Compared = Pick<DeploymentRecord, "manifest" | "actions" | "sourceDigest">;
 
-/** When the release the app runs was published. A Kernel older than `releasedAt` names only the first publish. */
 export function releasedAt(deployment: Released): number {
   return deployment.releasedAt ?? deployment.createdAt;
 }
 
-/** Keys under one owner, as the editor's workspace keeps them. */
 export function ownerStorage(ownerId: string, storage: Storage = localStorage) {
   const key = (name: string) => `konae:owner:${encodeURIComponent(ownerId)}:${name}`;
   return {
@@ -19,11 +17,6 @@ export function ownerStorage(ownerId: string, storage: Storage = localStorage) {
   };
 }
 
-/**
- * True when the release runs other access rules than the editor holds:
- * actions.json against the actions the release runs, which is what Export
- * reports as `sourcesAhead`, and who can open the app.
- */
 export function accessNotDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined): boolean {
   if (!deployment) return false;
   if (deployment.actions !== undefined && (project.files["actions.json"] ?? "") !== deployment.actions) return true;
@@ -31,14 +24,6 @@ export function accessNotDeployed(project: Pick<MiniAppProject, "files" | "manif
   return false;
 }
 
-/**
- * Whether the published app runs what the editor holds. `digest` is
- * sourceDigest() of the editor's files, or null while it is computed.
- * - false: it runs other files or other access rules;
- * - true: same files and same access;
- * - null: unknown, because the release names no source digest (a Kernel or a
- *   record older than the field) or the editor's digest is not ready yet.
- */
 export function sameAsDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined, digest: string | null): boolean | null {
   if (!deployment) return null;
   if (accessNotDeployed(project, deployment)) return false;
@@ -46,7 +31,6 @@ export function sameAsDeployed(project: Pick<MiniAppProject, "files" | "manifest
   return deployment.sourceDigest === digest;
 }
 
-/** True only when the editor holds something the published app does not run. An unknown answer says nothing. */
 export function changesNotDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined, digest: string | null): boolean {
   return sameAsDeployed(project, deployment, digest) === false;
 }

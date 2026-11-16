@@ -1,7 +1,3 @@
-//! The size limits a person meets when an app travels to the installation,
-//! and the sentences that name them. Each sentence names the size sent and
-//! the limit. src/lib/size.ts is the editor's and the CLI's twin, and the
-//! `sizes` and `sentences` of sources-cases.json are the cases both run.
 
 /// The most bytes a Build Artifact holds once base64 is decoded.
 pub const ARTIFACT_BYTES: usize = 16 * 1024 * 1024;

@@ -4,10 +4,6 @@ const DAY = 24 * HOUR;
 const dated = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
 const datedWithYear = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" });
 
-/**
- * How long ago a moment was, in the words a person uses: "just now", "3 min ago",
- * "2 h ago", "yesterday", "4 days ago", then the date. A moment in the future reads as "just now".
- */
 export function relativeTime(at: number, now = Date.now()): string {
   const age = now - at;
   if (age < MINUTE) return "just now";
@@ -18,7 +14,6 @@ export function relativeTime(at: number, now = Date.now()): string {
   return new Date(at).getFullYear() === new Date(now).getFullYear() ? dated.format(at) : datedWithYear.format(at);
 }
 
-/** The full date and time, for a title attribute beside a relative time. */
 export function exactTime(at: number): string {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(at);
 }

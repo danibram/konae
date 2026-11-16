@@ -1,4 +1,3 @@
-/* Rules for this legal page, on the design system's tokens. */
 body { font-family: var(--ds-font); overflow-x: hidden; }
 main:focus { outline: none; }
 .legal { max-width: 48rem; padding: 40px 0 80px; }

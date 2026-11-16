@@ -377,7 +377,6 @@ pub fn operator_command() -> Result<bool> {
         .optional()?
         .context("Owner not found for this issuer and subject.")?;
     suspend(&mut db, &owner)?;
-    // Suspension is durable even if cleanup in the MCP database fails.
     let mcp_path = root.join("mcp.sqlite");
     if mcp_path.exists() {
         let mut mcp =

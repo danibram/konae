@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { McpClient } from "./client";
 
-/** A fake MCP endpoint that records each tool call and answers a transfer. */
 function endpoint() {
   const calls: { name: string; arguments: Record<string, unknown> }[] = [];
   const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

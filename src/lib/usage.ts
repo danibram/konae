@@ -4,7 +4,6 @@ export type UsageCount = { kind: string; name: string; count: number };
 export type DailyCount = UsageCount & { day: string };
 export type Metric = { day: string; feature: "execution" | "signal"; name: string; origin: string; outcome: string; count: number; lastAt: number };
 export type PublishedAction = { name: string; kind: string; http: { method: string; path: string } | null; signal: { name: string } | null; schedule: unknown; notify: unknown };
-/** One signed-in app account's activity in the period. `email` is null once the account is gone. */
 export type AccountActivity = { account: string; email: string | null; opens: number; actions: number; activeDays: number; lastAt: number };
 export type UsageAccounts = { active: number; opens: number; actions: number; days: { day: string; active: number }[]; top: AccountActivity[]; limit: number; startedAt: number | null };
 export type StoragePart = { part: string; bytes: number; limit: number | null; exported: boolean };
@@ -63,7 +62,6 @@ export function featureRows(summary: UsageSummary) {
   });
 }
 
-// The Kernel names each notice "<action>: <reason>", where reason is "queued" or why nothing was queued (docs/reference/usage-and-signals.md, "Notices").
 const noticeReasons: Record<string, string> = {
   "no-transport": "this installation has no email service",
   "owner-has-no-email": "the Deployment has no contact email",
@@ -94,7 +92,6 @@ export function noticeOutcomes(summary: UsageSummary) {
 const outcomeLabels: Record<string, string> = { ok: "Correct", refused: "Refused by app rules", failed: "Failed", unchanged: "No changes" };
 export const outcomeLabel = (outcome: string) => outcomeLabels[outcome] ?? outcome;
 export function usageActivity(summary: UsageSummary) {
-  // Session checks, Signals and notices can accompany an action, so they are not added to it.
   return summary.usage.totals.filter((r) => ["action", "route", "scheduled", "call"].includes(r.kind)).reduce((sum, r) => sum + r.count, 0);
 }
 export function executionTotals(metrics: Metric[]) {
@@ -104,7 +101,6 @@ export function executionTotals(metrics: Metric[]) {
   }, {} as Record<string, number>);
 }
 
-/** Every UTC day from `from` to `to`, both included. */
 export function rangeDays(from: string, to: string) {
   const days: string[] = [];
   const day = new Date(`${from}T00:00:00Z`);
@@ -116,7 +112,6 @@ export function rangeDays(from: string, to: string) {
   return days;
 }
 export type DailyPoint = { day: string; value: number; parts: Record<string, number> };
-/** One point per day of the range, zero where the Kernel recorded nothing, so a quiet day reads as a gap rather than disappearing. */
 export function dailyUsage(summary: UsageSummary, kind: string): DailyPoint[] {
   const byDay = new Map<string, Record<string, number>>();
   for (const row of summary.usage.days) {
@@ -130,7 +125,6 @@ export function dailyUsage(summary: UsageSummary, kind: string): DailyPoint[] {
     return { day, value: Object.values(parts).reduce((sum, n) => sum + n, 0), parts };
   });
 }
-/** Executions per day, with each result as a part, over the summary's range. */
 export function dailyExecutions(summary: UsageSummary): DailyPoint[] {
   const byDay = new Map<string, Record<string, number>>();
   for (const metric of summary.metrics) {
@@ -147,13 +141,11 @@ export function dailyExecutions(summary: UsageSummary): DailyPoint[] {
 export function kindTotal(summary: UsageSummary, kind: string) {
   return summary.usage.totals.filter((row) => row.kind === kind).reduce((sum, row) => sum + row.count, 0);
 }
-/** Page views by the file the Kernel served, most viewed first. */
 export function pageViews(summary: UsageSummary) {
   return summary.usage.totals.filter((row) => row.kind === "page_view").map((row) => ({ page: row.name, count: row.count })).sort((a, b) => b.count - a.count || a.page.localeCompare(b.page));
 }
 
 const units = ["KiB", "MiB", "GiB", "TiB"];
-/** Bytes in the binary units the Kernel's limits use: `840 bytes`, `1.4 MiB`. */
 export function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
   let value = bytes / 1024;
@@ -171,7 +163,6 @@ export const storageParts: Record<string, { name: string; description: string }>
   sources: { name: "Sources", description: "Pages, actions.json and schema.sql as saved." },
   backups: { name: "Backups", description: "Copies this installation keeps. An export does not carry them." },
 };
-/** Each part of the app's storage with its share of a limit, largest first. Backups are left out: an export does not carry them. */
 export function storageRows(storage: UsageStorage) {
   return storage.parts.filter((part) => part.exported).map((part) => {
     const share = part.limit ? part.bytes / part.limit : null;
@@ -179,7 +170,6 @@ export function storageRows(storage: UsageStorage) {
   }).sort((a, b) => b.bytes - a.bytes);
 }
 
-/** Signed-in accounts active each day of the range, zero on a day with none. */
 export function dailyActiveAccounts(summary: UsageSummary) {
   const byDay = new Map((summary.accounts.days).map((row) => [row.day, row.active]));
   return rangeDays(summary.usage.from, summary.usage.to).map((day) => ({ day, value: byDay.get(day) ?? 0 }));

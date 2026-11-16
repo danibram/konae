@@ -1,28 +1,3 @@
-//! Calls between apps, ADR-0013.
-//!
-//! An action of `"kind": "call"` names a URL, a method, a body built from its
-//! inputs, an optional `auth` and an optional `then` mutation. `actions_invoke`
-//! checks the caller and the inputs as for any action, then queues the call in
-//! `calls.sqlite` and answers `{ callId, queued: true }`. The worker below
-//! sends it from the Kernel's own process, never from the browser, with a
-//! 10-second timeout, a 64 KiB cap on the answer and retries with backoff. When
-//! the call ends, delivered or failed, the `then` mutation runs with inputs read
-//! from the answer by JSON pointers. The owner reads the outbox with
-//! `calls_read`.
-//!
-//! A call whose host is a Deployment of this installation goes through
-//! `http::call_route`, the route code a request from outside meets, with the
-//! same callers check. Every other host is resolved once, every address it
-//! resolves to must be public, and the request is pinned to the address that
-//! was checked, so a DNS answer cannot change between the check and the
-//! connection. The rules are listed in docs/reference/routes-and-calls.md, "Calls between apps".
-//!
-//! The checks that need no knowledge of the installation run at both doors:
-//! `parseServerActionSource` in src/kernel/actions.ts makes them in the same
-//! order with the same messages, and kernel-rs/kernel/src/call-cases.json holds the
-//! cases both test suites run. The checks that do, http only to this
-//! installation and never the editor's host, run at release and again before
-//! each attempt, as unset secrets are refused only by the Kernel.
 
 use super::refusal::{refuse, Refusal};
 use super::*;
@@ -38,30 +13,21 @@ const MAX_POINTER_CHARS: usize = 200;
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest answer a call reads. A larger one ends the call as failed.
 pub const MAX_ANSWER_BYTES: usize = 64 * 1024;
-/// Calls an app may queue in any 60 seconds, unless KONAE_CALLS_PER_MINUTE says otherwise.
 const DEFAULT_PER_MINUTE: i64 = 20;
-/// Attempts before a call that keeps meeting a retryable answer fails. The
-/// waits double from 30 seconds, so the last attempt runs about 7.5 minutes
-/// after the first.
 const MAX_ATTEMPTS: i64 = 5;
 const FIRST_BACKOFF_MS: i64 = 30_000;
-/// A paused app's call waits this long before it is looked at again.
 const PAUSE_WAIT_MS: i64 = 60_000;
-/// How long a claimed call stays with one worker pass. Longer than an attempt.
 const LEASE_MS: i64 = 60_000;
 const BATCH: i64 = 20;
 const WORKER_INTERVAL: Duration = Duration::from_secs(5);
-/// Finished calls kept per Deployment, oldest dropped first.
 const KEEP_PER_DEPLOYMENT: i64 = 1000;
 const OUTBOX_PAGE: i64 = 50;
-/// The part of an answer the outbox keeps for the owner.
 const EXCERPT_CHARS: usize = 1024;
 const RESERVED_SEGMENTS: [&str; 4] = ["_konae", "oauth", ".well-known", "mcp"];
 const ANSWER_ROOTS: [&str; 5] = ["ok", "status", "error", "body", "input"];
 const DEFAULT_SIGNATURE_HEADER: &str = "X-Konae-Signature";
 pub const RATE_LIMITED: &str = "This app reached its limit of calls in the last minute. Try again in a minute.";
 
-/// The keys an action of `"kind": "call"` adds to an action definition.
 #[derive(Clone, Default, Deserialize)]
 pub struct CallKeys {
     #[serde(default)]
@@ -153,9 +119,6 @@ pub struct Then {
     pub inputs: Vec<(String, String)>,
 }
 
-// ---------------------------------------------------------------------------
-// Declarations. The same checks, order and messages as `parseCall` and
-// `assertCallTargets` in src/kernel/actions.ts.
 
 /// Refuses call keys on an action of another kind, and checks a call. Runs
 /// after `action_shape::check_action`. `Ok(None)` for an action that is not a call.
@@ -238,11 +201,8 @@ fn valid_body_key(key: &str) -> bool {
     std::iter::once(first).chain(segments).all(valid_body_segment)
 }
 
-/// The highest array index a nested body path may name. Keeps `nest_body` from
-/// allocating a huge sparse array from a key such as `items.999999.price`.
 const MAX_BODY_INDEX: usize = 31;
 
-/// One segment of a body path: an object key, or a non-negative array index.
 fn valid_body_segment(segment: &str) -> bool {
     if segment.is_empty() {
         return false;
@@ -258,7 +218,6 @@ fn valid_body_segment(segment: &str) -> bool {
         && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(byte))
 }
 
-/// A constant body value: `{ "value": <string of at most 1000 characters, number, boolean or null> }`.
 fn constant(value: &Value) -> Option<Value> {
     let record = value.as_object().filter(|record| record.len() == 1)?;
     let constant = record.get("value")?;
@@ -312,7 +271,6 @@ fn body_map(name: &str, method: &str, value: Option<&Value>, inputs: &[&str]) ->
     Ok(body)
 }
 
-/// The only request header a call may set besides auth and content-type.
 const ALLOWED_CALL_HEADER: &str = "Idempotency-Key";
 const MAX_HEADERS: usize = 8;
 
@@ -508,10 +466,6 @@ pub fn secrets(program: &ActionProgram) -> Vec<(String, String)> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// The manifest's `connects`: origins the page may reach with fetch, added to
-// its connect-src. The same checks and messages as `checkConnects` in
-// src/kernel/calls.ts.
 
 const MAX_CONNECTS: usize = 10;
 
@@ -522,8 +476,6 @@ pub fn check_connects(manifest: &Value) -> Result<(), Refusal> {
     let mut seen: Vec<&str> = Vec::new();
     for entry in entries {
         let entry = entry.as_str().ok_or_else(invalid)?;
-        // A browser treats localhost and its subdomains as secure, and a
-        // local installation serves its apps there over http.
         let local = |url: &url::Url| url.host_str().is_some_and(|host| host == "localhost" || host.ends_with(".localhost"));
         let origin = url::Url::parse(entry)
             .ok()
@@ -554,20 +506,15 @@ pub fn connects(manifest: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// The installation's rules, at release and before each attempt.
 
 fn host_of(url: &url::Url) -> String {
     url.host_str().unwrap_or("").trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// The editor's hosts: the public origin, where owners sign in and MCP
-/// answers, and the separate MCP origin when there is one.
 fn editor_host(rules: &super::domain::Rules, host: &str) -> bool {
     rules.installation_hosts.iter().any(|editor| editor == host)
 }
 
-/// A host under the installation's suffix: one of its apps, or a name it may give one.
 fn installation_host(rules: &super::domain::Rules, host: &str) -> bool {
     !rules.suffix.is_empty() && (host == rules.suffix || host.ends_with(&format!(".{}", rules.suffix)))
 }
@@ -582,8 +529,6 @@ pub fn check_release(rules: &super::domain::Rules, secrets: &Connection, program
     check_calls(rules, secrets, program)
 }
 
-/// Refuses a release whose calls reach the editor, use http outside this
-/// installation, or use a secret the project does not have.
 fn check_calls(rules: &super::domain::Rules, db: &Connection, program: &ActionProgram) -> Result<()> {
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
@@ -645,7 +590,6 @@ fn public_v6(address: Ipv6Addr) -> bool {
         return public_v4(v4);
     }
     let segments = address.segments();
-    // NAT64 (64:ff9b::/96) carries an IPv4 address in its last 32 bits.
     if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
         return public_v4(Ipv4Addr::new((segments[6] >> 8) as u8, segments[6] as u8, (segments[7] >> 8) as u8, segments[7] as u8));
     }
@@ -659,13 +603,10 @@ fn public_v6(address: Ipv6Addr) -> bool {
 }
 
 enum Target {
-    /// A Deployment of this installation, reached in process.
     App(Deployment),
-    /// A host outside, reached at this address after it was checked.
     Outside(SocketAddr),
 }
 
-/// Where a call goes, or the error kind that ends it. `Err((kind, retry))`.
 async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static str, bool)> {
     let host = host_of(url);
     let rules = super::domain::Rules::of(state);
@@ -811,7 +752,6 @@ fn redact_url(url: &url::Url) -> String {
     url.to_string()
 }
 
-/// A response an operator supplied for a captured test call.
 #[derive(Clone, Debug)]
 pub enum SyntheticOutcome {
     Http { status: u16, body: Vec<u8> },
@@ -1082,7 +1022,6 @@ fn claim(data_root: &Path) -> Result<Vec<Claimed>> {
     Ok(rows)
 }
 
-/// What one attempt produced.
 #[derive(Default)]
 struct Attempt {
     method: Option<String>,
@@ -1266,8 +1205,6 @@ fn resolve_sent(sent: &BodyValue, input: &Value) -> Option<Value> {
     }
 }
 
-/// Expands flat body keys whose names contain `.` into nested JSON objects and
-/// arrays. `line_items.0.price` becomes `{ "line_items": [{ "price": ... }] }`.
 fn nest_body(flat: Vec<(String, Value)>) -> Value {
     let mut root = Value::Object(serde_json::Map::new());
     for (path, value) in flat {
@@ -1328,9 +1265,6 @@ fn nest_body(flat: Vec<(String, Value)>) -> Value {
     root
 }
 
-/// The URL, query and body one call sends, from its declaration and inputs.
-/// A GET carries the body keys as query parameters after the URL's own. A POST
-/// expands dotted keys into nested JSON.
 fn request_parts(call: &Call, input: &Value) -> (url::Url, Vec<u8>) {
     let mut url = call.url.clone();
     let mut flat = Vec::new();
@@ -1356,7 +1290,6 @@ fn request_parts(call: &Call, input: &Value) -> (url::Url, Vec<u8>) {
     }
 }
 
-/// The Idempotency-Key and other declared headers for one attempt.
 fn request_headers(call: &Call, input: &Value) -> Vec<(String, String)> {
     let mut headers = Vec::new();
     for (name, sent) in &call.headers {
@@ -1370,15 +1303,10 @@ fn request_headers(call: &Call, input: &Value) -> Vec<(String, String)> {
     headers
 }
 
-/// A nonce for one signed attempt.
 fn nonce() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
-/// A synthetic client address for in-process calls from one app, so the
-/// target's per-address limit counts each calling app on its own. It is a
-/// unique-local IPv6 address whose /64 is derived from the caller's ID; no
-/// packet is ever sent to it.
 fn caller_address(deployment_id: &str) -> IpAddr {
     let digest = super::digest(deployment_id.as_bytes());
     let bytes = hex::decode(&digest[..14]).unwrap_or_default();
@@ -1396,7 +1324,6 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
         let attempt = Attempt { error: Some("app-gone"), ..Default::default() };
         return finish(&data_root, &job.id, &attempt, None);
     };
-    // A paused app sends nothing; the call waits uncounted.
     if super::maintenance::pause(&data_root, &deployment.id).is_some() {
         return release(&data_root, &job.id, PAUSE_WAIT_MS, false, &Attempt::default());
     }
@@ -1432,8 +1359,6 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
     finish(&data_root, &job.id, &attempt, then)
 }
 
-/// Sends one attempt. `Ok((status, answer))` once an answer arrived;
-/// `Err((kind, retry))` when none did.
 async fn send(
     state: &AppState,
     deployment: &Deployment,
@@ -1483,8 +1408,6 @@ async fn send_in_process(
     headers: &[(String, String)],
     body: &[u8],
 ) -> Result<(u16, Vec<u8>), (&'static str, bool)> {
-    // A paused app answers every request from outside with its maintenance
-    // refusal; a call from inside meets the same.
     if super::maintenance::pause(&state.data_root, &app.id).is_some() {
         return Ok((503, br#"{"error":"This app is paused."}"#.to_vec()));
     }
@@ -1555,9 +1478,6 @@ fn answer_document(input: &Value, attempt: &Attempt) -> Value {
     })
 }
 
-/// Runs the call's `then` mutation once, with no actor, under the
-/// Deployment's database lock. Returns the outcome the outbox keeps: done,
-/// refused with the guard, or failed with the reason.
 async fn run_then(
     state: &AppState,
     deployment: &Deployment,
@@ -2096,12 +2016,10 @@ mod tests {
             publish(&state, keyed, schema).await.err().unwrap(),
             "Action hook.send calls with the secret api_key, which is not set for this project. Set it with secret_set before publishing."
         );
-        // http to a name under the installation's suffix passes; no app holds it, so the call fails at once.
         assert!(publish(&state, call_action("http://gone-1.apps.example.org/send"), schema).await.is_ok());
         let url = |text: &str| url::Url::parse(text).unwrap();
         assert!(matches!(target(&state, &url("http://gone-1.apps.example.org/send")).await, Err(("app-not-found", false))));
         assert!(matches!(target(&state, &url("https://editor.example.org/x")).await, Err(("editor-host", false))));
-        // localhost resolves on every machine without a network: to loopback, which no call may reach.
         assert!(matches!(target(&state, &url("https://localhost/x")).await, Err(("address-refused", false))));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2115,7 +2033,6 @@ mod tests {
         assert!(started.elapsed() < TIMEOUT + Duration::from_secs(2));
     }
 
-    /// A call to the name an app held before hostname_set reaches that app in process.
     #[tokio::test]
     async fn a_call_to_a_previous_hostname_reaches_the_moved_app() {
         let root = std::env::temp_dir().join(format!("konae-call-moved-{}", uuid::Uuid::new_v4()));

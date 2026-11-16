@@ -4,7 +4,6 @@ export type StaticArtifact = {
   version: 1;
   entrypoint: "index.html";
   files: Record<string, string>;
-  /** Paths whose value in `files` is base64. Every other file is UTF-8 text. */
   encodings?: Record<string, "base64">;
 };
 

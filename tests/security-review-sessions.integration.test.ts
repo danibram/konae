@@ -1,7 +1,3 @@
-// A hostile app user and a hostile app against the showcase apps: other
-// users' rows, a forged actor, sessions carried to another Deployment or to
-// the editor, and Host header games. Each test is one attempt from the
-// security review; a refusal that already held says why in a comment.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { answerText, appUser, hostFetch, rawCall, runtimeClient, startLab, testPort, type Lab } from "./security-review-kernel";
 
@@ -18,7 +14,6 @@ describe("cross-user", () => {
     const ben = runtimeClient(lab, habits.hostname, (await appUser(lab, habits)).cookie);
     const created = await invoke(ana, "habits.create", { name: "Read" });
     expect(await invoke(ben, "habits.list")).toEqual([]);
-    // The statement binds the actor, so Ben's update of Ana's row changes nothing.
     await expect(invoke(ben, "habits.archive", { id: created.lastInsertId })).rejects.toThrow("This habit is already archived, or it is not yours.");
     const day = new Date().toISOString().slice(0, 10);
     expect((await invoke(ben, "checkins.add", { habitId: created.lastInsertId, day, device: "phone" })).changes).toBe(0);
@@ -28,7 +23,6 @@ describe("cross-user", () => {
   test("an input that names the actor is refused before any SQL runs", async () => {
     const { habits } = lab.apps;
     const ben = runtimeClient(lab, habits.hostname, (await appUser(lab, habits)).cookie);
-    // The actor binding comes from the session; an input key with its name is an undeclared input.
     for (const key of ["actor", "userId", "user_id", "id"]) {
       await expect(invoke(ben, "habits.list", { [key]: "someone-else" })).rejects.toThrow(`Unexpected action input: ${key}`);
     }
@@ -41,9 +35,7 @@ describe("cross-user", () => {
     const key = await lab.kernel.owner.call<{ key: string }>("api_keys_create", { projectId: habits.id, name: "Reader", actions: ["habits.mine"] });
     const read = await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${key.key}` } });
     expect(read.status).toBe(200);
-    // The key is its own Runtime Actor, so user_id = ?1 matches no user's row.
     expect(JSON.stringify(await read.json())).not.toContain("Private habit");
-    // A key plus a user's cookie is still the key.
     const both = await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${key.key}`, cookie: ana.cookie } });
     expect(JSON.stringify(await both.json())).not.toContain("Private habit");
   });
@@ -91,7 +83,6 @@ describe("cross-user", () => {
     await expect(invoke(client, "habits.list")).rejects.toThrow();
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { cookie: user.cookie } })).status).toBe(401);
     expect((await hostFetch(lab, habits.hostname, `/_konae/files/${file.id}`, { headers: { cookie: user.cookie } })).status).toBe(401);
-    // A bearer copy of the same session token is the same session.
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${user.token}` } })).status).toBe(401);
   });
 });
@@ -106,7 +97,6 @@ describe("sessions across Deployments and hosts", () => {
         expect(answerText(answer.body)).not.toContain(member.email);
       }
     }
-    // A private app's route does not take it either.
     expect((await hostFetch(lab, habits.hostname, "/api/habits", { headers: { authorization: `Bearer ${member.token}` } })).status).toBe(401);
   });
 
@@ -126,12 +116,10 @@ describe("sessions across Deployments and hosts", () => {
   test("Host header variants never select another Deployment or a session", async () => {
     const { club, gallery } = lab.apps;
     const member = await appUser(lab, club);
-    // Upper case, a trailing dot and a sub-host are not the Deployment's hostname.
     for (const host of [club.hostname.toUpperCase(), `${club.hostname}.`, `x.${club.hostname}`, `${club.hostname}@${gallery.hostname}`]) {
       const answer = await rawCall(lab, "/_konae/mcp", host, "auth_session", {}, { cookie: member.cookie });
       expect([403, 404]).toContain(answer.status);
     }
-    // X-Forwarded-Host is not read: the request stays on the gallery, where the club session means nothing.
     const forwarded = await rawCall(lab, "/_konae/mcp", gallery.hostname, "auth_session", {}, { cookie: member.cookie, "x-forwarded-host": club.hostname });
     expect(answerText(forwarded.body)).toContain("anonymous");
   });
@@ -142,11 +130,9 @@ describe("sessions across Deployments and hosts", () => {
     for (const origin of [`http://${gallery.hostname}`, `http://${club.hostname}:1`, "null"]) {
       const runtime = await rawCall(lab, "/_konae/mcp", habits.hostname, "actions_invoke", { name: "habits.list", input: {} }, { cookie: member.cookie, origin });
       expect(runtime.status).toBe(403);
-      // On a route the session is dropped and the caller is a visitor, which a private app refuses.
       const route = await hostFetch(lab, habits.hostname, "/api/habits", { method: "POST", headers: { cookie: member.cookie, origin }, body: JSON.stringify({ name: "csrf" }) });
       expect(route.status).toBe(401);
     }
-    // A same-site request without Origin, such as an <img> on a sibling app, gets no session either.
     const sibling = await hostFetch(lab, habits.hostname, "/api/habits", { headers: { cookie: member.cookie, "sec-fetch-site": "same-site" } });
     expect(sibling.status).toBe(401);
   });

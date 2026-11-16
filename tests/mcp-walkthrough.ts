@@ -1,30 +1,19 @@
-// Runs docs/mcp-walkthrough.md against real Kernels and records every
-// command, tool call and HTTP request with its answer. The integration test
-// renders the record into the document's marked blocks and fails when the
-// document differs, so the walkthrough cannot drift from what the Kernel says.
 import path from "node:path";
 
 const repo = path.resolve(import.meta.dir, "..");
 const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae");
 const PROTOCOL = "2025-11-25";
 
-/** The URLs the document shows, whatever ports the run used. */
 export const SHOWN = { a: "http://localhost:4173", b: "http://localhost:4174", dev: "http://localhost:8796" };
 
 type Block = { lang: string; text: string };
 
-/**
- * Collects the blocks of each marked step and replaces every value that
- * changes between runs (IDs, tokens, hashes, times, ports) with a named
- * placeholder, so two runs render the same document.
- */
 export class Recorder {
   readonly steps = new Map<string, Block[]>();
   private readonly names: [string, string][] = [];
   current = "";
 
   step(id: string) { this.current = id; if (!this.steps.has(id)) this.steps.set(id, []); }
-  /** Shows `value` as `placeholder` wherever it appears in a rendered block, also URL-encoded. */
   name(value: string | undefined | null, placeholder: string) {
     if (!value || this.names.some(([known]) => known === value)) return;
     const shown = (text: string) => placeholder.startsWith("<") ? placeholder : text;
@@ -57,7 +46,6 @@ export class Recorder {
   }
 }
 
-/** Replaces the content between `<!-- walkthrough:id -->` and `<!-- /walkthrough:id -->` with the recorded blocks. */
 export function renderDocument(document: string, recorder: Recorder) {
   const seen = new Set<string>();
   const out = document.replace(/<!-- walkthrough:([a-z0-9-]+) -->\n[\s\S]*?<!-- \/walkthrough:\1 -->/g, (_, id: string) => {
@@ -71,7 +59,6 @@ export function renderDocument(document: string, recorder: Recorder) {
 
 export type ToolAnswer = { result?: unknown; refused?: string; error?: string };
 
-/** One tools/call, answered as the Kernel answers it: a result, a tool error, or a JSON-RPC error. */
 export async function callTool(endpoint: string, headers: Record<string, string>, name: string, args: object = {}): Promise<ToolAnswer> {
   const response = await fetch(endpoint, {
     method: "POST",
@@ -105,7 +92,6 @@ export async function startKernel(port: number, data: string, setupKey: string):
   throw Error(`The Kernel on port ${port} did not start.`);
 }
 
-/** Runs the CLI as `bun run konae -- <args>` would, and returns what it printed. */
 export async function cli(args: string[], env: Record<string, string> = {}) {
   const child = Bun.spawn([process.execPath, path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, env: { ...cleanEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);

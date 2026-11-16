@@ -1,8 +1,7 @@
 import { templateHelpers, templateStyles } from "./shared";
 import type { TemplateSource } from "./types";
 
-const schema = `-- Written by any visitor through the form. Only the accounts in admins read it.
-CREATE TABLE IF NOT EXISTS messages (
+const schema = `CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   email TEXT NOT NULL,
@@ -10,9 +9,6 @@ CREATE TABLE IF NOT EXISTS messages (
   received_at INTEGER NOT NULL
 );
 
--- The accounts that read what the app keeps for its staff. The owner adds one
--- from Data > SQL with the account ID that Access > Users shows:
---   INSERT INTO admins (user_id) VALUES ('<account id>');
 CREATE TABLE IF NOT EXISTS admins (
   user_id TEXT PRIMARY KEY
 );

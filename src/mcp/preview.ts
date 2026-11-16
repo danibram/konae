@@ -35,9 +35,6 @@ export async function handlePreviewMcp(host: Pick<MiniAppRuntimeHost, "handle">,
   const method = request.params?.name && methods[request.params.name];
   if (!method) return error(-32602, "Unknown preview tool.");
   try {
-    // Uploads, visibility changes and deletes require a signed-in preview
-    // actor. Listing and files.url are allowed and the host returns only
-    // public files plus that actor's private files.
     if (fileTools.has(method) && (await host.handle("auth.session", undefined) as { role?: string }).role === "anonymous") {
       throw new Error("authentication-required");
     }

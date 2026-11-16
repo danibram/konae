@@ -38,7 +38,6 @@ describe("changes not deployed", () => {
     const edited = project({ "index.html": "<p>two</p>" });
     expect(changesNotDeployed(edited, live, await sourceDigest(edited))).toBe(true);
     expect(accessNotDeployed(edited, live)).toBe(false);
-    // A reverted edit is no change.
     expect(changesNotDeployed(project(), live, await sourceDigest({ files: { ...project().files } }))).toBe(false);
   });
 

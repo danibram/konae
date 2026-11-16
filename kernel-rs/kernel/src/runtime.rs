@@ -1,7 +1,3 @@
-//! The runtime endpoint the browser SDK calls: `/_konae/mcp` on an app's
-//! host. It speaks the same JSON-RPC as an MCP server and offers an app's
-//! visitors and app users the session, action, file and transfer tools.
-//! The helpers that read a call and wrap an answer serve every MCP door.
 
 use super::*;
 use super::transfers::{ADMIN_CHUNK, CHUNK, MAX_TRANSFER, download_body, transfer, transfer_call, transfer_path};
@@ -108,21 +104,14 @@ pub fn unauthorized(state: &AppState, headers: &HeaderMap) -> Response {
     response
 }
 
-/// Who a request to an app's runtime doors acts as.
 struct RuntimeCaller {
     deployment: Deployment,
-    /// The owner of the caller's transfers.
     principal: String,
     tools: Vec<Value>,
-    /// A visitor without a session.
     anonymous: bool,
-    /// A visitor on a private app, who reaches only the account tools.
     account_only: bool,
 }
 
-/// The checks every runtime door makes before it reads a body: the page's
-/// own origin and a host the Kernel serves, no API key, and a session or a
-/// visitor the app admits.
 async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std::net::SocketAddr>) -> Result<RuntimeCaller, Response> {
     let host_known = valid_host(state, headers)
         || super::domain::is_alias_request(state, headers)
@@ -139,18 +128,12 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
     if super::path::foreign_referer(state, headers, &deployment.id) {
         return Err(error(StatusCode::FORBIDDEN, "A page of another app's path address cannot call this app."));
     }
-    // A key would otherwise read as an unknown session token, and the
-    // program would get a visitor's answers without knowing why.
     if bearer(headers).is_some_and(|token| token.starts_with("lbk_")) {
         return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
     }
     let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
     let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers) {
         Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
-        // A visitor without a session on a public app may read the anonymous
-        // session, run actions declared anonymous, and read public files.
-        // The transfer principal includes the client address so visitors
-        // do not share one quota. Private apps require sign-in for everything.
         Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
         Ok(None) => (visitor(), account_tools(), true, true),
         Err(_) => return Err(unauthorized(state, headers)),
@@ -165,10 +148,6 @@ fn peer_of(request: &Request) -> Option<std::net::SocketAddr> {
         .map(|info| info.0)
 }
 
-/// `PUT /_konae/transfers/<id>` takes the whole body of an upload transfer
-/// the signed-in user opened with `transfer_begin`, checks its size and
-/// SHA-256 and completes it, so a file costs one request instead of one
-/// `transfer_write` per 64 KiB. `files_upload` then stores it as before.
 async fn put_transfer(State(state): State<AppState>, AxumPath(id): AxumPath<String>, request: Request) -> Response {
     let headers = request.headers().clone();
     let caller = match runtime_caller(&state, &headers, peer_of(&request)).await {
@@ -225,8 +204,6 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 return rpc_error(id, -32602, "Tool name is required.");
             };
             if !tools.iter().any(|t| t["name"] == name) {
-                // Tell a signed-out visitor the tool needs a session, so the SDK can
-                // send them to the login page.
                 if runtime_tools().iter().any(|t| t["name"] == name) {
                     return Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"authentication-required"}],"isError":true}})).into_response();
                 }
@@ -241,8 +218,6 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
                 return rpc_error(id, -32602, &e.to_string());
             }
             if name == "actions_invoke" {
-                // Signed-out visitors share a bucket per client address and
-                // Deployment; each signed-in app user has their own.
                 let limited = if anonymous {
                     let client = limits::client_key(state.guards.client_ip(peer, &headers));
                     let key = format!("{app}|{client}");
@@ -270,11 +245,9 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
             } else {
                 runtime_call(&state, &headers, &principal, Some(&app), name, arguments.clone()).await
             };
-            // No statement slot freed in time: the answer the address limit gives.
             if let Some(limits::Busy(wait)) = result.as_ref().err().and_then(|e| e.downcast_ref::<limits::Busy>()) {
                 return rate_limited_tool(&id, *wait);
             }
-            // The session row is gone; the browser must drop its cookie too.
             if name == "auth_logout" && result.is_ok() {
                 clear_cookie = true;
             }
@@ -294,14 +267,12 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
     response
 }
 
-/// The `rate-limited` tool error, with how long to wait before the next call.
 fn rate_limited_tool(id: &Value, wait: std::time::Duration) -> Response {
     let mut response = Json(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"rate-limited"}],"isError":true}})).into_response();
     response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
     response
 }
 
-/// Records an app user's upload or delete through the installation's sink.
 fn audit(state: &AppState, principal: &str, name: &str, app: Option<&str>, result: &Result<Value>) {
     if let (Some(sink), Some(app)) = (state.audit.as_ref(), app) {
         sink(principal, name, app, result.is_ok());
@@ -321,7 +292,6 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 
-/// Lock names the Kernel takes besides an app's ID.
 const RESERVED_IDS: [&str; 3] = ["domains", "paths", "transfer-quota"];
 
 /// A project ID names the app's folder and its lock, so it holds only
@@ -502,8 +472,6 @@ pub fn transfer_tools(runtime: bool) -> Vec<Value> {
             } else {
                 "Start a size-bounded upload with an expected SHA-256 checksum. An upload is at most 32 MiB unless it names a component of an export, which may be as large as that component's quota."
             },
-            // The bound depends on the installation's file limits, so the
-            // handler checks it and names the number.
             json!({"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"projectId":{"type":"string"},"component":{"type":"string","enum":super::package::COMPONENT_NAMES}}),
             &["size", "sha256"],
             false,
@@ -684,12 +652,10 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     super::calls::check_connects(&input.project.manifest)?;
-    // The limit counts the bytes the Kernel stores, after base64 is decoded.
     let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
     let sizes = artifact.iter().map(|(path, bytes)| (path.as_str(), bytes.len()));
     anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= super::size::ARTIFACT_BYTES, "{}", super::size::artifact_refused(sizes));
     drop(artifact);
-    // The sources become app/, so they meet the rules a save meets before anything is written.
     super::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let program = super::action_shape::read(
         input
@@ -741,8 +707,6 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
 }
 
 
-/// Whether Usage counts this request: not when its session came through an
-/// entry link (`enter.rs`).
 async fn counted(state: &AppState, app: &str, headers: &HeaderMap) -> bool {
     let deployment = state.deployments.read().await.values().find(|d| d.id == app).cloned();
     !deployment.is_some_and(|deployment| super::enter::entered_request(state, &deployment, headers))
@@ -778,7 +742,6 @@ pub async fn runtime_call(
                 Json(a.get("input").cloned().unwrap_or(json!({}))),
             )
             .await;
-            // Only a statement slot that did not free in time answers 429 here.
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
                 let wait = response.headers().get(header::RETRY_AFTER).and_then(|value| value.to_str().ok()).and_then(|value| value.parse().ok()).unwrap_or(1);
                 return Err(limits::Busy(std::time::Duration::from_secs(wait)).into());
@@ -796,10 +759,8 @@ pub async fn runtime_call(
             Ok(files)
         }
         "files_read" => {
-            // The whole file goes into the transfer, whatever range the request named.
             let mut whole = headers.clone();
             whole.remove(header::RANGE);
-            // A 304 would leave the transfer without bytes.
             whole.remove(header::IF_NONE_MATCH);
             let response = serve_file(
                 State(state.clone()),
@@ -818,7 +779,6 @@ pub async fn runtime_call(
         }
         "files_upload" => {
             let id = a["transferId"].as_str().unwrap();
-            // Validate before locking: the lock name comes from the caller.
             transfer_path(state, id)?;
             let _guard = database_lock(state, &format!("transfer:{id}")).await;
             let request_hash = digest(a.to_string().as_bytes());
@@ -848,7 +808,6 @@ pub async fn runtime_call(
                     super::usage::count(&state.data_root, deployment, super::usage::Operation::Upload);
                 }
             }
-            // Failed uploads and receipt replays leave no row.
             let result = Ok(result);
             audit(state, principal, name, app, &result);
             result
@@ -859,7 +818,6 @@ pub async fn runtime_call(
         }
         "files_delete" => {
             let result = response_value(super::files::delete_file(state, headers, a["fileId"].as_str().unwrap()).await).await;
-            // Each file is deleted once, so like uploads these rows stay bounded.
             if result.is_ok() {
                 audit(state, principal, name, app, &result);
             }
@@ -897,9 +855,6 @@ pub fn valid_host(state: &AppState, headers: &HeaderMap) -> bool {
             .as_ref()
             .and_then(|u| u.host_str())
             .is_some_and(|pub_host| host.ends_with(&format!(".{}", pub_host.to_ascii_lowercase())))
-        // With KONAE_DOMAIN, apps answer on <slug>.<domain> while the editor is
-        // on app.<domain>. The public-origin rule above only covers the editor
-        // host tree; generated hostnames need the suffix.
         || (!suffix.is_empty() && host.ends_with(&format!(".{suffix}")))
 }
 
@@ -925,7 +880,6 @@ pub fn origin(state: &AppState, headers: &HeaderMap) -> String {
 mod tests {
     use axum::http::{header, HeaderMap};
 
-    /// Every tool the instructions name is one the runtime endpoint serves.
     #[test]
     fn the_instructions_name_only_runtime_tools() {
         let served: Vec<String> = super::runtime_tools().iter().filter_map(|tool| tool["name"].as_str().map(str::to_owned)).collect();
@@ -945,8 +899,6 @@ mod tests {
         headers
     }
 
-    /// With KONAE_DOMAIN the editor is on app.<domain> and apps are on
-    /// <slug>.<domain>. The runtime must accept both Host trees.
     #[test]
     fn valid_host_accepts_a_generated_app_hostname() {
         let root = std::env::temp_dir().join(format!("konae-valid-host-{}", uuid::Uuid::new_v4()));

@@ -26,45 +26,24 @@ import { buildAuth, buildModel, createStreamFn } from "./providers";
 import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
 import { createCapsuleTools, readLiveDatabase, readValidationFacts, type PreviewFailureReport } from "./tools";
 
-/**
- * The concrete agent. Beyond the `KonaeAgent` contract it exposes the four
- * operations the editor needs around a proposal: swap the model without losing
- * the conversation, throw the workspace away, re-seed it after an Apply, and
- * point the session at the Project as it now stands.
- */
 export type KonaeAgentHandle = KonaeAgent & {
   configure(config: AgentSessionConfig): void;
-  /** Throw away the scratch copy's edits and the transcript. */
   discard(): void;
-  /** Re-seed the workspace from the Project after a proposal was applied. */
   reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void;
-  /**
-   * Point the session at a Project: a different one starts a new conversation,
-   * the same one refreshes the system prompt and re-seeds files changed outside
-   * the agent. Nothing else may assume the Project is the one it was built with.
-   */
   retarget(project: MiniAppProject): void;
   dispose(): void;
 };
 
 export type KonaeAgentOptions = {
-  /** The owner's MCP session (ADR-0007). Without it the agent edits files and nothing else. */
   platform?: AgentPlatformBinding;
-  /** Injected sql.js loader for the Validation Gate; defaults to the browser one. */
   loadSql?: SqlJsLoader;
   models?: Models;
   validator?: CapsuleValidator;
-  /** Default reasoning effort. Edits are small and mostly visual. */
   thinkingLevel?: ThinkingLevel;
-  /** Used from the turn after a change touches schema.sql or actions.json. */
   riskyThinkingLevel?: ThinkingLevel;
-  /** The live local database, so the gate can run its preview-rows stage. */
   liveDatabase?: LiveDatabaseExport;
-  /** Runtime failures from the live preview, exposed to the model as `preview_errors`. */
   previewErrors?: () => PreviewFailureReport[];
-  /** The project's secret names and the installation's hosts, read when the Gate runs. */
   releaseFacts?: () => Promise<ReleaseFacts>;
-  /** The full app files include binary assets the agent workspace cannot read. */
   sourceFiles?: () => MiniAppProject;
 };
 
@@ -89,24 +68,14 @@ class KonaeAgentSession implements KonaeAgentHandle {
   private readonly riskyThinkingLevel: ThinkingLevel;
   private project: MiniAppProject;
   private config: AgentSessionConfig;
-  /** The files the workspace was seeded from, so a change made outside the agent is detectable. */
   private seedFiles: CapsuleFiles;
-  /**
-   * A verdict is current only for the exact file contents it was produced from,
-   * whoever produced it: the model's own `validate_capsule` cannot vouch for an
-   * edit that landed next to it.
-   */
   private validated: { signature: string; result: ValidationResult; retry?: boolean } | null = null;
   private seeded = false;
-  /** The five files as the model last saw them, so a change it did not make re-seeds the capsule. */
   private modelView: CapsuleFiles | null = null;
   private risky = false;
   private aborted = false;
-  /** Bumped whenever the session is abandoned mid-run: discard, retarget, dispose. */
   private runToken = 0;
-  /** A transcript clear the next send must wait for; `reset` throws while a run is active. */
   private pending: Promise<void> = Promise.resolve();
-  /** Last error text emitted in this run, so one failure is not reported twice. */
   private reported = "";
 
   constructor(
@@ -119,7 +88,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
     this.config = sessionConfig;
     this.thinkingLevel = options.thinkingLevel ?? "low";
     this.riskyThinkingLevel = options.riskyThinkingLevel ?? "medium";
-    // The model reads and writes text. A file that is not text stays out of its copy and keeps its bytes.
     this.workspace = new WorkspaceHolder(textFiles(project));
     this.seedFiles = { ...textFiles(project) };
     this.validator = options.validator ?? createCapsuleValidator(options.loadSql);
@@ -136,7 +104,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
         thinkingLevel: clampThinkingLevel(model, this.thinkingLevel) as ThinkingLevel,
         tools: this.capsuleTools(),
       },
-      // Lever 6: escalate only once the change reaches the data contract.
       prepareNextTurn: () => (this.risky ? { thinkingLevel: this.escalated() } : undefined),
     });
     this.unsubscribes.push(this.agent.subscribe((event) => this.onAgentEvent(event)));
@@ -152,7 +119,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
   async send(prompt: string): Promise<void> {
     const text = prompt.trim();
     if (!text) return;
-    // A discard clears the transcript once the aborted run lands; never prompt across it.
     await this.pending;
     this.risky = false;
     this.aborted = false;
@@ -168,9 +134,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
       this.report(describe(error));
       return;
     }
-    // Discarded or retargeted mid-run: the workspace and transcript are no longer this run's.
     if (token !== this.runToken) return;
-    // A stop the owner asked for is not an error; the partial edits still get gated.
     const failure = this.agent.state.errorMessage;
     if (failure && !this.aborted) this.report(failure);
     await this.runGate(token);
@@ -219,9 +183,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
   }
 
   reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]) {
-    // The Project moved: the session's copy of it has to move too, or a later
-    // discard restores the workspace from the Capsule as it was before the Apply
-    // and quietly proposes the old files back over the applied ones.
     this.project = { ...this.project, files, encodings };
     const text = textFiles(this.project);
     this.replaceWorkspace(text);
@@ -234,7 +195,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
     this.agent.state.systemPrompt = systemPromptFor(project, this.config);
     const text = textFiles(project);
     if (switched) {
-      // Another Capsule entirely: nothing of this conversation may leak into it.
       this.agent.abort();
       this.runToken += 1;
       this.replaceWorkspace(text);
@@ -245,7 +205,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
       return;
     }
     if (sameFiles(text, this.seedFiles)) return;
-    // The Project moved under the workspace (an Apply, a hand edit, a reset).
     const dropped = this.workspace.changedFiles().length > 0;
     this.replaceWorkspace(text);
     this.forgetSeedIfUnseen(text);
@@ -261,7 +220,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
     this.listeners.clear();
   }
 
-  // --- internals ---------------------------------------------------------------
 
   private capsuleTools() {
     return createCapsuleTools(this.workspace, this.validator, {
@@ -273,11 +231,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
     });
   }
 
-  /**
-   * The workspace tools, then the owner's MCP tools as the session lists them
-   * now. A session that cannot list them (signed out, Kernel down) leaves the
-   * agent its files; the owner signs in and the next turn gets them back.
-   */
   private async toolsForRun(token: number) {
     const tools = this.capsuleTools();
     const binding = this.options.platform;
@@ -315,7 +268,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
     this.validated = null;
   }
 
-  /** The model only knows the capsule it was shown plus its own edits; anything else must be re-seeded. */
   private forgetSeedIfUnseen(files: CapsuleFiles) {
     if (this.modelView && sameFiles(files, this.modelView)) return;
     this.seeded = false;
@@ -324,7 +276,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
 
   private seedMessage(text: string): string {
     const files = this.workspace.serialize().files;
-    // Set before awaiting the run: a discard during it must be able to reset this.
     this.seeded = true;
     this.modelView = files;
     return buildInitialUserMessage({ ...this.project, files }, text, Object.keys(this.project.files).filter((path) => isEncoded(this.project, path)));
@@ -334,7 +285,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
     return clampThinkingLevel(this.agent.state.model, this.riskyThinkingLevel) as ThinkingLevel;
   }
 
-  /** Re-resolves the model so a provider or model change mid-conversation takes effect. */
   private applyConfig(): boolean {
     try {
       const model = buildModel(this.config, this.options.models);
@@ -348,7 +298,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
   }
 
   private onMutation(mutation: CapsuleMutation) {
-    // Only tools mutate the workspace, so this is exactly what the model knows about.
     this.modelView = mutation.files;
     if (riskyFiles.includes(mutation.file)) this.risky = true;
   }
@@ -387,19 +336,11 @@ class KonaeAgentSession implements KonaeAgentHandle {
     }
   }
 
-  /**
-   * The model's own `validate_capsule` counts as the gate — but only for the
-   * files that call actually saw, which is why the tool reports them.
-   */
   private recordValidation(files: CapsuleFiles, result: ValidationResult) {
     this.validated = { signature: signatureOf(files), result };
     this.emit({ type: "validation", result });
   }
 
-  /**
-   * The hard gate: Apply never trusts the model, so a settled run always ends
-   * with a validation of the workspace as it actually stands.
-   */
   private async runGate(token: number) {
     if (this.workspace.changedFiles().length === 0) return;
     const signature = this.signature();
@@ -413,9 +354,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
       this.emit({ type: "validation", result });
     } catch (error) {
       const message = `The Validation Gate could not run: ${describe(error)}`;
-      // A gate that could not run is not a pass: record the verdict so Apply stays
-      // shut and the footer says so instead of spinning forever. `retry` lets the
-      // next settled run try again on the same files.
       if (this.stillCurrent(token, signature)) {
         const result: ValidationResult = { ok: false, errors: [{ stage: "schema", message }], checked: [] };
         this.validated = { signature, result, retry: true };
@@ -452,10 +390,6 @@ class KonaeAgentSession implements KonaeAgentHandle {
   }
 }
 
-/**
- * A `CapsuleWorkspace` whose backing workspace can be replaced, so the tools and
- * the transcript survive an Apply or a Discard without being rebuilt.
- */
 class WorkspaceHolder implements CapsuleWorkspace {
   private workspace: CapsuleWorkspace;
   private unsubscribe: () => void;
@@ -507,11 +441,6 @@ function systemPromptFor(project: MiniAppProject, config: AgentSessionConfig): s
   return append ? `${buildSystemPrompt(project)}\n\n# Project instructions\n\n${append}` : buildSystemPrompt(project);
 }
 
-/**
- * Identity of a Capsule's contents: a validation is only current for one of
- * these. Every file counts, nested source files included, and a missing file
- * differs from an empty one.
- */
 function signatureOf(files: CapsuleFiles): string {
   return JSON.stringify(Object.keys(files).sort().map((file) => [file, files[file]]));
 }
@@ -524,7 +453,6 @@ function sameFiles(left: CapsuleFiles, right: CapsuleFiles): boolean {
   return true;
 }
 
-/** Tool chip detail: the Capsule file the call is about, if it names one. */
 function describeArgs(args: unknown): string {
   const path = (args as { path?: unknown } | undefined)?.path;
   if (typeof path !== "string") return "";

@@ -12,28 +12,14 @@ export function isSettingChanged(error: unknown): boolean {
   return error instanceof McpError && error.refusal?.code === "setting.changed";
 }
 
-/**
- * Publishes the project. `confirmSchema` is asked when the schema change loses
- * data. `initialSignupPolicy` goes only with a first release: the Kernel
- * installs it before the app serves, and refuses it on a republish.
- */
 export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number, initialModules?: MiniAppProject["modules"]): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
   const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, initialModules }), confirmSchema, () => {}, undefined, observedSourcesRevision);
   return { receipt, sourcesRevision: plan.expectedSourcesRevision + 1 };
 }
 
-/**
- * Whether the running release came with actions other than the editor's saved
- * sources, as after `konae publish` from an app folder. The Kernel decides it
- * when it applies each release.
- */
 
-/**
- * Who may create an account on a deployed app, in the order the editor offers
- * them. `invitation` admits only people the owner invited; `allowlist` holds
- * exact emails and `@domain` entries. The Kernel's `signup_policy_set` accepts
- * exactly these modes, and tests/mcp.integration.test.ts checks that.
- */
+
+
 export const signupModes = ["open", "invitation", "closed", "allowlist"] as const;
 export type SignupMode = (typeof signupModes)[number];
 export type SignupPolicy = { projectId: string; visibility: DeploymentVisibility; mode: SignupMode; allowlist: string[] };
@@ -44,20 +30,13 @@ export async function readSignupPolicy(projectId: string) {
   return { projectId, visibility: inspected.deployment.manifest.visibility, mode: inspected.deployment.signupPolicy.mode, allowlist: inspected.deployment.signupPolicy.allowlist ?? [] };
 }
 
-/** Saves the policy, then reads the deployed value through project_inspect. */
+
 export async function saveSignupPolicy(projectId: string, mode: SignupMode, allowlist: string[]) {
   await platformMcp.call("signup_policy_set", { projectId, mode, allowlist });
   return readSignupPolicy(projectId);
 }
 
-/**
- * How people sign in to a deployed app. Password is always on. `offered` is
- * what the sign-in page shows: google only once the owner turned it on and
- * set the app's Google client. `googleClient` says whether each half is set,
- * never its value. `redirectUris` are the callbacks the owner registers in
- * the Google console. `notice` explains an app that asks for Google without
- * its client here, such as after an import.
- */
+
 export type SignInMethod = "password" | "google";
 export type SignInMethods = {
   deploymentId: string;
@@ -77,7 +56,7 @@ export function saveSignInMethods(deploymentId: string, google: boolean) {
   return platformMcp.call<SignInMethods>("sign_in_methods_set", { projectId: deploymentId, methods });
 }
 
-/** The project secrets that hold the app's own Google OAuth client. */
+
 export const GOOGLE_CLIENT_ID = "google_client_id";
 export const GOOGLE_CLIENT_SECRET = "google_client_secret";
 
@@ -85,8 +64,8 @@ export function setGoogleClientPart(projectId: string, name: typeof GOOGLE_CLIEN
   return platformMcp.call<{ projectId: string; name: string; updatedAt: number }>("secret_set", { projectId, name, value, use: "google" });
 }
 
-// App accounts and invitations. Every tool needs the manage_users permission,
-// which the owner's browser session holds. docs/reference/accounts.md, "Users and invitations".
+
+
 
 export type AppUserState = "pending" | "active" | "suspended";
 export type AppUser = { userId: string; email: string; state: AppUserState; verified: boolean; verifiedAt: number | null; createdAt: number };
@@ -104,23 +83,20 @@ export function resumeAppUser(deploymentId: string, userId: string) {
   return platformMcp.call<{ userId: string; email: string; state: AppUserState }>("app_user_resume", { projectId: deploymentId, userId });
 }
 
-/** A one-time link that signs a browser in to the app as this account. It works once, for two minutes. */
+
 export function enterAsAppUser(deploymentId: string, userId: string) {
   return platformMcp.call<{ userId: string; email: string; url: string; expiresAt: number }>("app_user_enter", { projectId: deploymentId, userId });
 }
 
 export type InvitationStatus = "pending" | "expired" | "needs-resend" | "already-member" | "accepted" | "revoked";
-/** Whether the mail transport took the message. The Kernel keeps no per-invitation provider state. */
+
 export type InvitationDelivery = "queued" | "failed" | "not-sent";
 export type AppInvitation = {
   invitationId: string; email: string; status: InvitationStatus; invitedBy: string;
   createdAt: number; expiresAt: number; acceptedAt: number | null; revokedAt: number | null;
   delivery: InvitationDelivery; sends: number;
 };
-/**
- * An invite's answer. `local-mailbox` means the development transport wrote
- * the email to the server's mailbox file, so the answer carries `acceptUrl`.
- */
+
 export type InvitationResult =
   | { email: string; status: "invited"; invitationId: string; expiresAt: number; acceptable: boolean; delivery: InvitationDelivery | "local-mailbox"; acceptUrl?: string }
   | { email: string; status: "already-invited"; invitationId: string; acceptable: boolean }
@@ -142,7 +118,7 @@ export function revokeAppInvitation(deploymentId: string, invitationId: string) 
   return platformMcp.call<{ invitationId: string; email: string; status: "revoked" }>("app_invitation_revoke", { projectId: deploymentId, invitationId });
 }
 
-/** The installation's mail transport, as `mail_status` reports it. It names no recipient. */
+
 export type MailStatus = {
   transport: string | null;
   sending: boolean;
@@ -156,20 +132,13 @@ export function readMailStatus(refresh = false) {
   return platformMcp.call<MailStatus>("mail_status", refresh ? { refresh: true } : {});
 }
 
-// Signing secrets belong to the project, so they can be set before the first
-// release. API keys belong to one Deployment. docs/reference/routes-and-calls.md, "HTTP routes".
 
-/**
- * One row of `secrets_list`. `use` is "call" for a secret a route may not sign
- * with. `svixKey` says whether the value decodes as a svix whsec_ key.
- * The value never leaves the Kernel.
- */
+
+
+
 export type ProjectSecret = { name: string; updatedAt: number; use: "route" | "call"; svixKey: boolean };
 
-/**
- * The project's signing secrets. The app's Google client (`use` "google")
- * is left out: no route or call reads it, and Access > Users shows it.
- */
+
 export async function listSecrets(projectId: string) {
   const answer = await platformMcp.call<{ projectId: string; secrets: Array<Omit<ProjectSecret, "use"> & { use: ProjectSecret["use"] | "google" }> }>("secrets_list", { projectId });
   return { ...answer, secrets: answer.secrets.filter((secret): secret is ProjectSecret => secret.use !== "google") };
@@ -184,14 +153,14 @@ export function deleteSecret(projectId: string, name: string) {
 }
 
 export type FileVisibility = "public" | "private";
-/** `revokedReason` is "import" for a key that arrived with an imported app, revoked; null when the owner revoked it or it is live. */
+
 export type ApiKey = { keyId: string; name: string; actions: string[]; files: FileVisibility[]; createdAt: number; revokedAt: number | null; revokedReason?: "import" | null };
 
 export function listApiKeys(deploymentId: string) {
   return platformMcp.call<{ deploymentId: string; keys: ApiKey[] }>("api_keys_list", { projectId: deploymentId });
 }
 
-/** The answer carries the key once. Nothing can read it again. */
+
 export function createApiKey(deploymentId: string, name: string, actions: string[], files: FileVisibility[]) {
   return platformMcp.call<ApiKey & { key: string }>("api_keys_create", { projectId: deploymentId, name, actions, files });
 }
@@ -239,7 +208,7 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
     return this.request<DatabaseBackup>({ operation: "restore-backup", backupId });
   }
 
-  /** The database as the one export carries it: project_export, then only its database download. */
+
   async exportDatabase() {
     const exported = await platformMcp.call<{ downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: this.deploymentId });
     try {
@@ -255,34 +224,26 @@ export class HostedDatabaseClient implements DatabaseAdminHost {
   }
 }
 
-/**
- * Whether the app is in maintenance (kernel-rs/kernel/src/maintenance.rs).
- * `since` is when it went in. `installation` is a hold of the whole
- * installation, which taking the app out does not lift.
- */
+
 export type MaintenanceState = { maintenance: boolean; since: number | null; unreadable: boolean; installation: string | null };
 
 export function readMaintenance(deploymentId: string) {
   return platformMcp.call<MaintenanceState>("maintenance_read", { projectId: deploymentId });
 }
 
-/** Puts the app in maintenance or takes it out, and answers with the state the Kernel kept. */
+
 export function setMaintenance(deploymentId: string, on: boolean, expected: boolean) {
   return platformMcp.call<MaintenanceState>("maintenance_set", { projectId: deploymentId, on, expected });
 }
 
-/**
- * Where `"notify": { "to": "owner" }` sends (kernel-rs/kernel/src/notify.rs).
- * `ownerNotices` names the actions that send there; with no contact email
- * those notices are not sent.
- */
+
 export type ContactEmailState = { deploymentId: string; contactEmail: string | null; ownerNotices: string[] };
 
 export function readContactEmail(deploymentId: string) {
   return platformMcp.call<ContactEmailState>("contact_email_read", { projectId: deploymentId });
 }
 
-/** Sets the app's contact email in konae.json, or clears it with null, and answers with what the Kernel kept. */
+
 export function setContactEmail(deploymentId: string, email: string | null, expected: string | null) {
   return platformMcp.call<ContactEmailState>("contact_email_set", { projectId: deploymentId, email, expected });
 }

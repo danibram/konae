@@ -1,15 +1,3 @@
-//! A mutation's guard: the refusal it answers with when its statement
-//! changes no row, instead of `{ changes: 0 }`
-//! (ADR-0010).
-//!
-//! An app writes its rules into the statement's `WHERE`: the caller is an
-//! organizer, the slot is free, the event exists. When the rule says no, the
-//! statement changes nothing, and without a guard that looks the same as a
-//! request that had nothing to do. With `"guard": "<message>"` the Kernel
-//! answers that message as a refusal, 403 on a route and a tool error on the
-//! runtime endpoint, counts it under Usage's `refused` kind and records no
-//! Signal. `parseGuard` in src/kernel/actions.ts makes the same checks, and
-//! kernel-rs/kernel/src/guard-cases.json holds the cases both test suites run.
 
 use super::refusal::{refuse, Refusal};
 use super::ActionDefinition;
@@ -20,7 +8,6 @@ pub const MAX_GUARD_CHARS: usize = 200;
 /// Parses and checks one action's `guard` key. `Ok(None)` when it has none.
 pub fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<String>, Refusal> {
     let Some(value) = action.guard.as_ref() else { return Ok(None) };
-    // Each message is written out so src/sdk/contract.test.ts finds it.
     if action.kind == "query" {
         return Err(refuse("guard.not-mutation", format!("Action {name} is a query, so it cannot declare a guard. Declare it on a mutation.")));
     }
@@ -40,12 +27,8 @@ pub fn declaration(name: &str, action: &ActionDefinition) -> Result<Option<Strin
 
 /// What a finished action means for its caller, Usage and its Signal.
 pub enum Outcome {
-    /// The action ran and, for a mutation, changed at least one row.
     Changed,
-    /// A mutation without a guard changed no row: answered as it is, counted,
-    /// and no Signal is recorded.
     Unchanged,
-    /// A guarded mutation changed no row: refused with the guard.
     Refused(String),
 }
 
@@ -69,7 +52,6 @@ mod tests {
         serde_json::from_value(serde_json::json!({"version": 1, "actions": actions})).unwrap()
     }
 
-    /// The editor runs the same file in src/kernel/actions.test.ts.
     #[test]
     fn guards_refuse_what_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("guard-cases.json")).unwrap();

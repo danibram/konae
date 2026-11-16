@@ -1,9 +1,3 @@
-//! The commands an operator runs on an app that a Kernel serves without
-//! Konae (ADR-0001). Each one calls the function Konae's owner
-//! tool calls, so it refuses with the same words, and prints the same answer
-//! as JSON. They work on the app's files beside a running Kernel, which
-//! reads the app accounts, keys and secrets from SQLite on every request and
-//! follows `konae.json` for the Signup Policy.
 
 use std::io::Read;
 
@@ -256,7 +250,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
         "signup-policy" => signup_policy(state, deployment, words).await,
         "modules" => {
             ensure!(words.rest().is_empty(), "kernel modules takes no arguments.");
-            Ok(crate::modules::read(&deployment))
+            Ok(crate::modules::read(state, &deployment))
         }
         "module" => {
             let name = words.next().context("kernel module needs a module name and on or off.")?;
@@ -330,11 +324,6 @@ async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arg
     crate::set_signup_policy(state, &deployment.id, mode, (!given.is_empty()).then_some(given)).await
 }
 
-/// `project_import` with `replace: data`, from a folder on the machine. The
-/// database takes the schema of the app's own `app/`, which the Kernel
-/// opens at its next start. A folder the Kernel has not served yet opens
-/// first, so its record exists to import into. Run it while no Kernel
-/// serves the app, because the import holds its locks in this process only.
 async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Value> {
     use crate::import::{import_folder, Outcome, Target};
     let confirmation = words.option("confirm-schema")?;
@@ -359,7 +348,6 @@ async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Val
     }
 }
 
-/// The ID of the app account with `email`, as `kernel users` lists it.
 fn account_with_email(state: &AppState, id: &str, email: &str) -> Result<String> {
     let path = layout::data(&state.data_root, id).join("identity.sqlite");
     let db = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -371,7 +359,6 @@ fn account_with_email(state: &AppState, id: &str, email: &str) -> Result<String>
         .ok_or_else(|| anyhow!("This app has no account with the email {}.", email.trim()))
 }
 
-/// Who sends an invitation from the machine: the app's contact email.
 fn operator(state: &AppState, id: &str) -> invitations::Inviter {
     let email = Settings::read(&state.data_root, id).ok().and_then(|settings| settings.contact_email);
     invitations::Inviter { id: "operator".into(), email }
@@ -382,7 +369,6 @@ async fn served(state: &AppState, id: &str) -> Result<Deployment> {
         .ok_or_else(|| anyhow!("apps/{id} has not been served yet. Start the Kernel on it once, then run the command again."))
 }
 
-/// The app a command is for: `--app`, or the only folder under `apps/`.
 async fn app_id(state: &AppState, app: Option<String>) -> Result<String> {
     if let Some(id) = app {
         ensure!(layout::settings(&state.data_root, &id).exists(), "{} holds no app {id}.", layout::apps(&state.data_root).display());
@@ -405,7 +391,6 @@ async fn app_id(state: &AppState, app: Option<String>) -> Result<String> {
     }
 }
 
-/// The words after the command, read in order, with `--name value` options taken out.
 struct Arguments {
     words: Vec<String>,
 }

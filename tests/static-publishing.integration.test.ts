@@ -7,9 +7,6 @@ import { buildLocal } from "../scripts/konae";
 import { McpClient } from "../src/mcp/client";
 import { routingMessage } from "../src/lib/static-artifact.js";
 
-// The static publishing contract on a real Kernel: a multi-page Capsule built
-// by `konae build`, served with pages, 404, extensionless paths, content
-// types, HEAD and the Content Security Policy on every page.
 
 setDefaultTimeout(60_000);
 
@@ -45,7 +42,6 @@ const capsule: Record<string, string | Uint8Array> = {
 };
 
 async function capsuleOnDisk(name: string, files: Record<string, string | Uint8Array>) {
-  // An app folder: the sources go in app/.
   const directory = path.join(root, "capsules", name);
   for (const [file, contents] of Object.entries(files)) {
     await mkdir(path.dirname(path.join(directory, "app", file)), { recursive: true });
@@ -138,8 +134,8 @@ describe("a multi-page artifact under pages routing", () => {
     }
   });
 
-  test("Kernel and private app pages tell crawlers not to list them", async () => {
-    expect((await get("static_pages", "/")).headers.get("x-robots-tag")).toBeNull();
+  test("Kernel pages, private apps and public apps with seo off tell crawlers not to list them", async () => {
+    expect((await get("static_pages", "/")).headers.get("x-robots-tag")).toBe("noindex");
     const { artifact } = await buildLocal(await capsuleOnDisk("private", capsule));
     await release("static_private", artifact, { visibility: "private" });
     const home = await get("static_private", "/");
@@ -204,7 +200,6 @@ describe("a multi-page artifact under pages routing", () => {
     const response = await get("static_pages", "/about");
     const policy = response.headers.get("content-security-policy") ?? "";
     const hash = `'sha256-${createHash("sha256").update(inline).digest("base64")}'`;
-    // The page's own script and the runtime loader the build puts in its head are both listed by hash.
     expect(policy).toContain("script-src 'self' 'sha256-");
     expect(policy).toContain(hash);
     expect(policy).not.toContain("'unsafe-inline' 'sha256");

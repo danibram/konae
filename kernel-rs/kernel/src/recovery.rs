@@ -1,17 +1,3 @@
-//! Recovery after a restore: the revocation record kept off the volume.
-//!
-//! A copy is taken every hour, so a restore can bring back an account that
-//! was suspended, or an API key that was revoked, after the copy. Each such
-//! change is written to every copy target as its own small file under
-//! `revocations/` before the tool reports it done. `restore` reads that
-//! record from the same place it reads the copy and applies it before the
-//! Kernel serves. When the record cannot be read, the restored installation
-//! starts in maintenance: every app serves its maintenance page and
-//! administrative changes are refused, until the `reconcile` command
-//! applies the record or the operator reopens without it.
-//!
-//! The first copy writes `revocations/started.json`, so a target without it
-//! counts as unreadable, not as empty.
 
 use crate::installation::Installation;
 use std::sync::{LazyLock, RwLock as SyncRwLock};
@@ -32,7 +18,6 @@ fn reconcile_usage() -> String {
     format!("Usage: {} reconcile --from <copy directory | s3://bucket/prefix> | --without-record", crate::program())
 }
 
-/// One suspension or revocation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -70,8 +55,6 @@ impl Entry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The installation hold
 
 static HOLDS: LazyLock<SyncRwLock<HashMap<PathBuf, Option<String>>>> = LazyLock::new(Default::default);
 
@@ -111,8 +94,6 @@ fn clear_hold(data_root: &Path) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Writing the record
 
 /// Writes `entry` to every copy target. With no target configured there is
 /// no copy to restore and nothing to record.
@@ -214,8 +195,6 @@ pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str) -> Resu
     }
 }
 
-// ---------------------------------------------------------------------------
-// Applying the record
 
 /// Parses the record's files. `None` when a file does not parse, because a
 /// record with a hole cannot prove an account was not suspended.
@@ -375,15 +354,12 @@ mod tests {
         }
     }
 
-    /// A change that cannot reach the copy target is reported, not
-    /// confirmed, so the caller knows a restore could undo it.
     #[tokio::test]
     async fn a_change_is_confirmed_only_once_it_is_off_the_volume() {
         let (root, target) = (scratch(), scratch());
         std::fs::create_dir_all(&root).unwrap();
         record(&state_with(&root, &target), Entry::new("api-key", Some("app-1"), "key-1", "revoked")).await.unwrap();
         assert_eq!(std::fs::read_dir(target.join(LEDGER_DIR)).unwrap().count(), 1);
-        // A plain file where the record's folder should be.
         let blocked = scratch();
         std::fs::write(&blocked, "not a directory").unwrap();
         let refused = record(&state_with(&root, &blocked), Entry::new("api-key", Some("app-1"), "key-2", "revoked")).await.unwrap_err().to_string();
@@ -412,7 +388,6 @@ mod tests {
             Entry::new("app-user", Some("app-1"), &gone.user.user_id, "suspended"),
             Entry::new("api-key", Some("app-1"), "key-1", "revoked"),
             Entry::new("installation-account", None, &creator.user.user_id, "suspended"),
-            // An entry for another app or an unsafe path changes nothing.
             Entry::new("app-user", Some("../app-1"), &kept.user.user_id, "suspended"),
         ];
         assert!(reconcile(&root, &crate::installation::Installation::for_test(), &entries).unwrap() >= 4);
@@ -433,7 +408,6 @@ mod tests {
             query.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
         };
         assert!(revoked[0].1.is_some() && revoked[1].1.is_none());
-        // Applying the same record twice changes nothing more.
         assert_eq!(reconcile(&root, &crate::installation::Installation::for_test(), &entries).unwrap(), 0);
         std::fs::remove_dir_all(root).unwrap();
     }

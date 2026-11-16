@@ -1,0 +1,5 @@
+[
+  {"case":"window SDK file call","sources":["window.miniapp.files.upload(file)"],"artifact":["window.miniapp.files.upload(file)"],"usesFiles":true},
+  {"case":"file URL in HTML","sources":["<img src=\"/_konae/files/file-id\">"],"artifact":["<img src=\"/_konae/files/file-id\">"],"usesFiles":true},
+  {"case":"page without file access","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesFiles":false}
+]

@@ -5,16 +5,9 @@ import { bodyFromFields } from "../kernel/route-declaration";
 import { ownerFixes } from "../kernel/refusal";
 import { McpError } from "../mcp/client";
 
-/**
- * What the Users and Integrations views and the publish dialog say. Kept apart
- * from the components so the words and the state rules have tests. Every
- * sentence says "app account" for a person who uses the app and "owner" for
- * the person who builds it, so creating an app never reads like signing in to one.
- */
 
 export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
 
-/** One sentence per mode. Allowlist is the advanced option the Kernel keeps for older apps. */
 export const signupModeCopy: Record<SignupMode, { label: string; sentence: string; advanced?: true }> = {
   open: { label: "Open", sentence: "Anyone who opens the published app can create an app account." },
   invitation: { label: "Invitation only", sentence: "Only people you invite by email can create an app account, each with a link that works once within seven days." },
@@ -22,10 +15,8 @@ export const signupModeCopy: Record<SignupMode, { label: string; sentence: strin
   allowlist: { label: "Allowlist", sentence: "Only the emails and @domains you list can create an app account, and listing an address sends no invitation.", advanced: true },
 };
 
-/** The modes a first publish offers. Allowlist needs its list, so it waits for the Users view. */
 export const firstPublishModes: SignupMode[] = ["invitation", "open", "closed"];
 
-/** A private app proposes Invitation only; a public one proposes Open. */
 export function defaultSignupMode(visibility: DeploymentVisibility): SignupMode {
   return visibility === "private" ? "invitation" : "open";
 }
@@ -35,11 +26,6 @@ export const visibilityCopy: Record<DeploymentVisibility, { label: string; sente
   private: { label: "Private", sentence: "A person needs an active app account before the app loads." },
 };
 
-/**
- * What a republish says about access. The Kernel keeps the current signup
- * policy on a republish, except that publishing a public app as private turns
- * Open into Closed (docs/reference/accounts.md, "Signup policy").
- */
 export function republishAccessNote(current: { visibility: DeploymentVisibility; mode?: SignupMode }, next: DeploymentVisibility): string {
   if (current.visibility === "public" && next === "private" && current.mode === "open") {
     return "This publish makes the app private, so Open signup becomes Closed. Invite people or change the policy in Access > Users afterwards.";
@@ -52,7 +38,6 @@ export function republishAccessNote(current: { visibility: DeploymentVisibility;
 
 export const MAX_INVITATION_BATCH = 50;
 
-/** Splits on new lines, commas and spaces, trims, lowercases and drops repeats. */
 export function parseEmailBatch(text: string): { emails: string[]; tooMany: boolean } {
   const seen = new Set<string>();
   for (const entry of text.split(/[\s,;]+/)) {
@@ -63,11 +48,6 @@ export function parseEmailBatch(text: string): { emails: string[]; tooMany: bool
   return { emails, tooMany: emails.length > MAX_INVITATION_BATCH };
 }
 
-/**
- * The idempotency key for a batch. A retry of the same addresses after a lost
- * answer reuses the key, so the Kernel returns the first answer and sends
- * nothing twice. A different list gets a new key.
- */
 export type PendingBatch = { emails: string; key: string };
 
 export function batchKey(previous: PendingBatch | null, emails: string[], newKey: () => string = () => `invite-${crypto.randomUUID()}`): PendingBatch {
@@ -91,11 +71,6 @@ const statusView: Record<AppInvitation["status"], { label: string; tone: Tone }>
   revoked: { label: "Revoked", tone: "neutral" },
 };
 
-/**
- * The Kernel records, per invitation, whether the mail transport took the
- * message. It does not record whether the provider accepted or delivered it;
- * those counts exist only for the whole queue in `mail_status`.
- */
 export const deliveryView: Record<InvitationDelivery, { label: string; tone: Tone }> = {
   queued: { label: "Handed to mail", tone: "neutral" },
   failed: { label: "Sending failed", tone: "danger" },
@@ -117,7 +92,6 @@ export function invitationView(invitation: Pick<AppInvitation, "status" | "deliv
   };
 }
 
-/** One line per address after an invite. */
 export function invitationResultMessage(result: InvitationResult): { label: string; text: string; tone: Tone } {
   switch (result.status) {
     case "invited": {
@@ -138,12 +112,6 @@ export function invitationResultMessage(result: InvitationResult): { label: stri
   }
 }
 
-/**
- * What the Deploy receipt says after the owner invites their own email. An
- * invitation the Signup Policy will not accept is not access, so it says what
- * blocks it instead of promising the app opens. `listed` is the invitation as
- * app_invitations_list reads it back, or undefined when the read-back missed it.
- */
 export function selfInviteOutcome(result: InvitationResult | undefined, listed: Pick<AppInvitation, "delivery"> | undefined, email: string): { sent: boolean; text: string } {
   if (!result) return { sent: false, text: "The invitation call answered nothing. Open Access > Users and check it there." };
   if (result.status !== "invited" && result.status !== "already-invited") return { sent: false, text: invitationResultMessage(result).text };
@@ -155,7 +123,6 @@ export function selfInviteOutcome(result: InvitationResult | undefined, listed: 
   return { sent: false, text: `The invitation to ${email} exists, but its email did not leave. Resend it from Access > Users.` };
 }
 
-/** Whether the installation can send account email now, and why not. */
 export function mailReadiness(status: MailStatus | null): { ready: boolean; reason: string } {
   if (!status) return { ready: false, reason: "Checking whether this installation can send email." };
   if (status.sending) return { ready: true, reason: "" };
@@ -165,7 +132,6 @@ export function mailReadiness(status: MailStatus | null): { ready: boolean; reas
   return { ready: false, reason: `This installation cannot send email: the provider refused the sender.${why}` };
 }
 
-/** Kernel times for accounts and invitations are Unix seconds. */
 export function formatDate(seconds: number, locale?: string) {
   return new Date(seconds * 1000).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 }
@@ -178,7 +144,6 @@ export function expiryText(invitation: Pick<AppInvitation, "status" | "expiresAt
   return `Expires ${formatDate(invitation.expiresAt, locale)}`;
 }
 
-// Integrations
 
 export type RouteAction = { name: string; method: "GET" | "POST"; path: string; signature?: { header: string; secret: string }; fields?: Record<string, string>; inputs: Array<{ key: string; type: string }> };
 
@@ -191,7 +156,6 @@ function actionsOf(source: string | undefined): ServerActionDefinition[] {
   }
 }
 
-/** Actions that answer on an HTTP route, the ones an API key can name. */
 export function routeActions(source: string | undefined): RouteAction[] {
   return actionsOf(source).flatMap((action) => action.http ? [{
     name: action.name,
@@ -203,7 +167,6 @@ export function routeActions(source: string | undefined): RouteAction[] {
   }] : []).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Which actions in these sources sign with each secret. */
 export function secretUsage(source: string | undefined): Map<string, string[]> {
   const usage = new Map<string, string[]>();
   for (const action of routeActions(source)) {
@@ -215,34 +178,19 @@ export function secretUsage(source: string | undefined): Map<string, string[]> {
 
 export const SECRET_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
-/** The same checks `secret_set` makes, so the form says why before the Kernel does. */
 export function secretProblem(name: string, value: string): string {
   if (!SECRET_NAME.test(name)) return "A secret name uses lowercase letters, digits and \"_\", starting with a letter, up to 64 characters.";
   if (value.length < 16 || value.length > 512 || !/^[\x21-\x7e]+$/.test(value)) return "A secret value is 16 to 512 printable ASCII characters without spaces.";
   return "";
 }
 
-/**
- * The label beside each redirect URI the Kernel lists: the generated host
- * first, then a verified custom domain, and the path address, whose callback
- * names the Deployment's id under /p/.
- */
 export function redirectUriLabel(uri: string, index: number): string {
   if (index === 0) return "Redirect URI";
   return new URL(uri).pathname.startsWith("/p/") ? "Redirect URI for the path address" : "Redirect URI for your custom domain";
 }
 
-/** The field of the Google card a refusal belongs to. */
 export type GoogleField = "clientId" | "clientSecret";
 
-/**
- * The Kernel's refusal of a Google client save or of the Google switch, as
- * the card shows it: the Kernel's own sentence, and the field it belongs to
- * when the refusal is about the value saved there. The editor does not check
- * the values itself, so its words cannot drift from the Kernel's; the codes
- * and sentences are in kernel-rs/kernel/src/google-client-cases.json. Null for an
- * answer that is not an owner's refusal, which the card shows as it is.
- */
 export function googleRefusal(cause: unknown, saving?: GoogleField): { message: string; field?: GoogleField } | null {
   const refusal = cause instanceof McpError ? cause.refusal : undefined;
   if (!refusal || !ownerFixes(refusal.code)) return null;
@@ -259,12 +207,6 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/**
- * A curl command that calls one route with an API key, as
- * docs/reference/routes-and-calls.md describes: `Authorization: Bearer lbk_...` on the Deployment host. A key
- * that names a signed action replaces the signature. A GET maps the query
- * string onto the inputs; a POST sends a JSON object.
- */
 export function routeCurl(appUrl: string, action: RouteAction, key = KEY_PLACEHOLDER): string {
   const auth = `-H "Authorization: Bearer ${key}"`;
   const base = appUrl.replace(/\/$/, "");
@@ -272,21 +214,14 @@ export function routeCurl(appUrl: string, action: RouteAction, key = KEY_PLACEHO
     const query = new URLSearchParams(action.inputs.map((input) => [input.key, String(sample(input.type))])).toString();
     return `curl ${auth} "${base}${action.path}${query ? `?${query}` : ""}"`;
   }
-  // A route with fields reads each input at its path, from a key's request as from a provider's.
   const body = JSON.stringify(bodyFromFields(action.fields, Object.fromEntries(action.inputs.map((input) => [input.key, sample(input.type)]))));
   return `curl -X POST ${auth} -H 'Content-Type: application/json' --data ${shellQuote(body)} "${base}${action.path}"`;
 }
 
-/** A curl command for the file read path. The file ID comes from the app's upload. */
 export function fileCurl(appUrl: string, key = KEY_PLACEHOLDER): string {
   return `curl -OJ -H "Authorization: Bearer ${key}" "${appUrl.replace(/\/$/, "")}/_konae/files/<file id>"`;
 }
 
-/**
- * What the Integrations view says about revoked keys. A key that arrived with
- * an imported app is listed apart, with what it could call, because its
- * program stopped working when the app moved and needs a new key here.
- */
 export function revokedKeyNotes(keys: Pick<ApiKey, "name" | "actions" | "files" | "revokedAt" | "revokedReason">[]): string[] {
   const revoked = keys.filter((key) => key.revokedAt);
   const imported = revoked.filter((key) => key.revokedReason === "import");

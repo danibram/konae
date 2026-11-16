@@ -34,7 +34,6 @@ describe("what happened", () => {
       signals: [{ name: "task.created", at: at("12:00"), properties: { title: "Milk" } }],
     };
     const entries = whatHappened(sources, at("23:00"));
-    // The day's counted rows close its group, after the events.
     expect(entries.map((entry) => entry.title)).toEqual(["Signal task.created", "Scheduled run of days.close", "Call from hooks.send", "Email from tasks.create", "Route POST /hooks"]);
     expect(entries.map((entry) => entry.outcome.words)).toEqual(["Recorded.", "Ran and changed 2 rows.", "Answered 200.", "Handed to the mail provider.", "3 requests answered."]);
     expect(entries[0].detail).toBe("title Milk");
@@ -97,7 +96,7 @@ describe("what happened", () => {
     const accounts = page("accounts");
     const kinds = accounts.slice(accounts.indexOf("A failure kind is one of"));
     for (const [, kind] of kinds.slice(0, kinds.indexOf("\n")).matchAll(/`([a-z-]+)`/g)) {
-      if (["superseded", "link-expired", "secret-unavailable"].includes(kind)) continue; // account links only
+      if (["superseded", "link-expired", "secret-unavailable"].includes(kind)) continue;
       expect(noticeFailures[kind], kind).toBeDefined();
     }
     const calls = readFileSync(new URL("../../kernel-rs/kernel/src/calls.rs", import.meta.url), "utf8");

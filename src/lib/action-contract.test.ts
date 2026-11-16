@@ -24,7 +24,6 @@ const examples = readdirSync(examplesRoot, { withFileTypes: true })
     schema: readFileSync(path.join(examplesRoot, entry.name, "schema.sql"), "utf8"),
   }));
 
-/** The parser keeps an explicit `"nullable": false`; the contract says the same thing by omitting it. */
 function withoutFalseNullable(program: ReturnType<typeof parseServerActionSource>) {
   return JSON.parse(JSON.stringify(program, (key, value) => key === "nullable" && value === false ? undefined : value));
 }
@@ -44,9 +43,7 @@ describe("action contract for the product-fit examples", () => {
       const { $schema, ...body } = read;
       expect($schema).toBe("./action-contract.schema.json");
       expect(body).toEqual(contract);
-      // The contract describes the same program the Kernel would load.
       expect(programFromContract(body as ActionContract)).toEqual(withoutFalseNullable(parseServerActionSource(example.actions)));
-      // Generating twice gives the same bytes, so a checked-in contract only changes with its sources.
       expect(serializeActionContract(generateActionContract({ actionsSource: example.actions, schemaSource: example.schema }).contract)).toBe(written);
       expect(renderActionContractMarkdown(contract)).toContain(`## ${contract.actions[0].name}`);
     });
@@ -81,7 +78,6 @@ describe("action contract for the product-fit examples", () => {
       path: "/hooks/pings",
       signature: { header: "X-Signature", secret: "pings_webhook", windowSeconds: 300, acceptedOnce: true },
     });
-    // A signed route takes the signature or a key, and is the action's only door.
     expect(pings.http!.callers.map((caller) => caller.kind)).toEqual(["visitor", "service"]);
     expect(pings.http!.onlyDoor).toBe("always");
     expect(pings.runtime.callers).toEqual([]);
@@ -95,12 +91,10 @@ describe("action contract for the product-fit examples", () => {
     expect(recent.http).toMatchObject({ method: "GET", path: "/api/incidents" });
     expect(recent.http!.signature).toBeUndefined();
     expect(recent.errors.some((error) => error.message === "invalid-signature")).toBe(false);
-    // Unsigned, it answers anyone on a public Deployment and takes a key or a session on a private one.
     expect(recent.http!.onlyDoor).toBe("on a private Deployment");
     expect(recent.http!.callers.map((caller) => caller.kind)).toEqual(["visitor", "service", "person"]);
     expect(recent.errors.find((error) => error.message === "authentication-required" && error.via === "http")).toMatchObject({ status: 401 });
     expect(recent.limits).toMatchObject({ bound: "limit", limit: 50, maxRows: 1000 });
-    // A GET route refuses HEAD before any SQL; a POST route has no HEAD to refuse.
     expect(recent.errors.find((error) => error.message === "A route does not answer HEAD. Send GET.")).toMatchObject({ status: 405, via: "http" });
     expect(pings.errors.some((error) => error.message === "A route does not answer HEAD. Send GET.")).toBe(false);
   });
@@ -200,7 +194,6 @@ describe("output column derivation", () => {
       const derived = deriveOutputColumns(sql, tables);
       expect(derived.columns.map((column) => column.name)).toEqual(names);
       expect(derived.unnamed).toEqual(unnamed);
-      // Every named column is the key SQLite itself returns.
       const SQL = await initSqlJs();
       const db = new SQL.Database();
       db.run(`CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, note TEXT, owner_id TEXT NOT NULL, score REAL, raw);

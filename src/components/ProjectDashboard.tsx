@@ -21,17 +21,10 @@ type Props = {
   missing: ProjectMetadata[];
   notice?: string;
   onDeleteMissing: (project: ProjectMetadata, name: string) => Promise<void>;
-  /**
-   * Deletes a project the editor holds files for. Until the editor passes it,
-   * those cards offer no Delete, because the list could not drop the card.
-   */
   onDeleteProject?: (project: ProjectMetadata, name: string) => Promise<void>;
   onOpenProject: (projectId: string, entry?: "preview" | "agent" | "code") => void;
-  /** `description` is what the owner wrote under "What should it do?", for the conversation to start from. */
   onCreateProject: (name: string, template: TemplateId | "scratch", description?: string) => void;
-  /** A model is connected, so Describe can act on a description. New project says so when it cannot. */
   modelConnected?: boolean;
-  /** The project the owner just left; its card takes focus on arrival. Absent on a fresh load of the list. */
   returnFocusTo?: string;
 };
 
@@ -44,7 +37,6 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
   const [sort, setSort] = useState<ProjectSort>("edited");
   const groups = useMemo(() => groupProjects(entries, query, sort), [entries, query, sort]);
   const [deleting, setDeleting] = useState<ProjectEntry | null>(null);
-  // Which template the opener picked; New project itself opens with none picked.
   const [creating, setCreating] = useState<{ template: TemplateId | null } | null>(null);
   const [exporting, setExporting] = useState("");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -54,14 +46,12 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4000);
   };
   useEffect(() => { document.title = "Projects · Konae"; }, []);
-  // Back from an app, a keyboard user lands on that app's card, or on the heading when the card is gone.
   useEffect(() => {
     if (!returnFocusTo) return;
     const card = document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(returnFocusTo)}"] .project-card-link`);
     (card ?? document.querySelector<HTMLElement>(".project-list-head h1"))?.focus();
   }, []);
 
-  // The same comparison as the workbench's top bar, so the card and the project never disagree.
   const digests = useSourceDigests(projects);
   const undeployed = (entry: ProjectEntry) => {
     const project = entry.deployment && projects.find((item) => item.id === entry.id);
@@ -75,7 +65,6 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
       .then(() => toast("Address copied"))
       .catch(() => toast("Could not copy. Select the address on the card instead.", "danger"));
   };
-  /** The same export the editor's More menu makes: the app folder, with accounts and rows once it is published. */
   const exportApp = async (entry: ProjectEntry) => {
     const project = projects.find((item) => item.id === entry.id);
     if (!project || exporting) return;
@@ -98,7 +87,6 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
     }
   };
   const deleteHandler = deleting ? (deleting.sourceError ? onDeleteMissing : onDeleteProject) : undefined;
-  /** After a delete, focus goes to the card that took its place, so clearing several drafts keeps your place. */
   const focusAfterDelete = (removed: ProjectEntry) => {
     const order = listOrder(entries).filter((entry) => groups.published.includes(entry) || groups.drafts.includes(entry));
     const at = order.findIndex((entry) => entry.id === removed.id);
@@ -190,12 +178,10 @@ export function ProjectDashboard({ projects, deployments, ownerSession, missing,
 
 function ProjectCard({ entry, onOpen, onCopy, onDelete, onExport, exporting = false, undeployed = false }: {
   entry: ProjectEntry;
-  /** The editor holds changes the published app does not run yet. */
   undeployed?: boolean;
   onOpen: (door: "preview" | "agent" | "code") => void;
   onCopy: (url: string) => void;
   onDelete?: () => void;
-  /** Downloads the app folder, as the editor's Export does. */
   onExport?: () => void;
   exporting?: boolean;
 }) {
@@ -237,10 +223,8 @@ function ProjectCard({ entry, onOpen, onCopy, onDelete, onExport, exporting = fa
 }
 
 function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose, onCreate }: {
-  /** A template the person already clicked, or null: nothing is chosen for them. */
   initialTemplate: TemplateId | null;
   modelConnected: boolean;
-  /** Names already on the list; a new project never repeats one. */
   takenNames: readonly string[];
   onClose: () => void;
   onCreate: (name: string, template: TemplateId | "scratch", description?: string) => void;
@@ -250,10 +234,8 @@ function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<TemplateId | "scratch" | null>(initialTemplate);
   const [tried, setTried] = useState(false);
-  // The templates wait behind one line unless the person came here by clicking one.
   const [showTemplates, setShowTemplates] = useState(initialTemplate !== null);
   const described = description.trim();
-  // Once words are typed and no template was clicked, the app starts from them: "No template" shows as chosen.
   const template = picked ?? (described ? "scratch" : null);
   const chosen = templateChoices.find((choice) => choice.id === template);
   const missingStart = template === null;
@@ -318,10 +300,8 @@ function NewProjectDialog({ initialTemplate, modelConnected, takenNames, onClose
   </Dialog>;
 }
 
-/** The developer's way in: the CLI commands that make an app folder and publish it to this installation. */
 function FolderStart() {
   const [copied, setCopied] = useState<"" | "yes" | "no">("");
-  // The installation's own address, as the Owner account page prints it for `konae login`.
   const commands = ["konae init --dir .", `konae login --dir . --url ${window.location.origin} --browser`, "konae publish --dir ."].join("\n");
   const copy = () => {
     void navigator.clipboard?.writeText(commands).then(() => setCopied("yes"), () => setCopied("no"));
@@ -344,7 +324,6 @@ function DeleteProjectDialog({ project, published, onClose, onDelete, onDeleted,
   onClose: () => void;
   onDelete: (project: ProjectMetadata, name: string) => Promise<void>;
   onDeleted: (name: string) => void;
-  /** Downloads the app folder first, so the data can leave with the person. */
   onExport?: () => void;
   exporting?: boolean;
 }) {

@@ -1,10 +1,6 @@
 import { useRef } from "react";
 import type { ActionContractState } from "./useActionContract";
 
-/**
- * The generated Action Contract, read-only, where a file would be. It says
- * where it comes from, so nobody edits it expecting the change to stick.
- */
 export function ActionContractView({ state }: { state: ActionContractState }) {
   const text = state.ok ? state.markdown : state.reason;
   const lines = text.split("\n").length;

@@ -2,7 +2,6 @@ import type { MiniAppProject } from "./types";
 import { createDefaultManifest, withVisibility } from "../deployments/manifest";
 import { appStyles, escapeHtmlSource } from "./templates/shared";
 
-/** The design system, then nothing: the starter needs no rules of its own. */
 const starterStyles = appStyles();
 
 export const starterProject: MiniAppProject = {
@@ -176,10 +175,8 @@ export function cloneStarter(): MiniAppProject {
   };
 }
 
-/** What a card says about a plain list nobody described. */
 export const plainListPurpose = "A private list. People with an app account add rows and tick them off.";
 
-/** One line for the page's declared purpose: no line breaks, at most 200 characters. */
 export function purposeLine(description: string): string {
   const line = description.replace(/\s+/g, " ").trim();
   return line.length > 200 ? `${line.slice(0, 199).trimEnd()}…` : line;
@@ -291,11 +288,6 @@ list.addEventListener('click', async (event) => {
 try { await start(); } catch (error) { showError(error); }
 `;
 
-/**
- * The app "No template" creates: a private, plain list titled with the
- * project's name, whose page declares what the person wrote as its purpose.
- * People with an app account share the rows; nobody without one opens it.
- */
 export function plainListProject(base: MiniAppProject, description = ""): MiniAppProject {
   const purpose = purposeLine(description) || plainListPurpose;
   const name = escapeText(base.name);

@@ -15,7 +15,6 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const SESSION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
-/// Open sessions one account may hold: a sign-in past this ends the oldest.
 const MAX_SESSIONS_PER_ACCOUNT: i64 = 20;
 /// A verification link stays valid for 24 hours.
 pub const VERIFICATION_TTL_SECONDS: i64 = 24 * 60 * 60;
@@ -30,15 +29,12 @@ const MIN_PASSWORD_BYTES: usize = 8;
 const MAX_PASSWORD_BYTES: usize = 1024;
 const MAX_EMAIL_BYTES: usize = 254;
 const PASSWORD_HASH_ITERATIONS: u32 = 600_000;
-/// The iteration counts a stored hash may name. Every hash this Kernel has
-/// written uses `PASSWORD_HASH_ITERATIONS`.
 const WRITTEN_HASH_ITERATIONS: &[u32] = &[PASSWORD_HASH_ITERATIONS];
 const PASSWORD_HASH_BYTES: usize = 32;
 const PASSWORD_SALT_BYTES: usize = 16;
 /// Each identity database may grow to this size. Writes past it fail with
 /// "database or disk is full".
 pub const MAX_IDENTITY_DATABASE_BYTES: u64 = 64 * 1024 * 1024;
-// The salt must be PASSWORD_SALT_BYTES long so unknown emails pay for the full KDF.
 const DUMMY_PASSWORD_HASH: &str = "pbkdf2-sha256$600000$6c6974746c65626f782d64756d6d7921$0000000000000000000000000000000000000000000000000000000000000000";
 
 /// The scope of one Deployment's app accounts.
@@ -46,15 +42,9 @@ pub fn deployment_scope(deployment_id: &str) -> String {
     format!("deployment:{deployment_id}")
 }
 
-/// Whether new accounts must prove control of their email before they are active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verification {
-    /// Signup creates an active, unverified account and its session, as a
-    /// local development installation without email needs.
     Local,
-    /// Signup creates a pending account and a verification challenge. Opening
-    /// an identity database in this mode moves unverified active accounts to
-    /// pending and revokes their sessions.
     Required,
 }
 
@@ -98,8 +88,6 @@ impl Purpose {
     }
 }
 
-/// A challenge just issued. The token exists only here and in the message
-/// that carries it; the database keeps its hash.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IssuedChallenge {
@@ -128,9 +116,6 @@ pub struct AuthService {
     verification: Verification,
 }
 
-/// A signed-in app account. Roles are rows in the app's own tables; the
-/// `role` a client reads is "member" for every account and "anonymous" for a
-/// visitor, so it tells signed in from signed out and nothing more.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthUser {
     pub user_id: String,
@@ -167,18 +152,13 @@ pub enum AuthError {
     EmailTaken,
     AccountPending,
     AccountSuspended,
-    /// An invitation reached an email that already has an active account.
     AccountExists,
     InvalidChallenge,
     SignupClosed,
     MailUnavailable,
-    /// The mail queue refused to send now: a send limit was reached. Nothing was stored.
     MailLimit(String),
-    /// The mail transport is configured but may not send, for example because
-    /// its sender domain is not verified. Nothing was stored.
     MailBlocked(String),
     VerificationRequired,
-    /// Creator signup without a valid invitation code or installation key.
     AdmissionRefused(&'static str),
     /// An invitation answered with an identity for another email.
     InvitedEmailDiffers,
@@ -345,9 +325,6 @@ impl AuthService {
             )
             .map_err(AuthError::Storage)?;
         if inserted == 0 {
-            // The admission decides first, so a request without a valid code
-            // gets the refusal a new email gets and learns nothing about who
-            // has an account. Dropping the transaction keeps a valid code.
             admit(&transaction, None)?;
             return Err(AuthError::EmailTaken);
         }
@@ -460,19 +437,12 @@ impl AuthService {
         Ok(())
     }
 
-    /// Starts a signup in `Required` mode. A new email gets a pending account
-    /// with no password and a verification challenge. A pending email keeps
-    /// its account ID and gets a fresh challenge that replaces the earlier
-    /// one, so a stranger who registered the address first cannot block its
-    /// owner. An active or suspended email gets nothing. The caller answers
-    /// all three the same way, so the answer does not reveal who has an account.
-    #[allow(dead_code)] // Kept for callers without an outbox; tests use it.
+    #[allow(dead_code)]
     pub fn request_signup(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
         self.request_signup_with(email, None, |_, _| Ok(()))
     }
 
-    /// `request_signup` with an admission check and no outbox.
-    #[allow(dead_code)] // Used by admission tests and callers without a queue.
+    #[allow(dead_code)]
     pub fn request_signup_admitted(
         &self,
         email: &str,
@@ -532,11 +502,7 @@ impl AuthService {
         Ok(Some(challenge))
     }
 
-    /// Starts a recovery. An active account gets a recovery challenge; a
-    /// pending one gets a new verification challenge instead, which also
-    /// sets its password. Suspended, unknown and malformed emails get nothing.
-    /// The caller gives every case the same answer.
-    #[allow(dead_code)] // Kept for callers without an outbox; tests use it.
+    #[allow(dead_code)]
     pub fn request_recovery(&self, email: &str) -> Result<Option<IssuedChallenge>, AuthError> {
         self.request_recovery_with(email, None)
     }
@@ -852,12 +818,6 @@ impl AuthService {
                             _ => return Err(AuthError::AccountPending),
                         }
                         if verified_at.is_none() {
-                            // Nobody proved this email before: under local
-                            // verification anyone may have typed it with a
-                            // password of their own. The person the issuer
-                            // vouches for holds the address, so that password
-                            // and every session made with it stop working.
-                            // Recovery by email sets a new password.
                             transaction
                                 .execute(
                                     "UPDATE app_users SET password_hash = ?1, verified_at = ?2 WHERE id = ?3",
@@ -958,8 +918,6 @@ impl AuthService {
         })
     }
 
-    /// A connection with the outbox's database attached as `outbox`. SQLite
-    /// cannot attach inside a transaction, so this happens before it begins.
     fn connection_with(&self, outbox: Option<&dyn ChallengeOutbox>) -> Result<Connection, AuthError> {
         let connection = self.connection()?;
         if let Some(outbox) = outbox {
@@ -978,7 +936,6 @@ impl AuthService {
         connection
             .execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(AuthError::Storage)?;
-        // SQLite keeps this per connection, so every connection sets it.
         let page_size: u64 = connection
             .query_row("PRAGMA page_size", [], |row| row.get(0))
             .map_err(AuthError::Storage)?;
@@ -990,18 +947,14 @@ impl AuthService {
     }
 }
 
-/// An email an outside issuer vouched for: its ID token passed every check,
-/// including that the issuer is the authority for the address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedIdentity {
     pub email: String,
 }
 
-/// What a sign-in with an outside identity was started for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdentityIntent {
     SignIn,
-    /// Answer the invitation whose challenge has this token hash.
     Invitation { token_hash: String },
 }
 
@@ -1017,10 +970,6 @@ pub struct IdentitySignIn {
     pub outcome: IdentityOutcome,
 }
 
-/// The password hash of an account no person chose a password for, such as
-/// one created by a Google sign-in. It is a well-formed hash of 32 random
-/// bytes with a random salt, so a password check runs the full KDF and
-/// fails, and the person sets a password through recovery by email.
 fn unusable_password_hash() -> Result<String, AuthError> {
     let mut hash = [0_u8; PASSWORD_HASH_BYTES];
     let mut salt = [0_u8; PASSWORD_SALT_BYTES];
@@ -1098,9 +1047,6 @@ fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession,
             params![hash_token(&token), user.user_id, expires_at, user.entered_by],
         )
         .map_err(AuthError::Storage)?;
-    // Sign-ins are rate limited but succeed every time with the right
-    // password, so without a cap one account could fill the identity file.
-    // The oldest session beyond the cap ends.
     connection
         .execute(
             "DELETE FROM app_sessions WHERE user_id = ?1 AND rowid NOT IN
@@ -1115,13 +1061,7 @@ fn issue_session(connection: &Connection, user: AuthUser) -> Result<AuthSession,
     })
 }
 
-/// Brings an identity database to the current account schema without
-/// changing any ID or row, then applies the verification mode. Columns are
-/// added, never rebuilt. Accounts that existed before states default to
-/// active and unverified.
 fn migrate(connection: &mut Connection, verification: Option<Verification>) -> Result<(), AuthError> {
-    // Every request opens a store, so the common case reads without taking
-    // the write lock.
     let current: bool = connection
         .query_row(
             "SELECT (SELECT COUNT(*) FROM pragma_table_info('app_users') WHERE name IN ('state', 'verified_at')) = 2
@@ -1131,7 +1071,6 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
             |row| row.get(0),
         )
         .or_else(|error_value| match error_value {
-            // account_meta does not exist yet, so the subquery cannot compile.
             rusqlite::Error::SqliteFailure(_, _) => Ok(false),
             other => Err(other),
         })
@@ -1187,8 +1126,6 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
         .map_err(AuthError::Storage)?;
     if recorded.as_deref() != Some(verification.as_str()) {
         if verification == Verification::Required {
-            // A password chosen without proof of the email is not trusted:
-            // the person must verify and set a new password to enter.
             transaction
                 .execute(
                     "UPDATE app_users SET state = 'pending' WHERE state = 'active' AND verified_at IS NULL",
@@ -1213,8 +1150,6 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
     transaction.commit().map_err(AuthError::Storage)
 }
 
-/// A write transaction that takes the lock at once, so two writers serialize
-/// at BEGIN instead of failing at their first write.
 fn immediate(connection: &mut Connection) -> Result<rusqlite::Transaction<'_>, AuthError> {
     connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -1588,15 +1523,12 @@ mod tests {
                 Err(AuthError::InvalidChallenge)
             )
         };
-        // Another Deployment's scope over the same file, the creator scope,
-        // another Deployment's database, and the wrong purposes.
         assert!(refused(&app.scoped(&deployment_scope("app-two"), Verification::Required), Purpose::Verification));
         assert!(refused(&app.scoped("installation", Verification::Required), Purpose::Verification));
         assert!(refused(&AuthService::open(&app.0).unwrap(), Purpose::Verification));
         assert!(refused(&other_app.required(), Purpose::Verification));
         assert!(refused(&auth, Purpose::Recovery));
         assert!(refused(&auth, Purpose::Invitation));
-        // A policy that no longer admits the email refuses without using the token.
         assert!(matches!(
             auth.complete_challenge(Purpose::Verification, &challenge.token, password(PASSWORD), |_| false),
             Err(AuthError::SignupClosed)
@@ -1632,16 +1564,12 @@ mod tests {
     #[test]
     fn a_third_partys_password_does_not_survive_verification() {
         let app = TempDb::new();
-        // Someone registers another person's address on an installation that
-        // did not verify email, and picks the password.
         let local = app.scoped(&deployment_scope("app-one"), Verification::Local);
         let squatter = local.signup("victim@example.test", "squatter password").unwrap();
         let id = squatter.user.user_id.clone();
-        // The installation turns verification on.
         let auth = app.required();
         assert!(auth.authenticate(Some(&squatter.token)).unwrap().is_none());
         assert!(matches!(sign_in(&auth, "victim@example.test", "squatter password"), Err(AuthError::AccountPending)));
-        // The owner of the address asks for a link and sets their password.
         let challenge = auth.request_recovery("victim@example.test").unwrap().unwrap();
         assert_eq!(challenge.purpose, Purpose::Verification);
         let session = auth
@@ -1651,8 +1579,6 @@ mod tests {
         assert!(matches!(sign_in(&auth, "victim@example.test", "squatter password"), Err(AuthError::InvalidCredentials)));
         assert!(sign_in(&auth, "victim@example.test", "the real password").is_ok());
 
-        // On a verifying installation a squatter's signup stores no password,
-        // and the victim's own signup reaches the same pending account.
         let fresh = TempDb::new();
         let auth = fresh.required();
         auth.request_signup("victim@example.test").unwrap().unwrap();
@@ -1722,10 +1648,8 @@ mod tests {
         assert_eq!(signed.outcome, IdentityOutcome::Created);
         let user = signed.session.user;
         assert_eq!(user.name, "person@example.test");
-        // No password opens it, and the check runs the full KDF like any other.
         assert!(matches!(sign_in(&auth, "person@example.test", "any password at all"), Err(AuthError::InvalidCredentials)));
         assert!(app.required().is_active(&user.user_id).unwrap());
-        // Recovery by email gives it a password, and Google still reaches it.
         let recovery = auth.request_recovery("person@example.test").unwrap().unwrap();
         auth.complete_challenge(Purpose::Recovery, &recovery.token, password(PASSWORD), |_| true).unwrap();
         assert!(sign_in(&auth, "person@example.test", PASSWORD).is_ok());
@@ -1739,21 +1663,16 @@ mod tests {
         let auth = app.required();
         let verification = auth.request_signup("person@example.test").unwrap().unwrap();
         let session = auth.complete_challenge(Purpose::Verification, &verification.token, password(PASSWORD), |_| true).unwrap();
-        // The same email, in another case, reaches the password account without asking the policy.
         let signed = auth.sign_in_with_identity(&google("PERSON@example.test"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
         assert_eq!((signed.outcome, signed.session.user.user_id.as_str()), (IdentityOutcome::SignedIn, session.user.user_id.as_str()));
         assert!(sign_in(&auth, "person@example.test", PASSWORD).is_ok(), "the password keeps working");
-        // A proven password account keeps its password.
         assert!(auth.authenticate(Some(&session.token)).unwrap().is_some());
-        // A refused admission creates nothing.
         let closed = auth.sign_in_with_identity(&google("stranger@example.test"), &IdentityIntent::SignIn, |_| false, |_| true, |_, _, _| Ok(()));
         assert!(matches!(closed, Err(AuthError::SignupClosed)));
         assert!(auth.find_login("stranger@example.test", PASSWORD).unwrap().is_none());
-        // A pending signup keeps waiting for its email link.
         auth.request_signup("waiting@example.test").unwrap().unwrap();
         let pending = auth.sign_in_with_identity(&google("waiting@example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
         assert!(matches!(pending, Err(AuthError::AccountPending)));
-        // Suspension ends Google sign-in too.
         auth.suspend("person@example.test").unwrap();
         let suspended = auth.sign_in_with_identity(&google("person@example.test"), &IdentityIntent::SignIn, |_| true, |_| true, |_, _, _| Ok(()));
         assert!(matches!(suspended, Err(AuthError::AccountSuspended)));
@@ -1763,14 +1682,12 @@ mod tests {
     fn a_google_sign_in_takes_an_unproven_password_account_back_from_whoever_typed_the_email() {
         let app = TempDb::new();
         let auth = app.scoped(&deployment_scope("app-one"), Verification::Local);
-        // Under local verification anyone can make an active account for an address they do not hold.
         let squatter = auth.create_account(NewAccount::prepare("victim@gmail.com", PASSWORD).unwrap()).unwrap();
         let signed = auth.sign_in_with_identity(&google("victim@gmail.com"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
         assert_eq!(signed.session.user.user_id, squatter.user.user_id, "the address keeps its account");
         assert!(auth.authenticate(Some(&squatter.token)).unwrap().is_none(), "the typist's session ends");
         assert!(matches!(sign_in(&auth, "victim@gmail.com", PASSWORD), Err(AuthError::InvalidCredentials)), "and the typist's password");
         assert!(auth.authenticate(Some(&signed.session.token)).unwrap().is_some());
-        // From then on the address is proven, so a later Google sign-in leaves the account alone.
         let again = auth.sign_in_with_identity(&google("victim@gmail.com"), &IdentityIntent::SignIn, |_| false, |_| false, |_, _, _| Ok(())).unwrap();
         assert!(auth.authenticate(Some(&signed.session.token)).unwrap().is_some());
         assert_eq!(again.outcome, IdentityOutcome::SignedIn);
@@ -1792,7 +1709,6 @@ mod tests {
             Err(AuthError::InvalidChallenge)
         ));
         assert!(auth.request_recovery("person@example.test").unwrap().is_none());
-        // A session row that survived somehow still does not authenticate.
         Connection::open(&app.0).unwrap()
             .execute("INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)",
                 params![hash_token("leftover"), id, now_seconds() + 60])
@@ -1800,7 +1716,6 @@ mod tests {
         assert!(auth.authenticate(Some("leftover")).unwrap().is_none());
         assert_eq!(auth.resume("person@example.test").unwrap(), (id.clone(), "active".to_owned()));
         assert!(sign_in(&auth, "person@example.test", PASSWORD).is_ok());
-        // An account suspended before it verified returns to pending.
         auth.request_signup("unverified@example.test").unwrap();
         auth.suspend("unverified@example.test").unwrap();
         assert_eq!(auth.resume("unverified@example.test").unwrap().1, "pending");
@@ -1814,7 +1729,6 @@ mod tests {
         let connection = Connection::open(&app.0).unwrap();
         connection.execute_batch("CREATE TABLE notes (owner TEXT NOT NULL, body TEXT NOT NULL)").unwrap();
         connection.execute("INSERT INTO notes VALUES (?1, 'kept')", [&old.user.user_id]).unwrap();
-        // Local mode keeps working unverified.
         assert!(local.authenticate(Some(&old.token)).unwrap().is_some());
 
         let auth = app.required();
@@ -1824,14 +1738,11 @@ mod tests {
         let owner: String = connection.query_row("SELECT owner FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(owner, id);
 
-        // Verifying keeps the ID; reopening does not move a verified account back.
         let challenge = auth.request_recovery("old@example.test").unwrap().unwrap();
         auth.complete_challenge(Purpose::Verification, &challenge.token, password("a new password"), |_| true).unwrap();
         app.required();
         assert_eq!(state_of(&app, "old@example.test").1, "active");
 
-        // Accounts created unverified during a later local period are moved
-        // when the installation requires verification again.
         let local = app.scoped(&deployment_scope("app-one"), Verification::Local);
         local.signup("later@example.test", PASSWORD).unwrap();
         app.required();
@@ -1862,8 +1773,6 @@ mod tests {
 
     #[test]
     fn dummy_hash_runs_the_full_kdf() {
-        // PasswordHash would mean verify_password rejected the encoding before
-        // deriving, which makes unknown emails answer faster than known ones.
         assert!(matches!(
             verify_password("correct horse battery", DUMMY_PASSWORD_HASH),
             Err(AuthError::InvalidCredentials)
@@ -1885,7 +1794,6 @@ mod tests {
             verify_password("correct horse battery", &huge),
             Err(AuthError::InvalidCredentials)
         ));
-        // One iteration is cheap to write and cheap to guess against, so it is refused even for the right password.
         let mut weak = [0_u8; PASSWORD_HASH_BYTES];
         pbkdf2::derive(
             pbkdf2::PBKDF2_HMAC_SHA256,

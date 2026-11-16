@@ -9,9 +9,6 @@ import { downloadToFile } from "../scripts/package-files";
 import type { PackageManifest } from "../src/lib/portable-package";
 import type { UsageSummary } from "../src/lib/usage";
 
-// The chunked package of ADR-0008 and every refusal its import checks.
-// tests/smoke/package-quota.ts exports a 256 MiB app with its data and runs
-// it on the kernel binary.
 let root: string;
 let kernel: ReturnType<typeof Bun.spawn>;
 let url: string;
@@ -94,7 +91,6 @@ async function delegate(scopes: string[], projectIds: string[]) {
 
 type Exported = { manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer; sourcesAhead: boolean };
 
-/** Downloads each data component to a file, and reads the folder download: konae.json, app/ and dist/. */
 async function download(client: McpClient, exported: Exported, directory: string) {
   const files: Record<string, string> = {};
   for (const content of exported.manifest.contents) {
@@ -106,7 +102,6 @@ async function download(client: McpClient, exported: Exported, directory: string
   } finally { await client.cancel(exported.folder.transferId).catch(() => {}); }
   return files;
 }
-/** The paths of each folder download, newest last. */
 const folders: string[][] = [];
 
 async function uploadFile(client: McpClient, file: string, content: { name: string; size: number; sha256: string }, projectId: string) {
@@ -130,7 +125,6 @@ async function uploadPackage(client: McpClient, manifest: PackageManifest, files
   return components;
 }
 
-/** A source app with one account, one row and one file, exported as a package into `directory`. */
 async function sourcePackage(id: string, directory: string) {
   const source = await publish(id);
   const cookie = await account(source.hostname, "signup", `writer@${id}.test`);
@@ -199,7 +193,7 @@ describe("chunked package", () => {
     };
     await save(original);
     const { receipt } = await release(owner, { ...request, project: source }, id);
-    revision = 2; // A release advances the source revision with the app/ it installed.
+    revision = 2;
     const ahead = async () => {
       const exported = await owner.call<Exported>("project_export", { projectId: receipt.id });
       try { return exported.sourcesAhead; }
@@ -256,12 +250,9 @@ describe("chunked package", () => {
     const { source, cookie, fileId, key, exported, files } = await sourcePackage("pkg_source", directory);
     const manifest = exported.manifest;
     expect(manifest).toMatchObject({ format: "konae-package", version: 1, deploymentId: source.id, projectId: "pkg_source", visibility: "public", publishedRevision: 1 });
-    // The signup, the action and the upload above wrote a Usage store, which travels too.
     expect(manifest.contents.map((content) => content.name)).toEqual(["database", "identity", "files", "usage"]);
     expect(manifest.excluded).toContain("app sessions");
-    // The folder download is the rest of the app folder, and never a secret or the installation's records.
     const folder = folders.at(-1)!;
-    // An app published without an editor save keeps its release's sources in app/.
     expect(folder).toEqual(expect.arrayContaining(["konae.json", "app/actions.json", "app/schema.sql", "dist/index.html"]));
     expect(folder.every((entry) => entry === "konae.json" || entry.startsWith("app/") || entry.startsWith("dist/"))).toBe(true);
     expect(manifest.excluded).not.toContain("Usage and Signals");
@@ -270,7 +261,6 @@ describe("chunked package", () => {
     try {
       expect(identity.query("SELECT COUNT(*) n FROM app_users").get()).toEqual({ n: 1 });
       expect(identity.query("SELECT COUNT(*) n FROM app_sessions").get()).toEqual({ n: 0 });
-      // The key leaves already revoked, so the component opens nothing.
       expect(identity.query("SELECT id, revoked_reason FROM api_keys WHERE revoked_at IS NOT NULL").all()).toEqual([{ id: key.keyId, revoked_reason: "import" }]);
     } finally { identity.close(); }
 
@@ -312,7 +302,6 @@ describe("chunked package", () => {
     ]));
     expect(new TextDecoder().decode(await moved.download(await moved.call<Transfer>("files_read", { fileId })))).toBe("attachment bytes");
     expect(await runtime(first.receipt.hostname, cookie).call("auth_session")).toMatchObject({ role: "anonymous" });
-    // The destination lists the origin's key as revoked at import, and refuses it.
     const keys = await owner.call<{ keys: { keyId: string; name: string; files: string[]; revokedAt: number | null; revokedReason: string | null }[] }>("api_keys_list", { projectId: first.receipt.id });
     expect(keys.keys).toEqual([expect.objectContaining({ keyId: key.keyId, name: "Mirror", files: ["public"], revokedAt: expect.any(Number), revokedReason: "import" })]);
     const refused = await fetch(`${url}/_konae/files/${fileId}`, { headers: { host: first.receipt.hostname, "x-forwarded-for": freshClient(), authorization: `Bearer ${key.key}` } });
@@ -334,8 +323,6 @@ describe("chunked package", () => {
     try {
       transfersDb.exec(`CREATE TRIGGER refuse_component_cleanup BEFORE DELETE ON transfers WHEN OLD.id='${held}' BEGIN SELECT RAISE(ABORT, 'injected component cleanup failure'); END;`);
       await expect(owner.call("release_apply", { planId: plan.planId })).rejects.toThrow("injected component cleanup failure");
-      // First-party publishers cancel all uploads in finally, including the
-      // release JSON needed by the old cleanup implementation.
       for (const transferId of [releaseUpload.transferId, ...Object.values(components)]) await owner.cancel(transferId).catch(() => {});
       transfersDb.exec("DROP TRIGGER refuse_component_cleanup");
 
@@ -368,20 +355,17 @@ describe("chunked package", () => {
     await owner.call("project_create", { projectId: "pkg_checksum", name: "Checksum" });
     const database = exported.manifest.contents.find((content) => content.name === "database")!;
 
-    // Bytes that differ from the declared SHA-256 never complete.
     const tampered = path.join(directory, "tampered.sqlite");
     const bytes = new Uint8Array(await readFile(files.database));
     bytes[bytes.length - 1] ^= 0xff;
     await writeFile(tampered, bytes);
     await expect(uploadFile(owner, tampered, database, "pkg_checksum")).rejects.toThrow("SHA-256 mismatch");
 
-    // An upload that completed with its own checksum but not the manifest's is refused before any Deployment exists.
     const components = await uploadPackage(owner, exported.manifest, files, "pkg_checksum");
     await owner.cancel(components.database);
     components.database = await uploadFile(owner, tampered, { ...database, sha256: await checksum(bytes) }, "pkg_checksum");
     await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: exported.manifest, components } }, "pkg_checksum")).rejects.toThrow("does not match the size and SHA-256 in the manifest");
 
-    // A manifest from a future version is refused with the version it names.
     await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: { ...exported.manifest, version: 3 }, components } }, "pkg_checksum")).rejects.toThrow("Package version 3 is not supported");
     await expect(release(owner, { ...payload("pkg_checksum"), initialPackage: { manifest: { ...exported.manifest, version: 2 }, components } }, "pkg_checksum")).rejects.toThrow("Package version 2 is not supported");
     expect((await owner.call<{ deployment: unknown }>("project_inspect", { projectId: "pkg_checksum" })).deployment).toBeNull();
@@ -417,7 +401,6 @@ describe("chunked package", () => {
     const source = await publish("pkg_leak");
     const writer = runtime(source.hostname, await account(source.hostname, "signup", "writer@leak.test"));
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "first" } });
-    // About 300 KiB of rows, so the database download takes several blocks.
     await owner.call("database_execute", { projectId: source.id, operation: "sql", input: { sql: "INSERT INTO notes(title,user_id) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<300) SELECT hex(randomblob(500)),'bulk' FROM c" } });
     const exported = await owner.call<Exported>("project_export", { projectId: source.id });
     expect(exported.downloads.database.size).toBeGreaterThan(4 * 64 * 1024);
@@ -432,12 +415,10 @@ describe("chunked package", () => {
     try {
       const rows = db.query("SELECT detail,ok FROM audit WHERE tool='package_download' AND target=?1 ORDER BY id").all(source.id) as { detail: string; ok: number }[];
       const details = (ok: number) => rows.filter((row) => row.ok === ok).map((row) => row.detail).sort();
-      // The source app recorded Usage, so its package has a fourth component.
       expect(details(0)).toEqual(["database", "files", "identity", "usage"]);
       expect(details(1)).toEqual(["database", "files", "folder", "identity", "usage"]);
       const deniedReads = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_read' AND ok=0").get() as { n: number };
       expect(deniedReads.n).toBe(0);
-      // Component uploads in the earlier tests wrote one row per component, not one per block.
       const writes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_write'").get() as { n: number };
       const completes = db.query("SELECT COUNT(*) n FROM audit WHERE tool='transfer_complete' AND ok=1").get() as { n: number };
       expect(writes.n).toBeLessThanOrEqual(completes.n + 2);

@@ -14,7 +14,6 @@ function callPath(module: SdkModule, call: SdkCall) {
   return `miniapp.${module.name}.${call.name}`;
 }
 
-/** A module with calls is a namespace on miniapp; one without is only declared. */
 function moduleHeading(module: SdkModule) {
   return module.calls.length ? `miniapp.${module.name}` : `The ${module.name} module, declared, with no browser call`;
 }
@@ -56,9 +55,6 @@ export function renderPromptSection(contract: SdkContract = sdkContract): string
     lines.push("", `## ${moduleHeading(module)}`, "", module.summary, ...module.notes);
     for (const declaration of module.declarations) {
       lines.push("", `Declared with "${declaration.key}" in ${declaration.file}: ${declaration.summary}`);
-      // A wrong declaration is a Gate refusal with a code in a case file, and
-      // validate_capsule returns its remedy, so the prompt keeps only what a
-      // route's caller meets at runtime, which carries an HTTP status.
       const atRuntime = declaration.errors?.filter((error) => error.status !== undefined) ?? [];
       if (atRuntime.length) {
         lines.push("A route answers its caller with:");
@@ -85,7 +81,7 @@ export function renderPromptSection(contract: SdkContract = sdkContract): string
 /** The generated TypeScript module that holds the prompt section. */
 export function renderPromptModule(contract: SdkContract = sdkContract): string {
   const escaped = renderPromptSection(contract).replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
-  return `// ${generatedNotice}\n\nexport const sdkPromptSection = \`${escaped}\`;\n`;
+  return `export const sdkPromptSection = \`${escaped}\`;\n`;
 }
 
 function guideError({ message, when, source }: SdkError) {

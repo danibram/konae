@@ -2,17 +2,10 @@ import { sqlTokens, type SqlToken } from "./sql-tokens";
 
 const aggregates = new Set(["AVG", "COUNT", "GROUP_CONCAT", "MAX", "MIN", "SUM", "TOTAL"]);
 
-/** Breaks a statement before the clauses a person has to see, including LIMIT. */
 export function presentStatement(sql: string): string {
   return sql.replace(/\s+(FROM|WHERE|GROUP BY|HAVING|ORDER BY|LIMIT)\b/gi, "\n$1");
 }
 
-/**
- * Where the LIMIT clause starts among a statement's top-level tokens, or -1.
- * `:limit`, `@limit` and `$limit` are named parameters, not the clause, as
- * the RETURNING rule in src/kernel/sql-rules.ts reads them. The Kernel's
- * `limit_index` reads the same way.
- */
 export function limitIndex(top: SqlToken[]): number {
   return top.findIndex((token, index) => {
     const previous = top[index - 1];
@@ -21,15 +14,6 @@ export function limitIndex(top: SqlToken[]): number {
   });
 }
 
-/**
- * Why a query action may not ship, or null when it may.
- * A LIMIT counts only at the top level. One inside a subquery, a string or a
- * comment does not bound the rows the caller receives. A query with no FROM
- * returns one row. A query whose select list is only totals, with no GROUP BY,
- * returns one row. Everything else that reads a table has to name a LIMIT.
- * The Kernel's `unbounded_query_reason` repeats this so an exported app refuses
- * the same statements.
- */
 
 export function unboundedQueryReason(sql: string): string | null {
   const tokens = sqlTokens(sql);

@@ -6,9 +6,6 @@ import path from "node:path";
 import { account, appFetch, buildKernel, release, runtime, startKernel, type Kernel } from "./kernel-harness";
 import type { UsageSummary } from "../src/lib/usage";
 
-// An owner enters an app as one of its users through a one-time link
-// (kernel-rs/kernel/src/enter.rs). The owner's audit log records who entered
-// as whom, and Usage and Signals do not count what that session does.
 let root: string;
 let kernel: Kernel;
 
@@ -47,7 +44,6 @@ test("an owner enters as an app user once per link, and the audit log names both
   expect(link.url).toStartWith(`${receipt.url}/_konae/enter#entry=`);
   const token = new URL(link.url).hash.replace("#entry=", "");
 
-  // The page does nothing on GET; the POST from the app's own origin takes the token.
   expect((await appFetch(kernel, receipt.hostname, "/_konae/enter")).status).toBe(200);
   const enter = () => appFetch(kernel, receipt.hostname, "/_konae/enter", { method: "POST", body: JSON.stringify({ token }), headers: { origin: `http://${receipt.hostname}` } });
   const entered = await enter();
@@ -80,7 +76,6 @@ test("an owner enters as an app user once per link, and the audit log names both
     expect(row.actor).toStartWith("owner:");
   } finally { audit.close(); }
 
-  // A suspended account cannot be entered.
   await kernel.owner.call("app_user_suspend", { projectId: receipt.id, userId: ana.userId });
   await expect(kernel.owner.call("app_user_enter", { projectId: receipt.id, userId: ana.userId })).rejects.toThrow("Only an active account can be entered.");
 }, 120_000);

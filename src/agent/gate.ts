@@ -6,6 +6,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange } from "../lib/module-state";
+import { sourcesUseFiles } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -26,13 +27,6 @@ export type SqlJsLoader = () => Promise<SqlJsStatic>;
 
 let browserSql: Promise<SqlJsStatic> | undefined;
 
-/**
- * The browser loader: the runtime host's own memoised sql.js, so one tab holds
- * one wasm heap instead of two. The import is dynamic so the gate stays usable
- * in plain runtimes (tests, a future Kernel-side gate) with an injected loader.
- * A failed load is never memoised: a transient wasm fetch failure must not
- * disable the Validation Gate for the rest of the session.
- */
 export const loadBrowserSqlJs: SqlJsLoader = () => {
   browserSql ??= import("../runtime/host")
     .then((module) => module.loadSqlJs())
@@ -43,7 +37,6 @@ export const loadBrowserSqlJs: SqlJsLoader = () => {
   return browserSql;
 };
 
-/** Who clears a release refusal, beside the Kernel's sentence. */
 const RELEASE_OWNER = "Deploy refuses this until the owner sets the secret in Access > Integrations. No edit to the files clears it.";
 const PREVIEW_BEHIND = "The preview's test database is behind schema.sql, so the preview cannot run the actions that need the change. Publishing applies it to the published database, so try the change on konae dev or a published Deployment.";
 const RELEASE_AUTHOR = "The Kernel refuses this at publish. Change actions.json.";
@@ -52,28 +45,6 @@ export function createCapsuleValidator(loadSql: SqlJsLoader = loadBrowserSqlJs):
   return new SqlJsCapsuleValidator(loadSql);
 }
 
-/**
- * The Validation Gate. Source files and three runtime stages share the rules used by save and release:
- *
- * 1. `schema`. schema.sql must execute on a fresh database, twice, because
- *    the preview re-runs it on every open and the Kernel runs it twice in its
- *    scratch database too. It may only hold CREATE TABLE and CREATE [UNIQUE]
- *    INDEX, the same allowlist the Kernel's scratch database enforces.
- *    Optional schema-transforms.json gets static shape, order, bounds and SQL
- *    subset checks. The Gate cannot establish database history, row counts,
- *    or that transition statements will run against a particular database.
- * 2. `actions`. actions.json must parse, every binding must resolve, and
- *    every statement must prepare against the schema it declares.
- * 3. `preview-rows`, only when the preview's database could be read.
- *    schema.sql runs on a clone of it. When the clone then carries every
- *    table and column the fresh schema declares, every action must prepare
- *    against it. When it does not, the preview is behind, and the Gate warns
- *    and passes, because the Kernel derives the schema change at publish
- *    (kernel-rs/kernel/src/schema_change.rs).
- *
- * The result names the stages that actually ran, because a stage that was
- * skipped must never be reported as one that held.
- */
 export class SqlJsCapsuleValidator implements CapsuleValidator {
   constructor(private readonly loadSql: SqlJsLoader = loadBrowserSqlJs) {}
 
@@ -89,8 +60,9 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       });
     }
     const SQL = await this.loadSql();
-    const filesCall = Object.values(files).some((contents) => /miniapp\s*\.\s*files/.test(contents));
-    const filesOff = checkModuleChange({ rule: "on", module: "files", state: facts.modules?.files ?? { on: false } });
+    const filesCall = sourcesUseFiles(Object.values(files));
+    const filesState = facts.modules?.files;
+    const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
     if (filesCall && filesOff) {
       return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code) }, ["sources"]);
     }
@@ -113,8 +85,6 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           });
         }
       }
-      // Read before running: sql.js lacks some refused functions, and "no such
-      // function" would hide the reason the Kernel gives.
       const refused = refusedStatements(files["schema.sql"]);
       if (refused.length > 0) {
         return failure({
@@ -140,7 +110,6 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         }, checked);
       }
 
-      // The runtime re-runs schema.sql on every database open, so running once proves nothing.
       try {
         fresh.run(files["schema.sql"]);
       } catch (error) {
@@ -161,25 +130,18 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       try {
         program = parseServerActionSource(files["actions.json"]);
       } catch (error) {
-        // A refusal of the Capsule keeps the Kernel's code beside its sentence (ADR-0004).
         const refused = refusalOf(error);
         errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
       }
 
       if (program) errors.push(...checkActions(fresh, program, "actions"));
-      // The Kernel parses before it plans a release, so its release sentence only follows a program that parsed.
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
-      // A secret only the owner can set does not block the change: the files are
-      // right, and Deploy still refuses until the owner sets it.
       if (release && ownerFixes(release.code)) warnings.push({ stage: "actions", message: release.message, detail: RELEASE_OWNER, owner: true, code: release.code, hint: release.hint });
       else if (release) errors.push({ stage: "actions", message: release.message, detail: RELEASE_AUTHOR, code: release.code, hint: release.hint });
-      // A result column without a name a second backend could match passes, with a warning.
       if (program) warnings.push(...contractFromProgram(program, files["schema.sql"]).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
       checked.push("actions");
 
       if (live.state === "unreadable") {
-        // Not the same as having no database: there is one, and the gate cannot
-        // see it. Passing here would promise a convergence nobody checked.
         errors.push({
           stage: "preview-rows",
           message: "The current database could not be read, so the preview-rows stage could not run.",
@@ -194,9 +156,6 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           errors.push({ stage: "preview-rows", message: "The current database export could not be opened.", detail: describe(error) });
         }
         if (clone) {
-          // The preview re-runs schema.sql on its own test rows and changes no
-          // table it already has. A Kernel derives the change at publish, so a
-          // preview that is behind is a warning about the preview, not a refusal.
           let behind: string[];
           try {
             clone.run(files["schema.sql"]);
@@ -216,26 +175,13 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
-    // The build refuses with the same words. Of the sources, the Kernel's release check reads only actions.json and schema.sql, so it has no check to match.
     const neverRuns = entryNeverRunsMessage(Object.keys(files), files);
     if (neverRuns) errors.push({ stage: "actions", message: neverRuns });
-    // A root-relative URL leaves the app's path address. The build warns with the same words, and the Kernel has no release warning to match.
     warnings.push(...rootRelativeWarnings(files).map(({ message }) => ({ stage: "actions" as const, message })));
     return { ok: errors.length === 0, errors, checked, ...(warnings.length > 0 ? { warnings } : {}) };
   }
 }
 
-/**
- * What schema.sql may not run, named for the error. The allowlist matches the
- * authorizer of the Kernel's scratch database (kernel-rs/kernel/src/schema_change.rs):
- * CREATE TABLE and CREATE [UNIQUE] INDEX, nothing else. INSERT, PRAGMA and
- * transaction statements run fine in sql.js but are refused at deploy. SQL
- * functions are allowed (a CHECK, an index expression, a partial index, a
- * generated column), except the ones that reach outside the database. The
- * script is split by the tokenizer rather than by preparing each statement:
- * preparing a second CREATE TABLE fails once the table exists, and a naive
- * split on ";" would cut a trigger body in half.
- */
 function refusedStatements(schema: string): string[] {
   const found = new Set<string>();
   for (const tokens of sqlStatementTokens(schema)) {
@@ -251,14 +197,8 @@ function refusedStatements(schema: string): string[] {
   return [...found];
 }
 
-/**
- * Functions the Kernel's authorizer refuses by name: they load native code or
- * read and write files on the host. sql.js does not ship most of them, so the
- * gate has to name them rather than wait for the statement to fail.
- */
 const refusedFunctionNames = new Set(["load_extension", "readfile", "writefile", "edit", "fts3_tokenizer"]);
 
-/** The refused functions `tokens` call. A quoted name still calls the function. */
 function refusedFunctions(tokens: SqlToken[]): string[] {
   const found: string[] = [];
   tokens.forEach((token, index) => {
@@ -270,28 +210,17 @@ function refusedFunctions(tokens: SqlToken[]): string[] {
   return found;
 }
 
-/**
- * The CREATE forms the Kernel will not deploy. A trigger or a view passes
- * sql.js but fails the authorizer, and a trigger could delete rows whenever
- * something writes to its table. CREATE TABLE ... AS (a SELECT, a VALUES list
- * or a WITH query) copies rows into the new table, which the authorizer
- * refuses as an INSERT. TEMP objects are a different authorizer action and are
- * refused too, whether the statement says TEMP or names the temp schema.
- */
 function refusedCreate(tokens: SqlToken[], words: string[]): string | null {
   const object = words[1] === "UNIQUE" ? words[2] : words[1];
   if (object !== "INDEX" && object !== "TABLE") return `CREATE ${words[1] ?? ""}`.trim();
 
   const start = tokens.findIndex((token) => token.kind === "word" && token.text.toUpperCase() === object);
   let index = start + 1;
-  // IF NOT EXISTS
   if (isWord(tokens[index], "IF")) index += 3;
   const schema = tokens[index + 1]?.kind === "symbol" && (tokens[index + 1] as { text: string }).text === "." ? nameOf(tokens[index]) : null;
   if (schema && ["temp", "temporary"].includes(schema.toLowerCase())) return `CREATE ${object} ${schema}.*`;
   if (object === "INDEX") return null;
 
-  // The column list opens with the first top-level "(". An AS before it is a
-  // CREATE TABLE ... AS query; GENERATED ALWAYS AS sits inside the list.
   const outer = tokens[start].depth;
   for (let at = index; at < tokens.length; at += 1) {
     const token = tokens[at];
@@ -316,7 +245,6 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
 
   for (const action of Object.values(program.actions)) {
     if (action.kind === "signal" || action.kind === "call") {
-      // A signal action and a call run no SQL; their bindings still have to resolve.
       if (stage !== "actions") continue;
       try {
         resolveServerAction(program, action.name, syntheticInput(action), { actorId: "validation_actor", now: 0 });
@@ -360,11 +288,6 @@ function checkActions(db: Database, program: ServerActionProgram, stage: "action
   return errors;
 }
 
-/**
- * A notify column the statement cannot return, checked by preparing the
- * statement with the Kernel's own RETURNING clause, as kernel-rs/kernel/src/notify.rs
- * `check_columns` does at publish (ADR-0012).
- */
 export function notifyColumnsRefusal(db: Database, action: ServerActionDefinition) {
   const columns = action.kind === "mutation" ? notifyReturning(action.notify) : [];
   if (!columns.length) return undefined;
@@ -379,8 +302,6 @@ export function notifyColumnsRefusal(db: Database, action: ServerActionDefinitio
   return notifyColumnRefusal(action.name);
 }
 
-/** Tables and columns the fresh schema declares but the migrated clone does not carry. */
-/** What the preview's test database lacks of what schema.sql declares, one sentence each. */
 function divergence(fresh: Database, clone: Database): string[] {
   const found: string[] = [];
   const cloneTables = new Set(userTables(clone));
@@ -396,11 +317,6 @@ function divergence(fresh: Database, clone: Database): string[] {
   return found;
 }
 
-/**
- * sql.js reports "column index out of range" when more values are bound than the
- * statement has placeholders, which turns binding into an exact parameter count
- * probe. Null is not usable as a probe value; 1 is.
- */
 function placeholderMismatch(db: Database, action: ServerActionDefinition): string | null {
   const declared = action.bindings.length;
   if (!accepts(db, action.statement, declared)) {
@@ -444,7 +360,6 @@ function tableColumns(db: Database, table: string): string[] {
   return db.exec(`PRAGMA table_info("${escaped}")`)[0]?.values.map((row) => String(row[1])) ?? [];
 }
 
-/** A schema that does not hold stops the run: nothing after it was checked. */
 function failure(error: ValidationError, checked: ValidationStage[] = []): ValidationResult {
   return { ok: false, errors: [error], checked };
 }

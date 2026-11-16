@@ -1,9 +1,3 @@
-// Probe: a two-sided app where publishers post and readers follow them.
-// Proves roles managed inside the app, public and
-// private rows in one table, realtime by polling, the audit of who did what,
-// and files shared with a role.
-//
-//   KONAE_PROBE_PORT=23030 bun run examples/probes/community/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -24,11 +18,9 @@ await probe("community", 23030, async (kit) => {
     await act(name, "members.join", { name: name[0].toUpperCase() + name.slice(1) });
   }
 
-  // Nobody starts with a role the app did not give. The first editor comes from the owner's SQL.
   const early = await kit.errorText(act("ana", "posts.create", { title: "Hello", status: "published" }));
   assert.equal(early, "Only a publisher can post.");
   await owner.call("database_execute", { deploymentId: app.deploymentId, operation: "sql", input: { sql: `UPDATE members SET role = 'editor' WHERE user_id = '${ids.edith}'` } });
-  // From then on roles are managed in the app: the editor lists members and promotes one.
   const listed = await act<any[]>("edith", "members.list");
   assert.deepEqual(listed.map((row) => row.display_name), ["Ana", "Edith", "Rui"]);
   const byReader = await kit.errorText(act("rui", "members.promote", { member: ids.ana }));
@@ -37,9 +29,6 @@ await probe("community", 23030, async (kit) => {
   assert.equal((await act("edith", "members.promote", { member: ids.ana })).changes, 1);
   kit.pass("Roles inside the app", `A reader's post is refused with "${early}". The owner makes the first editor with database_execute; after that the editor lists members by the display names they gave and promotes Ana, while Rui's promotion is refused with "${byReader}" and his members.list returns no rows.`);
 
-  // The actor binding gives an ID, never an email, and both doors refuse the
-  // declaration with the same words before anything is published (since
-  // 2026-11-07; before, the Kernel published it and failed at the first call).
   const actionsJson = JSON.parse(await readFile(path.join(here, "actions.json"), "utf8"));
   actionsJson.actions["members.join"].bindings[1] = { source: "actor", field: "email" };
   const variant = { "schema.sql": await readFile(path.join(here, "schema.sql"), "utf8"), "actions.json": JSON.stringify(actionsJson) };
@@ -50,7 +39,6 @@ await probe("community", 23030, async (kit) => {
   console.log(`  actor.email: both doors refuse with "${emailKernel}"`);
   kit.pass("No email from the actor", `A binding { source: "actor", field: "email" } is refused at both doors with "${emailKernel}", so it never publishes. The app knows a person by ID and by what they typed.`);
 
-  // One table, two audiences: drafts stay with their author, published posts reach visitors.
   assert.equal((await act("ana", "posts.create", { title: "Draft about rivers", status: "draft" })).changes, 1);
   assert.equal((await act("ana", "posts.create", { title: "Letter one", status: "published" })).changes, 1);
   const visitor = kit.runtime(app.host);
@@ -62,7 +50,6 @@ await probe("community", 23030, async (kit) => {
   assert.deepEqual((await act<any[]>("rui", "posts.following")).map((row) => row.title), ["Letter one"]);
   kit.pass("Publishers and readers", "A visitor's posts.feed shows Letter one and not Ana's draft; Ana sees both; Rui follows Ana (following a reader changes nothing) and his feed holds her published letter.");
 
-  // Realtime is a poll: the reader asks for rows after the last ID it has.
   const last = feed.at(-1).id;
   assert.deepEqual(await visitor.call("actions_invoke", { name: "posts.feed", input: { after: last } }), []);
   await act("ana", "posts.create", { title: "Letter two", status: "published" });
@@ -70,7 +57,6 @@ await probe("community", 23030, async (kit) => {
   assert.deepEqual(next.map((row) => row.title), ["Letter two"]);
   kit.pass("Realtime by polling", "posts.feed with after=<last id> returns [] until Ana publishes, then only Letter two. Nothing is pushed: the page asks again, within 30 calls per 10 seconds per visitor address and 120 per signed-in user.");
 
-  // Who did what: Signals name the actor for the owner; the app keeps the author on the row.
   const signals = await owner.call<{ signals: any[] }>("signals_read", { deploymentId: app.deploymentId });
   const created = signals.signals.filter((signal) => signal.name === "post.created");
   assert.equal(created.length, 3);
@@ -79,7 +65,6 @@ await probe("community", 23030, async (kit) => {
   assert.deepEqual(promoted.properties, { member: ids.ana, actor: ids.edith });
   kit.pass("Audit", "signals_read gives the owner 3 post.created naming Ana and member.promoted naming Edith as actor and Ana as member; the two refused calls left none. Members see only what the rows keep (author_id), because one statement writes one table and Signals are for the owner.");
 
-  // Files follow the uploader, not the role: an editor cannot read a publisher's private file.
   const ana = as("ana");
   const transfer = await ana.upload(new TextEncoder().encode("manuscript"));
   const file = await ana.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "draft.txt", type: "text/plain" });

@@ -2,12 +2,6 @@ import type { ReleaseFacts } from "../agent/release-check";
 import { listSecrets } from "./client";
 import { readDomain } from "./domains";
 
-/**
- * What release_plan reads that the editor can read too, for the build agent's
- * Gate: the project's secret names (never values) and, once the app is
- * published, the installation's hosts. A read that fails leaves its part out,
- * and the Gate stays silent on it, as the Deploy dialog does.
- */
 export async function readReleaseFacts(
   projectId: string,
   deploymentId: string | undefined,

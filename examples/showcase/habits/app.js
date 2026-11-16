@@ -1,8 +1,5 @@
-// Habits: one person, two devices, one account. Every row belongs to the
-// signed-in account; the Kernel binds the actor, never the page.
 const $ = (selector) => document.querySelector(selector);
 const pad = (n) => String(n).padStart(2, "0");
-// The person's own calendar day, not the server's UTC day.
 const localDay = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 const shiftDay = (day, offset) => {
   const [y, m, d] = day.split("-").map(Number);
@@ -19,9 +16,6 @@ const week = Array.from({ length: 7 }, (_, i) => shiftDay(today, i - 6));
 $("#today").textContent = new Date().toLocaleDateString("en", { weekday: "long", month: "long", day: "numeric" });
 $("#device").textContent = `Checking in from this ${device}.`;
 
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 function reason(error) {
   if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
   if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "Habits could not reach its server. Check the connection and try again.";
@@ -123,11 +117,9 @@ $("#add").addEventListener("submit", async (event) => {
   const input = $("#name");
   const name = input.value.trim();
   if (!name) return;
-  // The button stays disabled until the call answers, so a double press adds one habit.
   const button = event.target.querySelector("button[type=submit]");
   button.disabled = true;
   try {
-    // habits.create declares a guard, so the twenty-first habit is refused with its sentence.
     await act(async () => {
       await miniapp.actions.call("habits.create", { name });
       input.value = "";

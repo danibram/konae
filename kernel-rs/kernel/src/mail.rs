@@ -1,13 +1,3 @@
-//! Account email: the persistent queue in `mail.sqlite`, the worker that
-//! drains it, the transports (Resend, SMTP and the development mailbox),
-//! Resend's delivery events, the sender preflight and the send limits.
-//!
-//! A challenge and its job commit in one transaction: the identity
-//! connection attaches `mail.sqlite` and `JobOutbox::record` inserts the job
-//! before the challenge commits (`auth::ChallengeOutbox`). The job keeps the
-//! link sealed with AES-256-GCM until the provider accepts it, then drops it.
-//! The worker sends a job only while its challenge is still open, so a link
-//! that was replaced, used or expired is never mailed.
 
 use std::{future::Future, net::IpAddr, pin::Pin, sync::Mutex as SyncMutex, time::Duration};
 
@@ -26,34 +16,20 @@ use auth::{AuthError, ChallengeOutbox, IssuedChallenge, Purpose};
 
 pub const MAIL_DATABASE: &str = "mail.sqlite";
 pub const TEST_MAIL_DATABASE: &str = "mail-test.sqlite";
-/// How long a claimed job stays with the worker before another pass may
-/// claim it again. A Kernel stopped mid-send leaves the lease to expire.
 const LEASE_MS: i64 = 2 * 60 * 1000;
-/// Attempts before a job fails. The waits double from 30 seconds to 32
-/// minutes, then one of an hour, so the last attempt runs about two hours
-/// after the first, inside Resend's 24-hour idempotency window.
 const MAX_ATTEMPTS: i64 = 9;
 const FIRST_BACKOFF_MS: i64 = 30_000;
 const MAX_BACKOFF_MS: i64 = 60 * 60 * 1000;
-/// A job whose challenge is not visible yet is younger than this when the
-/// two databases' commits are still landing; it waits instead of failing.
 const COMMIT_GRACE_MS: i64 = 60_000;
-/// Jobs claimed per worker pass.
 const BATCH: i64 = 20;
-/// Accepted age of a Resend event's `svix-timestamp`, in either direction.
-/// Svix's own libraries use five minutes.
 const WEBHOOK_TOLERANCE_SECONDS: i64 = 5 * 60;
-/// How often the worker checks a refused sender again.
 const PREFLIGHT_RETRY_MS: i64 = 10 * 60 * 1000;
 const DEFAULT_RESEND_API: &str = "https://api.resend.com";
 const DAY_MS: i64 = 86_400_000;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-// ---------------------------------------------------------------------------
-// Configuration
 
-/// Send limits. Each is a count over a sliding window.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Limits {
@@ -72,9 +48,6 @@ pub struct Limits {
 }
 
 impl Default for Limits {
-    /// The launch plan's values. The plan names no per-app or per-client
-    /// value; an app gets its creator's daily allowance, and one client
-    /// address may ask for 20 emails an hour.
     fn default() -> Self {
         Self {
             recipient_per_minute: 3,
@@ -122,12 +95,6 @@ impl Limits {
     }
 }
 
-/// The key that seals links at rest. `KONAE_MAIL_SECRET` when set;
-/// otherwise the key the binary passes: Konae's `KONAE_SETUP_KEY`, which
-/// every installation reachable from another machine already keeps secret,
-/// or the `kernel` binary's own `mail-key` (`operator::mail_key`). The development
-/// default key is public, so it seals nothing for a real provider; the
-/// development mailbox writes its links in clear anyway and may use it.
 fn mail_secret(key: &str, development: bool) -> Result<String> {
     if let Some(secret) = std::env::var("KONAE_MAIL_SECRET").ok().filter(|value| !value.is_empty()) {
         anyhow::ensure!(secret.len() >= 32, "KONAE_MAIL_SECRET must be at least 32 characters.");
@@ -143,16 +110,12 @@ fn mail_secret(key: &str, development: bool) -> Result<String> {
 struct LinkKey(LessSafeKey);
 
 impl LinkKey {
-    /// HKDF-SHA256 with a fixed salt and label, so the setup key itself
-    /// never encrypts anything and rotating either secret is one variable.
     fn derive(secret: &str) -> Self {
         let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-mail-v1").extract(secret.as_bytes());
         let okm = prk.expand(&[b"account link"], &AES_256_GCM).expect("HKDF output fits AES-256");
         Self(LessSafeKey::new(UnboundKey::from(okm)))
     }
 
-    /// Seals `link` for job `id`. The job ID is the associated data, so a
-    /// sealed link moved to another row does not open.
     fn seal(&self, id: &str, link: &str) -> Result<(Vec<u8>, Vec<u8>), AuthError> {
         let mut nonce = [0_u8; NONCE_LEN];
         SystemRandom::new().fill(&mut nonce).map_err(|_| AuthError::PasswordHash)?;
@@ -171,11 +134,7 @@ impl LinkKey {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Transports
 
-/// One email ready for a transport. `id` is the job ID and the provider's
-/// idempotency key, so a retry of the same job is the same request.
 #[derive(Clone, Debug)]
 pub struct OutgoingEmail {
     pub id: String,
@@ -192,7 +151,6 @@ pub struct OutgoingEmail {
     pub action: Option<String>,
 }
 
-/// The development mailbox's line for a notice: no link, the rendered text.
 #[derive(Serialize)]
 struct NoticeLine<'a> {
     to: &'a str,
@@ -229,7 +187,6 @@ pub trait Transport: Send + Sync {
     fn name(&self) -> &'static str;
     fn send<'a>(&'a self, email: &'a OutgoingEmail) -> BoxFuture<'a, SendOutcome>;
     fn preflight<'a>(&'a self, sender: &'a str) -> BoxFuture<'a, PreflightResult>;
-    /// The secret that signs this provider's delivery events, if it sends any.
     fn webhook_secret(&self) -> Option<&[u8]> {
         None
     }
@@ -242,8 +199,6 @@ pub const TEST_MAILBOX_FILE: &str = "mail-testbox.jsonl";
 /// What health and `mail_status` say while the development transport runs.
 pub const LOCAL_MAILBOX: &str = "With KONAE_MAIL_TRANSPORT=development no email leaves this server. The Kernel writes every message, account links included, to mailbox.jsonl in its data directory. Set KONAE_MAIL_TRANSPORT to resend or smtp to send email.";
 
-/// The development mailbox as a transport: each message is one line of
-/// `mailbox.jsonl`, and writing it counts as delivery.
 struct DevelopmentTransport(DevelopmentMailbox);
 
 impl Transport for DevelopmentTransport {
@@ -303,7 +258,6 @@ impl ResendTransport {
     }
 }
 
-/// The `name` and `message` of a Resend error body.
 fn resend_error(body: &str) -> (String, String) {
     let value: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let text = |key: &str| value[key].as_str().unwrap_or("").chars().take(200).collect::<String>();
@@ -359,8 +313,6 @@ impl Transport for ResendTransport {
     }
 
     /// Passes when the sender's domain is `verified` in this Resend account.
-    /// A key with `sending_access` cannot list domains, so it cannot pass on
-    /// its own; `KONAE_RESEND_DOMAINS_KEY` supplies one that can.
     fn preflight<'a>(&'a self, sender: &'a str) -> BoxFuture<'a, PreflightResult> {
         Box::pin(async move {
             let Some(domain) = sender_domain(sender) else {
@@ -407,14 +359,10 @@ impl Transport for ResendTransport {
     }
 }
 
-/// How an SMTP connection is encrypted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmtpTls {
-    /// Plain connection upgraded with STARTTLS, which is required.
     StartTls,
-    /// TLS from the first byte, usually on port 465.
     Implicit,
-    /// No encryption, accepted only for a loopback host, for tests.
     None,
 }
 
@@ -490,7 +438,6 @@ impl Transport for SmtpTransport {
 
     /// Connects, negotiates TLS and authenticates. Whether the server lets
     /// this account send as the sender address is the provider's rule; a
-    /// refusal there shows as failed jobs.
     fn preflight<'a>(&'a self, _sender: &'a str) -> BoxFuture<'a, PreflightResult> {
         Box::pin(async move {
             match self.mailer.test_connection().await {
@@ -508,8 +455,6 @@ fn sender_domain(sender: &str) -> Option<String> {
     (!domain.is_empty()).then_some(domain)
 }
 
-/// Reads `KONAE_MAIL_TRANSPORT` and the variables of the chosen
-/// transport. Unset means no transport.
 fn transport_from_env(data_root: &Path, force_local: bool) -> Result<Option<(Arc<dyn Transport>, String)>> {
     let required = |name: &str| -> Result<String> {
         std::env::var(name)
@@ -570,8 +515,6 @@ fn transport_from_env(data_root: &Path, force_local: bool) -> Result<Option<(Arc
     Ok(Some((transport, from)))
 }
 
-/// The HMAC key of a Svix signing secret: the base64 after `whsec_`.
-/// <https://docs.svix.com/receiving/verifying-payloads/how-manual>
 fn webhook_key(secret: &str) -> Result<Vec<u8>> {
     use base64::Engine;
     let encoded = secret.strip_prefix("whsec_").unwrap_or(secret);
@@ -580,8 +523,6 @@ fn webhook_key(secret: &str) -> Result<Vec<u8>> {
         .map_err(|_| anyhow::anyhow!("KONAE_RESEND_WEBHOOK_SECRET is not a whsec_ signing secret."))
 }
 
-// ---------------------------------------------------------------------------
-// Templates
 
 /// Subject, plain text and HTML for one account email. Only the app name,
 /// the inviter and the link vary. The app name is the Deployment's and the
@@ -664,10 +605,7 @@ pub fn escape_html(value: &str) -> String {
     escaped
 }
 
-// ---------------------------------------------------------------------------
-// The queue
 
-/// Where the preflight stands. Sending runs only in `Ready`.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Preflight {
@@ -690,12 +628,9 @@ pub struct Notice<'a> {
     pub html: &'a str,
 }
 
-/// What became of a notice.
 #[derive(Debug, PartialEq, Eq)]
 pub enum NoticeOutcome {
-    /// A pending job the worker sends.
     Queued,
-    /// Not sent, with the kind the owner reads in Usage.
     Refused(&'static str),
 }
 
@@ -960,13 +895,8 @@ impl MailQueue {
             .map_err(storage)?;
         let at = now();
         transaction.execute("DELETE FROM requests WHERE at <= ?1", [at - DAY_MS]).map_err(storage)?;
-        // The minute limit counts an address across the installation. The day
-        // limit counts it per scope, so requests on one app cannot use up the
-        // address's allowance for its other apps and for the editor.
         let recipient = hashed("recipient", admission.recipient);
         let recipient_in_scope = hashed("recipient", &format!("{}|{}", admission.scope, admission.recipient));
-        // A client counts by the same key as every other limiter: one IPv6
-        // /64 is one client.
         let client = admission.client.map(|client| hashed("client", &super::limits::client_key(client)));
         let requests = |dimension: &str, key: &str, since: i64| -> Result<u32, AuthError> {
             transaction
@@ -1016,7 +946,6 @@ impl MailQueue {
         JobOutbox { queue: self, scope, creator, app_name, inviter, page }
     }
 
-    // -- Worker -------------------------------------------------------------
 
     /// Sends the jobs that are due. Returns how many reached the provider.
     pub async fn run_once(&self) -> Result<usize> {
@@ -1070,7 +999,6 @@ impl MailQueue {
         Ok(rows)
     }
 
-    /// The identity database that holds a scope's challenges.
     fn identity_path(&self, scope: &str) -> Option<PathBuf> {
         if let Some(account) = self.accounts.iter().find(|account| account.scope == scope) {
             return Some(self.data_root.join(account.file));
@@ -1079,8 +1007,6 @@ impl MailQueue {
         (!id.is_empty() && !id.contains(['/', '\\', '.'])).then(|| crate::layout::identity(&self.data_root, &id))
     }
 
-    /// Whether the job's challenge is still open: not used, replaced,
-    /// revoked by a suspension or expired.
     fn challenge_open(&self, job: &Claimed) -> Result<bool> {
         let Some(path) = self.identity_path(&job.scope).filter(|path| path.is_file()) else {
             return Ok(false);
@@ -1095,9 +1021,7 @@ impl MailQueue {
         )?)
     }
 
-    /// Runs one claimed job. Returns true when the provider accepted it.
     async fn process(&self, job: Claimed) -> Result<bool> {
-        // A paused app sends nothing; the job waits uncounted.
         if super::maintenance::holds_mail(&self.data_root, &job.scope) {
             self.release(&job.id, super::maintenance::MAIL_HOLD_MS, false, None)?;
             return Ok(false);
@@ -1146,8 +1070,6 @@ impl MailQueue {
         self.deliver(job, email).await
     }
 
-    /// Sends a notice. It has no challenge to check; it fails once it is a
-    /// day old, so a notice never arrives long after the change it reports.
     async fn process_notice(&self, job: Claimed) -> Result<bool> {
         if job.link_expires_at * 1000 <= now() {
             self.finish_failed(&job.id, "notice-expired")?;
@@ -1175,7 +1097,6 @@ impl MailQueue {
         self.deliver(job, email).await
     }
 
-    /// Hands one email to the transport and records what it answered.
     async fn deliver(&self, job: Claimed, email: OutgoingEmail) -> Result<bool> {
         match self.transport.send(&email).await {
             SendOutcome::Accepted { provider_id, delivered } => {
@@ -1198,8 +1119,6 @@ impl MailQueue {
                 Ok(false)
             }
             SendOutcome::SenderRefused(reason) => {
-                // The job did not fail; the installation's sender did. It
-                // waits, with this attempt uncounted, for a passing preflight.
                 self.release(&job.id, 0, false, Some("sender-refused"))?;
                 self.set_preflight(PreflightResult::Refused(reason));
                 Ok(false)
@@ -1207,8 +1126,6 @@ impl MailQueue {
         }
     }
 
-    /// Returns a claimed job to pending after `delay_ms`. `counted` keeps
-    /// the attempt the claim added.
     fn release(&self, id: &str, delay_ms: i64, counted: bool, error_kind: Option<&str>) -> Result<()> {
         let at = now();
         self.connection()?.execute(
@@ -1220,7 +1137,6 @@ impl MailQueue {
         Ok(())
     }
 
-    /// Ends a job as failed and drops its link.
     fn finish_failed(&self, id: &str, kind: &str) -> Result<()> {
         self.connection()?.execute(
             "UPDATE jobs SET state = 'failed', error_kind = ?1, link_nonce = NULL, link_sealed = NULL,
@@ -1231,8 +1147,6 @@ impl MailQueue {
         Ok(())
     }
 
-    /// Records the provider's acceptance, drops the link, then applies any
-    /// provider event that arrived before the ID was known.
     fn record_accepted(&self, id: &str, provider_id: Option<&str>, delivered: bool) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1255,7 +1169,6 @@ impl MailQueue {
         Ok(())
     }
 
-    // -- Status -------------------------------------------------------------
 
     fn counts(&self) -> Result<Value> {
         let connection = self.connection()?;
@@ -1280,7 +1193,6 @@ impl MailQueue {
         Ok(json!({
             "depth": counts["pending"],
             "jobs": counts,
-            // The jobs above that are notices (`notify`, ADR-0012).
             "notices": notices,
             "lastFailure": last.map(|(kind, at, purpose)| json!({"kind": kind, "at": at, "purpose": purpose})),
         }))
@@ -1343,7 +1255,6 @@ pub async fn status_tool(state: &AppState, refresh: bool) -> Result<Value> {
     tokio::task::spawn_blocking(move || queue.status()).await?
 }
 
-/// Notices a page of `notices_read` holds.
 const NOTICE_PAGE: i64 = 50;
 
 pub async fn notices_tool(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Value> {
@@ -1387,9 +1298,6 @@ fn read_notices(path: &Path, scope: &str, before: i64) -> Result<Value> {
     Ok(json!({"notices": page.into_iter().map(|(_, notice)| notice).collect::<Vec<_>>(), "nextCursor": next}))
 }
 
-/// Refuses when the creator, the app or the installation has used its daily
-/// allowance of jobs. `schema` is `main` in the queue's own connection and
-/// `outbox` inside an identity transaction.
 fn check_job_budget(
     connection: &Connection,
     schema: &str,
@@ -1400,7 +1308,6 @@ fn check_job_budget(
 ) -> Result<(), AuthError> {
     let since = at - DAY_MS;
     let count = |filter: &str, value: Option<&str>| -> Result<u32, AuthError> {
-        // Notices have their own allowance; only the installation's total counts them here.
         let class = if filter.is_empty() { "" } else { "AND purpose <> 'notify'" };
         let sql = format!("SELECT COUNT(*) FROM {schema}.jobs WHERE created_at > ?1 {class} {filter}");
         match value {
@@ -1427,9 +1334,6 @@ fn check_job_budget(
     Ok(())
 }
 
-/// The budget a notice failed, as the kind Usage records: the installation's
-/// total of every email, then the creator's, the app's and the recipient's
-/// notices.
 fn check_notice_budget(connection: &Connection, limits: &Limits, notice: &Notice<'_>, at: i64) -> rusqlite::Result<Option<&'static str>> {
     let since = at - DAY_MS;
     let count = |filter: &str, values: &[&str]| -> rusqlite::Result<u32> {
@@ -1457,9 +1361,6 @@ fn check_notice_budget(connection: &Connection, limits: &Limits, notice: &Notice
     Ok(None)
 }
 
-/// Moves a job forward on a provider event. States only advance:
-/// pending, then accepted, then delivered or failed. A late `email.sent`
-/// after `email.delivered` changes nothing, and the first final state wins.
 fn advance(connection: &Connection, provider_id: &str, event: &str) -> rusqlite::Result<usize> {
     let (state, kind) = match event {
         "email.sent" => ("accepted", None),
@@ -1482,8 +1383,6 @@ fn advance(connection: &Connection, provider_id: &str, event: &str) -> rusqlite:
     )
 }
 
-/// The jobs table. `notify` joined the purposes with ADR-0012, and `action`
-/// names the action that queued a notice.
 fn jobs_table(name: &str) -> String {
     format!(
         "CREATE TABLE IF NOT EXISTS {name} (
@@ -1534,15 +1433,12 @@ pub fn install(connection: &Connection) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS provider_events_email ON provider_events(email_id);",
     )?;
-    // Queues created before invitations named their inviter.
     let has_inviter = connection
         .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'inviter'")?
         .exists([])?;
     if !has_inviter {
         connection.execute("ALTER TABLE jobs ADD COLUMN inviter TEXT", [])?;
     }
-    // Queues created before notices refuse the purpose in a CHECK, which
-    // SQLite cannot alter, so the table is rebuilt with its rows.
     let definition: String =
         connection.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'", [], |row| row.get(0))?;
     if !definition.contains("'notify'") {
@@ -1551,7 +1447,6 @@ pub fn install(connection: &Connection) -> rusqlite::Result<()> {
             .exists([])?;
         let columns = "id, purpose, recipient, scope, creator, app_name, token_hash, link_nonce, link_sealed, link_expires_at,
              state, attempts, next_attempt_at, leased_until, provider_id, error_kind, created_at, updated_at, inviter";
-        // Dropping the transaction on an error rolls the rebuild back.
         let transaction = connection.unchecked_transaction()?;
         transaction.execute_batch(&format!(
             "{}
@@ -1582,8 +1477,6 @@ impl ChallengeOutbox for JobOutbox<'_> {
         &self.queue.path
     }
 
-    /// Rechecks the job budgets, ends the recipient's earlier pending job of
-    /// the same purpose (its challenge was just replaced) and inserts the job.
     fn record(&self, transaction: &Connection, challenge: &IssuedChallenge, token_hash: &str) -> Result<(), AuthError> {
         if challenge.scope != self.scope {
             return Err(AuthError::InvalidChallenge);
@@ -1689,8 +1582,6 @@ pub fn end_pending_for_local_reset(path: &Path, app_id: &str) -> Result<usize> {
     )?)
 }
 
-// ---------------------------------------------------------------------------
-// Provider events
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/_konae/mail/resend-events", post(resend_events))
@@ -1722,10 +1613,6 @@ pub fn verify_svix(secret: &[u8], id: &str, timestamp: &str, signatures: &str, b
     })
 }
 
-/// Records one Resend event. Answers 404 when this installation takes no
-/// events, 401 on a bad signature, and 200 for a duplicate, which changes
-/// nothing. The handler touches `mail.sqlite` only, so no event can
-/// activate an account.
 async fn resend_events(State(state): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let Some(queue) = state.accounts.queue.clone() else {
         return error(StatusCode::NOT_FOUND, "This installation does not take email events.");
@@ -1780,7 +1667,6 @@ mod tests {
 
     #[test]
     fn an_old_mail_limit_name_is_refused_with_the_new_one() {
-        // Serialised by the name: no other test sets it.
         unsafe { std::env::set_var("KONAE_MAIL_LIMIT_CREATOR_PER_DAY", "5") };
         let message = super::Limits::from_env().unwrap_err().to_string();
         unsafe { std::env::remove_var("KONAE_MAIL_LIMIT_CREATOR_PER_DAY") };
@@ -1797,7 +1683,6 @@ mod tests {
     const SECRET: &str = "a mail secret that is long enough for tests";
     const CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
 
-    /// A transport that answers from a script and records what it sent.
     struct Scripted {
         sent: SyncMutex<Vec<OutgoingEmail>>,
         outcomes: SyncMutex<VecDeque<SendOutcome>>,
@@ -2038,7 +1923,6 @@ mod tests {
         fixture.queue().run_once().await.unwrap();
         assert_eq!(transport.sent().len(), 1, "only the newest link is mailed");
 
-        // A job whose link expired before the worker reached it fails unsent.
         fixture.signup(&fixture.other, "late@example.test").await.unwrap();
         fixture.db().execute("UPDATE jobs SET link_expires_at = 1 WHERE state = 'pending'", []).unwrap();
         fixture.queue().run_once().await.unwrap();
@@ -2051,7 +1935,6 @@ mod tests {
         let transport = Scripted::new();
         let fixture = fixture(transport.clone()).await;
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
-        // The account is suspended before the worker runs: its challenge ends.
         accounts::app_store(&fixture.state, &fixture.app).unwrap().suspend("person@example.test").unwrap();
         fixture.db().execute("UPDATE jobs SET created_at = created_at - ?1", [COMMIT_GRACE_MS + 1]).unwrap();
         fixture.queue().run_once().await.unwrap();
@@ -2076,7 +1959,6 @@ mod tests {
         assert_eq!(fixture.queue().run_once().await.unwrap(), 1);
         assert_eq!(fixture.jobs()[0].1, "accepted");
 
-        // Retries are bounded: the last allowed attempt ends the job as failed.
         fixture.signup(&fixture.other, "second@example.test").await.unwrap();
         for _ in 0..MAX_ATTEMPTS {
             transport.then(SendOutcome::Retry("Resend 500 application_error".into()));
@@ -2106,13 +1988,10 @@ mod tests {
         assert_eq!(status["preflight"]["state"], "refused");
         assert!(status["preflight"]["reason"].as_str().unwrap().contains("pending in Resend"));
 
-        // Once the domain verifies, a refresh enables sending.
         *transport.preflight.lock().unwrap() = PreflightResult::Ready;
         assert_eq!(status_tool(&fixture.state, true).await.unwrap()["sending"], true);
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
 
-        // A provider that refuses the sender at send time parks the queue:
-        // the job stays pending with its attempt uncounted.
         transport.then(SendOutcome::SenderRefused("Resend refused the sender".into()));
         fixture.queue().run_once().await.unwrap();
         let job = fixture.jobs()[0].clone();
@@ -2126,8 +2005,6 @@ mod tests {
     async fn the_recipient_limits_refuse_visibly_and_the_same_for_unknown_addresses() {
         let transport = Scripted::new();
         let fixture = fixture(transport).await;
-        // Three per minute, whatever happens to the request: two signups and
-        // a recovery for the now pending account.
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
         fixture.signup(&fixture.other, "person@example.test").await.unwrap();
         accounts::recover_app(&fixture.state, &fixture.app, "person@example.test", CLIENT).await.unwrap();
@@ -2135,8 +2012,6 @@ mod tests {
         let refused = fixture.signup(&fixture.app, "Person@Example.test").await;
         assert!(matches!(&refused, Err(AuthError::MailLimit(message)) if message.contains("this address")), "{refused:?}");
         assert_eq!(fixture.jobs().len(), jobs, "a refusal enqueues nothing");
-        // An address with no account reaches the limit after the same number
-        // of requests, so the refusal says nothing about who has an account.
         for _ in 0..3 {
             accounts::recover_app(&fixture.state, &fixture.app, "nobody@example.test", CLIENT).await.unwrap();
         }
@@ -2156,7 +2031,6 @@ mod tests {
                     assert_eq!(jobs, index, "nothing was enqueued for the refused request");
                     return (index, error_value.to_string());
                 }
-                // Clear the per-minute window between requests.
                 fixture.db().execute("UPDATE requests SET at = at - 61000", []).unwrap();
             }
             panic!("no limit refused");
@@ -2169,7 +2043,6 @@ mod tests {
         let (at, message) = refused_at(Limits { app_per_day: 2, ..base.clone() }, &distinct, false).await;
         assert_eq!(at, 2);
         assert!(message.contains("This app"), "{message}");
-        // Two apps of one creator share the creator's allowance.
         let (at, message) = refused_at(Limits { creator_per_day: 3, ..base.clone() }, &distinct, true).await;
         assert_eq!(at, 3);
         assert!(message.contains("creator"), "{message}");
@@ -2184,19 +2057,15 @@ mod tests {
     #[tokio::test]
     async fn requests_on_one_app_do_not_use_up_an_address_on_another_and_a_64_is_one_client() {
         let fixture = fixture_with(Scripted::new(), Limits { recipient_per_minute: 100, ..Limits::default() }).await;
-        // Ten recoveries for an address with no account on one app send
-        // nothing, yet they reach that app's day limit for the address.
         for _ in 0..10 {
             accounts::recover_app(&fixture.state, &fixture.app, "victim@example.test", CLIENT).await.unwrap();
             fixture.db().execute("UPDATE requests SET at = at - 61000", []).unwrap();
         }
         let blocked = accounts::recover_app(&fixture.state, &fixture.app, "victim@example.test", CLIENT).await;
         assert!(matches!(&blocked, Err(AuthError::MailLimit(message)) if message.contains("today")), "{blocked:?}");
-        // The same person can still sign up on another app the same day.
         fixture.signup(&fixture.other, "victim@example.test").await.unwrap();
         assert_eq!(fixture.jobs().len(), 1);
 
-        // Addresses inside one IPv6 /64 share the client limit.
         let limited = fixture_with(Scripted::new(), Limits { recipient_per_minute: 100, client_per_hour: 2, ..Limits::default() }).await;
         let mut refused = None;
         for index in 0..3u16 {
@@ -2216,8 +2085,6 @@ mod tests {
         let transport = Scripted::new();
         let fixture = fixture(transport.clone()).await;
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
-        // The Kernel stops before the worker runs. A new queue on the same
-        // data directory, as after a restart, finds the job and sends it.
         let restarted = queue_in(&fixture.root, transport.clone(), Limits::default());
         restarted.run_preflight().await;
         assert_eq!(restarted.run_once().await.unwrap(), 1);
@@ -2227,8 +2094,6 @@ mod tests {
         assert_eq!(again.run_once().await.unwrap(), 0);
         assert_eq!(transport.sent().len(), 1, "an accepted job is never sent again");
 
-        // A job claimed by a worker that stopped mid-send stays leased until
-        // the lease runs out, so a second worker does not send it alongside.
         fixture.signup(&fixture.other, "second@example.test").await.unwrap();
         let claimed = again.claim().unwrap();
         assert_eq!(claimed.len(), 1);
@@ -2256,7 +2121,6 @@ mod tests {
         assert_eq!(fixture.jobs()[0].1, "accepted");
     }
 
-    // -- Provider events ------------------------------------------------------
 
     fn sign(secret: &[u8], id: &str, timestamp: i64, body: &str) -> String {
         use base64::Engine;
@@ -2314,23 +2178,18 @@ mod tests {
         let (status, body) = event(&fixture, "msg_1", "email.delivered", &provider_id, None).await;
         assert_eq!((status, body["duplicate"].clone()), (StatusCode::OK, json!(false)));
         assert_eq!(fixture.jobs()[0].1, "delivered");
-        // A replay of the same event is recorded once and changes nothing.
         let updated: i64 = fixture.db().query_row("SELECT updated_at FROM jobs", [], |row| row.get(0)).unwrap();
         let (status, body) = event(&fixture, "msg_1", "email.delivered", &provider_id, None).await;
         assert_eq!((status, body["duplicate"].clone()), (StatusCode::OK, json!(true)));
         let after: i64 = fixture.db().query_row("SELECT updated_at FROM jobs", [], |row| row.get(0)).unwrap();
         assert_eq!(updated, after);
-        // Out of order: a late `email.sent` and a later bounce do not undo delivery.
         event(&fixture, "msg_0", "email.sent", &provider_id, None).await;
         event(&fixture, "msg_2", "email.bounced", &provider_id, None).await;
         assert_eq!(fixture.jobs()[0].1, "delivered");
         let events: i64 = fixture.db().query_row("SELECT COUNT(*) FROM provider_events", [], |row| row.get(0)).unwrap();
         assert_eq!(events, 3);
-        // Delivery is not verification.
         assert_eq!(fixture.account_state(&fixture.app, "person@example.test").as_deref(), Some("pending"));
 
-        // An event that arrives before the worker records the provider ID
-        // applies once it does.
         fixture.signup(&fixture.other, "second@example.test").await.unwrap();
         let job = fixture.jobs()[1].0.clone();
         event(&fixture, "msg_early", "email.bounced", &format!("provider-{job}"), None).await;
@@ -2348,11 +2207,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    // -- Resend over HTTP ------------------------------------------------------
 
-    /// A local stand-in for Resend: `POST /emails` keeps one email per
-    /// `Idempotency-Key` and answers with the status in `fail` when set;
-    /// `GET /domains` lists one domain with `domain_status`.
     #[derive(Clone, Default)]
     struct FakeResend {
         requests: Arc<SyncMutex<Vec<(String, Value)>>>,
@@ -2423,9 +2278,6 @@ mod tests {
         assert!(requests[0].1["text"].as_str().unwrap().contains("http://tasks.localhost/_konae/account#verification="));
         assert_eq!(provider_id.as_deref(), fake.emails.lock().unwrap().get(&id).map(String::as_str));
 
-        // The Kernel stopped after Resend accepted the email and before the
-        // queue recorded it. The restarted worker repeats the request with
-        // the same key, and Resend answers with the same email.
         let (nonce, sealed) = fixture.queue().key.seal(&id, "http://tasks.localhost/_konae/account#verification=x").unwrap();
         fixture
             .db()
@@ -2487,10 +2339,7 @@ mod tests {
         assert!(matches!(transport.send(&email).await, SendOutcome::Accepted { provider_id: Some(_), delivered: false }));
     }
 
-    // -- SMTP -------------------------------------------------------------------
 
-    /// A minimal SMTP server on loopback that accepts one session per
-    /// connection and keeps each DATA payload.
     async fn fake_smtp() -> (Arc<SyncMutex<Vec<String>>>, u16) {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let received = Arc::new(SyncMutex::new(Vec::new()));
@@ -2551,13 +2400,11 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert!(messages[0].contains(&format!("Message-ID: <{}@mail.example.test>", job.0)), "{}", messages[0]);
         assert!(messages[0].contains("Subject: Confirm your email for"));
-        // Plain SMTP is refused for anything but loopback.
         assert!(SmtpTransport::new("smtp.example.test", 25, SmtpTls::None, None).is_err());
         let closed = SmtpTransport::new("127.0.0.1", 9, SmtpTls::None, None).unwrap();
         assert!(matches!(closed.preflight("no-reply@mail.example.test").await, PreflightResult::Refused(_)));
     }
 
-    // -- Templates, secrets, restore ---------------------------------------------
 
     #[test]
     fn templates_escape_the_app_name_and_strip_line_breaks() {
@@ -2690,10 +2537,7 @@ mod tests {
         assert_eq!((job.1.as_str(), job.4.as_deref(), job.5), ("failed", Some("restored"), false));
     }
 
-    // -- Notices (ADR-0012) ----------------------------------------------------
 
-    /// Two app accounts, one that answered a link and one that did not. The
-    /// owner's address is the Deployment's contact email, which `deployment` sets.
     fn notice_accounts(fixture: &Fixture) {
         Connection::open(crate::layout::identity(&fixture.root, &fixture.app.id))
             .unwrap()
@@ -2726,7 +2570,6 @@ mod tests {
         super::super::notify::record(&fixture.state, &fixture.app, name, &program.actions[name], &input, caller, changed).await;
     }
 
-    /// The `notify` lines of the app's Usage, by name.
     fn notice_usage(fixture: &Fixture) -> Vec<(String, i64)> {
         super::super::usage::flush();
         let db = Connection::open(crate::layout::usage(&fixture.root, &fixture.app.id)).unwrap();
@@ -2777,8 +2620,6 @@ mod tests {
         super::super::notify::record(&fixture.state, &fixture.app, "tasks.remind", &program.actions["tasks.remind"], &json!({}), caller, changed).await;
     }
 
-    /// ADR-0012: a column of account IDs reaches each verified account of
-    /// this Deployment with its own rows, and never an address a row holds.
     #[tokio::test]
     async fn a_column_notice_reaches_each_verified_account_with_only_its_rows() {
         let transport = Scripted::new();
@@ -2846,7 +2687,6 @@ mod tests {
     #[tokio::test]
     async fn a_notice_without_a_proven_address_stores_nothing_and_says_why() {
         let fixture = fixture(Scripted::new()).await;
-        // A Deployment published without a contact email has nowhere to send.
         let program = notice_program();
         let without = Deployment { contact_email: None, ..fixture.app.clone() };
         let changed = super::super::notify::Changed { count: 1, rows: &[], now: 0 };
@@ -2898,16 +2738,13 @@ mod tests {
         };
         let fixture = fixture_with(Scripted::new(), limits).await;
         notice_accounts(&fixture);
-        // Two to the actor, then the recipient's day is used up.
         for _ in 0..3 {
             notify(&fixture, "bookings.create", json!({"room": "Oak"}), Some("ana")).await;
         }
-        // One to the owner, then the app's day of notices is used up.
         for _ in 0..2 {
             notify(&fixture, "alerts.raise", json!({"title": "x"}), None).await;
         }
         assert_eq!(fixture.jobs().len(), 3);
-        // Signup on the same app still has its own two account emails.
         fixture.signup(&fixture.app, "one@example.test").await.unwrap();
         fixture.signup(&fixture.app, "two@example.test").await.unwrap();
         assert!(matches!(fixture.signup(&fixture.app, "three@example.test").await, Err(AuthError::MailLimit(_))));
@@ -2921,7 +2758,6 @@ mod tests {
             ]
         );
 
-        // The creator's notices and the installation's total.
         let creator = fixture_with(Scripted::new(), Limits { notify_owner_per_day: 1, ..Limits::default() }).await;
         notice_accounts(&creator);
         notify(&creator, "alerts.raise", json!({"title": "x"}), None).await;

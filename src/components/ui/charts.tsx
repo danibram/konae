@@ -1,17 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
-/**
- * Charts of the design system. One rule runs through all of them: the colour
- * of a series follows its position in `--ds-s1` to `--ds-s5`, never its rank,
- * and every value a pointer can reach is also a focusable mark or a table row.
- */
 
 const number = new Intl.NumberFormat("en");
 export const formatNumber = (value: number) => number.format(value);
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 const seriesColor = (index: number) => `var(--ds-s${(index % 5) + 1})`;
 
-/** The smallest 1, 2 or 5 times a power of ten that is at least `value`. */
 export function niceMax(value: number) {
   if (value <= 1) return 1;
   const power = 10 ** Math.floor(Math.log10(value));
@@ -24,32 +18,22 @@ function ticksFor(max: number) {
 
 export type ChartPoint = {
   key: string;
-  /** What the tooltip and the axis call this point. */
   label: string;
   value: number;
-  /** A breakdown of `value`. A bar stacks it; a tooltip lists it. */
   parts?: Record<string, number>;
 };
 
 type BarChartProps = {
   title: string;
-  /** The unit a tooltip and the table name, as "page views". */
   unit: string;
   points: ChartPoint[];
   partLabel?: (part: string) => string;
-  /** Stack each bar by its parts, one series colour per part in first-seen order. */
   stacked?: boolean;
-  /** A fixed colour for a part whose meaning is a status, as a failure. The rest follow the series order. */
   partColor?: (part: string) => string | undefined;
   empty: string;
-  /** Label of the first column of the table view. */
   keyHeading?: string;
 };
 
-/**
- * Counts as bars. Each column is focusable, its tooltip lists the parts, and
- * the same numbers sit in a table under the chart.
- */
 export function BarChart({ title, unit, points, partLabel = (part) => part, stacked = false, partColor, empty, keyHeading = "Day" }: BarChartProps) {
   const [active, setActive] = useState<number | null>(null);
   const total = points.reduce((sum, point) => sum + point.value, 0);
@@ -113,10 +97,8 @@ export type LineSeries = { id: string; label: string; values: number[] };
 type LineChartProps = {
   title: string;
   unit: string;
-  /** One label per x position, shared by every series. */
   labels: string[];
   series: LineSeries[];
-  /** Fill the first series down to the baseline. */
   area?: boolean;
   height?: number;
   empty: string;
@@ -124,10 +106,6 @@ type LineChartProps = {
 
 const MARGIN = { top: 10, right: 12, bottom: 24, left: 40 };
 
-/**
- * One to five series over shared x positions. A crosshair follows the pointer
- * and the arrow keys; the plot is one tab stop and the values also sit in a table.
- */
 export function LineChart({ title, unit, labels, series, area = false, height = 200, empty }: LineChartProps) {
   const [ref, width] = useWidth();
   const [active, setActive] = useState<number | null>(null);
@@ -190,7 +168,6 @@ export function LineChart({ title, unit, labels, series, area = false, height = 
 
 export type Slice = { id: string; label: string; value: number };
 
-/** Shares of one whole, at most five slices; a sixth belongs in "Other" before it gets here. */
 export function DonutChart({ title, unit, slices, empty, center }: { title: string; unit: string; slices: Slice[]; empty: string; center?: ReactNode }) {
   const [active, setActive] = useState<number | null>(null);
   const shown = slices.slice(0, 5);
@@ -224,7 +201,6 @@ export function DonutChart({ title, unit, slices, empty, center }: { title: stri
   </figure>;
 }
 
-/** A trend with no axes, for a stat tile. The tile's text carries the number. */
 export function Sparkline({ values, label }: { values: number[]; label: string }) {
   const width = 96;
   const height = 28;
@@ -243,26 +219,17 @@ export type BarRow = {
   key: string;
   label: ReactNode;
   value: number;
-  /** Words after the figure, as a share of a quota. */
   detail?: ReactNode;
-  /** A row past a limit the reader must notice. The detail says why in words. */
   tone?: "warning" | "danger";
 };
 
-/**
- * Ranked horizontal bars on one baseline, largest first, one hue. Every row
- * prints its figure, so nothing hides behind a hover, and the bars compare
- * parts more exactly than a donut's slices.
- */
 export function BarList({ title, rows, format = formatNumber, total, empty, labelHeading = "Name", unit }: {
   title: string;
   rows: BarRow[];
   format?: (value: number) => string;
-  /** The figure the caption shows. The sum of the rows when absent. */
   total?: number;
   empty: string;
   labelHeading?: string;
-  /** What a value counts, for screen readers, as "actions". */
   unit: string;
 }) {
   const sorted = [...rows].sort((a, b) => b.value - a.value);

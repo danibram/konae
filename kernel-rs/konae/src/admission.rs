@@ -1,35 +1,15 @@
-//! Owner admission: who may create an owner account on this installation.
-//!
-//! The operator issues invitation codes from the server with the Kernel
-//! executable. A code is single use, expires, and is stored in
-//! `owners.sqlite` as a SHA-256 hash next to the accounts, so one transaction
-//! consumes the code and creates the pending creator.
-//!
-//! The installation key creates the first creator on an empty store and
-//! nothing else. Once any code has been issued it creates no account at all,
-//! so a leaked key never opens creator signup. The one allowance is the
-//! development key on an installation that permits it: while no code exists
-//! it keeps creating local accounts, because local development and the
-//! browser tests sign up a fresh owner per run. The Kernel refuses to listen
-//! off loopback with that key unless the operator sets
-//! `KONAE_ALLOW_DEFAULT_KEY=1`.
 
 use super::*;
 use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
-/// A code expires after 14 days unless the operator chooses otherwise.
 const DEFAULT_TTL_SECONDS: i64 = 14 * 24 * 60 * 60;
 const MIN_TTL_SECONDS: i64 = 60 * 60;
 const MAX_TTL_SECONDS: i64 = 90 * 24 * 60 * 60;
 const MAX_NOTE_CHARS: usize = 200;
-/// Crockford's base32 alphabet: no I, L, O or U, so a code read aloud or
-/// copied by hand survives.
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-/// 25 symbols carry 125 random bits.
 const CODE_SYMBOLS: usize = 25;
-/// The longest `returnTo` an emailed link carries.
 const MAX_RETURN_BYTES: usize = 4096;
 
 pub(crate) const CODE_REFUSED: &str =
@@ -39,16 +19,12 @@ pub(crate) const CODE_REQUIRED: &str =
 const KEY_REFUSED: &str =
     "A valid installation setup key is required to create the first owner.";
 
-/// How a signup request asks to be admitted.
 #[derive(Clone)]
 pub(crate) enum Admission {
-    /// An invitation code, held as its hash.
     Code(String),
-    /// The installation key. `development` is true for the default local key.
     SetupKey { development: bool },
 }
 
-/// Which admission the signup forms should ask for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
     SetupKey,
@@ -86,7 +62,6 @@ fn hash_code(normalized: &str) -> String {
 }
 
 /// Uppercases, drops separators and maps the letters Crockford's base32
-/// reads as digits. Returns `None` for anything that cannot be a code.
 fn normalize_code(raw: &str) -> Option<String> {
     let mut code = String::with_capacity(CODE_SYMBOLS);
     for character in raw.chars() {
@@ -109,7 +84,6 @@ fn new_code() -> Result<String> {
     SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| anyhow::anyhow!("The system random source failed."))?;
-    // 256 is a multiple of 32, so taking each byte modulo 32 is uniform.
     let symbols: Vec<char> = bytes.iter().map(|byte| ALPHABET[(byte % 32) as usize] as char).collect();
     Ok(symbols.chunks(5).map(|group| group.iter().collect::<String>()).collect::<Vec<_>>().join("-"))
 }
@@ -122,9 +96,6 @@ fn owners_path(root: &Path) -> PathBuf {
     root.join("owners.sqlite")
 }
 
-/// Reads the admission a signup body asks for. A non-empty `code` wins over
-/// `setupKey`. A wrong key is refused here, with a message that names the
-/// key only while the key can still create the first creator.
 pub(crate) fn read(state: &Konae, body: &Value) -> std::result::Result<Admission, AuthError> {
     let code = body["code"].as_str().unwrap_or("");
     if !code.trim().is_empty() {
@@ -142,11 +113,6 @@ pub(crate) fn read(state: &Konae, body: &Value) -> std::result::Result<Admission
     }))
 }
 
-/// The check that runs inside the signup transaction. It receives the
-/// creator the request created or re-linked, or `None` when the email
-/// already has an active or suspended account. A code is consumed in every
-/// accepted case, so its holder cannot use it to probe for existing
-/// accounts; it records a creator only when one was created or re-linked.
 pub(crate) fn admit(
     admission: Admission,
 ) -> impl FnOnce(&Connection, Option<&str>) -> std::result::Result<(), AuthError> + Send + 'static {
@@ -329,12 +295,8 @@ fn run(root: &Path, args: &[String], now: i64) -> Result<String> {
     }
 }
 
-/// Opens the creator store, creating it on a fresh installation so a code
-/// can be issued before anyone has signed up.
 fn open_store(root: &Path) -> Result<Connection> {
     std::fs::create_dir_all(root)?;
-    // Installs the schema without applying a verification mode, so a shell
-    // without the Kernel's KONAE_ACCOUNT_VERIFICATION changes nothing.
     AuthService::open(owners_path(root))?;
     let connection = Connection::open(owners_path(root))?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -416,7 +378,6 @@ fn revoke(root: &Path, id: &str, now: i64) -> Result<String> {
     }
 }
 
-/// Reads `36h` or `14d`, between one hour and 90 days.
 fn parse_duration(value: &str) -> Result<i64> {
     let invalid = || anyhow::anyhow!("--expires-in takes hours or days, such as 36h or 14d, from 1h to 90d.");
     let (number, unit) = value.split_at(value.len().saturating_sub(1));
@@ -431,11 +392,9 @@ fn parse_duration(value: &str) -> Result<i64> {
     Ok(seconds)
 }
 
-/// A UTC time as `2026-11-20 14:00Z`.
 fn timestamp(seconds: i64) -> String {
     let days = seconds.div_euclid(86_400);
     let in_day = seconds.rem_euclid(86_400);
-    // Howard Hinnant's civil_from_days.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -487,7 +446,6 @@ mod tests {
     }
 
     impl Fixture {
-        /// Issues a code as the operator command does, `ttl` seconds from now.
         fn code(&self, ttl: i64) -> (String, String) {
             let (id, code, _) = create(&self.root, "test", ttl, now_seconds()).unwrap();
             (id, code)
@@ -506,8 +464,6 @@ mod tests {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap();
-            // A fresh rate-limit window per call, so the sign-in limits
-            // never decide a test.
             let mut state = self.state.clone();
             state.kernel.guards = Arc::new(Guards::new(Vec::new()));
             mcp::owner_signup(State(state), request).await
@@ -593,7 +549,6 @@ mod tests {
         assert!(fixture.cli(&["owner-code-create", "--note", "two\nlines"]).is_err());
         assert!(fixture.cli(&["owner-code-list", "extra"]).is_err());
 
-        // A code issued with a past clock lists as expired.
         create(&fixture.root, "", MIN_TTL_SECONDS, now_seconds() - 2 * MIN_TTL_SECONDS).unwrap();
         assert!(fixture.cli(&["owner-code-list"]).unwrap().contains("\texpired\t"));
     }
@@ -602,7 +557,6 @@ mod tests {
     fn operator_commands_leave_the_kernels_verification_mode_alone() {
         let fixture = fixture(Verification::Required, KEY);
         super::owners::creator_store(&fixture.state).unwrap();
-        // The operator's shell does not set KONAE_ACCOUNT_VERIFICATION.
         fixture.cli(&["owner-code-create"]).unwrap();
         fixture.cli(&["owner-code-list"]).unwrap();
         let recorded: String = Connection::open(owners_path(&fixture.root))
@@ -622,7 +576,6 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(mode(&fixture.state), Mode::Code);
 
-        // The key is now refused, and the refusal does not mention it.
         let (status, text) = message(fixture.signup(json!({"email": "second@example.test", "password": PASSWORD, "setupKey": KEY})).await).await;
         assert_eq!((status, text.as_str()), (StatusCode::FORBIDDEN, CODE_REQUIRED));
         let (_, text) = message(fixture.signup(json!({"email": "second@example.test", "password": PASSWORD, "setupKey": "wrong"})).await).await;
@@ -632,7 +585,6 @@ mod tests {
 
     #[tokio::test]
     async fn once_a_code_exists_the_installation_key_creates_no_account() {
-        // Even on an empty store: issuing a code ends the key's signup path.
         let fixture = fixture(Verification::Required, KEY);
         let (id, _) = fixture.code(DEFAULT_TTL_SECONDS);
         assert_eq!(mode(&fixture.state), Mode::Code);
@@ -640,7 +592,6 @@ mod tests {
         assert_eq!((status, text.as_str()), (StatusCode::FORBIDDEN, CODE_REQUIRED));
         assert!(!text.to_lowercase().contains("key"));
         assert_eq!((fixture.accounts(), fixture.sent()), (0, 0));
-        // Revoking every code does not reopen it.
         fixture.cli(&["owner-code-revoke", &id]).unwrap();
         assert_eq!(fixture.signup(json!({"email": "first@example.test", "setupKey": KEY})).await.status(), StatusCode::FORBIDDEN);
     }
@@ -690,7 +641,6 @@ mod tests {
     #[tokio::test]
     async fn a_code_admits_one_creator_who_verifies_without_the_key() {
         let fixture = fixture(Verification::Required, KEY);
-        // An operator who bootstrapped with the key, then opened admission.
         fixture.signup(json!({"email": "operator@example.test", "setupKey": KEY})).await;
         fixture.verify(&fixture.last_link()).unwrap();
         let (id, code) = fixture.code(DEFAULT_TTL_SECONDS);
@@ -707,7 +657,6 @@ mod tests {
         assert!(fixture.cli(&["owner-code-list"]).unwrap().contains("ada@example.test (active)"));
         assert!(fixture.cli(&["owner-code-revoke", &id]).unwrap_err().to_string().contains("owner-account-suspend"));
 
-        // The same code is refused for anyone else, and creates nothing.
         let again = fixture.signup(json!({"email": "eve@example.test", "code": code})).await;
         assert_eq!(message(again).await, (StatusCode::FORBIDDEN, CODE_REFUSED.to_owned()));
         assert_eq!(fixture.accounts(), 2);
@@ -720,13 +669,11 @@ mod tests {
         let signup = fixture.signup(json!({"email": "ada@example.test", "password": PASSWORD, "code": code})).await;
         assert_eq!(signup.status(), StatusCode::OK);
         assert!(signup.headers().get(header::SET_COOKIE).is_some());
-        // A taken email rolls the transaction back and keeps the code usable.
         let (_, other) = fixture.code(DEFAULT_TTL_SECONDS);
         let taken = fixture.signup(json!({"email": "ada@example.test", "password": PASSWORD, "code": other})).await;
         assert_eq!(taken.status(), StatusCode::CONFLICT);
         let next = fixture.signup(json!({"email": "bob@example.test", "password": PASSWORD, "code": other})).await;
         assert_eq!(next.status(), StatusCode::OK);
-        // Without a valid code, a taken email and a new one get the same refusal.
         for email in ["ada@example.test", "nobody@example.test"] {
             let guessed = fixture.signup(json!({"email": email, "password": PASSWORD, "code": "00000-00000-00000-00000-00000"})).await;
             assert_eq!(message(guessed).await, (StatusCode::FORBIDDEN, CODE_REFUSED.to_owned()), "{email}");
@@ -745,7 +692,6 @@ mod tests {
             assert_eq!(message(response).await, (StatusCode::FORBIDDEN, CODE_REFUSED.to_owned()), "{code}");
         }
         assert_eq!((fixture.accounts(), fixture.sent()), (0, 0));
-        // A code wins over a key sent with it, so a bad code is not rescued by the key.
         let (_, text) = message(fixture.signup(json!({"email": "eve@example.test", "code": revoked, "setupKey": KEY})).await).await;
         assert_eq!(text, CODE_REFUSED);
     }
@@ -792,7 +738,6 @@ mod tests {
         let back: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
         assert_eq!(back, vec![("returnTo".to_owned(), consent.to_owned())]);
         assert!(parsed.fragment().unwrap().starts_with("verification="));
-        // The verified creator holds the session the consent page asks for.
         let session = fixture.verify(&link).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("localhost"));

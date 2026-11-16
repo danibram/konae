@@ -1,19 +1,3 @@
-//! Where each part of an app lives under the Kernel's data directory.
-//!
-//! An app is one folder, `apps/<id>/`, laid out the way `konae init` writes
-//! it and an export hands it over:
-//!
-//! ```text
-//! apps/<id>/
-//!   konae.json   name, visibility, Signup Policy, sign-in methods, contact email, Kernel version
-//!   app/         the saved sources: pages, actions.json, schema.sql
-//!   dist/        the built static files the Kernel serves
-//!   data/        database.sqlite, identity.sqlite, usage.sqlite, files/, secrets.sqlite
-//!   .konae/      what this installation keeps and never hands over
-//! ```
-//!
-//! The app's ID names the folder and its Deployment. Every path into it
-//! goes through this module.
 
 use std::path::{Path, PathBuf};
 

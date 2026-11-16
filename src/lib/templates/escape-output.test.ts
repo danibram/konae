@@ -6,7 +6,6 @@ import { applyTemplate, templateChoices, type TemplateId } from "./index";
 
 const born = (id: TemplateId) => applyTemplate({ ...cloneStarter(), id: "app_escape_test", name: "Test", slug: "test" }, id);
 
-/** The escapeHtml a template's app.js defines, compiled on its own. */
 function templateEscape(source: string): (value: unknown) => string {
   const match = source.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
   if (!match) throw new Error("app.js defines no escapeHtml");
@@ -50,7 +49,6 @@ describe("a template escapes text it writes into HTML", () => {
     const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => (...values: unknown[]) => Promise<void>;
     await new AsyncFunction("document", "miniapp", born("gallery").files["app.js"] as string)(document, miniapp);
     const html = elements.get("#photos")!.innerHTML;
-    // Every quote a value carried is an entity, so no attribute can start from a title, a file id or a URL.
     expect(html).not.toContain(`" style=`);
     expect(html).not.toContain(`" onload=`);
     expect(html).not.toContain(`" onerror=`);

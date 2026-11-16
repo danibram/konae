@@ -4,7 +4,6 @@ import { parseServerActionSource } from "../kernel/actions";
 import { checkActionContract, generateActionContract, programFromContract, renderActionContractMarkdown, type ActionContract } from "./action-contract";
 import { runConformance, type ConformanceTarget, type RouteRequest } from "./action-conformance";
 
-// An app with one route per provider scheme, each reading a nested body through fields.
 const actionsSource = JSON.stringify({
   version: 1,
   actions: {
@@ -44,11 +43,6 @@ function contract(): ActionContract {
   return generateActionContract({ actionsSource, schemaSource }).contract;
 }
 
-/**
- * A backend that verifies each scheme as the provider's documentation says,
- * with node:crypto rather than the signer the runner uses, and reads inputs
- * from the paths the contract names.
- */
 function providerBackend(subject: ActionContract): ConformanceTarget {
   const seen = new Set<string>();
   const hmac = (key: string | Buffer, message: string, encoding: "hex" | "base64") => createHmac("sha256", key).update(message).digest(encoding);
@@ -112,7 +106,6 @@ describe("a route in a provider's scheme", () => {
     expect(emails.http!.signature).toMatchObject({ scheme: "svix", headers: ["svix-id", "svix-timestamp", "svix-signature"], windowSeconds: 300 });
     expect(issues.http!.fields).toEqual({ id: "$.issue.node_id", title: "$.issue.title" });
     expect(issues.http!.input).toContain("id is read from $.issue.node_id, title is read from $.issue.title, and the body's other keys are left out");
-    // A body-only MAC has no time to be stale, and a route with fields never answers an undeclared key.
     const messages = (action: typeof issues) => action.errors.map((error) => error.message);
     expect(messages(issues)).not.toContain("stale-timestamp");
     expect(messages(payments)).toContain("stale-timestamp");
@@ -148,7 +141,6 @@ describe("a route in a provider's scheme", () => {
       async route(request) {
         if (request.path !== "/hooks/github") return honest.route!(request);
         const answer = await honest.route!(request);
-        // Reads the top-level key, as a route without fields does: the nested body has none.
         return answer.status === 200 ? { status: 400, body: { error: "Missing action input: id" } } : answer;
       },
     };

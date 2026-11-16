@@ -19,20 +19,16 @@ import { message, signedOut, useConfirm } from "./useConfirm";
 import "./app-access.css";
 
 type Props = {
-  /** Secrets belong to the project; the app's Google client is two of them. */
   projectId?: string;
   deploymentId?: string;
   visibility: DeploymentVisibility;
   onSetVisibility?: (visibility: DeploymentVisibility) => void;
-  /** False when the caller shows who can open the app elsewhere, as the editor's Rules do. */
   openAccess?: boolean;
-  /** Changes each time the invite field should take the cursor, as Deploy's "Invite people" asks. */
   inviteFocus?: number;
 };
 
 const PAGE = 25;
 
-/** What a change that waits for Deploy says, wherever it is made. */
 export const appliesOnDeploy = "It applies to the live app when you deploy.";
 
 export function OpenAccessFields({ visibility, onSetVisibility }: Pick<Props, "visibility" | "onSetVisibility">) {
@@ -55,7 +51,6 @@ function SignedOut() {
   return <p className="access-note">Sign in with <a href={platformAccessHref(window.location.pathname)}>owner sign-in</a> to manage this app's accounts.</p>;
 }
 
-/** App accounts, invitations and who may join, for the published app. Owners only. */
 export function AppUsersView({ projectId, deploymentId, visibility, onSetVisibility, openAccess = true, inviteFocus = 0 }: Props) {
   const [mail, setMail] = useState<MailStatus | null>(null);
   const [mailError, setMailError] = useState("");
@@ -174,12 +169,6 @@ function SignupPolicyControl({ deploymentId, onSignedOut, onSaved }: { deploymen
   </>;
 }
 
-/**
- * Continue with Google on the sign-in page. The owner makes a Google OAuth
- * client for this app in their own Google console, registers the redirect
- * URIs shown here, pastes its client ID and secret, and turns Google on.
- * The switch stays off until both halves are set, as the Kernel refuses it.
- */
 function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: string; deploymentId: string; onSignedOut: () => void }) {
   const [methods, setMethods] = useState<SignInMethods | null>(null);
   const [clientId, setClientId] = useState("");
@@ -190,7 +179,6 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
   const [status, setStatus] = useState("");
   const pending = useLoadingHold(!methods && !error);
 
-  // The Kernel checks the values; the card shows its sentence by the field it is about.
   const fail = useCallback((cause: unknown, saving?: GoogleField) => {
     if (signedOut(cause)) { onSignedOut(); return; }
     const refused = googleRefusal(cause, saving);
@@ -227,7 +215,6 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
       setStatus("Saved. Konae keeps the values and never shows them again.");
     } catch (cause) {
       fail(cause, saving);
-      // A client ID saved before the secret was refused still counts.
       if (saving === "clientSecret") readSignInMethods(deploymentId).then(setMethods, () => {});
     } finally {
       setSaving(false);
@@ -303,7 +290,6 @@ function GoogleSignIn({ projectId, deploymentId, onSignedOut }: { projectId: str
 function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOut, focusRequest = 0 }: { deploymentId: string; mailReady: boolean; mailReason: string; onInvited: () => void; onSignedOut: () => void; focusRequest?: number }) {
   const [text, setText] = useState("");
   const fieldRef = useRef<HTMLTextAreaElement>(null);
-  // Two frames, so a dialog that just closed has handed focus back before the field takes it.
   useEffect(() => {
     if (!focusRequest) return;
     let frame = requestAnimationFrame(() => {
@@ -323,14 +309,11 @@ function InviteForm({ deploymentId, mailReady, mailReason, onInvited, onSignedOu
 
   const invite = async () => {
     if (!mailReady || sending || batch.emails.length === 0 || batch.tooMany) return;
-    // The same addresses after a failed call keep their key, so a retry
-    // creates and sends nothing twice.
     const next = batchKey(pending, batch.emails);
     setPending(next);
     setSending(true);
     setError("");
     try {
-      // Sorted, so a retry after reordering lines sends the arguments its key was made for.
       const answer = await createAppInvitations(deploymentId, [...batch.emails].sort(), next.key);
       setResults(answer.results);
       setPending(null);
@@ -415,7 +398,6 @@ function InvitationList({ deploymentId, mailReady, mailReason, changed, onChange
 
   const resend = async (invitation: AppInvitation) => {
     if (!mailReady) return;
-    // One key per invitation until the resend succeeds, so a retry sends one email.
     const key = resending[invitation.invitationId] ?? `resend-${crypto.randomUUID()}`;
     setResending((current) => ({ ...current, [invitation.invitationId]: key }));
     setNotice("");
@@ -490,7 +472,6 @@ const stateFilters: Array<{ value: "" | AppUserState; label: string }> = [
 
 function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: string; changed: number; onSignedOut: () => void }) {
   const [filter, setFilter] = useState<"" | AppUserState>("");
-  // Each entry is the cursor that opens a page; the first page has none.
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [rows, setRows] = useState<AppUser[] | null>(null);
   const accountsPending = useLoadingHold(!rows);
@@ -525,7 +506,6 @@ function AccountList({ deploymentId, changed, onSignedOut }: { deploymentId: str
     }
   };
 
-  // The tab opens before the call, so the browser treats it as the click's own window.
   const enter = async (user: AppUser) => {
     const tab = window.open("", "_blank");
     try {

@@ -8,10 +8,8 @@ import { sourceFilesFrom } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { extractVerifiedPulledData, readPulled } from "./pull";
 
-/** Evidence returned after the Kernel imports the immutable snapshot from pull. */
 export type RehearsalEvidence = { snapshotId: string; candidateSourceDigest: string; sourceBaselineDigest: string | null; sourceBaselineRevision: number | null; snapshotDigest: string; packageId: string };
 
-/** Starts and stops the Kernel once so operator commands can address the scratch Deployment. */
 export async function bootLocalKernel(kernel: { binary: string; env: Record<string, string | undefined> }) {
   const server = Bun.spawn([kernel.binary], { env: { ...kernel.env, KONAE_KERNEL_PORT: "0" }, stdout: "pipe", stderr: "pipe" });
   let output = "";
@@ -34,13 +32,11 @@ export async function bootLocalKernel(kernel: { binary: string; env: Record<stri
   }
 }
 
-/** Creates the local Deployment record, then imports the snapshot through the Kernel operator. */
 export async function importWithLocalKernel(kernel: { binary: string; env: Record<string, string | undefined>; run(args: string[]): Promise<string> }, snapshot: string, confirmation?: string) {
   await bootLocalKernel(kernel);
   return kernel.run(["import", snapshot, ...(confirmation ? ["--confirm-schema", confirmation] : [])]);
 }
 
-/** Copies current app sources and build into scratch, then imports the immutable pulled data. */
 export async function rehearsePulledSnapshot(root: string, settings: AppSettings, importSnapshot: (appFolder: string, snapshotFolder: string) => Promise<unknown>): Promise<RehearsalEvidence> {
   const pulled = await readPulled(root);
   if (!pulled) throw Error("Run konae pull before rehearse so the exact published snapshot is available.");

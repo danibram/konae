@@ -9,15 +9,9 @@ type Props = {
   ownerSession: OwnerSession;
 };
 
-/**
- * The owner's way around: Projects and Usage, and the account at the foot.
- * A wide screen draws it as a rail on the left; a narrow one as a bar on top,
- * with the two links as tabs and the account behind its avatar.
- */
 export function WorkspaceNav({ active, projectCount, ownerSession }: Props) {
   const accessHref = platformAccessHref(window.location.pathname);
   const initials = ownerInitials(ownerSession);
-  // The component gallery is public. Signed-in owners reach it by address, not from the nav.
   const showDesignSystemLink = ownerSession.state !== "signed-in" && ownerSession.state !== "checking";
   const signedIn = ownerSession.state === "signed-in";
   const accountLabel = signedIn ? `Owner account, ${ownerSession.email ?? "signed in"}` : "Owner sign-in";

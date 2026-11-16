@@ -1,15 +1,3 @@
-//! A path address: an app answers on `<domain>/p/<id>`, and on
-//! `<domain>/p/<name>` when it is named (docs/adr/0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md).
-//!
-//! The owner turns the path on with `path_set`. The state lives in
-//! `apps/<id>/.konae/path.json`, next to `domain.json`. The Kernel keeps the
-//! enabled ids and names in memory, so `deployment_for_segment` answers the
-//! router without a file read. Every path and the home share the origin
-//! `<domain>`, so an app with accounts, or a private app, needs the owner's
-//! `acceptSharedOrigin` before its path turns on. `has_accounts` decides that.
-//!
-//! An export carries the path's state and the name, never the id. The
-//! destination keeps the name when it is free there.
 
 use super::path_name::check_name;
 use super::refusal::{refuse, Refusal};
@@ -35,8 +23,6 @@ pub fn prefix(headers: &HeaderMap) -> Option<&str> {
 
 pub const RECORD_FILE: &str = "path.json";
 
-/// The path a Deployment holds. A name stays on the record while the path
-/// is off, and only an enabled name holds it on the installation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
@@ -48,8 +34,6 @@ pub struct Record {
     pub accept_shared_origin: bool,
 }
 
-/// The path a package carries. It holds the owner's decision about this app,
-/// never the Deployment id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Carried {
@@ -60,11 +44,7 @@ pub struct Carried {
     pub accept_shared_origin: bool,
 }
 
-// ---------------------------------------------------------------------------
-// The index of enabled ids and names
 
-/// Enabled ids and names to their Deployment, per data directory, so tests
-/// with their own data directories in one process do not see each other's.
 type Index = HashMap<String, String>;
 static INDEXES: OnceLock<Mutex<HashMap<PathBuf, Index>>> = OnceLock::new();
 
@@ -89,8 +69,6 @@ fn load_index(root: &Path) -> Index {
             continue;
         };
         if record.enabled {
-            // Two folders cannot both hold a name on a healthy volume; a
-            // hand-edited one keeps the first name read.
             index.entry(id.clone()).or_insert_with(|| id.clone());
             if let Some(name) = record.name {
                 index.entry(name).or_insert_with(|| id.clone());
@@ -110,15 +88,12 @@ pub fn deployment_for_segment(state: &AppState, segment: &str) -> Option<String>
 /// with `path_set` like any other name, before anyone else does.
 pub const HOME_NAME: &str = "konae-home";
 
-// ---------------------------------------------------------------------------
-// Resolution and the router
 
 /// The host name of `<domain>`, lowercased, or `None` without `KONAE_DOMAIN`.
 pub fn path_host(state: &AppState) -> Option<String> {
     url::Url::parse(state.path_origin.as_deref()?).ok()?.host_str().map(str::to_ascii_lowercase)
 }
 
-/// The host name a request names, with its port removed.
 fn request_host(headers: &HeaderMap) -> Option<String> {
     let host = headers.get(header::HOST)?.to_str().ok()?;
     url::Url::parse(&format!("http://{host}")).ok()?.host_str().map(str::to_ascii_lowercase)
@@ -178,7 +153,6 @@ pub async fn route(State(state): State<AppState>, mut request: Request, next: Ne
         }
         return next.run(request).await;
     };
-    // An unknown segment passes through, so the routes answer the normal not-found.
     let Some(id) = resolution.deployment_id else {
         return next.run(request).await;
     };
@@ -230,16 +204,12 @@ pub fn foreign_referer(state: &AppState, headers: &HeaderMap, deployment_id: &st
     deployment_for_segment(state, &segment).is_some_and(|holder| holder != deployment_id)
 }
 
-// ---------------------------------------------------------------------------
-// Records
 
 pub fn read_record(state: &AppState, id: &str) -> Option<Record> {
     let bytes = std::fs::read(crate::layout::private(&state.data_root, id).join(RECORD_FILE)).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Writes or removes the record and moves the index to match. Callers hold
-/// the `paths` lock.
 async fn write_record(state: &AppState, id: &str, record: Option<&Record>) -> Result<()> {
     let path = crate::layout::private(&state.data_root, id).join(RECORD_FILE);
     let previous = read_record(state, id);
@@ -267,7 +237,6 @@ async fn write_record(state: &AppState, id: &str, record: Option<&Record>) -> Re
     Ok(())
 }
 
-/// Turns a Deployment's path on with the owner's acceptance, for other modules' tests.
 #[cfg(any(test, feature = "testing"))]
 pub async fn turn_on_for_test(state: &AppState, id: &str, name: Option<&str>) {
     let record = Record { enabled: true, name: name.map(str::to_owned), accept_shared_origin: true };
@@ -295,15 +264,11 @@ fn actions_need_accounts(actions: &str) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Refusals
 
-/// Another enabled Deployment holds the name. The message never says who.
 fn taken(name: &str) -> Refusal {
     refuse("path.taken", format!("{name} is taken on this installation. Choose another name, such as spring-menu."))
 }
 
-/// The risk of a shared origin, in the words the owner reads before accepting.
 fn shared_origin(domain: &str) -> Refusal {
     refuse(
         "path.shared-origin",
@@ -313,13 +278,10 @@ fn shared_origin(domain: &str) -> Refusal {
     )
 }
 
-/// The domain a path answers on, from `<scheme>://<domain>[:port]`.
 fn domain_of(origin: &str) -> String {
     url::Url::parse(origin).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_else(|| origin.to_owned())
 }
 
-/// Refuses a name another enabled Deployment holds. A name nobody has enabled
-/// is free, and a Deployment that holds it stays the holder.
 async fn ensure_free(state: &AppState, id: &str, name: &str) -> std::result::Result<(), Refusal> {
     let holder = with_index(state, |index| index.get(name).filter(|holder| holder.as_str() != id).cloned());
     match holder {
@@ -328,11 +290,7 @@ async fn ensure_free(state: &AppState, id: &str, name: &str) -> std::result::Res
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tools
 
-/// The state the owner reads. Addresses are listed only while the path is on
-/// and the installation names a domain.
 fn view(state: &AppState, id: &str, record: Option<Record>) -> Value {
     let record = record.unwrap_or_default();
     let mut addresses = Vec::new();
@@ -381,14 +339,12 @@ async fn set(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Val
     let enabled = a["enabled"].as_bool().context("enabled must be true or false.")?;
     let _paths = database_lock(state, "paths").await;
     let previous = read_record(state, &deployment.id).unwrap_or_default();
-    // An omitted name keeps the stored one; a null name removes it and keeps the path on or off as asked.
     let name = match a.get("name") {
         Some(Value::String(raw)) => Some(check_name(raw)?),
         Some(Value::Null) => None,
         _ => previous.name.clone(),
     };
     let accept_shared_origin = a["acceptSharedOrigin"].as_bool().unwrap_or(previous.accept_shared_origin);
-    // A name only holds the installation while its path is on, so turning a path off never refuses.
     if let (true, Some(name)) = (enabled, &name) {
         ensure_free(state, &deployment.id, name).await?;
     }
@@ -403,8 +359,6 @@ async fn set(state: &AppState, deployment: &Deployment, a: &Value) -> Result<Val
     Ok(view(state, &deployment.id, Some(record)))
 }
 
-// ---------------------------------------------------------------------------
-// Packages
 
 /// The path a package carries, or none when the Deployment has no path record.
 pub fn for_package(state: &AppState, id: &str) -> Option<Carried> {
@@ -452,7 +406,6 @@ pub async fn arrive(state: &AppState, deployment: &Deployment, carried: Option<&
 mod tests {
     use super::*;
 
-    /// The refusals a case file names, asserted with the words the Kernel gives.
     #[test]
     fn refusals_are_given_with_the_words_and_codes_the_case_file_names() {
         let file: Value = serde_json::from_str(include_str!("path-state-cases.json")).unwrap();
@@ -477,7 +430,6 @@ mod tests {
         }
     }
 
-    /// A folder for a Deployment that holds a path record, without a Deployment behind it.
     async fn folder(state: &AppState, id: &str) {
         tokio::fs::create_dir_all(crate::layout::data(&state.data_root, id)).await.unwrap();
     }
@@ -504,7 +456,6 @@ mod tests {
         tool(state, id, "path_set", args).await
     }
 
-    /// Only enabled ids and names answer, and a disabled path frees its name.
     #[tokio::test]
     async fn a_segment_answers_only_while_its_path_is_on() {
         let root = std::env::temp_dir().join(format!("konae-path-segment-{}", Uuid::new_v4()));
@@ -524,24 +475,20 @@ mod tests {
         write_record(&state, "d1", Some(&Record { enabled: false, name: Some("spring-menu".into()), accept_shared_origin: true })).await.unwrap();
         assert_eq!(deployment_for_segment(&state, "d1"), None);
         assert_eq!(deployment_for_segment(&state, "spring-menu"), None);
-        // The freed name can be taken by the other Deployment.
         write_record(&state, "d2", Some(&Record { enabled: true, name: Some("spring-menu".into()), accept_shared_origin: false })).await.unwrap();
         assert_eq!(deployment_for_segment(&state, "spring-menu").as_deref(), Some("d2"));
 
-        // A rebuilt index, as after a restart, holds the same answers.
         assert_eq!(load_index(&root).get("spring-menu").map(String::as_str), Some("d2"));
         assert_eq!(load_index(&root).get("d1"), None);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// Only a private app, one with signup not Closed, or one with a non-anonymous action has accounts.
     #[tokio::test]
     async fn an_app_has_accounts_when_it_is_private_open_or_calls_a_non_anonymous_action() {
         let root = std::env::temp_dir().join(format!("konae-path-accounts-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root, Some("https://konae.es"));
         let app = publish(&state, "plain").await;
-        // Public, signup Open by default: accounts.
         assert_eq!(app.signup_policy.mode, SignupMode::Open);
         assert!(has_accounts(&app));
 
@@ -574,7 +521,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The owner's words for the path, and what each tool answers on the way.
     #[tokio::test]
     async fn path_set_checks_the_name_the_domain_and_the_shared_origin_before_it_writes() {
         let root = std::env::temp_dir().join(format!("konae-path-set-{}", Uuid::new_v4()));
@@ -583,7 +529,6 @@ mod tests {
         let notes = publish(&state, "notes").await;
         let other = publish(&state, "other").await;
 
-        // An app with accounts needs the owner's acceptance before the path turns on.
         let refused = set(&state, &notes.id, json!({"enabled": true})).await.unwrap_err();
         let refusal = crate::refusal::of(&refused).expect("path_set refuses with a code");
         assert_eq!(refusal.code, "path.shared-origin");
@@ -591,24 +536,20 @@ mod tests {
         assert!(read_record(&state, &notes.id).is_none(), "a refused call writes nothing");
         assert_eq!(deployment_for_segment(&state, &notes.id), None);
 
-        // Accepted, the path answers on the id and the name.
         let on = set(&state, &notes.id, json!({"enabled": true, "name": "Spring-Menu", "acceptSharedOrigin": true})).await.unwrap();
         assert_eq!(on["name"], "spring-menu");
         assert_eq!(on["addresses"], json!([format!("https://konae.es/p/{}", notes.id), "https://konae.es/p/spring-menu"]));
         assert_eq!(deployment_for_segment(&state, "spring-menu").as_deref(), Some(notes.id.as_str()));
 
-        // Another app cannot take the name, and the answer does not say who holds it.
         let taken = set(&state, &other.id, json!({"enabled": true, "name": "spring-menu", "acceptSharedOrigin": true})).await.unwrap_err();
         let refusal = crate::refusal::of(&taken).expect("path_set refuses with a code");
         assert_eq!(refusal.code, "path.taken");
         assert_eq!(refusal.message, "spring-menu is taken on this installation. Choose another name, such as spring-menu.");
         assert!(!refusal.message.contains(&notes.id));
 
-        // A bad name is refused with the rule's code, before anything is written.
         let bad = set(&state, &other.id, json!({"enabled": false, "name": "app"})).await.unwrap_err();
         assert_eq!(crate::refusal::of(&bad).map(|r| r.code), Some("path.reserved"));
 
-        // Turning the path off frees the name for the other app.
         let off = set(&state, &notes.id, json!({"enabled": false})).await.unwrap();
         assert_eq!(off["name"], "spring-menu", "the name stays on the record");
         assert_eq!(off["addresses"], json!([]));
@@ -616,18 +557,15 @@ mod tests {
         let other_on = set(&state, &other.id, json!({"enabled": true, "name": "spring-menu", "acceptSharedOrigin": true})).await.unwrap();
         assert_eq!(other_on["addresses"].as_array().unwrap().len(), 2);
 
-        // Turning the first back on finds the name held.
         let back = set(&state, &notes.id, json!({"enabled": true})).await.unwrap_err();
         assert_eq!(crate::refusal::of(&back).map(|r| r.code), Some("path.taken"));
 
-        // A null name drops the name and leaves the path on.
         let unnamed = set(&state, &other.id, json!({"enabled": true, "name": null})).await.unwrap();
         assert_eq!((unnamed["enabled"].clone(), unnamed["name"].clone()), (json!(true), Value::Null));
         assert_eq!(unnamed["addresses"], json!([format!("https://konae.es/p/{}", other.id)]));
         assert_eq!(unnamed["domainConfigured"], json!(true));
         assert_eq!(deployment_for_segment(&state, "spring-menu"), None);
 
-        // path_read shows the stored state; path_clear forgets it.
         let read = tool(&state, &other.id, "path_read", json!({})).await.unwrap();
         assert_eq!((read["enabled"].clone(), read["acceptSharedOrigin"].clone()), (json!(true), json!(true)));
         let cleared = tool(&state, &other.id, "path_clear", json!({})).await.unwrap();
@@ -638,7 +576,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// Without KONAE_DOMAIN the path has no address, so turning it on is refused.
     #[tokio::test]
     async fn an_installation_without_a_domain_reads_the_path_but_does_not_turn_it_on() {
         let root = std::env::temp_dir().join(format!("konae-path-nodomain-{}", Uuid::new_v4()));
@@ -653,7 +590,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// A package carries the path without the id, and the destination keeps a free name only.
     #[tokio::test]
     async fn a_package_keeps_a_free_name_and_says_what_it_dropped() {
         let root = std::env::temp_dir().join(format!("konae-path-arrive-{}", Uuid::new_v4()));
@@ -666,7 +602,6 @@ mod tests {
         let wire = serde_json::to_value(&carried).unwrap();
         assert_eq!(wire, json!({"enabled": true, "name": "spring-menu", "acceptSharedOrigin": true}), "no id travels");
 
-        // The name is taken on the destination: the import keeps the path on, drops the name, and says so.
         let mut arriving = notes.clone();
         arriving.id = "arriving".into();
         folder(&state, "arriving").await;
@@ -677,14 +612,12 @@ mod tests {
         assert_eq!(read_record(&state, "arriving"), Some(Record { enabled: true, name: None, accept_shared_origin: true }));
         assert_eq!(deployment_for_segment(&state, "arriving").as_deref(), Some("arriving"));
 
-        // A name the rules refuse is dropped the same way.
         let mut invalid = carried.clone();
         invalid.name = Some("app".into());
         let notices = arrive(&state, &arriving, Some(&invalid)).await.unwrap();
         assert!(notices[0].contains("is not valid here"), "{notices:?}");
         assert!(notices[0].contains("app is reserved"), "{notices:?}");
 
-        // A path without the acceptance stays off on an app with accounts, and keeps its free name.
         let mut unaccepted = carried.clone();
         unaccepted.name = Some("fresh-menu".into());
         unaccepted.accept_shared_origin = false;
@@ -696,10 +629,8 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The host an installation's path addresses answer on.
     const PATH_HOST: &str = "konae.es";
 
-    /// One request through the Kernel's stack, as `main` serves it.
     async fn call(state: &AppState, method: &str, host: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Response {
         use tower::ServiceExt;
         let mut builder = Request::builder().method(method).uri(path).header(header::HOST, host);
@@ -719,8 +650,6 @@ mod tests {
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
-    /// A state for a Kernel on `https://konae.es`, with two apps whose
-    /// paths are on. The first answers as `spring-menu`, the second as `winter-menu`.
     async fn two_path_apps(root: &Path) -> (AppState, Deployment, Deployment) {
         let state = test_state(root, Some("https://konae.es"));
         let first = publish(&state, "spring").await;
@@ -736,8 +665,6 @@ mod tests {
         root
     }
 
-    /// The path address serves the app under its id and its name, and the
-    /// routes answer under the prefix with the Deployment they belong to.
     #[tokio::test]
     async fn a_path_address_serves_the_app_and_its_routes_under_the_prefix() {
         let root = scratch("serve").await;
@@ -768,7 +695,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// An unknown segment, and an empty one, answer the normal not-found.
     #[tokio::test]
     async fn an_unknown_segment_answers_not_found() {
         let root = scratch("unknown").await;
@@ -782,8 +708,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// `/p/<segment>` without a slash redirects, keeping the query, so the
-    /// relative URLs of the page resolve under the prefix.
     #[tokio::test]
     async fn a_bare_address_redirects_to_its_slash_form_and_keeps_the_query() {
         let root = scratch("redirect").await;
@@ -797,8 +721,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The app whose path holds the name `konae-home` answers `/` and every
-    /// other non-prefix path. Without one, `/` answers the normal not-found.
     #[tokio::test]
     async fn the_app_named_konae_home_answers_the_root_of_the_path_host() {
         let root = scratch("home").await;
@@ -813,13 +735,11 @@ mod tests {
         assert_eq!(get(&state, "/api/count").await.status(), 200, "a non-prefix path belongs to the home");
         assert_eq!(get(&state, "/p/konae-home/").await.status(), 200, "the home keeps its path address");
 
-        // Turning the path off takes the home away again.
         set(&state, &first.id, json!({"enabled": false})).await.unwrap();
         assert_eq!(get(&state, "/").await.status(), 404);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// A path address gets the app policy and the installation's HSTS.
     #[tokio::test]
     async fn a_path_address_gets_the_app_policy() {
         let root = scratch("policy").await;
@@ -833,7 +753,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// Only the runtime checks a Referer, and only for another app's path.
     #[tokio::test]
     async fn the_runtime_refuses_a_referer_from_another_apps_path() {
         let root = scratch("referer").await;
@@ -863,8 +782,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The session cookie on a path address names its Deployment, and the
-    /// login page on a path address redirects under the prefix.
     #[tokio::test]
     async fn the_session_cookie_on_a_path_address_names_its_deployment() {
         let root = scratch("cookie").await;
@@ -898,8 +815,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// A generated hostname answers as it did, with its own cookie and policy,
-    /// and a client-sent resolution header does not move it to another app.
     #[tokio::test]
     async fn a_generated_hostname_behaves_as_before() {
         let root = scratch("generated").await;
@@ -915,7 +830,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, host.parse().unwrap());
         assert_eq!(crate::app_cookie_name(&state, &first.id, &headers), "__Host-konae_app_session");
-        // A path address is not a path on a generated host.
         assert_ne!(call(&state, "GET", &host, "/p/spring-menu/", &[], "").await.status(), 200);
         let _ = tokio::fs::remove_dir_all(root).await;
     }

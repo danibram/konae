@@ -1,16 +1,3 @@
-/**
- * The workshop layout: a tree of tabbed groups.
- *
- * The model follows the one every large editor converged on. A *stack* is a
- * group of panels shown as tabs, one active at a time; a *split* arranges
- * stacks (or other splits) in a direction with parallel sizes. Dropping a panel
- * on the middle of a stack adds a tab; dropping it on an edge splits. Opening a
- * panel that is already somewhere reveals it instead of duplicating it.
- *
- * Pure data and pure transforms: no React, no DOM, no knowledge of what a panel
- * contains. Every operation is total, because this state is also read back from
- * localStorage where an older or hand-edited value can turn up.
- */
 
 export type PanelId = "explorer" | "code" | "data" | "files" | "auth" | "activity" | "preview" | "agent";
 
@@ -19,37 +6,25 @@ export type SplitNode = {
   type: "split";
   direction: "row" | "column";
   children: LayoutNode[];
-  /** Percentages parallel to `children`, summing to 100. */
   sizes: number[];
 };
 export type LayoutNode = StackNode | SplitNode;
 
 export type LayoutState = {
   root: LayoutNode | null;
-  /** Panels not on screen. They are closed, not destroyed: opening restores them. */
   closed: PanelId[];
-  /** Where a newly opened panel lands: the stack holding this one. */
   focused: PanelId | null;
-  /** Where each closed panel was, so reopening it puts it back instead of into a tab. */
   homes?: Partial<Record<PanelId, Home>>;
 };
 
-/** Middle of a stack means "add a tab"; an edge means "split there". */
 export type Side = "left" | "right" | "top" | "bottom";
 export type DropZone = Side | "center";
 export type Placement = {
   target: PanelId;
   zone: DropZone;
-  /**
-   * Where a "center" drop lands relative to `target`. A tab strip is a list, so
-   * "join this group" is not enough to say what the owner aimed at: dropping on
-   * the left half of a tab must put the panel before it, and only `before` can
-   * express the first position at all.
-   */
   before?: boolean;
 };
 
-/** A remembered slot, with the placement to restore and, for an edge, the share it had. */
 export type Home = Placement & { size?: number };
 
 export const panelIds: PanelId[] = ["explorer", "code", "data", "files", "auth", "activity", "preview", "agent"];
@@ -65,18 +40,8 @@ export const panelLabels: Record<PanelId, string> = {
   agent: "Describe",
 };
 
-/** What the stage can show, in the order the section nav lists them. */
 export const stagePanels: PanelId[] = ["preview", "agent", "code", "data", "auth", "files", "activity"];
 
-/**
- * The workbench as a stage. Files has a column of its own on the left, and one
- * group on the right holds every other panel, showing the chosen one. The
- * membership of both never changes, so choosing a section only switches a tab:
- * no panel unmounts, and the preview keeps running behind Data or Access. While
- * Files is not chosen the right group shows it, and the shell hides the Files
- * column; while Files is chosen the right group shows the preview beside it.
- * With `rail`, Describe lives outside the stage, beside it.
- */
 export function stageLayout(active: PanelId, { rail, codeShare = 50 }: { rail: boolean; codeShare?: number }): LayoutState {
   const rest = stagePanels.filter((panel) => panel !== "code" && !(rail && panel === "agent"));
   const shown = active === "code" || !rest.includes(active) ? "preview" : active;
@@ -88,10 +53,8 @@ export function stageLayout(active: PanelId, { rail, codeShare = 50 }: { rail: b
   };
 }
 
-/** Panels that behave like documents: opening one goes to the focused group. */
 export const editorPanels: PanelId[] = ["code", "data", "files", "auth", "activity"];
 
-/** The smallest share a panel may be squeezed to, as a percentage of its split. */
 export const minShare = 8;
 
 export function stack(panels: PanelId[], active = 0): StackNode {
@@ -132,7 +95,6 @@ export function panelsIn(node: LayoutNode | null): PanelId[] {
   return node.type === "stack" ? [...node.panels] : node.children.flatMap(panelsIn);
 }
 
-/** The active tab of every group, which is what the owner can actually see. */
 export function visiblePanels(node: LayoutNode | null): PanelId[] {
   if (!node) return [];
   if (node.type === "stack") {
@@ -161,7 +123,6 @@ export function nodeAt(node: LayoutNode | null, path: number[]): LayoutNode | nu
   return current;
 }
 
-/** Removes a panel, dropping any group left empty and collapsing lone splits. */
 function detach(node: LayoutNode | null, panel: PanelId): LayoutNode | null {
   if (!node) return null;
   if (node.type === "stack") {
@@ -194,10 +155,6 @@ function mapStack(node: LayoutNode, panel: PanelId, replace: (stack: StackNode) 
   return { ...node, children: node.children.map((child) => mapStack(child, panel, replace)) };
 }
 
-/**
- * Drops `panel` onto `placement.target`: as a tab when the zone is the middle,
- * as a new group beside it when the zone is an edge.
- */
 export function movePanel(state: LayoutState, panel: PanelId, placement: Placement): LayoutState {
   if (panel === placement.target) return state;
   const withoutPanel = detach(state.root, panel);
@@ -219,11 +176,6 @@ export function movePanel(state: LayoutState, panel: PanelId, placement: Placeme
   return { ...state, root, closed, focused: panel };
 }
 
-/**
- * Reveals a panel: if it is already somewhere it becomes the active tab of its
- * group, otherwise it opens as a tab in the focused group. Splitting stays an
- * explicit gesture, exactly as in the editors this model comes from.
- */
 export function openPanel(state: LayoutState, panel: PanelId): LayoutState {
   const path = stackPathOf(state.root, panel);
   if (path) {
@@ -248,10 +200,6 @@ export function openPanel(state: LayoutState, panel: PanelId): LayoutState {
   return movePanel(rest, panel, { target: host, zone: "center" });
 }
 
-/**
- * Where a panel goes when it has no remembered slot, or its slot's neighbour is
- * gone too. Editor panels have none, so they open as a tab in the focused group.
- */
 const defaultHomes: Partial<Record<PanelId, Home>> = {
   explorer: { target: "preview", zone: "left", size: 18 },
   code: { target: "preview", zone: "left", size: 32 },
@@ -259,7 +207,6 @@ const defaultHomes: Partial<Record<PanelId, Home>> = {
   agent: { target: "preview", zone: "right", size: 36 },
 };
 
-/** Puts `panel` back beside `home.target`, or returns null when the target is not on screen. */
 function restoreAt(state: LayoutState, panel: PanelId, home: Home): LayoutState | null {
   if (home.target === panel) return null;
   const path = stackPathOf(state.root, home.target);
@@ -267,8 +214,6 @@ function restoreAt(state: LayoutState, panel: PanelId, home: Home): LayoutState 
   if (home.zone === "center") return movePanel(state, panel, home);
 
   const axis = sideAxis[home.zone];
-  // The nearest split along the same axis takes the panel as a sibling, so a
-  // reopened sidebar gets its old width back instead of half of its neighbour.
   for (let depth = path.length - 1; depth >= 0; depth -= 1) {
     const parentPath = path.slice(0, depth);
     const parent = nodeAt(state.root, parentPath);
@@ -289,7 +234,6 @@ function restoreAt(state: LayoutState, panel: PanelId, home: Home): LayoutState 
   return movePanel(state, panel, home);
 }
 
-/** Where a panel sits now, described against a neighbour that stays on screen. */
 function homeOf(root: LayoutNode | null, panel: PanelId): Home | null {
   const path = stackPathOf(root, panel);
   const group = path ? nodeAt(root, path) : null;
@@ -315,7 +259,6 @@ function homeOf(root: LayoutNode | null, panel: PanelId): Home | null {
   return null;
 }
 
-/** The panel whose group receives a newly opened one. */
 function hostPanelFor(state: LayoutState): PanelId | null {
   const open = panelsIn(state.root);
   if (open.length === 0) return null;
@@ -339,16 +282,10 @@ export function closePanel(state: LayoutState, panel: PanelId): LayoutState {
   };
 }
 
-/** The layout a new workshop starts with, for when an owner wants it back. */
 export function resetLayout(): LayoutState {
   return defaultLayout();
 }
 
-/**
- * Folds a panel away, or brings it back. "Back" means visible: a panel that is
- * open but behind another tab is revealed, not closed and reopened somewhere
- * else — the fold is about what the owner can see.
- */
 export function togglePanel(state: LayoutState, panel: PanelId): LayoutState {
   return visiblePanels(state.root).includes(panel) ? closePanel(state, panel) : openPanel(state, panel);
 }
@@ -357,7 +294,6 @@ export function isOpen(state: LayoutState, panel: PanelId): boolean {
   return panelsIn(state.root).includes(panel);
 }
 
-/** True when the panel is the one its group is currently showing. */
 export function isVisible(state: LayoutState, panel: PanelId): boolean {
   return visiblePanels(state.root).includes(panel);
 }
@@ -369,13 +305,6 @@ export function activateTab(state: LayoutState, path: number[], index: number): 
   return { ...state, root: writeNode(state.root, path, next), focused: next.panels[next.active] ?? state.focused };
 }
 
-/**
- * Drags the handle between children `index` and `index + 1`: `share` is the
- * first one's portion of the pair, and every other child of the split keeps its
- * size exactly. The floor is applied here, against the pair, because a share
- * that would put a neighbour under it has to stop at the neighbour — leaving it
- * to `shareOut` pays the difference out of children the gesture never touched.
- */
 export function resizeSplit(state: LayoutState, path: number[], index: number, share: number): LayoutState {
   const node = nodeAt(state.root, path);
   if (!state.root || !node || node.type !== "split") return state;
@@ -399,11 +328,6 @@ export function setSizes(state: LayoutState, path: number[], sizes: number[]): L
   return { ...state, root: writeNode(state.root, path, { ...node, sizes: shareOut(sizes) }) };
 }
 
-/**
- * Turns raw sizes into percentages summing to 100 with no child below the
- * floor. The floor has to be applied after normalising, not before, or dividing
- * by the new total pushes small children straight back under it.
- */
 function shareOut(sizes: number[]): number[] {
   if (sizes.length === 0) return [];
   const floor = Math.min(minShare, 100 / sizes.length);
@@ -431,14 +355,8 @@ function writeNode(root: LayoutNode, path: number[], node: LayoutNode): LayoutNo
   };
 }
 
-/** Layouts written before panels were tabbed; kept so an upgrade never wipes one. */
 const renamed: Record<string, PanelId> = { workbench: "code", database: "data" };
 
-/**
- * Repairs anything read from storage: unknown panels are dropped, a panel that
- * appears twice keeps its first place, and a panel the stored layout never heard
- * of is closed rather than lost.
- */
 export function normalizeLayout(value: unknown): LayoutState {
   if (!value || typeof value !== "object") return defaultLayout();
   const input = value as Record<string, unknown>;
@@ -544,11 +462,6 @@ export function saveLayout(state: LayoutState, storage: Pick<Storage, "setItem">
   }
 }
 
-/**
- * Which drop zone a pointer is over: the middle of a group means "tab", the
- * outer band means "split on that side". The band is a quarter of each axis,
- * which is wide enough to hit without aiming.
- */
 export function dropZoneAt(
   box: { left: number; top: number; width: number; height: number },
   x: number,

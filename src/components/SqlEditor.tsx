@@ -40,7 +40,6 @@ export function SqlEditor({ value, schema, onChange, onExecute }: Props) {
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
           }),
-          // The dark reading surface matches the code editor; popups use the design tokens.
           EditorView.theme({
             "&": { height: "100%", backgroundColor: "#20232b", color: "#dce0e9", fontSize: "11px" },
             ".cm-content": { caretColor: "#a4abff", fontFamily: "var(--ds-mono)", padding: "12px 0" },

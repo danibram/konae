@@ -1,7 +1,3 @@
-// Reads an app folder, as the editor's Export writes it in a tar, back into
-// what `project_import` takes. The sources go as a release payload, and the
-// data as the export's manifest and parts. It is the inverse of export-project.ts and
-// `dataEntries` in app-folder.ts.
 import { checksum, encodeBase64 } from "../mcp/client";
 import { sourceFilesFrom, type SourceFiles } from "./source-files";
 import { skippedName } from "./source-rules";
@@ -11,17 +7,13 @@ import { createTar, readTar } from "./tar";
 
 export type ImportedFolder = {
   settings: AppSettings;
-  /** The files of `app/`, by path inside it, as text or as base64 that `encodings` names. */
   sources: SourceFiles;
-  /** The files of `dist/`, by path inside it. */
   dist: Record<string, Uint8Array>;
-  /** Each data component as the bytes a package upload carries. */
   data: Partial<Record<PackageComponentName, Uint8Array>>;
 };
 
 const text = new TextDecoder("utf-8", { fatal: true });
 
-/** Reads the tar. The folder may sit at the archive's root or in one top folder, as Export names it. */
 export function readAppFolder(archive: Uint8Array): ImportedFolder {
   const entries = readTar(archive);
   const top = entries.find((entry) => entry.path === SETTINGS_FILE || entry.path.endsWith(`/${SETTINGS_FILE}`) && entry.path.split("/").length === 2);
@@ -30,7 +22,6 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
   const inside = new Map(entries.filter((entry) => entry.path.startsWith(prefix)).map((entry) => [entry.path.slice(prefix.length), entry.contents]));
   const settings = JSON.parse(text.decode(inside.get(SETTINGS_FILE)!)) as AppSettings;
   const under = (folder: string) => [...inside].filter(([path]) => path.startsWith(`${folder}/`)).map(([path, contents]) => [path.slice(folder.length + 1), contents] as const);
-  // Like konae publish, the sources leave out dot entries and node_modules at any depth.
   const sources = sourceFilesFrom(under(SOURCES_FOLDER).filter(([path]) => !path.split("/").some(skippedName)));
   const dist = Object.fromEntries(under(DIST_FOLDER));
   const data: ImportedFolder["data"] = {};
@@ -41,7 +32,6 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
   const files = new Map(under(`${DATA_FOLDER}/files`));
   const index = files.get("index.json");
   if (index) {
-    // The files component is index.json, then each file's bytes in index order.
     const listed = JSON.parse(text.decode(index)) as { id: string }[];
     data.files = createTar([{ path: "index.json", contents: index }, ...listed.map(({ id }) => {
       const blob = files.get(`${id}.blob`);
@@ -52,7 +42,6 @@ export function readAppFolder(archive: Uint8Array): ImportedFolder {
   return { settings, sources, dist, data };
 }
 
-/** The release payload for the folder's sources, published under the app's own ID and visibility. */
 export function sourcesPayload(folder: ImportedFolder, project: { id: string; name: string; slug: string }, visibility: "public" | "private") {
   if (!folder.dist["index.html"]) throw new Error(`The folder has no ${DIST_FOLDER}/index.html. Build it before importing its sources.`);
   const files: Record<string, string> = {};
@@ -67,11 +56,6 @@ export function sourcesPayload(folder: ImportedFolder, project: { id: string; na
   };
 }
 
-/**
- * The manifest of the folder's data, with each component's size and SHA-256.
- * An import into an existing app keeps that app's Signup Policy and sign-in
- * methods, so the manifest names neither.
- */
 export async function dataManifest(folder: ImportedFolder, projectId: string): Promise<PackageManifest> {
   if (!folder.data.database) throw new Error(`The folder has no ${dataPaths.database}, so it carries no data to import.`);
   const contents: PackageContent[] = [];

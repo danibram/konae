@@ -27,7 +27,7 @@ A crawler gets an app's built files as they are. The same page answers on the ge
 - The canonical URL is the chosen address and the page's path without `.html`, with `/` for `index.html` and no query string.
 - A page without a `<title>` is served with `noindex` and left out of the sitemap. `modules_read` lists it. No publish is refused for it.
 - In `spa` routing, the answer for a path the artifact does not hold carries `noindex`.
-- The Kernel answers `/robots.txt` when the artifact holds none, and `/sitemap.xml` when the artifact holds none, each on its own. The sitemap lists every listed page with its absolute canonical URL. The Kernel's `robots.txt` names the sitemap, and an app that ships its own `robots.txt` names it there.
+- The Kernel answers `/robots.txt` when the artifact holds none, and `/sitemap.xml` when the artifact holds none, each on its own. The sitemap lists every listed page with its absolute canonical URL. The Kernel's `robots.txt` names the sitemap. When an app's `robots.txt` has no `Sitemap:` line, the Kernel adds one that points to `/sitemap.xml` at the canonical address.
 - The validator of a page changes with the release, the module's options and the chosen address.
 
 ### The page says what it is about

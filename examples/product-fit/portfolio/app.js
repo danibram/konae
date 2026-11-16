@@ -1,8 +1,5 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 const reason = (error) => error?.message === 'rate-limited' ? 'Too many requests just now. Wait a few seconds and try again.'
   : error instanceof TypeError && /fetch|network|load failed/i.test(error.message) ? 'The app could not reach its server. Check the connection and try again.'
   : error?.message ?? String(error);
@@ -12,9 +9,6 @@ $('#who').textContent = signedIn ? `Signed in as ${session.name}.` : '';
 $('#editor').hidden = !signedIn;
 async function render() {
   const pieces = await miniapp.actions.call('pieces.list');
-  // The uploaded photo stays private to the potter, so only her own pieces name their file;
-  // a visitor gets no file ID and sees the inline copy. files.url names the file's path,
-  // so the page loads only the photos it shows instead of downloading every file.
   const mine = signedIn ? await miniapp.actions.call('pieces.files') : [];
   const fileOf = new Map(mine.map(p => [p.id, p.file_id]));
   $('#gallery').innerHTML = pieces.map(p => {
@@ -39,7 +33,6 @@ $('#post')?.addEventListener('submit', async (e) => {
     await miniapp.actions.call('pieces.create', { title: $('#title').value.trim(), body: $('#body').value.trim() || '-', fileId: uploaded?.id ?? '-', imageData: inline });
     $('#status').textContent = 'Published.'; e.target.reset(); await render();
   } catch (err) {
-    // A photo whose piece was refused is deleted, so it does not count against the quota.
     if (uploaded) await miniapp.files.delete(uploaded.id).catch(() => {});
     $('#status').textContent = reason(err);
   } finally { button.disabled = false; }

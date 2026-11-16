@@ -5,9 +5,6 @@ import path from "node:path";
 import { McpClient } from "../src/mcp/client";
 import { signRoute } from "../src/lib/route-signature";
 
-// The HTTP module against a real Kernel: routes on a private Deployment and
-// the callers each one takes, signatures, API keys, the file read path, and
-// keys revoked by an import.
 
 setDefaultTimeout(60_000);
 
@@ -209,9 +206,6 @@ describe("HTTP routes", () => {
     const refusedWith = async (headers: Record<string, string>, sent = body) => json(await route("/hooks/orders", { method: "POST", body: sent, headers }));
     expect(await refusedWith({})).toEqual({ status: 401, body: { error: "invalid-signature" } });
     expect(await refusedWith({ "x-signature": await signed(body) }, JSON.stringify({ id: "A-1", total: 99 }))).toEqual({ status: 401, body: { error: "invalid-signature" } });
-    // A stale t has its own answer, whatever the secret, so a sender with a skewed clock can tell.
-    // The Kernel reads its clock after this test does. A t of now + 301 is 300 s ahead once the
-    // request crosses a second, and the Kernel accepts that, so t sits a minute past the window.
     const outside = 300 + 60;
     expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) - outside) })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
     expect(await refusedWith({ "x-signature": await signed(body, Math.floor(Date.now() / 1000) + outside, "another-secret-0123456789") })).toEqual({ status: 401, body: { error: "stale-timestamp" } });
@@ -222,7 +216,6 @@ describe("HTTP routes", () => {
     const header = await signed(body, now, secret, "first");
     expect(await refusedWith({ "x-signature": header })).toEqual({ status: 200, body: { result: { changes: 1, lastInsertId: 1 } } });
     expect(await refusedWith({ "x-signature": header })).toEqual({ status: 409, body: { error: "replayed-signature" } });
-    // A retry in the same second with a new nonce is a new request.
     const retry = await json(await route("/hooks/orders", { method: "POST", body, headers: { "x-signature": await signed(body, now, secret, "retry") } }));
     expect(retry).toEqual({ status: 200, body: { result: { changes: 1, lastInsertId: 2 } } });
     await owner.call("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: "DELETE FROM orders WHERE id = 2" } });
@@ -256,16 +249,13 @@ describe("HTTP routes", () => {
     expect(note.status).toBe(200);
     const rows = await owner.call<{ rows: { owner_id: string }[] }>("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: "SELECT owner_id FROM notes" } });
     expect(JSON.stringify(rows)).toContain(issued.keyId);
-    // A key that names a signed action stands in for the signature.
     const unsigned = JSON.stringify({ id: "K-1", total: 1 });
     expect((await route("/hooks/orders", { method: "POST", body: unsigned, headers: bearer })).status).toBe(200);
     expect(await json(await route("/api/orders", { headers: bearer }))).toEqual({ status: 403, body: { error: "This API key may not call orders.list." } });
     expect(await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }), headers: { authorization: "Bearer lbk_unknown" } })))
       .toEqual({ status: 401, body: { error: "invalid-api-key" } });
-    // On a private Deployment an unsigned route takes a key or a session, and nothing else.
     expect(await json(await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "x" }) })))
       .toEqual({ status: 401, body: { error: "authentication-required" } });
-    // A route whose callers leave out "key" refuses every key, before the action is checked.
     expect(await json(await route("/hooks/void", { method: "POST", body: JSON.stringify({ id: "K-1" }), headers: bearer })))
       .toEqual({ status: 403, body: { error: "This route does not accept API keys." } });
     const listed = await owner.call<{ keys: Record<string, unknown>[] }>("api_keys_list", { projectId: deploymentId });
@@ -282,7 +272,6 @@ describe("HTTP routes", () => {
       route(pathname, { headers: { authorization: `Bearer ${key}`, "x-forwarded-for": address } });
     const statuses: number[] = [];
     for (let i = 0; i < 9; i++) statuses.push((await from("198.18.3.1", `lbk_wrong${i}`)).status);
-    // The file read path shares the bucket.
     statuses.push((await from("198.18.3.1", "lbk_wrong-file", `/_konae/files/${crypto.randomUUID()}`)).status);
     expect(statuses).toEqual(Array(10).fill(401));
     const limited = await from("198.18.3.1", "lbk_wrong-again");
@@ -305,7 +294,6 @@ describe("HTTP routes", () => {
         .toEqual({ status: 401, body: { error: "authentication-required" } });
     }
     expect((await route("/api/notes", { method: "POST", body: JSON.stringify({ body: "forged" }), headers: { cookie, origin: "http://other-app.localhost" } })).status).toBe(401);
-    // A signed route keeps asking the person for its signature.
     expect(await json(await route("/hooks/orders", { method: "POST", body: JSON.stringify({ id: "S-1", total: 1 }), headers: { cookie, "sec-fetch-site": "same-origin" } })))
       .toEqual({ status: 401, body: { error: "invalid-signature" } });
   });
@@ -322,7 +310,6 @@ describe("HTTP routes", () => {
     await expect(member.call("actions_invoke", { name: "orders.list", input: {} }))
       .rejects.toThrow("Action orders.list answers only on its HTTP route, GET /api/orders.");
     expect(await member.call("actions_invoke", { name: "notes.mine", input: {} })).toEqual([{ body: "mine" }]);
-    // The same person reads the unsigned route with the session cookie, from the app's origin.
     expect((await route("/api/orders", { headers: { cookie, "sec-fetch-site": "same-origin" } })).status).toBe(200);
   });
 
@@ -371,7 +358,6 @@ describe("HTTP routes", () => {
 
   test("one owner's two apps cannot share a route secret", async () => {
     await owner.call("project_create", { projectId: "http_routes_copy", name: "HTTP routes copy" });
-    // A signature names no app, so one owner's two projects cannot share a value.
     await expect(owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: secret }))
       .rejects.toThrow("Another of your projects already uses this secret value.");
     await owner.call("secret_set", { projectId: "http_routes_copy", name: "orders_webhook", value: `${secret}_copy` });
@@ -387,12 +373,9 @@ describe("HTTP routes", () => {
       return fetch(input, { ...init, headers });
     } });
     const [mine] = (await owner.call<{ rows: { id: number }[] }>("database_execute", { projectId: deploymentId, operation: "sql", input: { sql: `SELECT id FROM notes WHERE owner_id = '${ana}' LIMIT 1` } })).rows;
-    // The runtime endpoint: a tool error with the guard, then a change that records the Signal with the actor.
     await expect(member.call("actions_invoke", { name: "notes.rename", input: { id: 999_999, body: "not mine" } })).rejects.toThrow("That note is not yours, or it does not exist.");
     expect(await member.call("actions_invoke", { name: "notes.rename", input: { id: mine.id, body: "renamed" } })).toMatchObject({ changes: 1 });
-    // Without a guard a mutation that changes nothing still answers { changes: 0 }, and records no Signal.
     expect(await member.call("actions_invoke", { name: "notes.touch", input: { id: 999_999 } })).toEqual({ changes: 0, lastInsertId: 0 });
-    // The route: 403 with the guard, then a change by the person's session.
     const edit = (id: number, body: string) => route("/api/notes/edit", { method: "POST", body: JSON.stringify({ id, body }), headers: { cookie, "sec-fetch-site": "same-origin" } });
     expect(await json(await edit(999_999, "not mine"))).toEqual({ status: 403, body: { error: "That note is not yours, or it does not exist." } });
     expect((await json(await edit(mine.id, "edited"))).status).toBe(200);
@@ -411,8 +394,6 @@ describe("HTTP routes", () => {
   });
 
   test("anonymous callers share the runtime's rate limit per client address", async () => {
-    // A caller without a key or a session is refused on this private route,
-    // and still counts against its address before the refusal.
     const statuses: number[] = [];
     for (let i = 0; i < 31; i++) {
       statuses.push((await route("/api/orders", { headers: { "x-forwarded-for": "198.18.2.1" } })).status);

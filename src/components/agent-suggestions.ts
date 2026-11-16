@@ -5,11 +5,6 @@ type SuggestionFacts = {
   manifest: { visibility: "public" | "private" };
 };
 
-/**
- * Changes Describe offers before anyone types, each with the test that says the
- * app already does it. actions.json and the manifest are enough to tell, so the
- * list never offers what the app has.
- */
 const candidates: { sentence: string; done: (actions: ServerActionDefinition[], facts: SuggestionFacts) => boolean }[] = [
   {
     sentence: "Let anyone with the link add a row.",

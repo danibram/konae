@@ -1,17 +1,3 @@
-// Probe: a scheduled notice that reaches the people its rows name (ADR-0012),
-// run on `konae dev`, the Kernel a person runs on an app folder on their own
-// machine. Ana and Ben accept invitations the `kernel` binary's invite command
-// sends, which proves their addresses.
-// Ana assigns chores to herself, to Ben, to an email address and to an ID that
-// is no account. The hourly chores.remind runs every 2 seconds here
-// (KONAE_SCHEDULE_MIN_SECONDS), and the development mailbox shows one notice
-// to Ana and one to Ben, each listing only their own chores.
-//
-//   KONAE_PROBE_PORT=20010 bun run examples/probes/notify-rows/replay.ts [--keep <folder>]
-//
-// dev serves its events page on the next port, so that one must be free too.
-// KONAE_KERNEL_BIN names a built `kernel` binary, which dev then runs instead of compiling one.
-// --keep copies the mailbox file to <folder>/mailbox.jsonl as evidence.
 import assert from "node:assert/strict";
 import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -43,7 +29,6 @@ try {
   catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
   await mkdir(appDir(scratch), { recursive: true });
   for (const file of ["index.html", "schema.sql", "actions.json"]) await cp(path.join(import.meta.dir, file), path.join(appDir(scratch), file));
-  // The app starts Invitation only, as konae init writes it.
   const settings: AppSettings = {
     id: "probe_notify_rows", name: "Chores", slug: "chores", visibility: "private",
     signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: { version: 1 },
@@ -67,7 +52,6 @@ try {
     return printed.match(/^(http:\/\/\S+)$/m)?.[1];
   }, 300);
   const host = new URL(appUrl).host;
-  // The same binary and environment dev runs, for the operator commands.
   const kernel = await localKernel(scratch, settings, { port: String(port), build: false });
   const operator = async <T>(args: string[]) => JSON.parse(await kernel.run(args)) as T;
 
@@ -79,7 +63,6 @@ try {
     if (cookie) headers.set("cookie", cookie);
     return fetch(input, { ...init, headers });
   };
-  // Ana and Ben accept invitations the operator sends, which proves their addresses.
   const member = async (email: string) => {
     const invited = await operator<{ results: { status: string }[] }>(["invite", email]);
     assert.equal(invited.results[0].status, "invited");
@@ -121,7 +104,6 @@ try {
   assert(notices.every((mail) => mail.action === "chores.remind"));
 
   const today = new Date().toISOString().slice(0, 10);
-  // The running Kernel writes usage in the background, so the read waits for both notice lines.
   type Events = { summary: { usage: { totals: { kind: string; name: string; count: number }[] } } };
   const lines = await waitFor("notice usage", async () => {
     const events = await operator<Events>(["events", "--from", today, "--to", today]);

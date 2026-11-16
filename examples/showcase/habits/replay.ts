@@ -1,10 +1,3 @@
-// Replays the habits showcase against its own Kernel: verified signup, rows
-// bound to the actor, a day closed by a schedule, an API key on a route,
-// Signals and Usage, a publish from a folder, and a scheduled copy
-// restored into a fresh Kernel. It asserts
-// what works and what each primitive refuses, then removes its Kernel and data.
-//
-//   KONAE_SHOWCASE_PORT=21410 bun run examples/showcase/habits/replay.ts
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -51,7 +44,6 @@ function kernelEnv(data: string, extra: Record<string, string> = {}) {
     KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: data, KONAE_SETUP_KEY: setupKey,
     KONAE_TRUSTED_PROXIES: "127.0.0.1",
     KONAE_ACCOUNT_VERIFICATION: "required", KONAE_MAIL_TRANSPORT: "development",
-    // days.close is declared daily at 00:05 UTC; the test clock runs it every 2 seconds.
     KONAE_SCHEDULE_MIN_SECONDS: "2",
     ...extra,
   };
@@ -80,7 +72,6 @@ async function mailbox(data: string): Promise<Mail[]> {
   const text = await readFile(path.join(data, "mailbox.jsonl"), "utf8").catch(() => "");
   return text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
-/** The mail worker writes the development mailbox after the request returns. */
 async function waitForMail(email: string, seen: number, data = dataDir) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -123,21 +114,16 @@ const utcDay = (offset = 0) => new Date(Date.now() + offset * 86_400_000).toISOS
 try {
   const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
   assert.equal(await build.exited, 0, "The Kernel must compile.");
-  // An app folder whose app/ holds this example's sources.
   const appRoot = path.join(scratch, "habits");
   await mkdir(appDir(appRoot), { recursive: true });
   for (const name of appFiles) await cp(path.join(import.meta.dir, name), path.join(appDir(appRoot), name));
   const sources = await readSources(appRoot);
 
-  // ---------------------------------------------------------------- the Gate
-  // The editor's Validation Gate on sql.js, then the Kernel on release_plan.
   const gate = createCapsuleValidator(() => initSqlJs());
   const passed = await gate.validate({ "schema.sql": sources["schema.sql"], "actions.json": sources["actions.json"] } as never);
   assert.equal(passed.ok, true, JSON.stringify(passed.errors));
   const program = JSON.parse(sources["actions.json"]);
   const streakSql: string = program.actions["habits.streaks"].statement;
-  // Three programs the doors must refuse: the streak without its LIMIT, a
-  // recursive calendar, and a Signal that names an input it does not have.
   const variants: Record<string, (actions: any) => void> = {
     unbounded: (actions) => { actions["habits.streaks"].statement = streakSql.replace(/ LIMIT 20$/, ""); },
     recursive: (actions) => { actions["habits.streaks"].statement = "WITH RECURSIVE d(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM d WHERE n < 7) SELECT n AS day_offset FROM d WHERE ?1 IS NOT NULL AND ?2 IS NOT NULL LIMIT 7"; },
@@ -155,10 +141,8 @@ try {
   assert.equal(gateRefusals.recursive, "Action habits.streaks is a query, so it must start with SELECT. Move the WITH clause into a subquery, as in SELECT ... FROM (WITH ... SELECT ...).");
   assert.match(gateRefusals.signalActor, /Action checkins.add names signal property user, which is not one of its input bindings\./);
 
-  // ------------------------------------------------------------ the Kernel
   kernel = await startKernel(dataDir, { KONAE_COPY_DIR: copyDir, KONAE_COPY_INTERVAL_SECONDS: "2" });
 
-  // Required verification covers the creator too: the setup key answers 202 and a link.
   const ownerSignup = await post("/_konae/owner/signup", { email: ownerEmail, setupKey });
   assert.equal(ownerSignup.status, 202, await ownerSignup.clone().text());
   const ownerVerify = await post("/_konae/owner/verify", { token: tokenOf((await waitForMail(ownerEmail, 0)).link), password: ownerPassword });
@@ -166,7 +150,6 @@ try {
   const ownerCookie = cookieOf(ownerVerify)!;
   const owner = withHeaders(`${url}/mcp`, { cookie: ownerCookie });
 
-  // The Kernel refuses the same two streak variants on release_plan.
   const kernelRefusals: Record<string, string> = {};
   await owner.call("project_create", { projectId: "showcase_habits_probe", name: "Habits probe", slug: "habits-probe", manifest: { version: 1, visibility: "public" } });
   for (const [name, change] of Object.entries(variants)) {
@@ -185,8 +168,6 @@ try {
   check("Streak SQL within the LIMIT rules",
     `The Gate passes the capsule and both doors refuse the streak query without its top-level LIMIT. A WITH RECURSIVE calendar that leads the statement is refused by both with "${kernelRefusals.recursive}". A Signal property that is neither an input key nor actor is refused by both with "${kernelRefusals.signalActor}"; the capsule's Signals list actor and pass`);
 
-  // ---------------------------------------------------------- the editor's path
-  // project_sources_save and release_plan/apply in the shapes the editor sends.
   const manifest = {
     version: 1, visibility: "public",
     runtime: {
@@ -224,11 +205,9 @@ try {
   const sql = <T = any>(statement: string) => owner.call<{ rows: T[] }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: statement } });
   const appUsers = async () => (await owner.call<{ users: { userId: string; email: string; state: string; verified: boolean }[] }>("app_users_list", { deploymentId: receipt.id })).users;
 
-  // -------------------------------------------- Open signup, verification required
   const ana = "ana@habits.test";
   const first = await appPost("/_konae/auth/signup", { email: ana });
   assert.equal(first.status, 202, await first.clone().text());
-  // A signup opens no session. It sets only the signup hint, so a sign-in from this browser before the link can say why it failed.
   const signupHint = cookieOf(first);
   assert.match(signupHint ?? "", /^konae_signup=/, "A signup must not open a session before verification.");
   const firstLink = await waitForMail(ana, 0);
@@ -245,7 +224,6 @@ try {
   const pendingUsers = await appUsers();
   assert.deepEqual(pendingUsers.map((user) => [user.email, user.state, user.verified]), [[ana, "pending", false]]);
 
-  // A password sent with a required-mode signup does not survive.
   const ben = "ben@habits.test";
   const benSignup = await appPost("/_konae/auth/signup", { email: ben, password: "typed-at-signup-1234" });
   const benSignupStatus = benSignup.status;
@@ -253,7 +231,6 @@ try {
   const benTypedLogin = await appPost("/_konae/auth/login", { email: ben, password: "typed-at-signup-1234" });
   assert.equal(benTypedLogin.status, 401, await benTypedLogin.clone().text());
 
-  // A second signup for the pending address keeps its ID and replaces the link.
   const second = await appPost("/_konae/auth/signup", { email: ana });
   assert.equal(second.status, 202);
   assert.equal(cookieOf(second), signupHint, "The same email gets the same hint cookie, and no session.");
@@ -268,7 +245,6 @@ try {
   assert.equal(anaSession.name, ana);
   assert.equal(anaSession.userId, pendingUsers[0].userId, "Re-signing up a pending address must keep its account ID.");
 
-  // A third signup, now for the active address, gives the caller nothing.
   const mailBefore = await mailCount(ana);
   const steal = await appPost("/_konae/auth/signup", { email: ana });
   assert.equal(steal.status, 202);
@@ -289,7 +265,6 @@ try {
   check("Verified signup",
     `Signup answers 202 with no session cookie, only the signup hint; the pending account's login from that browser answers ${pendingLogin.status} ${pendingLoginBody}, and from another browser the plain 401; a re-signup keeps user ID ${anaSession.userId} and turns the first link into 410; a signup for the active address answers 202, mails [${mailToActive.join(", ") || "nothing"}], and a guessed password answers 401 while both of Ana's sessions keep working. A password sent with a required-mode signup (status ${benSignupStatus}) does not sign in.`);
 
-  // ------------------------------------------------ two devices, one account
   const today = utcDay();
   assert.equal((await action(anaPhone, "habits.create", { name: "Read 20 pages" })).changes, 1);
   assert.equal((await action(anaLaptop, "habits.create", { name: "Walk" })).changes, 1);
@@ -304,9 +279,7 @@ try {
   assert.equal((await action(anaLaptop, "checkins.add", { habitId: read.id, day: today, device: "computer" })).changes, 1);
   assert.equal((await action(anaLaptop, "checkins.add", { habitId: walk.id, day: today, device: "computer" })).changes, 1);
   completions += 2;
-  // The same check from the second device the same day is absorbed by the UNIQUE key.
   assert.equal((await action(anaPhone, "checkins.add", { habitId: read.id, day: today, device: "phone" })).changes, 0);
-  // Only the last 30 days and tomorrow are accepted.
   assert.equal((await action(anaPhone, "checkins.add", { habitId: read.id, day: utcDay(-45), device: "phone" })).changes, 0);
   await assert.rejects(action(anaPhone, "checkins.add", { habitId: read.id, day: "2026-11-061", device: "phone" }), /day is too long/);
   const streaks = await action<{ habit_id: number; current_streak: number; best_streak: number; total_days: number }[]>(anaLaptop, "habits.streaks", { today });
@@ -319,7 +292,6 @@ try {
   assert.deepEqual([...new Set(week.map((row) => row.device))].sort(), ["computer", "phone"]);
   check("Two devices", `Ana's phone and laptop sessions share one account: habits from both, check-ins from both, and the streak query returns current 4, best 4, total 5 for the gapped habit. A second check-in for the same day changes 0 rows.`);
 
-  // ------------------------------------------------- rows bound to the actor
   assert.deepEqual(await action(benClient, "habits.list"), []);
   assert.deepEqual(await action(benClient, "checkins.since", { from: utcDay(-30) }), []);
   assert.deepEqual(await action(benClient, "habits.streaks", { today }), []);
@@ -332,10 +304,6 @@ try {
   assert.equal((await action(anaPhone, "checkins.since", { from: utcDay(-30) })).length, 6);
   check("Rows bound to the actor", "Ben reads no habit, check-in or streak of Ana's; archive, check-in and uncheck on her habit change 0 rows; a userId input is refused with \"Unexpected action input: userId\"; Ana's rows are unchanged. The archive is refused with its guard, \"This habit is already archived, or it is not yours.\"");
 
-  // ---------------------------------------------------------- close the day
-  // days.close has "schedule": { "daily": "00:05" }, so the Kernel runs it with nobody
-  // calling. A habit started today does not count against yesterday, and the replay made
-  // Ana's habits a moment ago, so the owner dates them a week back, as if she started then.
   await sql(`UPDATE habits SET created_at = created_at - ${7 * 86_400_000} WHERE user_id = '${anaSession.userId}'`);
   const yesterday = utcDay(-1);
   type Day = { day: string; habits: number; done: number };
@@ -346,7 +314,6 @@ try {
   }
   assert.deepEqual(closedDays, [{ day: yesterday, habits: 2, done: 1 }]);
   assert.deepEqual(await action(benClient, "days.recent"), [], "Ben's habit started today, so he had nothing to close yesterday.");
-  // A scheduled mutation with no route refuses every caller, so only the timer closes a day.
   const closedByBen = await action(benClient, "days.close").then(() => "answered", (error: Error) => error.message);
   assert.equal(closedByBen, "Action days.close runs only on its schedule.");
   await Bun.sleep(2500);
@@ -357,7 +324,6 @@ try {
   assert.deepEqual(await action(anaPhone, "days.recent"), closedDays);
   check("Close the day", `days.close, declared daily at 00:05 UTC and run here every 2 seconds, closes ${yesterday} for Ana as ${JSON.stringify(closedDays[0])} with nobody calling; Ben, whose habit started today, gets no row. Ben calling days.close himself is refused with "${closedByBen}". usage_read lists ${closeRuns.length} runs, all ok, and only the first changed a row: the others found the day closed.`);
 
-  // ------------------------------------------- an API key on an actor-bound route
   const key = await owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receipt.id, name: "Phone shortcut", actions: ["habits.import", "habits.mine", "checkins.log"] });
   const route = (method: "GET" | "POST", routePath: string, body?: unknown, headers: Record<string, string> = {}) => fetch(`${url}${routePath}`, {
     method, headers: { host, "x-forwarded-for": freshAddress(), ...(body ? { "content-type": "application/json" } : {}), ...headers },
@@ -376,8 +342,6 @@ try {
   const keyOwnCheckin = await route("POST", "/api/checkins", { habitId: 4, day: today, device: "shortcut" }, bearer);
   assert.equal(keyOwnCheckin.body.result.changes, 1);
   completions++;
-  // The three routes declare "callers": ["key"], so a visitor and a signed-in person are
-  // refused before the action runs, and an app session checks in through actions_invoke.
   const visitorRoute = await route("POST", "/api/habits", { name: "Nobody" });
   assert.deepEqual(visitorRoute, { status: 401, body: { error: "authentication-required" } });
   const visitorRead = await route("GET", "/api/habits");
@@ -390,7 +354,6 @@ try {
   check("API key on an actor-bound route",
     `A key writes a habit whose owner is the key's ID ${key.keyId}; GET /api/habits with the key returns only that row; the key's check-in on Ana's habit changes 0 rows. The routes take only a key: a visitor gets ${visitorRoute.status} "${visitorRoute.body.error}" on POST and GET, and Ana's cookie from the app origin gets ${anaRoute.status} too.`);
 
-  // --------------------------------------------------------- Signals and Usage
   const signals: { name: string; at: number; properties: Record<string, unknown> }[] = [];
   for (let cursor: string | null | undefined; ;) {
     const page = await owner.call<{ signals: typeof signals; nextCursor: string | null }>("signals_read", { deploymentId: receipt.id, name: "habit.completed", ...(cursor ? { cursor } : {}) });
@@ -398,7 +361,6 @@ try {
     if (!page.nextCursor) break;
     cursor = page.nextCursor;
   }
-  // Only a call that added a row records one, and it names who checked in.
   assert.equal(signals.length, completions, JSON.stringify(signals.map((s) => s.properties)));
   assert(!signals.some((signal) => signal.properties.day === utcDay(-45)), "A check-in outside the window changed nothing and records no Signal.");
   assert(signals.every((signal) => Object.keys(signal.properties).sort().join() === "actor,day,device,habitId"));
@@ -411,7 +373,6 @@ try {
   assert.equal(total("route", "POST /api/checkins"), 2);
   assert.equal(total("route", "POST /api/habits"), 1);
   assert.equal(total("signup"), 2);
-  // The app's own session cannot read either store.
   let runtimeUsage = "";
   await assert.rejects(anaPhone.call("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) }), (error: Error) => { runtimeUsage = error.message; return true; });
   await assert.rejects(anaPhone.call("signals_read", { deploymentId: receipt.id }), (error: Error) => error.message === runtimeUsage);
@@ -419,7 +380,6 @@ try {
   check("Signals and Usage",
     `signals_read returns ${signals.length} habit.completed Signals with habitId, day, device and actor, one for each of the ${completions} calls that added a row; the calls that changed nothing, Ben's attempt on Ana's habit and a key's among them, record none. ${completions - 1} name Ana and 1 names the key. usage_read gives checkins.add ${total("action", "checkins.add")} on ${dailyCheckins.map((row) => row.day).join(", ")}, POST /api/checkins ${total("route", "POST /api/checkins")}, signup ${total("signup")}, login ${total("login")}, session ${total("session")}. An app session calling usage_read or signals_read gets "${runtimeUsage}".`);
 
-  // --------------------------------------------------- Action Contract and conform
   const conformEmail = "conform@habits.test";
   assert.equal((await appPost("/_konae/auth/signup", { email: conformEmail })).status, 202);
   const conformVerify = await appPost("/_konae/auth/verify", { token: tokenOf((await waitForMail(conformEmail, 0)).link), password: `conform-${crypto.randomUUID()}` });
@@ -442,9 +402,6 @@ try {
   const [conformCode, conformOut, conformErr] = await cli(["conform", "--url", receipt.url, "--contract", path.join(contractDir, "action-contract.json"), "--token", conformToken, "--key", key.key]);
   const conformTotals = conformOut.trim().split("\n").at(-1)!;
   assert.equal(conformCode, 0, conformOut + conformErr);
-  // conform sends the key to the three routes that bind the caller's ID.
-  // habits.create and habits.import guard an INSERT under a limit of 20; conform's second
-  // identical call inserts again, so it cannot reach the guard. The Chrome pass proves it.
   assert.match(conformTotals, /^\d+ passed, 0 failed, 2 skipped/);
   const conformSkips = conformOut.split("\n").filter((line) => line.startsWith("SKIP")).map((line) => line.slice(0, line.indexOf(". "))).sort();
   assert.deepEqual(conformSkips, ["SKIP habits.create: refuses with its guard when no row changes", "SKIP habits.import: refuses with its guard when no row changes"], conformOut);
@@ -453,8 +410,6 @@ try {
   }
   check("Action Contract", `konae contract writes 12 actions${contractErr.trim() ? ` with warnings: ${contractErr.trim()}` : " with no warning"}; konae conform reports "${conformTotals}" and calls the three actor-bound routes with the API key.`);
 
-  // ------------------------------------------------- publish from a folder
-  // The same project, published with the CLI from a folder that holds its files.
   const publisher = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], projectIds: [projectId], ttlSeconds: 3600 });
   const folder = path.join(scratch, "folder");
   await mkdir(appDir(folder), { recursive: true });
@@ -480,7 +435,6 @@ try {
   check("Publish from a folder",
     `konae publish serves "Build 2" at the same URL; Ana's phone session, her rows and Ben's password survive, and the editor still saves the project's sources.`);
 
-  // ------------------------------------------------------- copy and restore
   const written = Date.now();
   let copies: { targets: { lastAttemptAt: number | null; lastSuccessAt: number | null; lastCopyId: string | null; lastError: string | null }[]; alert: string | null } | undefined;
   for (let attempt = 0; attempt < 300; attempt++) {
@@ -511,13 +465,10 @@ try {
   assert.deepEqual((await action(anaRestored, "habits.streaks", { today })).map((row: any) => [row.current_streak, row.total_days]), [[5, 6], [1, 1]]);
   const keyAfter = await route("GET", "/api/habits", undefined, bearer);
   assert.equal(keyAfter.status, 200);
-  // conform added two habits with the key, its valid call and the same call again to reach
-  // habits.import's guard, so the key reads Stretch and those two.
   assert(keyAfter.body.result.map((row: any) => row.name).includes("Stretch"), JSON.stringify(keyAfter.body));
   assert.equal(keyAfter.body.result.length, 3);
   const restoredSignals = await restoredOwner.call<{ signals: unknown[]; nextCursor: string | null }>("signals_read", { deploymentId: receipt.id, name: "habit.completed" });
   assert.equal(restoredSignals.signals.length, signalCountBefore);
-  // The closed day and the runs travel in the copy, with the slot each run marked done.
   assert.deepEqual(await action(anaRestored, "days.recent"), closedDays);
   const restoredRuns = (await restoredOwner.call<{ scheduled: Run[] }>("usage_read", { deploymentId: receipt.id, from: utcDay(-1), to: utcDay(1) })).scheduled;
   assert(restoredRuns.length >= closeRuns.length, `${restoredRuns.length} runs after the restore, ${closeRuns.length} before the copy.`);
@@ -525,7 +476,6 @@ try {
   check("Copy and restore",
     `A directory copy taken ${copies!.targets[0].lastCopyId} restores into an empty data directory. The restored Kernel serves Build 2, signs out Ana's sessions, the owner's session and the delegated token, keeps the passwords, rows, streaks, ${signalCountBefore} Signals, the closed day and ${restoredRuns.length} scheduled runs and the API key, which still reads GET /api/habits.`);
 
-  // ------------------------------------------- Chrome under the app's policy
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     const [name, ...value] = cookieOf(anaAgain)!.split("=");
     const browser = await chromium.launch({ channel: "chrome" });
@@ -560,7 +510,6 @@ try {
         }
         await context.close();
       }
-      // A double press adds one habit, and the twenty-first is refused with the guard's sentence.
       const context = await browser.newContext({ viewport: { width: 720, height: 900 } });
       await context.addCookies([{ name, value: value.join("="), url: receipt.url }]);
       for (let i = 0; i < 15; i++) await action(anaRestored, "habits.create", { name: `Habit ${i + 3}` });
