@@ -203,7 +203,10 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
           }
           throw explain(error);
         }
-        if (tool.name === "module_set") result = await binding.call("modules_read", { projectId }, signal);
+        if (tool.name === "module_set") {
+          try { result = await binding.call("modules_read", { projectId }, signal); }
+          catch (error) { result = { result: "module_set succeeded; modules_read failed", error: explain(error).message }; }
+        }
         check(signal);
         if (confirm) binding.onChanged?.(tool.name);
         return { content: [{ type: "text" as const, text: text(result) }], details: result };
