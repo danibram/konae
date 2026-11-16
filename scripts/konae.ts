@@ -748,7 +748,10 @@ export async function publishLocal(root: string, config: Config, token: string, 
     if (warning) warn(warning);
   }
   if (!first && config.contactEmail) {
-    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id }).catch(() => undefined);
+    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id }).catch((error) => {
+      warn(`Publish succeeded, but contact_email_read failed: ${error instanceof Error ? error.message : error}`);
+      return undefined;
+    });
     if (current && current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
       warn(`The app folder asks for contact email ${config.contactEmail}, but this app has ${current.contactEmail ?? "none"}. A publish keeps the app's contact email after its first release. Change it with contact_email_set.`);
     }

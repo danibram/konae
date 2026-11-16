@@ -689,9 +689,11 @@ describe("konae CLI", () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     answers.project_inspect = { deployment: { id: "dep_1" }, sourcesRevision: 1 };
     failing.add("contact_email_read");
+    const warnings: string[] = [];
     const config = { url: origin(), contactEmail: "owner@example.test", project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
-    await expect(publishLocal(directory, config, "token")).resolves.toMatchObject({ id: "dep_1", first: false });
+    await expect(publishLocal(directory, config, "token", (message) => warnings.push(message))).resolves.toMatchObject({ id: "dep_1", first: false });
     expect(calls.map((call) => call.name)).toContain("contact_email_read");
+    expect(warnings[0]).toContain("Publish succeeded, but contact_email_read failed");
   });
 
   test("a later publish warns when konae.json names module settings", async () => {
