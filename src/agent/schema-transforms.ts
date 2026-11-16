@@ -1,5 +1,5 @@
 import { refusal, type RefusalError } from "../kernel/refusal";
-import { sqlStatementTokens, type SqlToken } from "../lib/sql-tokens";
+import { sqlStatementTokens, sqlTokens, type SqlToken } from "../lib/sql-tokens";
 
 export const SCHEMA_TRANSFORMS_FILE = "schema-transforms.json";
 const MAX_TRANSITIONS = 256;
@@ -69,10 +69,15 @@ export function schemaTransformsRefusal(source: string): RefusalError | null {
 }
 
 function validateStatement(statement: string): string | null {
+  const tokens = sqlTokens(statement);
+  const semicolons = tokens.filter((token) => token.kind === "symbol" && token.text === ";");
+  if (semicolons.length > 1 || (semicolons.length === 1 && tokens.at(-1) !== semicolons[0])) {
+    return "Write one supported SQL statement without a second statement.";
+  }
   const scripts = sqlStatementTokens(statement);
   if (scripts.length !== 1) return "Write one supported SQL statement without a second statement.";
-  const tokens = scripts[0]!;
   const words = tokens.filter((token) => token.kind !== "string").map(tokenValue);
+  if (words.at(-1) === ";") words.pop();
   if (words.length === 0) return "Write one supported SQL statement without a second statement.";
   if (hasSequence(words, ["on", "conflict", "rollback"])) {
     return "ROLLBACK conflict policies are refused because they can end the caller's transaction.";

@@ -8,7 +8,7 @@ import initSqlJs from "sql.js";
 const validEmpty = JSON.stringify({ version: 1, transitions: [] });
 const validTransition = JSON.stringify({
   version: 1,
-  transitions: [{ id: "seed.rows", predecessor: null, before: `sha256:${"a".repeat(64)}`, after: `sha256:${"b".repeat(64)}`, maxRows: 20, statements: ["INSERT INTO tasks (title) VALUES ('sqlite_schema')"] }],
+  transitions: [{ id: "seed.rows", predecessor: null, before: `sha256:${"a".repeat(64)}`, after: `sha256:${"b".repeat(64)}`, maxRows: 20, statements: ["INSERT INTO tasks (title) VALUES ('sqlite_schema');"] }],
 });
 const schemaTransformCases = JSON.parse(readFileSync(new URL("../../kernel-rs/kernel/src/schema-transform-cases.json", import.meta.url), "utf8")) as {
   cases: { case: string; scope: "static" | "runtime"; source: string; error: string | null; code: string | null }[];
