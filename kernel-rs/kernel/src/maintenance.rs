@@ -173,26 +173,18 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
         return next.run(request).await;
     };
     let Some(message) = pause(&state.data_root, &deployment.id) else {
-        let mut response = next.run(request).await;
-        if super::is_private(&deployment) {
-            response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
-        }
-        return response;
+        return next.run(request).await;
     };
     let wants_page = request
         .headers()
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|accept| accept.contains("text/html"));
-    let mut response = if matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_konae/") || wants_page) {
+    if matches!(*request.method(), Method::GET | Method::HEAD) && (!path.starts_with("/_konae/") || wants_page) {
         maintenance_page(&deployment.project_name, &message)
     } else {
         refusal(&message)
-    };
-    if super::is_private(&deployment) {
-        response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     }
-    response
 }
 
 #[cfg(test)]
