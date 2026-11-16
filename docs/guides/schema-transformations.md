@@ -66,7 +66,7 @@ The editor Gate checks the document shape and supported SQL before Apply. The Ke
 
 ## Apply against the right database
 
-Run `rehearse` to check the current sources against a fresh pulled-data snapshot. A rehearsal confirmation belongs to that snapshot. `publish --plan` plans against the current Deployment database and its journal. Publish applies the transitions to a staged copy of the live database, then swaps it in with the release only after checks pass. The production confirmation may differ from rehearsal, so use the value from the production plan when publishing. An import into an existing app checks the incoming database and transforms a staged copy before replacing its live data.
+Run `rehearse` to check the current sources against a fresh pulled-data snapshot. A rehearsal confirmation belongs to that snapshot. `publish --plan` plans against the current Deployment database and its journal. Publish applies the transitions to a staged copy of the live database, then swaps it in with the release only after checks pass. The production confirmation may differ from rehearsal, so use the value from the production plan when publishing. An import into an existing app plans against the incoming database before backup, then transforms a staged copy before replacing its live data.
 
 ```sh
 bun run konae -- rehearse --dir ./my-app [--confirm-schema <snapshot confirmation>]
@@ -76,6 +76,6 @@ bun run konae -- publish --dir ./my-app --confirm-schema <production confirmatio
 
 The angle-bracket values are placeholders. Copy the confirmation from the matching rehearsal or production plan. See the [local rehearsal guide](./rehearse-locally.md) for the pull and reset steps.
 
-The Kernel keeps the transition journal inside `data/database.sqlite`. Export, copy and restore carry it with the rows. A fresh database installs `schema.sql` directly and records each listed transition as `baselineSkipped`; it does not replay those steps against an empty database. A local test run records history only in its own database. Publish reads the production database's journal, so test-mode history does not make production skip a step. `push` explicitly replaces production data and its journal together, after a backup.
+The Kernel keeps the transition journal inside `data/database.sqlite`. Export, copy and restore carry it with the rows. A fresh database installs `schema.sql` directly and records each listed transition as `baselineSkipped`; it does not replay those steps against an empty database. A folder opened in test mode selects the current candidate schema, actions and transformation file on each start, even when `dist/` did not change. It records history in its own database. Live opens keep the released transformation snapshot. Publish plans the candidate transformations against the production database's own journal, so test-mode history does not make production skip a step. `push` explicitly replaces production data and its journal together, after a backup.
 
 Fingerprints hash sorted SQLite schema definitions with conservative token normalization. The tokenizer ignores whitespace and comments and normalizes recognized identifiers using the existing SQL token rules. It preserves string literal case and ambiguous double-quoted values. A fingerprint does not claim general SQL semantic equivalence.
