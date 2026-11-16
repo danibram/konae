@@ -1888,7 +1888,6 @@ async fn admin_call(
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
             let id = a["projectId"].as_str().unwrap_or_default();
             let found = owned_deployment(state, owner, id, scope).await?;
-            // hostname_set takes project:{id} inside hostname::set_expected, so taking it here would deadlock.
             let _guard = if scope == "publish" && !name.starts_with("hostname_") { Some(database_lock(state, &format!("project:{}", found.project_id)).await) } else { None };
             let deployment = owned_deployment(state, owner, id, scope).await?;
             if a.get("expected").is_some() && name != "hostname_set" {
@@ -2038,10 +2037,6 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
-/// The first release may take the folder's contact email. Later releases keep
-/// the Deployment value so a stale app folder cannot replace an owner change.
-/// A malformed address is refused either way, before a release or an import
-/// changes anything.
 async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
     let given = given.map(|given| super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))).transpose()?;
     let deployment = find_project_deployment(&*state.deployments.read().await, project);

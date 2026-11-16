@@ -1,18 +1,4 @@
-/**
- * The miniapp SDK contract: every module on `window.miniapp`, every call, its
- * arguments, what it returns, what it refuses and the limits that apply.
- *
- * This file is the single source. `bun run sdk:render` writes four readers
- * from it: the SDK section of the build agent's prompt
- * (src/agent/sdk-section.generated.ts), the `sdk` topic of `platform_guide`
- * (kernel-rs/konae/src/sdk-guide.json) and docs/sdk.md. src/sdk/contract.test.ts
- * fails when src/mcp/runtime.js, the preview client or any reader disagrees.
- *
- * Error messages are the exact text the published app sees: the Kernel's,
- * or the SDK's own when `source` is "sdk". `preview` records where the
- * editor preview differs: absent means the same text, null means the preview
- * never refuses that case, a list holds the preview's own messages for it.
- */
+
 
 export type SdkArgument = {
   name: string;
@@ -69,7 +55,6 @@ export type SdkDeclaration = {
 export type SdkModule = {
   name: string;
   summary: string;
-  /** Whether the owner can turn this module on yet. */
   switch: boolean;
   options: SdkModuleOption[];
   permission: string;

@@ -330,7 +330,6 @@ mod tests {
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             std::fs::copy(fixture.join(relative), destination).unwrap();
         }
-        // The repository ignores every dist/, so the fixture cannot carry its built page.
         let dist = layout::dist(&root, "app_legacy_modules");
         std::fs::create_dir_all(&dist).unwrap();
         std::fs::write(dist.join("index.html"), "<!doctype html><title>Legacy app</title><main>Legacy app</main>").unwrap();

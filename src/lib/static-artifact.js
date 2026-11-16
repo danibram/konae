@@ -139,11 +139,7 @@ export function renderCapsuleDocument(input) {
 <body>${body}<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
 }
 
-/**
- * Moves the document metadata a fragment opens with into the head. Only
- * elements before the fragment's first other element move, so an SVG's
- * <title> further down stays where it is.
- */
+
 export function splitFragmentHead(fragment) {
   const lead = /^\s*(?:<!--[\s\S]*?-->|<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link)\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[\s\S]*?<\/script\s*>)/i;
   const moved = [];

@@ -4,9 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// "notify": { "to": "owner" } sends to the app's contact email in konae.json.
-// A publish fills it with the owner's email when the app has none, the owner
-// changes it with contact_email_set, and later publishes keep the change.
 let root: string;
 let kernel: Kernel;
 

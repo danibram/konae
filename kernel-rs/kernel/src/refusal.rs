@@ -13,7 +13,6 @@ pub fn refuse(code: &'static str, message: impl Into<String>) -> Refusal {
     Refusal { code, message: message.into() }
 }
 
-/// Refuses a write when its read value no longer matches the current setting.
 pub fn check_setting_expected(expected: Option<&Value>, current: Value) -> std::result::Result<(), Refusal> {
     if expected.is_some_and(|expected| expected != &current) {
         return Err(refuse(
