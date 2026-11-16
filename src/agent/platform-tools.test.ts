@@ -111,7 +111,7 @@ describe("the build agent's tools from the owner's MCP", () => {
     const state = { on: false, canonical: null, image: null };
     await run(tools.modules_read);
     await run(tools.module_set, { module: "seo", on: true, options: { canonical: "path" }, expected: state });
-    expect(confirmations).toEqual([{ projectId: "p1", tool: "module_set", summary: "The agent will turn on seo and set Canonical address to path.", arguments: { module: "seo", on: true, options: { canonical: "path" }, expected: state } }]);
+    expect(confirmations).toEqual([{ projectId: "p1", tool: "module_set", summary: "The agent will turn on Search listing (seo) and set Canonical address to Path address.", arguments: { module: "seo", on: true, options: { canonical: "path" }, expected: state } }]);
     expect(calls).toEqual([
       { name: "modules_read", args: { projectId: "p1" } },
       { name: "module_set", args: { module: "seo", on: true, options: { canonical: "path" }, expected: state, projectId: "p1" } },

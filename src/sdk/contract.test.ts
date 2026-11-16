@@ -54,12 +54,20 @@ describe("the SDK contract", () => {
       ],
     });
     expect(seo?.uses).toBeDefined();
+    expect(sdkContract.modules.map((module) => module.title)).toEqual(["Accounts", "App actions", "File storage", "Calls to other services", "HTTP routes", "Search listing"]);
+    expect(seo?.options[0].valueLabels).toEqual({ domain: "Custom domain", hostname: "Generated hostname", path: "Path address" });
     expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["seo"]);
     expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
     const modules = JSON.parse(renderAll()["kernel-rs/kernel/src/modules.json"]);
     expect(modules.modules.actions.switch).toBe(false);
     expect(modules.modules.seo.switch).toBe(true);
     expect(modules.modules.seo.options).toEqual(seo?.options);
+  });
+
+  test("renders owner-facing module titles and enum labels in the generated docs", () => {
+    const docs = renderAll()["docs/sdk.md"];
+    expect(docs).toContain("### Search listing (`seo`)");
+    expect(docs).toContain("`path` (Path address)");
   });
 
   test("the shared module cases keep editor answers aligned with the Kernel", () => {
@@ -182,9 +190,9 @@ describe("the rendered readers", () => {
   test("the prompt, guide and docs carry every module and the agent read-back rule", () => {
     const prompt = buildSystemPrompt(cloneStarter());
     for (const module of sdkContract.modules) {
-      expect(prompt).toContain(`- ${module.name}: ${module.summary}`);
+      expect(prompt).toContain(`- ${module.title} (${module.name}): ${module.summary}`);
       expect(prompt).toContain(`Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`);
-      expect(read("docs/sdk.md")).toContain(`## ${module.calls.length ? `miniapp.${module.name}` : `The ${module.name} module, declared, with no browser call`}`);
+      expect(read("docs/sdk.md")).toContain(`### ${module.title} (\`${module.name}\`)`);
     }
     expect(prompt).toContain("module_set changes a switchable module or its options; read modules_read after it");
     expect(read("docs/guides/manage-modules.md")).toContain("read `modules_read` to confirm the new state");

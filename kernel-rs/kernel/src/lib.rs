@@ -5206,6 +5206,7 @@ pub mod tests {
         assert!(sitemap.contains("/about"));
         assert!(!sitemap.contains("untitled"));
         let listed = modules::read(&state, &deployment);
+        assert_eq!(listed["modules"]["seo"]["current"]["canonical"]["reason"], "Generated hostname is the default.");
         assert!(listed["modules"]["seo"]["current"]["excluded"].to_string().contains("untitled.html"));
         let domain_file = crate::layout::private(&root, &deployment.id).join(crate::domain::RECORD_FILE);
         tokio::fs::create_dir_all(domain_file.parent().unwrap()).await.unwrap();

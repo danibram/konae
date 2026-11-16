@@ -1,5 +1,5 @@
 import type { AgentTool } from "./contracts";
-import { sdkContract } from "../sdk/contract";
+import { sdkContract, type SdkModuleOption } from "../sdk/contract";
 
 export type McpToolDefinition = {
   name: string;
@@ -88,8 +88,11 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
       const name = String(args.module);
       const module = sdkContract.modules.find((item) => item.name === name);
       const change = typeof args.on === "boolean" ? `turn ${args.on ? "on" : "off"}` : "update";
-      const options = args.options && typeof args.options === "object" ? Object.entries(args.options as Record<string, unknown>).map(([key, value]) => `${module?.options.find((option) => option.key === key)?.label ?? key} to ${String(value)}`) : [];
-      return `The agent will ${change} ${name}${options.length ? ` and set ${options.join(", ")}` : ""}.`;
+      const options = args.options && typeof args.options === "object" ? Object.entries(args.options as Record<string, unknown>).map(([key, value]) => {
+        const option = module?.options.find((item) => item.key === key) as SdkModuleOption | undefined;
+        return `${option?.label ?? key} to ${option?.valueLabels?.[String(value)] ?? String(value)}`;
+      }) : [];
+      return `The agent will ${change} ${module?.title ?? name} (${name})${options.length ? ` and set ${options.join(", ")}` : ""}.`;
     }
     case "hostname_set": return `The agent will move this app's generated address to ${String(args.name)}. The old address redirects there, and app users sign in again on the new one.`;
     case "domain_set": return `The agent will set ${String(args.hostname)} as this app's domain and check its TXT record.`;

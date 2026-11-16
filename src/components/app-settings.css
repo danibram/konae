@@ -47,6 +47,12 @@
 .module-settings-card > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .module-settings-card h3, .module-current h4 { margin: 0; font-size: 15px; }
 .module-settings-card header p { color: var(--ds-muted); }
+.module-settings-key { display: block; color: var(--ds-muted); font: 12px/1.4 var(--ds-mono); }
+.module-settings-fixed { display: grid; gap: 8px; }
+.module-settings-fixed > h3 { margin: 0; font-size: 14px; }
+.module-settings-fixed-item { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr; gap: 4px 16px; padding: 10px 0; border-top: 1px solid var(--ds-border); }
+.module-settings-fixed-item h4 { margin: 0; font-size: 14px; }
+.module-settings-fixed-item p { color: var(--ds-muted); }
 .module-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .module-current { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ds-border); overflow-wrap: anywhere; }
 .module-current ul { margin: 0; padding-left: 20px; }

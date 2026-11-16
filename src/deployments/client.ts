@@ -25,7 +25,7 @@ export type ModuleRead = {
     message: string | null;
     summary: string;
     options: { key: string; type: string; values?: string[]; default: unknown; label: string; help: string }[];
-    current?: { canonical: { url: string; reason: string }; excluded: { page: string; reason: string }[] };
+    current?: unknown;
   }>;
 };
 

@@ -18,7 +18,7 @@ const PIECES = `| Need | Use | Not |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |`;
 
-const MODULES = sdkContract.modules.map((module) => `- ${module.name}: ${module.summary}${module.switch ? ` Options: ${module.options.map((option) => `${option.label} (${option.key})`).join(", ")}.` : " This module is on and cannot be changed yet."} Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`).join("\n");
+const MODULES = sdkContract.modules.map((module) => `- ${module.title} (${module.name}): ${module.summary}${module.switch ? ` Options: ${module.options.map((option) => `${option.label} (${option.key})`).join(", ")}.` : " This module is on and cannot be changed yet."} Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`).join("\n");
 
 export function buildSystemPrompt(project: MiniAppProject): string {
   const visibility = project.manifest.visibility;

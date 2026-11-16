@@ -19,6 +19,7 @@ import "./app-settings.css";
 type Props = {
   projectName: string;
   modules?: Record<string, { on: boolean; [key: string]: unknown }>;
+  files?: string[];
 
   importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
@@ -39,7 +40,7 @@ const sections: { id: Section; label: string }[] = [
   { id: "move", label: "Move this app" },
 ];
 
-export function AppSettingsDialog({ projectName, modules, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
+export function AppSettingsDialog({ projectName, modules, files, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
 
   const [section, setSection] = useState<Section>("addresses");
   const initialModules = modules ?? Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, { on: false, ...Object.fromEntries(module.options.map((option) => [option.key, option.default])) }]));
@@ -139,7 +140,7 @@ export function AppSettingsDialog({ projectName, modules, importTarget, deployme
         <p>Deploy this app first. Then its addresses appear here.</p>
         </div>
         <div className="app-settings-section" role="tabpanel" id="app-settings-modules" aria-labelledby="app-settings-tab-modules" hidden={section !== "modules"}>
-          <ModulesSettings projectId={null} initial={initialModules} onSignedOut={onSignedOut} />
+          <ModulesSettings projectId={null} initial={initialModules} files={files} onSignedOut={onSignedOut} />
         </div>
       </> : <>
       <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
@@ -198,7 +199,7 @@ export function AppSettingsDialog({ projectName, modules, importTarget, deployme
         <AppContactEmail key={`contact-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
       </div>
       <div className="app-settings-section" role="tabpanel" id="app-settings-modules" aria-labelledby="app-settings-tab-modules" hidden={section !== "modules"}>
-        <ModulesSettings key={`modules-${deploymentId}`} projectId={deploymentId} initial={initialModules} onSignedOut={onSignedOut} />
+        <ModulesSettings key={`modules-${deploymentId}`} projectId={deploymentId} initial={initialModules} files={files} onSignedOut={onSignedOut} />
       </div>
       <div className="app-settings-section" role="tabpanel" id="app-settings-move" aria-labelledby="app-settings-tab-move" hidden={section !== "move"}>
         <p>To take this app to another machine with its accounts, rows and rules, export its folder here and import it there. Pause it first so nothing changes in between.</p>

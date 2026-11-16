@@ -73,6 +73,11 @@
             "hostname",
             "path"
           ],
+          "valueLabels": {
+            "domain": "Custom domain",
+            "hostname": "Generated hostname",
+            "path": "Path address"
+          },
           "default": null,
           "label": "Canonical address",
           "help": "Choose the address search engines and link previews should use."
@@ -80,6 +85,7 @@
         {
           "key": "image",
           "type": "path",
+          "valuesFrom": "app-images",
           "default": null,
           "label": "Card image",
           "help": "Choose an image path from the app's published files."

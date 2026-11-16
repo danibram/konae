@@ -662,21 +662,32 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
 });
 
 test("Modules settings show fixed modules and read back seo after reload", async ({ page }) => {
-  await createProject(page, "Module settings");
+  const projectPath = await createProject(page, "Module settings");
+  const projectId = projectPath.split("/").at(-1)!;
+  await seedRetainedBinary(page, projectId);
+  await page.reload();
   await fromMore(page, "App settings");
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
   await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
-  await expect(settings.locator(".module-settings-card")).toHaveCount(6);
-  await expect(settings.locator(".module-settings-card").nth(1)).toContainText("On · fixed");
-  await expect(settings.locator(".module-settings-card").nth(5).getByRole("switch")).toHaveCount(0);
+  await expect(settings.locator(".module-settings-card")).toHaveCount(1);
+  await expect(settings.locator(".module-settings-card").first()).toContainText("Search listing");
+  await expect(settings.locator(".module-settings-card").first()).toContainText("seo");
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(5);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");
   settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
-  await expect(settings.getByRole("switch", { name: "Turn seo on", exact: true })).toHaveAttribute("aria-checked", "false");
-  await settings.getByRole("switch", { name: "Turn seo on", exact: true }).click();
+  await expect(settings.getByLabel("Canonical address", { exact: true }).locator("option")).toContainText(["Custom domain", "Generated hostname", "Path address"]);
+  await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("");
+  await expect(settings.getByLabel("Card image", { exact: true }).locator("option")).toContainText(["public/retained.png"]);
+  await settings.getByLabel("Card image", { exact: true }).selectOption("public/retained.png");
+  await settings.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(settings.getByText("seo settings saved.", { exact: true })).toBeVisible();
+  await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("public/retained.png");
+  await expect(settings.getByRole("switch", { name: "Turn Search listing on", exact: true })).toHaveAttribute("aria-checked", "false");
+  await settings.getByRole("switch", { name: "Turn Search listing on", exact: true }).click();
   await expect(settings.locator(".module-settings-card").filter({ hasText: "seo" }).getByText("On", { exact: true })).toBeVisible();
   await expect(settings.getByRole("link", { name: "Open sitemap", exact: true })).toBeVisible();
   await page.reload();
@@ -701,7 +712,7 @@ test("the build agent confirms module changes and reads them back", async ({ pag
   });
   await askFixture(page, "Turn on seo and use the path address.");
   const confirm = page.getByRole("dialog", { name: "Allow the agent to do this?" });
-  await expect(confirm.getByText("The agent will turn on seo and set Canonical address to path.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(confirm.getByText("The agent will turn on Search listing (seo) and set Canonical address to Path address.", { exact: true })).toBeVisible({ timeout: 30_000 });
   await confirm.getByRole("button", { name: "Allow", exact: true }).click();
   await expect(page.getByText("I read the module state after the change.", { exact: true })).toBeVisible({ timeout: 30_000 });
   expect(calls).toContain("module_set");
