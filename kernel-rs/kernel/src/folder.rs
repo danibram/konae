@@ -49,7 +49,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
-    decide_files_module(root, id).await?;
+    decide_app_modules(root, id).await?;
     settings = Settings::read(root, id)?;
     let sources = layout::sources(root, id);
     let stored = match tokio::fs::read(layout::record(root, id)).await {
@@ -184,21 +184,33 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     Ok(deployment)
 }
 
-pub async fn decide_files_module(root: &Path, id: &str) -> Result<Option<bool>> {
+pub async fn decide_app_modules(root: &Path, id: &str) -> Result<Option<std::collections::BTreeMap<String, Value>>> {
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let raw_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(root, id)).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?)?;
     ensure!(raw_settings["id"].as_str() == Some(id), "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", raw_settings["id"].as_str().unwrap_or(""));
-    let legacy_file_access = raw_settings["released"]["manifest"]["fileAccess"].as_str();
-    let used = crate::modules::uses_files(root, id, &json!({"fileAccess": legacy_file_access}));
     let mut settings = Settings::read(root, id)?;
-    let files_state = settings.modules.get_mut("files").expect("files is switchable");
-    if raw_settings["modules"]["files"]["on"] == true { return Ok(None); }
-    if !raw_settings["modules"]["files"].is_null() && !used && legacy_file_access.is_none() { return Ok(None); }
-    files_state["on"] = json!(used);
-    if legacy_file_access == Some("app-users") { files_state["fileAccess"] = json!("app-users"); }
+    let mut changed = false;
+    for module in crate::modules::defaults().keys() {
+        match module.as_str() {
+            "files" => {
+                let legacy_file_access = raw_settings["released"]["manifest"]["fileAccess"].as_str();
+                let used = crate::modules::uses_files(root, id, &json!({"fileAccess": legacy_file_access}));
+                if raw_settings["modules"]["files"]["on"] != true
+                    && (raw_settings["modules"]["files"].is_null() || used || legacy_file_access.is_some())
+                {
+                    let files = settings.modules.get_mut("files").expect("files is switchable");
+                    files["on"] = json!(used || legacy_file_access == Some("app-users"));
+                    if legacy_file_access == Some("app-users") { files["fileAccess"] = json!("app-users"); }
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    if !changed { return Ok(None); }
     settings.write(root).await?;
-    eprintln!("konae: decided files module for {id}: {}", if used { "on" } else { "off" });
-    Ok(Some(used))
+    eprintln!("konae: decided legacy module state for {id}");
+    Ok(Some(settings.modules))
 }
 
 async fn optional_text(path: &Path) -> Result<Option<String>> {
@@ -395,6 +407,84 @@ mod tests {
         let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(bytes.as_ref(), b"legacy file\n");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn konae_deployment_loading_migrates_legacy_files_before_serving_and_keeps_unused_files_off() {
+        use axum::{http::{HeaderMap, HeaderValue, Request, StatusCode, header}, Router};
+        use tower::ServiceExt;
+        let root = scratch();
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures");
+        let install_fixture = |id: &str, fixture: &str, file_fixture: bool| {
+            let source = fixtures.join(fixture);
+            let folder = layout::folder(&root, id);
+            std::fs::create_dir_all(folder.join("app")).unwrap();
+            let mut settings: Value = serde_json::from_slice(&std::fs::read(source.join("konae.json")).unwrap()).unwrap();
+            settings["id"] = json!(id);
+            std::fs::write(layout::settings(&root, id), serde_json::to_vec(&settings).unwrap()).unwrap();
+            let actions = fixtures.join("module-mechanism-0.9.0/app/actions.json");
+            let schema = fixtures.join("module-mechanism-0.9.0/app/schema.sql");
+            std::fs::copy(actions, folder.join("app/actions.json")).unwrap();
+            std::fs::copy(schema, folder.join("app/schema.sql")).unwrap();
+            let dist = layout::dist(&root, id);
+            std::fs::create_dir_all(&dist).unwrap();
+            std::fs::write(dist.join("index.html"), "<title>Legacy app</title>").unwrap();
+            if file_fixture {
+                let data = layout::files(&root, id);
+                std::fs::create_dir_all(&data).unwrap();
+                std::fs::copy(source.join("files-index.json"), data.join("index.json")).unwrap();
+                std::fs::copy(source.join("files-018f2b2c-4a10-7a01-8000-000000000001.blob"), data.join("018f2b2c-4a10-7a01-8000-000000000001.blob")).unwrap();
+            }
+            std::fs::create_dir_all(layout::private(&root, id)).unwrap();
+            let installed = crate::Installed { hostname: format!("{id}.localhost"), created_at:1, released_at:Some(2), source_digest:None, actions:include_str!("../../test-fixtures/module-mechanism-0.9.0/app/actions.json").into(), artifact_version:"v1".into(), released:None };
+            std::fs::write(layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).unwrap();
+        };
+        install_fixture("legacy_uploads", "module-files-0.9.0", true);
+        install_fixture("legacy_static", "module-mechanism-0.9.0", false);
+        let mut state = AppState::for_test(&root);
+        let loaded = crate::load_deployments(&root, "http://localhost").await.unwrap();
+        assert_eq!(loaded["legacy_uploads.localhost"].modules["files"]["on"], true);
+        assert_eq!(loaded["legacy_static.localhost"].modules["files"]["on"], false);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(loaded));
+        let auth = crate::auth::AuthService::open(layout::identity(&root, "legacy_uploads")).unwrap();
+        let session = auth.signup("uploader@example.test", "correct horse battery").unwrap();
+        let index_path = layout::files(&root, "legacy_uploads").join("index.json");
+        let mut index: Value = serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+        index[0]["visibility"] = json!("private");
+        index[0]["ownerId"] = json!(session.user.user_id);
+        std::fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("legacy_uploads.localhost"));
+        headers.insert(header::COOKIE, format!("konae_app_session={}", session.token).parse().unwrap());
+        let request = Request::builder().uri("/_konae/files/018f2b2c-4a10-7a01-8000-000000000001").body(axum::body::Body::empty()).unwrap();
+        let mut request = request;
+        *request.headers_mut() = headers;
+        let response = crate::stack(state.clone(), Router::new()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(response.into_body(), 1024).await.unwrap().as_ref(), b"legacy file\n");
+        let persisted: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "legacy_uploads")).unwrap()).unwrap();
+        assert_eq!(persisted["modules"]["files"]["on"], true);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn module_decision_refuses_mismatched_and_traversal_ids_before_writing() {
+        let root = scratch();
+        write_folder(&root, "shop", "");
+        write_folder(&root, "shop_test", "");
+        let shop_path = layout::settings(&root, "shop");
+        let shop_before = std::fs::read(&shop_path).unwrap();
+        let copied_path = layout::settings(&root, "shop_test");
+        let mut copied: Value = serde_json::from_slice(&std::fs::read(&copied_path).unwrap()).unwrap();
+        copied["id"] = json!("shop");
+        std::fs::write(&copied_path, serde_json::to_vec(&copied).unwrap()).unwrap();
+        assert!(decide_app_modules(&root, "shop_test").await.is_err());
+        assert_eq!(std::fs::read(shop_path).unwrap(), shop_before);
+
+        let outside = root.join("x").join("konae.json");
+        assert!(decide_app_modules(&root, "../../x").await.is_err());
+        assert!(!outside.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
