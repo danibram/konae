@@ -44,6 +44,8 @@ bun run konae -- rehearse --dir ./my-app --confirm-schema <confirmation>
 
 The first schema refusal prints a confirmation for this snapshot's scratch import. Pass it to rehearse as shown above. The later production plan uses current Deployment rows and may print a different value. `konae schema fingerprint --dir ./my-app` prints `sha256:<64 lowercase hex characters>` for the schema; add `--data` to read the local database read-only, or `--json` for structured output. The Kernel command accepts `--schema <path>` or `--database <path>`. Fingerprinting starts no app and creates no `.konae/`.
 
+For explicit rename and data backfill steps, see [schema transformations](./schema-transformations.md).
+
 ## Plan and publish
 
 Review the release against the current Deployment before applying it:

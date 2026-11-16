@@ -123,6 +123,8 @@ Rehearse builds a fresh `dist/` from the current `app/`, then asks a scratch Ker
 
 `konae schema fingerprint --dir ./my-app` prints `sha256:<64 lowercase hex characters>` for `app/schema.sql`. Add `--data` to read `data/database.sqlite` read-only, or `--json` to return `{ "fingerprint": "sha256:<64 lowercase hex characters>", "source": "schema" | "data" }`. It does not start the app or create `.konae/`. The Kernel command accepts a direct path: `kernel schema fingerprint --schema <path>` or `kernel schema fingerprint --database <path>`.
 
+[Schema transformations](./guides/schema-transformations.md) explains how to fingerprint each schema and record an explicit transition chain.
+
 ## push
 
 ```sh

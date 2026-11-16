@@ -20,7 +20,8 @@
       "guides/give-the-app-an-address.md",
       "guides/take-the-app-elsewhere.md",
       "guides/bring-existing-data.md",
-      "guides/rehearse-locally.md"
+      "guides/rehearse-locally.md",
+      "guides/schema-transformations.md"
     ] },
     { "section": "Reference", "pages": [
       "cli.md",
