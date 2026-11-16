@@ -5225,11 +5225,18 @@ pub mod tests {
         deploy_files(&state, json!({
             "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"Start here\"></head><body>Home</body></html>",
             "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
+            "post.html": "<!doctype html><html><head><title>Post template</title></head><body>Post</body></html>",
             "untitled.html": "<html><body>Missing title</body></html>",
             "robots.txt": "User-agent: special\nDisallow: /private\n",
             "card.png": "image"
         })).await;
-        let (host, deployment) = state.deployments.read().await.iter().next().map(|(host, deployment)| (host.clone(), deployment.clone())).unwrap();
+        let (host, deployment) = {
+            let mut deployments = state.deployments.write().await;
+            let (host, deployment) = deployments.iter_mut().next().unwrap();
+            deployment.actions = r#"{"version":1,"actions":{"posts.by":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html"}}}}"#.into();
+            (host.clone(), deployment.clone())
+        };
+        if let Err(error_value) = action_shape::read(&deployment.actions) { panic!("{error_value}"); }
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_str(&host).unwrap());
         let _off = serve_key(state.clone(), headers.clone(), "index.html".into()).await;
@@ -5261,7 +5268,10 @@ pub mod tests {
         let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
         let sitemap = String::from_utf8(axum::body::to_bytes(sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
         assert!(sitemap.contains("/about"));
+        assert!(!sitemap.contains("/post"));
         assert!(!sitemap.contains("untitled"));
+        let template = serve_key(state.clone(), headers.clone(), "post.html".into()).await;
+        assert_eq!(template.headers()["x-robots-tag"], "noindex");
         let listed = modules::read(&state, &deployment);
         assert_eq!(listed["modules"]["seo"]["current"]["canonical"]["reason"], "Generated hostname is the default.");
         assert!(listed["modules"]["seo"]["current"]["excluded"].to_string().contains("untitled.html"));

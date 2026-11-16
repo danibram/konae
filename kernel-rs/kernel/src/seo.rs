@@ -274,6 +274,7 @@ pub fn html_response(
     if !(candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
         return None;
     }
+    let is_template = page_template(&deployment.actions, candidate);
     let canonical = page_canonical(&address.url, candidate, crate::artifact::routing(&deployment.manifest));
     let Some(title) = title(&bytes) else {
         let mut response = cache.respond(headers, bytes.to_vec(), candidate);
@@ -287,7 +288,16 @@ pub fn html_response(
     let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes(), option_state.as_bytes()].concat());
     let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
     if crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
-    Some(tagged.respond(&HeaderMap::new(), body, candidate))
+    let mut response = tagged.respond(&HeaderMap::new(), body, candidate);
+    if is_template { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
+    Some(response)
+}
+
+fn page_template(actions: &str, candidate: &str) -> bool {
+    crate::action_shape::read(actions)
+        .is_ok_and(|program| program.actions.values().any(|action| {
+            action.page.as_ref().and_then(|page| page.get("file")).and_then(serde_json::Value::as_str) == Some(candidate)
+        }))
 }
 
 pub fn robots_response(
@@ -436,6 +446,10 @@ fn head_range(html: &str) -> (usize, usize) {
 }
 
 pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
+    let program = crate::action_shape::read(&deployment.actions).ok();
+    let page_files = program.as_ref().map(|program| program.actions.values().filter_map(|action| {
+        action.page.as_ref()?.get("file")?.as_str().map(str::to_owned)
+    }).collect::<std::collections::HashSet<_>>()).unwrap_or_default();
     let mut files = Vec::new();
     if crate::artifact::routing(&deployment.manifest) == crate::artifact::Routing::Spa {
         files.push("index.html".to_owned());
@@ -451,7 +465,7 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">",
     );
     for file in files {
-        if file.eq_ignore_ascii_case("404.html") {
+        if file.eq_ignore_ascii_case("404.html") || page_files.contains(&file) {
             continue;
         }
         if let Ok(bytes) = std::fs::read(crate::layout::dist(root, &deployment.id).join(&file)) {
@@ -463,7 +477,7 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
             }
         }
     }
-    if let Ok(program) = crate::action_shape::read(&deployment.actions) {
+    if let Some(program) = program {
         for action in program.actions.values() {
             let Some(page) = action.page.as_ref() else { continue };
             let Some(template) = page.get("path").and_then(serde_json::Value::as_str) else { continue };
