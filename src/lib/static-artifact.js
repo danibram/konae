@@ -134,15 +134,28 @@ export function renderCapsuleDocument(input) {
 
 
 export function splitFragmentHead(fragment) {
-  const lead = /^\s*(?:<!--[\s\S]*?-->|<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link)\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[\s\S]*?<\/script\s*>)/i;
+  const lead = /^\s*(<!--[^]*?-->|<title\b[^>]*>[^]*?<\/title\s*>|<meta\b[^>]*>|<link\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[^]*?<\/script\s*>)/i;
   const moved = [];
   let rest = fragment;
   for (let match = lead.exec(rest); match; match = lead.exec(rest)) {
     const element = match[0].trim();
-    if (!element.startsWith("<!--")) moved.push(element);
+    const eligible = /^<title\b/i.test(element) || /^<meta\b(?=[^>]*\b(?:name|property)\s*=)/i.test(element)
+      || /^<link\b(?=[^>]*\brel\s*=\s*["'][^"']*(?:canonical|alternate|icon|apple-touch-icon))/i.test(element)
+      || /^<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])/i.test(element);
+    if (eligible) moved.push(element);
     rest = rest.slice(match[0].length);
   }
-  return moved.length ? { head: moved.join(""), body: rest.replace(/^\s+/, "") } : { head: "", body: fragment };
+  const body = rest;
+  if (!moved.length) return { head: "", body: fragment };
+  const consumed = fragment.slice(0, fragment.length - rest.length);
+  const kept = consumed.replace(/\s*(<!--[^]*?-->|<title\b[^>]*>[^]*?<\/title\s*>|<meta\b[^>]*>|<link\b[^>]*>|<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>[^]*?<\/script\s*>)/gi, (token) => {
+    const element = token.trim();
+    const eligible = /^<title\b/i.test(element) || /^<meta\b(?=[^>]*\b(?:name|property)\s*=)/i.test(element)
+      || /^<link\b(?=[^>]*\brel\s*=\s*["'][^"']*(?:canonical|alternate|icon|apple-touch-icon))/i.test(element)
+      || /^<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])/i.test(element);
+    return eligible || element.startsWith("<!--") ? "" : token;
+  });
+  return { head: moved.join(""), body: `${kept}${body}`.replace(/^\s+/, "") };
 }
 
 /**
@@ -190,7 +203,7 @@ export async function assembleStaticArtifact(input) {
 
   const pageRoutes = held.has("actions.json") ? pageRoutesFromActions(await text("actions.json")) : [];
   const pages = [...sources].filter(([served]) => served.endsWith(".html") && !sources.get(served).startsWith("public/"));
-  const pageDepths = new Map(pageRoutes.map(({ path, file }) => [file, path.split("/").filter(Boolean).length]));
+  const pageDepths = new Map(pageRoutes.map(({ path, file }) => [servedPath(file) ?? file, path.split("/").filter(Boolean).length]));
   if (!sources.has("index.html")) pages.unshift(["index.html", null]);
   let compiled;
   let usesRuntimeFile = false;
@@ -224,12 +237,14 @@ export async function assembleStaticArtifact(input) {
       compiled ??= withoutModulePaths(await input.compile(), held);
       scanHtml(html, served, reference);
       scanCss(compiled.styles, served, reference);
-      files[served] = bom + renderCapsuleDocument({ body: rewritePageUrls(html, depth), styles: rewriteCssUrls(compiled.styles, depth), script: compiled.script, runtime: input.runtime, head: input.head });
+      const sourceDirectory = source ? (servedPath(source) ?? served).split("/").slice(0, -1).join("/") : "";
+      files[served] = bom + renderCapsuleDocument({ body: rewritePageUrls(html, depth, sourceDirectory), styles: rewriteCssUrls(compiled.styles, depth), script: compiled.script, runtime: input.runtime, head: input.head });
       continue;
     }
     scanHtml(html, served, reference);
     // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
-    const page = insertIntoHead(rewritePageUrls(withoutRuntimeTags(html, served), depth), `${input.head ?? ""}${runtimeLoaderScript()}`);
+    const sourceDirectory = (servedPath(source) ?? served).split("/").slice(0, -1).join("/");
+    const page = insertIntoHead(rewritePageUrls(withoutRuntimeTags(html, served), depth, sourceDirectory), `${input.head ?? ""}${runtimeLoaderScript()}`);
     usesRuntimeFile = true;
     files[served] = bom + page;
   }
@@ -270,34 +285,55 @@ export async function assembleStaticArtifact(input) {
 }
 
 function pageRoutesFromActions(source) {
-  const actions = JSON.parse(source).actions;
+  let actions;
+  try { actions = JSON.parse(source)?.actions; } catch { return []; }
   return Object.values(actions ?? {}).flatMap((action) => {
     const page = action?.page;
     return typeof page?.path === "string" && typeof page.file === "string" ? [{ path: page.path, file: page.file }] : [];
   });
 }
 
-function pageUrl(value, depth) {
+function pageUrl(value, depth, sourceDirectory = "") {
   const prefix = "../".repeat(Math.max(0, depth - 1));
   const trimmed = value.trim();
-  if (!prefix || !trimmed || trimmed.startsWith("/") || trimmed.startsWith("#") || trimmed.startsWith("?") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return value;
-  return `${prefix}${value}`;
+  if (depth < 1 || !trimmed || trimmed.startsWith("/") || trimmed.startsWith("#") || trimmed.startsWith("?") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return value;
+  const suffixAt = trimmed.search(/[?#]/);
+  const pathname = suffixAt < 0 ? trimmed : trimmed.slice(0, suffixAt);
+  const suffix = suffixAt < 0 ? "" : trimmed.slice(suffixAt);
+  const parts = [...sourceDirectory.split("/").filter(Boolean)];
+  for (const part of pathname.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `${prefix}${parts.join("/")}${suffix}`;
 }
 
-function rewriteCssUrls(value, depth) {
-  return value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth)}${after}`);
+function rewriteCssUrls(value, depth, sourceDirectory = "") {
+  return value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth, sourceDirectory)}${after}`)
+    .replace(/(@import\s+)(["'])([^"']+)(\2)/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth, sourceDirectory)}${after}`);
 }
 
-function rewritePageUrls(html, depth) {
+function rewritePageUrls(html, depth, sourceDirectory = "") {
   if (depth < 2) return html;
-  const scripts = [];
-  const source = html.replace(/(<script\b[^>]*>)([\s\S]*?<\/script\s*>)/gi, (_, start, body) => `${start}\u0000${scripts.push(body) - 1}\u0000`);
-  const styles = source.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_, start, body, end) => `${start}${rewriteCssUrls(body, depth)}${end}`);
-  const inline = styles.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, body) => `${before}${quote}${rewriteCssUrls(body, depth)}${quote}`);
-  const srcset = (value) => value.split(",").map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${pageUrl(target, depth)}`)).join(",");
-  return inline.replace(/(\b(?:href|src|action|formaction|poster|data)\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${pageUrl(value, depth)}${quote}`)
-    .replace(/(\bsrcset\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${srcset(value)}${quote}`)
-    .replace(/\u0000(\d+)\u0000/g, (_, index) => scripts[Number(index)]);
+  const protectedBlocks = [];
+  let source = html.replace(/<(pre|code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, (block) => `\u0001${protectedBlocks.push(block) - 1}\u0001`);
+  const scriptBodies = [];
+  source = source.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi, (_, start, body, end) => `${start}\u0002${scriptBodies.push(body) - 1}\u0002${end}`);
+  const styles = source.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_, start, body, end) => `${start}${rewriteCssUrls(body, depth, sourceDirectory)}${end}`);
+  const inline = styles.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, body) => `${before}${quote}${rewriteCssUrls(body, depth, sourceDirectory)}${quote}`);
+  const srcset = (value) => value.split(/,(?=\s*[^\n])/).map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${pageUrl(target, depth, sourceDirectory)}`)).join(",");
+  const attributes = inline.replace(/<([a-z][\w:-]*)(\s[^<>]*?)?(\/?)>/gi, (tag, name, raw = "", close = "") => {
+    const rewritten = raw.replace(/(^|\s)(href|src|action|formaction|poster|data|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi, (attribute, space, key, double, single, bare) => {
+      const value = double ?? single ?? bare;
+      const next = key.toLowerCase() === "srcset" ? srcset(value) : pageUrl(value, depth, sourceDirectory);
+      const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
+      return `${space}${key}=${quote}${next}${quote}`;
+    });
+    return `<${name}${rewritten}${close}>`;
+  });
+  return attributes.replace(/\u0001(\d+)\u0001/g, (_, index) => protectedBlocks[Number(index)])
+    .replace(/\u0002(\d+)\u0002/g, (_, index) => scriptBodies[Number(index)]);
 }
 
 /**

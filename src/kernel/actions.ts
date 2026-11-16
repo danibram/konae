@@ -237,8 +237,14 @@ function selectedColumns(statement: string): Set<string> | null {
 
 function assertPageLists(actions: Record<string, ServerActionDefinition>) {
   const paths: [string, string][] = [];
-  for (const [name, action] of Object.entries(actions).sort(([left], [right]) => left.localeCompare(right))) {
+  const files = new Map<string, { name: string; depth: number }>();
+  for (const [name, action] of Object.entries(actions).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
     if (action.page) {
+      if (action.page.file === "index.html") throw refusal("page.file-invalid", `Action ${name} names index.html as a page file, but index.html is the app entry page.`);
+      const depth = action.page.path.split("/").filter(Boolean).length;
+      const earlierFile = files.get(action.page.file);
+      if (earlierFile && earlierFile.depth !== depth) throw refusal("page.file-depth", `Actions ${earlierFile.name} and ${name} name the same page file at different path depths.`);
+      files.set(action.page.file, { name: earlierFile?.name ?? name, depth });
       const earlier = paths.find(([, prior]) => pagePathsOverlap(prior, action.page!.path))?.[0];
       if (earlier) throw refusal("page.duplicate", `Actions ${earlier} and ${name} both bind page path ${action.page.path}.`);
       paths.push([name, action.page.path]);

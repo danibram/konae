@@ -1,11 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import * as esbuild from "esbuild";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildLocal } from "../../scripts/konae";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
+import { sourcesUseFiles } from "./module-use";
 import type { MiniAppProject } from "./types";
 import { assembleStaticArtifact, basePath, checkRouting, isDocument, pathPrefixPattern, resolveReference, routingMessage, runtimeFile, runtimeLoaderScript, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
@@ -15,13 +16,13 @@ const { buildProjectInBrowser } = await import("../runtime/browser-build");
 const runtime = "window.miniapp = {};";
 const page = (title: string, body = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
-function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; bundle?: (path: string) => { script: string; styles: string } } = {}) {
+function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; runtime?: string; bundle?: (path: string) => { script: string; styles: string } } = {}) {
   return assembleStaticArtifact({
     paths: Object.keys(files),
     read: async (file) => files[file],
     compile: async () => ({ styles: typeof files["styles.css"] === "string" ? files["styles.css"] : "", script: "console.log('app')" }),
     bundle: async (file) => options.bundle?.(file) ?? { script: `/* bundled ${file} */`, styles: "" },
-    runtime,
+    runtime: options.runtime ?? runtime,
     routing: options.routing,
   });
 }
@@ -62,9 +63,44 @@ describe("page path assets", () => {
     expect(artifact.files["post.html"]).toContain("url('../cover.png')");
   });
 
+  test("the builder resolves page assets from the named file's directory", async () => {
+    const artifact = await assemble({
+      "index.html": page("Home"),
+      "pages/blog/post.html": page("Post", '<link rel="stylesheet" href="post.css"><img src="cover.png">'),
+      "public/blog/post.css": "body { color: red }",
+      "public/blog/cover.png": "image",
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/blog/post", file: "pages/blog/post.html" } } } }),
+    });
+    expect(artifact.files["blog/post.html"]).toContain('href="../blog/post.css"');
+    expect(artifact.files["blog/post.html"]).toContain('src="../blog/cover.png"');
+    expect(artifact.files["blog/post.css"]).toContain("color: red");
+  });
+
+  test("the builder rewrites URL attributes and CSS without changing text or other attribute values", async () => {
+    const artifact = await assemble({
+      "index.html": "<main></main>",
+      "post.html": '<a href=plain.css data-action="click->gallery#next" title="href=docs.html">href="docs.html"</a><pre><code>href="docs.html"</code></pre><img srcset="one.png 1x,\n two.png 2x"><style>@import "more.css";</style>',
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+      "plain.css": "", "docs.html": "", "one.png": "", "two.png": "", "more.css": "",
+    });
+    const html = artifact.files["post.html"];
+    expect(html).toContain("href=../plain.css");
+    expect(html).toContain('data-action="click->gallery#next" title="href=docs.html"');
+    expect(html).toContain('<code>href="docs.html"</code>');
+    expect(html).toContain("../one.png 1x,\n ../two.png 2x");
+    expect(html).toContain('@import "../more.css";');
+  });
+
 });
 
 describe("which Capsule files become pages", () => {
+  test("broken actions JSON builds the static artifact without page routes", async () => {
+    for (const actions of ["{", "null"]) {
+      const artifact = await assemble({ "index.html": "<main>Home</main>", "actions.json": actions });
+      expect(artifact.files["index.html"]).toContain("<main>Home</main>");
+    }
+  });
+
   test("schema-transforms.json stays in sources and is never served in the Build Artifact", async () => {
     const artifact = await assemble({ "index.html": "<main id=app></main>", "schema-transforms.json": "{\"version\":1,\"transitions\":[]}" });
     expect(artifact.files).not.toHaveProperty("schema-transforms.json");
@@ -95,6 +131,13 @@ describe("which Capsule files become pages", () => {
       expect(resolveReference(outside, "index.html")).toBeNull();
     }
   });
+});
+
+test("a bracketed miniapp.files source misses detection while the release runtime contains files", async () => {
+  const source = 'window["miniapp"].files.list();';
+  expect(sourcesUseFiles([source])).toBe(false);
+  const artifact = await assemble({ "index.html": '<script type="module" src="app.js"></script>', "app.js": source }, { runtime: await readFile(new URL("../mcp/runtime.js", import.meta.url), "utf8") });
+  expect(artifact.files["index.html"]).toContain("files: {");
 });
 
 describe("the artifact", () => {
@@ -168,9 +211,16 @@ describe("the artifact", () => {
   });
 
   test("metadata moves from the fragment lead while a title after body content stays there", () => {
-    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<link rel="stylesheet" href="x.css"><title>A</title>', body: '<main></main>' });
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<title>A</title>', body: '<link rel="stylesheet" href="x.css"><main></main>' });
     expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
     expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
+  });
+
+  test("fragment head split leaves stylesheets and http-equiv metadata in the body", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><meta http-equiv="Content-Security-Policy" content="default-src none"><meta name="description" content="Details"><main/>')).toEqual({
+      head: '<meta name="description" content="Details">',
+      body: '<link rel="stylesheet" href="x.css"><meta http-equiv="Content-Security-Policy" content="default-src none"><main/>',
+    });
   });
 
   test("a fragment moves description metadata and JSON-LD into the document head", () => {

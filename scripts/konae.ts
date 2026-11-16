@@ -506,6 +506,25 @@ async function hasPackageBuild(root: string) {
   return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
 }
 
+async function refreshPageBuilder(root: string, actionsSource: string) {
+  let actions: unknown;
+  try { actions = JSON.parse(actionsSource)?.actions; } catch { return; }
+  if (!actions || typeof actions !== "object" || Array.isArray(actions) || !Object.values(actions).some((action) => {
+    const page = (action as { page?: { path?: unknown; file?: unknown } } | null)?.page;
+    return typeof page?.path === "string" && typeof page.file === "string";
+  })) return;
+  const resources = [
+    ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
+    ["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")],
+  ] as const;
+  for (const [relative, contents] of resources) {
+    const target = path.join(root, relative);
+    if (await readFile(target, "utf8").catch(() => undefined) === contents) continue;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+}
+
 /** Packs an existing dist/ into the artifact shape a release uploads. */
 async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Record<string, string>; encodings: Record<string, string> }> {
   const files: Record<string, string> = {};
@@ -559,6 +578,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
+    await refreshPageBuilder(root, files["actions.json"] ?? "");
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
     const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
     if (neverRuns) throw Error(neverRuns);
@@ -717,6 +737,9 @@ export async function publishLocal(root: string, config: Config, token: string, 
   await writeFile(path.join(root, ".konae/source-revision.json"), JSON.stringify({ ...sourceRevisionScope(config.url, project.id), sourcesRevision: plan.expectedSourcesRevision + 1, sourceDigest: publishedSourceDigest, settingsDigest: settingsDigest(publishedSettings) }, null, 2), { mode: 0o600 });
   await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
+  if (!first && Object.keys(config.modules ?? {}).length > 0) {
+    warn("konae.json modules apply only to the first publish. This release keeps the Deployment's module state. Read it with modules_read and change it with module_set.");
+  }
   if (!first && wanted) {
     // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
     const inspected = await client.call<{ deployment?: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId: project.id }).catch(() => undefined);
@@ -725,8 +748,11 @@ export async function publishLocal(root: string, config: Config, token: string, 
     if (warning) warn(warning);
   }
   if (!first && config.contactEmail) {
-    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id });
-    if (current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
+    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id }).catch((error) => {
+      warn(`Publish succeeded, but contact_email_read failed: ${error instanceof Error ? error.message : error}`);
+      return undefined;
+    });
+    if (current && current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
       warn(`The app folder asks for contact email ${config.contactEmail}, but this app has ${current.contactEmail ?? "none"}. A publish keeps the app's contact email after its first release. Change it with contact_email_set.`);
     }
   }
@@ -743,8 +769,8 @@ export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentI
     const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { projectId: deploymentId });
     return [`This app answers at ${generatedUrl}.`];
   }
-  const current = await client.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: deploymentId });
-  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set, expected: current.deployment.hostname });
+  const current = await client.call<{ deployment?: { hostname: string } | null }>("project_inspect", { projectId: deploymentId });
+  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set, expected: current.deployment?.hostname });
   if (!moved.changed) return [`This app already answers at ${moved.url}.`];
   return [
     `This app now answers at ${moved.url}. ${moved.previousHostnames.at(-1)} redirects there with a 308 and stays this app's.`,
@@ -972,7 +998,7 @@ export async function initLocal(root: string, options: { name?: string; template
   }
   // The template says who may open the app. Only people the owner invites can create an account.
   const modules = defaultModuleStates();
-  modules.files.on = Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source));
+  if (Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source))) modules.files = { on: true, fileAccess: null };
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
     signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },

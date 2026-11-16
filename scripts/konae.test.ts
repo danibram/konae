@@ -13,7 +13,7 @@ import { usageRange } from "../src/lib/usage";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
-import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, buildLocal, type PromptInput } from "./konae";
 
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
@@ -120,7 +120,7 @@ test("init keeps existing .gitignore entries and adds required entries once", as
     await writeFile(path.join(folder, ".gitignore"), "private.txt\nnode_modules/\n");
     await initLocal(folder, { template: "tasks" });
     const modules = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).modules;
-    expect(Object.keys(modules).sort()).toEqual(["files", "seo"]);
+    expect(Object.keys(modules).sort()).toEqual(["files"]);
     expect(modules.files.on).toBe(true);
     const lines = (await readFile(path.join(folder, ".gitignore"), "utf8")).split(/\r?\n/);
     expect(lines.filter((line) => line === "private.txt")).toHaveLength(1);
@@ -173,6 +173,25 @@ test("downloadKernel verifies the release checksum and repairs a changed cached 
 });
 
 describe("konae CLI", () => {
+  test("a page build refreshes generated runtime and builder files in an older app folder", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "konae-old-page-builder-"));
+    try {
+      await mkdir(path.join(root, "app"), { recursive: true });
+      await mkdir(path.join(root, "scripts"), { recursive: true });
+      await mkdir(path.join(root, "node_modules"));
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
+      await writeFile(path.join(root, "konae.json"), JSON.stringify({ manifest: { version: 1 } }));
+      await writeFile(path.join(root, "app/index.html"), "<!doctype html><html><body>Home</body></html>");
+      await writeFile(path.join(root, "app/actions.json"), JSON.stringify({ version: 1, actions: { "posts.head": { kind: "query", access: "anonymous", statement: "SELECT title FROM posts LIMIT 1", bindings: [], page: { path: "/posts", file: "post.html" } } } }));
+      await writeFile(path.join(root, "scripts/static-artifact.mjs"), "old builder");
+      await writeFile(path.join(root, "scripts/runtime.js"), "old runtime");
+      await writeFile(path.join(root, "scripts/build.mjs"), "import { mkdir, writeFile } from 'node:fs/promises'; await mkdir('dist', { recursive: true }); await writeFile('dist/index.html', '<!doctype html><html><body>Home</body></html>');");
+      await buildLocal(root);
+      expect(await readFile(path.join(root, "scripts/static-artifact.mjs"), "utf8")).toContain("rewritePageUrls");
+      expect(await readFile(path.join(root, "scripts/runtime.js"), "utf8")).toContain("page: {");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   test("publish --plan calls release_plan only, leaves success markers alone, and releases uploads", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     await writeFile(path.join(directory, ".konae-source-marker"), "untouched");
@@ -653,6 +672,37 @@ describe("konae CLI", () => {
       "This app now answers at https://notes.apps.example.com. notes-1a2b3c.apps.example.com redirects there with a 308 and stays this app's.",
       "App users sign in again on the new name. If the app offers Google sign-in, add https://notes.apps.example.com/_konae/auth/google/callback to its Google client's redirect URIs. Give the new address to any service that calls the app's HTTP routes.",
     ]);
+  });
+
+  test("hostname changes on an unpublished project reach the Kernel refusal", async () => {
+    const names: string[] = [];
+    const client = { async call<T>(name: string): Promise<T> {
+      names.push(name);
+      if (name === "project_inspect") return { deployment: null } as T;
+      throw Error("This project has no Deployment.");
+    } };
+    await expect(hostnameLocal(client, "app_test", "notes")).rejects.toThrow("This project has no Deployment.");
+    expect(names).toEqual(["project_inspect", "hostname_set"]);
+  });
+
+  test("a post-publish contact email read failure does not undo the release", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    answers.project_inspect = { deployment: { id: "dep_1" }, sourcesRevision: 1 };
+    failing.add("contact_email_read");
+    const warnings: string[] = [];
+    const config = { url: origin(), contactEmail: "owner@example.test", project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    await expect(publishLocal(directory, config, "token", (message) => warnings.push(message))).resolves.toMatchObject({ id: "dep_1", first: false });
+    expect(calls.map((call) => call.name)).toContain("contact_email_read");
+    expect(warnings[0]).toContain("Publish succeeded, but contact_email_read failed");
+  });
+
+  test("a later publish warns when konae.json names module settings", async () => {
+    await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
+    answers.project_inspect = { deployment: { id: "dep_1" }, sourcesRevision: 1 };
+    const warnings: string[] = [];
+    const config = { url: origin(), modules: { seo: { on: true } }, project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+    await publishLocal(directory, config, "token", (message) => warnings.push(message));
+    expect(warnings).toContain("konae.json modules apply only to the first publish. This release keeps the Deployment's module state. Read it with modules_read and change it with module_set.");
   });
 
   test("a trailing --dir with no value is an error, not the current directory", async () => {
