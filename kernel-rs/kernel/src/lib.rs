@@ -2235,7 +2235,7 @@ pub(crate) async fn serve_key_with_routes(
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
             if seo_on {
-                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache, navigation) {
+                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache) {
                     return response;
                 }
             }
@@ -5250,7 +5250,12 @@ pub mod tests {
         let about_html = String::from_utf8(about_body.to_vec()).unwrap();
         assert!(about_html.contains("<title>A \"small\" <app> &amp; more</title>"));
         assert!(about_html.contains("content=\"Owner title\""));
-        assert!(about_html.contains("href=\"https://republish.localhost/about\""));
+        assert!(about_html.contains("href=\"https://republish.localhost/about\""), "{about_html}");
+        let mut navigation_headers = headers.clone();
+        navigation_headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&old_etag).unwrap());
+        navigation_headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+        let navigation_revalidation = serve_key(state.clone(), navigation_headers, "about".into()).await;
+        assert_eq!(navigation_revalidation.status(), StatusCode::NOT_MODIFIED);
         let robots = serve_key(state.clone(), headers.clone(), "robots.txt".into()).await;
         assert!(String::from_utf8(axum::body::to_bytes(robots.into_body(), 100_000).await.unwrap().to_vec()).unwrap().contains("Disallow: /private"));
         let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;

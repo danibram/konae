@@ -903,19 +903,20 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     let html = if let Some(title) = title {
         seo::page_html(&bytes, &Value::Object(params), title, description, image.as_deref(), canonical.as_deref())
     } else {
-        bytes
+        seo::page_params_html(&bytes, &Value::Object(params))
     };
     let row_bytes = serde_json::to_vec(row).unwrap_or_default();
     let seo_state = serde_json::to_vec(&deployment.modules["seo"]).unwrap_or_default();
     let digest = sha2::Sha256::digest([deployment.artifact_version.as_bytes(), row_bytes.as_slice(), canonical.as_deref().unwrap_or("").as_bytes(), seo_state.as_slice()].concat());
     let etag = format!("\"{}-{}\"", deployment.artifact_version, hex::encode(digest));
+    count_page_view(state, deployment, headers, file);
     if crate::etag_matches(headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
         response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));
+        if !seo_on || title.is_none() { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
         return Some(response);
     }
-    count_page_view(state, deployment, headers, file);
     let mut response = artifact_response(html, file);
     response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));

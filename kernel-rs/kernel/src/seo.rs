@@ -270,7 +270,6 @@ pub fn html_response(
     address: &Address,
     headers: &HeaderMap,
     cache: &ArtifactCache,
-    navigation: bool,
 ) -> Option<Response> {
     if !(candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
         return None;
@@ -287,7 +286,7 @@ pub fn html_response(
     let option_state = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
     let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes(), option_state.as_bytes()].concat());
     let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
-    if !navigation && crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
+    if crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
     Some(tagged.respond(&HeaderMap::new(), body, candidate))
 }
 
@@ -349,8 +348,9 @@ fn title_span(html: &str) -> Option<(usize, usize)> {
             continue;
         }
         if !tag.closing && tag.name == "title" {
-            let close = next_tag(html, tag.end)?;
-            if close.closing && close.name == "title" { break (tag.end, close.start) }
+            let lower = html[tag.end..].to_ascii_lowercase();
+            let close = tag.end + lower.find("</title")?;
+            break (tag.end, close)
         }
     };
     Some((open, close))
@@ -682,6 +682,13 @@ mod tests {
     #[test]
     fn title_in_svg_does_not_count_as_a_document_title() {
         assert_eq!(title(br#"<html><head></head><body><svg><title>Icon</title></svg></body></html>"#), None);
+    }
+
+    #[test]
+    fn untitled_page_templates_still_receive_row_parameters() {
+        let output = String::from_utf8(page_params_html(br#"<html><head></head><body></body></html>"#, &serde_json::json!({"slug": "hello"}))).unwrap();
+        assert!(output.contains("name=\"konae-page-params\""));
+        assert!(output.contains("&quot;slug&quot;:&quot;hello&quot;"));
     }
 
     #[test]
