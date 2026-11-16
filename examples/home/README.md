@@ -15,7 +15,7 @@ The Deployment whose path address holds the name `konae-home` answers `<domain>/
 | `home.css` | The few rules of this page, on the same tokens. |
 | `home.js` | Points the editor, MCP and docs links at this installation from `location`, because the page answers on `<domain>/`, `<domain>/p/konae-home/` and its own hostname. On a custom domain it cannot tell the installation's domain and treats the custom domain as one. |
 | `pages/es/index.html` | Generated Spanish page at `/es/`. `bun run home:site` reads the English page and the translations in `i18n.js`, so each sentence has one source. |
-| `public/card.png` | The home card image. Set the `seo` module's `image` option to `/card.png`. |
+| `public/card.png` | The home card image. `public/card.svg` is its editable source. Run `bash scripts/render-card-images.sh` to rebuild both app cards. Set the `seo` module's `image` option to `card.png`. |
 | `?v=` on `home.css` and `home.js` | A proxy in front of the installation may let browsers keep CSS and JavaScript for hours, while the Kernel serves the page itself with `no-cache`. Raise the number in `index.html` when either file changes, so a returning visitor does not get the new page with the old files. |
 | `i18n.js` | The page's Spanish text, keyed by each element's `data-t`, and the text the script writes in both languages. The English text is the markup. |
 | `query-bound.ts`, `sql-tokens.ts` | Copies of `src/lib/query-bound.ts` and `src/lib/sql-tokens.ts`, so the row-limit box runs the editor's own check. `bun run ui:render` writes them, and `src/lib/templates/app-ui.test.ts` fails when they drift. |
@@ -41,7 +41,5 @@ bun run konae -- publish --dir /tmp/konae-home
 bun run konae -- tool path_set '{"projectId":"<home id>","enabled":true,"name":"konae-home"}' --dir /tmp/konae-home
 bun run konae -- tool path_read '{"projectId":"<home id>"}' --dir /tmp/konae-home
 ```
-
-After release, read `modules_read`, then turn on `seo` with `canonical: "path"` and `image: "/card.png"` through `module_set`. Pass the `modules.seo.state` value from the read as `expected`, then read the state back with `modules_read`.
 
 The app has no accounts, so `path_set` needs no `acceptSharedOrigin`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect, and [the invitation requests](../invitation/README.md) with the name `invitation`.

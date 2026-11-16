@@ -23,7 +23,16 @@ describe("the Konae home", () => {
       const image = readFileSync(target);
       expect(image.byteLength).toBeLessThan(600 * 1024);
       expect(image.readUInt32BE(16)).toBeGreaterThanOrEqual(300);
+      expect(image[25]).toBe(2);
       expect(statSync(target).size).toBe(image.byteLength);
+      expect(readFileSync(path.resolve(home, `../${app}/public/card.svg`), "utf8")).not.toContain('rx="42"');
     }
+  });
+
+  test("the page script redirects old Spanish links and preserves invitation language", () => {
+    const script = readFileSync(path.join(home, "home.js"), "utf8");
+    expect(script).toContain('new URLSearchParams(location.search).get("lang") === "es"');
+    expect(script).toContain('location.replace("/es/")');
+    expect(script).toContain('`${links.invite}?lang=${lang}`');
   });
 });

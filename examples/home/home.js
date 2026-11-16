@@ -3,6 +3,8 @@ import { sqlTokens } from "./sql-tokens.ts";
 import { words } from "./i18n.js";
 
 const { protocol, hostname, port, pathname } = location;
+const lang = document.documentElement.lang === "es" ? "es" : "en";
+if (pathname === "/" && new URLSearchParams(location.search).get("lang") === "es") location.replace("/es/");
 const labels = hostname.split(".");
 const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
 const domain = ownHostname ? labels.slice(1).join(".") : hostname;
@@ -30,7 +32,9 @@ const links = {
   examples: docs("examples"),
 };
 const point = () => {
-  for (const element of document.querySelectorAll("[data-link]")) element.href = links[element.dataset.link];
+  for (const element of document.querySelectorAll("[data-link]")) {
+    element.href = element.dataset.link === "invite" ? `${links.invite}?lang=${lang}` : links[element.dataset.link];
+  }
 };
 point();
 for (const element of document.querySelectorAll("[data-text]")) element.textContent = links[element.dataset.text];
@@ -39,7 +43,6 @@ for (const pre of document.querySelectorAll("figure.code pre")) {
   pre.innerHTML = pre.innerHTML.split("\n").map((line) => `<span class="line">${line.replace(/(--[a-z-]+)/g, '<span class="flag">$1</span>') || " "}</span>`).join("");
 }
 
-const lang = document.documentElement.lang === "es" ? "es" : "en";
 const w = words[lang];
 const redraw = [];
 

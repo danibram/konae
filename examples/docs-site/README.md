@@ -9,7 +9,7 @@ The Konae docs, published as a Konae app. The markdown under `docs/` is the only
 | Static files published as they are | `public/content/*.md`, `public/llms.txt` |
 | One page per address under `pages/` | Each page has its own title, first-paragraph description and rendered body |
 | An npm package for the generator | `render.js` uses the pinned `marked` package for page bodies and descriptions |
-| A card image | `public/card.png`, set as the `seo` module's `image` option to `/card.png` |
+| A card image | `public/card.png`, editable at `public/card.svg`, rebuilt for both apps with `bash scripts/render-card-images.sh`, and set as the `seo` module's `image` option to `card.png` |
 | A large script a page loads only when it needs it | `public/vendor/mermaid.js`, which draws the diagrams, loaded by the pages that hold one |
 | An anonymous Server Action | `docs.search` in `actions.json`, a query with a `LIMIT` over the `sections` table |
 | A public app with no accounts | `visibility: "public"` and signup `closed` in `konae.json` |
@@ -47,7 +47,7 @@ bun run konae -- publish --dir /tmp/konae-docs
 bun run docs:site --seed /tmp/konae-docs
 ```
 
-`publish` sends the pages and the markdown. `--seed` loads the search rows, one per `## ` section, with `database_execute`, and reads the count back. After release, run `bun run konae -- hostname --dir /tmp/konae-docs --set docs`, then call `modules_read`, `module_set` with `canonical: "hostname"` and `image: "/card.png"`, and `modules_read` again. Pass the first read's `modules.seo.state` as `expected`. When a page changes, run `bun run docs:site`, copy `examples/docs-site` into `/tmp/konae-docs/app` again, and run both again.
+`publish` sends the pages and the markdown. `--seed` loads the search rows, one per `## ` section, with `database_execute`, and reads the count back.
 
 ## Add or change a page
 
