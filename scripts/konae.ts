@@ -972,7 +972,7 @@ export async function initLocal(root: string, options: { name?: string; template
   }
   // The template says who may open the app. Only people the owner invites can create an account.
   const modules = defaultModuleStates();
-  modules.files.on = Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source));
+  if (Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source))) modules.files = { on: true, fileAccess: null };
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
     signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },

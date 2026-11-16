@@ -120,7 +120,7 @@ test("init keeps existing .gitignore entries and adds required entries once", as
     await writeFile(path.join(folder, ".gitignore"), "private.txt\nnode_modules/\n");
     await initLocal(folder, { template: "tasks" });
     const modules = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).modules;
-    expect(Object.keys(modules).sort()).toEqual(["files", "seo"]);
+    expect(Object.keys(modules).sort()).toEqual(["files"]);
     expect(modules.files.on).toBe(true);
     const lines = (await readFile(path.join(folder, ".gitignore"), "utf8")).split(/\r?\n/);
     expect(lines.filter((line) => line === "private.txt")).toHaveLength(1);
