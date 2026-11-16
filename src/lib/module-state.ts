@@ -32,7 +32,7 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
   }
   if (input.rule === "known" && input.known !== true) return { code: "module.unknown", message: `Unknown module ${input.module}.` };
   if (input.rule === "on" && (input.state as { on?: boolean } | undefined)?.on !== true) {
-    return { code: "module.off", message: `Module ${input.module} is off. Turn it on with module_set.` };
+    return { code: "module.off", message: `Module ${input.module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.` };
   }
   if (input.rule === "requires" && input.requiredState?.on !== true) {
     return { code: "module.requires", message: `Module ${input.module} requires ${input.required}, which is off. Turn ${input.required} on first.` };
