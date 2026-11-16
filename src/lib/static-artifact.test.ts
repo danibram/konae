@@ -65,6 +65,13 @@ describe("page path assets", () => {
 });
 
 describe("which Capsule files become pages", () => {
+  test("broken actions JSON builds the static artifact without page routes", async () => {
+    for (const actions of ["{", "null"]) {
+      const artifact = await assemble({ "index.html": "<main>Home</main>", "actions.json": actions });
+      expect(artifact.files["index.html"]).toContain("<main>Home</main>");
+    }
+  });
+
   test("schema-transforms.json stays in sources and is never served in the Build Artifact", async () => {
     const artifact = await assemble({ "index.html": "<main id=app></main>", "schema-transforms.json": "{\"version\":1,\"transitions\":[]}" });
     expect(artifact.files).not.toHaveProperty("schema-transforms.json");

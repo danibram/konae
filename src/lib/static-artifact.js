@@ -283,7 +283,8 @@ export async function assembleStaticArtifact(input) {
 }
 
 function pageRoutesFromActions(source) {
-  const actions = JSON.parse(source).actions;
+  let actions;
+  try { actions = JSON.parse(source)?.actions; } catch { return []; }
   return Object.values(actions ?? {}).flatMap((action) => {
     const page = action?.page;
     return typeof page?.path === "string" && typeof page.file === "string" ? [{ path: page.path, file: page.file }] : [];
