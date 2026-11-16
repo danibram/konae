@@ -1293,6 +1293,10 @@ fn remove_database_files(path: &Path) {
 
 
 fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result<()> {
+    swap_database_with(live, staged, replaced, || {})
+}
+
+fn swap_database_with(live: &Path, staged: &Path, replaced: &Path, between_renames: impl FnOnce()) -> std::io::Result<()> {
     std::fs::rename(live, replaced)?;
     for suffix in ["-wal", "-shm"] {
         let from = database_sidecar(live, suffix);
@@ -1303,6 +1307,7 @@ fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result
             }
         }
     }
+    between_renames();
     if let Err(error_value) = std::fs::rename(staged, live) {
         let _ = restore_database(live, replaced);
         return Err(error_value);
@@ -2219,9 +2224,9 @@ pub(crate) async fn serve_key_with_routes(
     let html_candidate = artifact::candidates(&path, routing).iter().any(|candidate| {
         candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")
     });
-    let spa_fallback = routing == artifact::Routing::Spa
+    let spa_fallback = seo_on && routing == artifact::Routing::Spa
         && (!safe_relative_path(&path) || tokio::fs::metadata(crate::layout::dist(&state.data_root, &deployment.id).join(&path)).await.is_err());
-    let may_be_page = html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml";
+    let may_be_page = seo_on && (html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml");
     if !navigation && etag_matches(&headers, &cache.version_tag()) && (!seo_on || !may_be_page) {
         return cache.not_modified(cache.version_tag());
     }
@@ -2229,13 +2234,13 @@ pub(crate) async fn serve_key_with_routes(
         return seo::robots_response(&deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache, navigation).unwrap();
     }
     if seo_on && path == "sitemap.xml" {
-        return seo::sitemap_response(&state.data_root, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).unwrap();
+        return seo::sitemap_response(&state, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).await.unwrap();
     }
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
             if seo_on {
-                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache, navigation) {
+                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache) {
                     return response;
                 }
             }
@@ -4344,6 +4349,33 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn a_release_with_a_missing_page_template_uses_the_shared_case() {
+        let cases: Value = serde_json::from_str(include_str!("page-release-cases.json")).unwrap();
+        let case = &cases[0];
+        let root = std::env::temp_dir().join(format!("konae-release-page-file-{}", Uuid::new_v4()));
+        let state = test_state(&root);
+        let body = release_body(
+            "app_missing_page_file",
+            "CREATE TABLE IF NOT EXISTS posts(id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+            json!({
+                "posts.head": {
+                    "kind": "query", "access": "anonymous",
+                    "statement": "SELECT title FROM posts LIMIT 10", "bindings": [],
+                    "page": {"path": "/posts", "file": "post.html"}
+                }
+            }),
+            "<main>posts</main>",
+            None,
+        );
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let text = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains(case["error"].as_str().unwrap()), "{text}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn a_stored_deployment_on_the_editor_host_does_not_capture_the_owner_door() {
         let root = std::env::temp_dir().join(format!("konae-editor-host-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
@@ -5222,14 +5254,22 @@ pub mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let mut state = test_state(&root);
         state.public_origin = "https://konae.example.test".into();
+        state.guards = Arc::new(Guards::new(Vec::new()).with_statement_wait(std::time::Duration::from_millis(5)));
         deploy_files(&state, json!({
             "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"Start here\"></head><body>Home</body></html>",
             "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
+            "post.html": "<!doctype html><html><head><title>Post template</title></head><body>Post</body></html>",
             "untitled.html": "<html><body>Missing title</body></html>",
             "robots.txt": "User-agent: special\nDisallow: /private\n",
             "card.png": "image"
         })).await;
-        let (host, deployment) = state.deployments.read().await.iter().next().map(|(host, deployment)| (host.clone(), deployment.clone())).unwrap();
+        let (host, deployment) = {
+            let mut deployments = state.deployments.write().await;
+            let (host, deployment) = deployments.iter_mut().next().unwrap();
+            deployment.actions = r#"{"version":1,"actions":{"posts.by":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html","list":"posts.list"}},"posts.list":{"kind":"query","access":"anonymous","statement":"SELECT 'listed' AS slug, ?1 AS updated LIMIT 1","bindings":[{"source":"kernel","field":"now"}]}}}"#.into();
+            (host.clone(), deployment.clone())
+        };
+        if let Err(error_value) = action_shape::read(&deployment.actions) { panic!("{error_value}"); }
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_str(&host).unwrap());
         let _off = serve_key(state.clone(), headers.clone(), "index.html".into()).await;
@@ -5250,13 +5290,33 @@ pub mod tests {
         let about_html = String::from_utf8(about_body.to_vec()).unwrap();
         assert!(about_html.contains("<title>A \"small\" <app> &amp; more</title>"));
         assert!(about_html.contains("content=\"Owner title\""));
-        assert!(about_html.contains("href=\"https://republish.localhost/about\""));
+        assert!(about_html.contains("href=\"https://republish.localhost/about\""), "{about_html}");
+        let mut navigation_headers = headers.clone();
+        navigation_headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&old_etag).unwrap());
+        navigation_headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+        let navigation_revalidation = serve_key(state.clone(), navigation_headers, "about".into()).await;
+        assert_eq!(navigation_revalidation.status(), StatusCode::NOT_MODIFIED);
         let robots = serve_key(state.clone(), headers.clone(), "robots.txt".into()).await;
         assert!(String::from_utf8(axum::body::to_bytes(robots.into_body(), 100_000).await.unwrap().to_vec()).unwrap().contains("Disallow: /private"));
+        let mut held = Vec::new();
+        for _ in 0..4 { held.push(state.guards.statement_permit(&deployment.id).await.unwrap()); }
+        let blocked_sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let blocked_sitemap = String::from_utf8(axum::body::to_bytes(blocked_sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(!blocked_sitemap.contains("/posts/listed"));
+        drop(held);
         let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let sitemap_etag = sitemap.headers()[header::ETAG].to_str().unwrap().to_owned();
         let sitemap = String::from_utf8(axum::body::to_bytes(sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
         assert!(sitemap.contains("/about"));
+        assert!(sitemap.contains("/posts/listed"));
+        assert!(!sitemap.contains("/post</loc>"));
         assert!(!sitemap.contains("untitled"));
+        let mut sitemap_headers = headers.clone();
+        sitemap_headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&sitemap_etag).unwrap());
+        let sitemap_revalidation = serve_key(state.clone(), sitemap_headers, "sitemap.xml".into()).await;
+        assert_eq!(sitemap_revalidation.status(), StatusCode::NOT_MODIFIED);
+        let template = serve_key(state.clone(), headers.clone(), "post.html".into()).await;
+        assert_eq!(template.headers()["x-robots-tag"], "noindex");
         let listed = modules::read(&state, &deployment);
         assert_eq!(listed["modules"]["seo"]["current"]["canonical"]["reason"], "Generated hostname is the default.");
         assert!(listed["modules"]["seo"]["current"]["excluded"].to_string().contains("untitled.html"));
@@ -5271,6 +5331,69 @@ pub mod tests {
         state.deployments.write().await.get_mut(&host).unwrap().manifest["routing"] = json!("spa");
         let fallback = serve_key(state.clone(), HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]), "deep/page".into()).await;
         assert_eq!(fallback.headers()["x-robots-tag"], "noindex");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn page_queries_wait_through_database_swap_and_keep_the_new_wal() {
+        let root = std::env::temp_dir().join(format!("konae-page-swap-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html":"<title>Home</title>","post.html":"<html><head><title>Template</title></head><body></body></html>"})).await;
+        let (host, deployment) = {
+            let mut deployments = state.deployments.write().await;
+            let (host, deployment) = deployments.iter_mut().next().unwrap();
+            deployment.actions = r#"{"version":1,"actions":{"posts.head":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html"}}}}"#.into();
+            deployment.artifact_version = format!("{}-page-swap", deployment.artifact_version);
+            (host.clone(), deployment.clone())
+        };
+        let routes = http::route_table(&deployment);
+        assert!(routes.has_pages());
+        let live = crate::layout::database(&root, &deployment.id);
+        let staged = crate::layout::private(&root, &deployment.id).join("page-swap-staged.sqlite");
+        let replaced = crate::layout::private(&root, &deployment.id).join("page-swap-replaced.sqlite");
+        for path in [&live, &staged] {
+            let connection = Connection::open(path).unwrap();
+            connection.execute_batch("CREATE TABLE posts(slug TEXT PRIMARY KEY, title TEXT);").unwrap();
+            connection.execute("INSERT INTO posts VALUES('hello', ?1)", [if path == &live { "Old" } else { "New" }]).unwrap();
+        }
+        let lock = database_lock(&state, &deployment.id).await;
+        let (at_gap_tx, at_gap_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let swap = tokio::task::spawn_blocking(move || swap_database_with(&live, &staged, &replaced, || {
+            at_gap_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+        }));
+        tokio::task::spawn_blocking(move || at_gap_rx.recv().unwrap()).await.unwrap();
+        let headers = HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]);
+        let request = tokio::spawn(serve_key_with_routes(state.clone(), headers, "posts/hello".into(), Some(routes)));
+        let blocked = tokio::time::timeout(std::time::Duration::from_millis(20), async { while !request.is_finished() { tokio::task::yield_now().await; } }).await.is_err();
+        continue_tx.send(()).unwrap();
+        swap.await.unwrap().unwrap();
+        assert!(blocked, "the page request completed inside the database swap");
+        let writer = Connection::open(&crate::layout::database(&root, &deployment.id)).unwrap();
+        writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        writer.execute("INSERT INTO posts VALUES('later', 'WAL row')", []).unwrap();
+        assert!(crate::layout::database(&root, &deployment.id).with_extension("sqlite-wal").exists() || {
+            let mut sidecar = crate::layout::database(&root, &deployment.id).as_os_str().to_owned();
+            sidecar.push("-wal");
+            std::path::PathBuf::from(sidecar).exists()
+        });
+        drop(lock);
+        let response = request.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(body.contains("New"), "{body}");
+        writer.execute("UPDATE posts SET title=NULL WHERE slug='hello'", []).unwrap();
+        let headers = HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]);
+        let untitled = serve_key_with_routes(state.clone(), headers, "posts/hello".into(), Some(http::route_table(&deployment))).await;
+        assert_eq!(untitled.headers()["x-robots-tag"], "noindex");
+        let untitled = String::from_utf8(axum::body::to_bytes(untitled.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(untitled.contains("name=\"konae-page-params\""));
+        assert!(untitled.contains("&quot;slug&quot;:&quot;hello&quot;"));
+        let reopened = Connection::open(crate::layout::database(&root, &deployment.id)).unwrap();
+        assert_eq!(reopened.query_row("SELECT title FROM posts WHERE slug='later'", [], |row| row.get::<_, String>(0)).unwrap(), "WAL row");
+        drop(writer);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

@@ -203,6 +203,8 @@ function parsePageBinding(name: string, kind: string, access: string, value: unk
   if (path.length > 200 || !path.startsWith("/") || segments.some((segment) => !segment || segment === "." || segment === ".." || !/^:[A-Za-z][A-Za-z0-9_]*$/.test(segment) && !/^[A-Za-z0-9._~-]+$/.test(segment)) || segments[0]?.startsWith(":")) {
     throw refusal("page.path-invalid", `Action ${name} has an invalid page path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", with parameters such as ":slug" after the first segment.`);
   }
+  const first = segments[0]?.toLowerCase();
+  if (["_konae", "oauth", ".well-known", "mcp"].includes(first ?? "")) throw refusal("page.path-reserved", `Action ${name} binds the reserved path ${path}. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.`);
   const params = segments.filter((segment) => segment.startsWith(":")).map((segment) => segment.slice(1));
   const inputs = bindings.filter((binding): binding is Extract<ActionBinding, { source: "input" }> => binding.source === "input").map((binding) => binding.key);
   if (new Set(params).size !== params.length || [...params].sort().join("\0") !== [...inputs].sort().join("\0")) {
@@ -234,13 +236,12 @@ function selectedColumns(statement: string): Set<string> | null {
 }
 
 function assertPageLists(actions: Record<string, ServerActionDefinition>) {
-  const paths = new Map<string, string>();
+  const paths: [string, string][] = [];
   for (const [name, action] of Object.entries(actions).sort(([left], [right]) => left.localeCompare(right))) {
     if (action.page) {
-      const key = action.page.path.split("/").map((part) => part.startsWith(":") ? ":" : part).join("/");
-      const earlier = paths.get(key);
+      const earlier = paths.find(([, prior]) => pagePathsOverlap(prior, action.page!.path))?.[0];
       if (earlier) throw refusal("page.duplicate", `Actions ${earlier} and ${name} both bind page path ${action.page.path}.`);
-      paths.set(key, name);
+      paths.push([name, action.page.path]);
     }
     const listName = action.page?.list;
     if (!listName) continue;
@@ -257,6 +258,12 @@ function assertPageLists(actions: Record<string, ServerActionDefinition>) {
       throw refusal("page.list-columns", `Action ${name} names ${listName} as its page list, whose columns must match the page parameters and optional updated.`);
     }
   }
+}
+
+function pagePathsOverlap(left: string, right: string): boolean {
+  const a = left.split("/").slice(1);
+  const b = right.split("/").slice(1);
+  return a.length === b.length && a.every((segment, index) => segment.startsWith(":") || b[index].startsWith(":") || segment === b[index]);
 }
 
 function assertNoReservedKernelTable(name: string, statement: string) {

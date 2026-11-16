@@ -742,6 +742,7 @@ fn html(status: StatusCode, body: String) -> Response {
     let mut response = (status, body).into_response();
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 
@@ -762,6 +763,11 @@ pub const BUTTON_STYLE: &str = ".google{display:block;text-align:center;text-dec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn google_error_pages_are_not_indexed() {
+        assert_eq!(login_link_page(StatusCode::BAD_REQUEST, "Sign-in failed.").headers()["x-robots-tag"], "noindex");
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use accounts::AccountSettings;
     use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
