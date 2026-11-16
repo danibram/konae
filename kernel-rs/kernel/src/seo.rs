@@ -322,20 +322,73 @@ pub fn robots_response(
 }
 
 pub fn sitemap_response(
-    root: &Path,
+    state: &AppState,
     deployment: &Deployment,
     candidate: &str,
     bytes: Option<Vec<u8>>,
     address: &Address,
     headers: &HeaderMap,
     cache: &ArtifactCache,
-) -> Option<Response> {
+) -> impl std::future::Future<Output = Option<Response>> + Send {
+    async move {
     if candidate != "sitemap.xml" { return None; }
     if let Some(bytes) = bytes { return Some(cache.respond(headers, bytes, candidate)); }
-    let body = sitemap(root, deployment, &address.url);
+    let root = state.data_root.clone();
+    let id = deployment.id.clone();
+    let db = crate::layout::database(&root, &id);
+    let row_version = format!("{}-{}", metadata_version(&db).await, metadata_version(&database_sidecar(&db, "-wal")).await);
+    let options = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
+    let key = format!("{}|{}|{}|{}|{}", deployment.artifact_version, address.url, options, row_version, candidate);
+    let body = if let Some((_, body)) = sitemap_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&deployment.id).filter(|(cached, _)| cached == &key).cloned() {
+        body
+    } else {
+        let program = crate::action_shape::read(&deployment.actions).ok();
+        let mut lists = std::collections::HashMap::new();
+        let mut cacheable = true;
+        if let Some(program) = &program {
+            let names = program.actions.values().filter_map(|action| action.page.as_ref()?.get("list")?.as_str()).collect::<std::collections::BTreeSet<_>>();
+            for name in names {
+                let Some(list) = program.actions.get(name).cloned() else { continue };
+                let Ok(bindings) = crate::resolve_bindings(&list, &serde_json::Value::Object(serde_json::Map::new()), None) else { cacheable = false; continue };
+                let _database = crate::action_lock(state, &deployment.id, &list.kind).await;
+                let permit = match state.guards.statement_permit(&deployment.id).await { Ok(permit) => permit, Err(_) => { cacheable = false; continue } };
+                let path = db.clone();
+                if let Ok(Ok(rows)) = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    crate::run_query(&path, &list, bindings)
+                }).await {
+                    lists.insert(name.to_owned(), rows);
+                } else {
+                    cacheable = false;
+                }
+            }
+        }
+        let deployment = deployment.clone();
+        let deployment_id = deployment.id.clone();
+        let base = address.url.clone();
+        let built = tokio::task::spawn_blocking(move || sitemap(&root, &deployment, &base, lists)).await.ok()?;
+        if cacheable { sitemap_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(deployment_id, (key, built.clone())); }
+        built
+    };
     let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes()].concat());
     let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
     Some(tagged.respond(headers, body, candidate))
+    }
+}
+
+fn database_sidecar(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    name.into()
+}
+
+async fn metadata_version(path: &Path) -> String {
+    tokio::fs::metadata(path).await.ok().map(|metadata| format!("{}:{:?}", metadata.len(), metadata.modified().ok())).unwrap_or_default()
+}
+
+fn sitemap_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, Vec<u8>)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, Vec<u8>)>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
 }
 
 pub fn title(html: &[u8]) -> Option<String> {
@@ -445,7 +498,7 @@ fn head_range(html: &str) -> (usize, usize) {
     (start, html.len())
 }
 
-pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
+pub fn sitemap(root: &Path, deployment: &Deployment, base: &str, lists: std::collections::HashMap<String, Vec<serde_json::Value>>) -> Vec<u8> {
     let program = crate::action_shape::read(&deployment.actions).ok();
     let page_files = program.as_ref().map(|program| program.actions.values().filter_map(|action| {
         action.page.as_ref()?.get("file")?.as_str().map(str::to_owned)
@@ -482,12 +535,8 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
             let Some(page) = action.page.as_ref() else { continue };
             let Some(template) = page.get("path").and_then(serde_json::Value::as_str) else { continue };
             let Some(list_name) = page.get("list").and_then(serde_json::Value::as_str) else { continue };
-            let Some(list) = program.actions.get(list_name) else { continue };
-            let bindings = match crate::resolve_bindings(list, &serde_json::Value::Object(serde_json::Map::new()), None) {
-                Ok(bindings) => bindings,
-                Err(_) => continue,
-            };
-            let Ok(rows) = crate::run_query(&crate::layout::database(root, &deployment.id), list, bindings) else { continue };
+            let Some(_list) = program.actions.get(list_name) else { continue };
+            let Some(rows) = lists.get(list_name) else { continue };
             let segments = template.trim_start_matches('/').split('/').collect::<Vec<_>>();
             for row in rows {
                 let Some(row) = row.as_object() else { continue };

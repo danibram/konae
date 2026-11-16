@@ -2229,7 +2229,7 @@ pub(crate) async fn serve_key_with_routes(
         return seo::robots_response(&deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache, navigation).unwrap();
     }
     if seo_on && path == "sitemap.xml" {
-        return seo::sitemap_response(&state.data_root, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).unwrap();
+        return seo::sitemap_response(&state, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).await.unwrap();
     }
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
@@ -5222,6 +5222,7 @@ pub mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let mut state = test_state(&root);
         state.public_origin = "https://konae.example.test".into();
+        state.guards = Arc::new(Guards::new(Vec::new()).with_statement_wait(std::time::Duration::from_millis(5)));
         deploy_files(&state, json!({
             "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"Start here\"></head><body>Home</body></html>",
             "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
@@ -5265,12 +5266,23 @@ pub mod tests {
         assert_eq!(navigation_revalidation.status(), StatusCode::NOT_MODIFIED);
         let robots = serve_key(state.clone(), headers.clone(), "robots.txt".into()).await;
         assert!(String::from_utf8(axum::body::to_bytes(robots.into_body(), 100_000).await.unwrap().to_vec()).unwrap().contains("Disallow: /private"));
+        let mut held = Vec::new();
+        for _ in 0..4 { held.push(state.guards.statement_permit(&deployment.id).await.unwrap()); }
+        let blocked_sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let blocked_sitemap = String::from_utf8(axum::body::to_bytes(blocked_sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(!blocked_sitemap.contains("/posts/listed"));
+        drop(held);
         let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let sitemap_etag = sitemap.headers()[header::ETAG].to_str().unwrap().to_owned();
         let sitemap = String::from_utf8(axum::body::to_bytes(sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
         assert!(sitemap.contains("/about"));
         assert!(sitemap.contains("/posts/listed"));
         assert!(!sitemap.contains("/post</loc>"));
         assert!(!sitemap.contains("untitled"));
+        let mut sitemap_headers = headers.clone();
+        sitemap_headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&sitemap_etag).unwrap());
+        let sitemap_revalidation = serve_key(state.clone(), sitemap_headers, "sitemap.xml".into()).await;
+        assert_eq!(sitemap_revalidation.status(), StatusCode::NOT_MODIFIED);
         let template = serve_key(state.clone(), headers.clone(), "post.html".into()).await;
         assert_eq!(template.headers()["x-robots-tag"], "noindex");
         let listed = modules::read(&state, &deployment);
