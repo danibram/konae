@@ -506,6 +506,25 @@ async function hasPackageBuild(root: string) {
   return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
 }
 
+async function refreshPageBuilder(root: string, actionsSource: string) {
+  let actions: unknown;
+  try { actions = JSON.parse(actionsSource)?.actions; } catch { return; }
+  if (!actions || typeof actions !== "object" || Array.isArray(actions) || !Object.values(actions).some((action) => {
+    const page = (action as { page?: { path?: unknown; file?: unknown } } | null)?.page;
+    return typeof page?.path === "string" && typeof page.file === "string";
+  })) return;
+  const resources = [
+    ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
+    ["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")],
+  ] as const;
+  for (const [relative, contents] of resources) {
+    const target = path.join(root, relative);
+    if (await readFile(target, "utf8").catch(() => undefined) === contents) continue;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+}
+
 /** Packs an existing dist/ into the artifact shape a release uploads. */
 async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Record<string, string>; encodings: Record<string, string> }> {
   const files: Record<string, string> = {};
@@ -559,6 +578,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
+    await refreshPageBuilder(root, files["actions.json"] ?? "");
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
     const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
     if (neverRuns) throw Error(neverRuns);

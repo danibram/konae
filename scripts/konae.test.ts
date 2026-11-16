@@ -13,7 +13,7 @@ import { usageRange } from "../src/lib/usage";
 import { defaultModuleStates } from "../src/lib/app-folder";
 import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
-import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, type PromptInput } from "./konae";
+import { DOMAIN_NEEDS_DEPLOYMENT, HELP, INIT_TEMPLATES, NO_INSTALLATION, SERVER_COMMANDS, TEST_ACCOUNT_EMAIL, VERIFY_BY_LINK, acquireLocalLifecycleLock, browserLogin, creatorVerificationToken, domainLocal, downloadKernel, hostnameLocal, ignoreInGit, initLocal, inviteTestAccount, invitationLink, isLoopbackUrl, kernelRecord, localKernel, loginCredentials, loginScopes, manifestSignupPolicy, pendingPull, pipedSecret, publishLocal, readSecret, resetData, serverCommandMessage, setSecret, signupPolicyWarning, toolArguments, buildLocal, type PromptInput } from "./konae";
 
 const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
 const failing = new Set<string>();
@@ -173,6 +173,25 @@ test("downloadKernel verifies the release checksum and repairs a changed cached 
 });
 
 describe("konae CLI", () => {
+  test("a page build refreshes generated runtime and builder files in an older app folder", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "konae-old-page-builder-"));
+    try {
+      await mkdir(path.join(root, "app"), { recursive: true });
+      await mkdir(path.join(root, "scripts"), { recursive: true });
+      await mkdir(path.join(root, "node_modules"));
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
+      await writeFile(path.join(root, "konae.json"), JSON.stringify({ manifest: { version: 1 } }));
+      await writeFile(path.join(root, "app/index.html"), "<!doctype html><html><body>Home</body></html>");
+      await writeFile(path.join(root, "app/actions.json"), JSON.stringify({ version: 1, actions: { "posts.head": { kind: "query", access: "anonymous", statement: "SELECT title FROM posts LIMIT 1", bindings: [], page: { path: "/posts", file: "post.html" } } } }));
+      await writeFile(path.join(root, "scripts/static-artifact.mjs"), "old builder");
+      await writeFile(path.join(root, "scripts/runtime.js"), "old runtime");
+      await writeFile(path.join(root, "scripts/build.mjs"), "import { mkdir, writeFile } from 'node:fs/promises'; await mkdir('dist', { recursive: true }); await writeFile('dist/index.html', '<!doctype html><html><body>Home</body></html>');");
+      await buildLocal(root);
+      expect(await readFile(path.join(root, "scripts/static-artifact.mjs"), "utf8")).toContain("rewritePageUrls");
+      expect(await readFile(path.join(root, "scripts/runtime.js"), "utf8")).toContain("page: {");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   test("publish --plan calls release_plan only, leaves success markers alone, and releases uploads", async () => {
     await writeFile(path.join(directory, "app", "app.js"), "console.log('hi');");
     await writeFile(path.join(directory, ".konae-source-marker"), "untouched");
