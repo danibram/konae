@@ -16,7 +16,7 @@ import {
 import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src/deployments/release";
 import { type ProjectTemplates } from "./project-templates";
 import type { AppEvent, ReadRecord } from "./events";
-import { runScenario, testCalls, testControls, testReply, testSchedule, testStatus } from "./local-test";
+import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testCalls, testControls, testReply, testSchedule, testStatus } from "./local-test";
 import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
 import { pushData } from "./push";
 import {
@@ -985,6 +985,10 @@ export async function initLocal(root: string, options: { name?: string; template
 /** The Kernel `dev` runs on the folder, and the commands `sql`, `events` and `dev` give it. */
 export type LocalKernel = { binary: string; env: Record<string, string | undefined>; data: string; mailbox: string; run(args: string[], input?: string): Promise<string> };
 
+async function localStateSummary(root: string) {
+  return localResetSummary(await json<unknown>(path.join(root, ".konae/local-state.json")).catch(() => undefined));
+}
+
 /**
  * 1 TiB, the quota a local Kernel holds unless KONAE_FILES_QUOTA_BYTES names another.
  * `kernel import` checks pulled files against the quota and the per-file limit, and
@@ -1485,8 +1489,6 @@ export async function main() {
     const [action, ...rest] = positional;
     const settings = await readSettings(root);
     const kernel = await localKernel(root, settings, { build: false });
-    const capabilities = JSON.parse(await kernel.run(["capabilities"])) as { executionTest?: number };
-    if (capabilities.executionTest !== 1) throw Error("This Kernel does not support local test controls. Build or install a Kernel with executionTest capability.");
     let result: unknown;
     if (action === "status" && rest.length === 0) result = await testStatus(kernel);
     else if (action === "calls" && rest.length === 0) result = await testCalls(kernel);
@@ -1496,14 +1498,14 @@ export async function main() {
       const stdinFlag = args.includes("--stdin");
       if (file && stdinFlag) throw Error("Choose --stdin or --file <json>, not both.");
       if (!file && !stdinFlag) throw Error("Reply JSON must come from --stdin or --file <json>.");
-      const body = file ? await readFile(path.resolve(file), "utf8") : await Bun.stdin.text();
+      const body = file ? await readReplyFile(path.resolve(file)) : await readReplyInput(Bun.stdin.stream());
       result = await testReply(kernel, rest[0], body);
     } else if (action === "scenario" && rest.length === 1) {
-      const scenario = path.resolve(root, rest[0]);
-      if (!scenario.startsWith(path.join(path.resolve(root), "tests") + path.sep)) throw Error("Scenario files must live under project tests/.");
+      const scenario = await resolveScenarioPath(root, path.resolve(root, rest[0]));
       result = await runScenario(kernel, scenario);
     } else throw Error("Use konae test status, calls, reply <call-id> --stdin|--file <json>, schedule <action>, or scenario <file>.");
     console.log(JSON.stringify(result, null, 2));
+    if (action === "reply" && result && typeof result === "object" && (result as { accepted?: unknown }).accepted === false) process.exitCode = 1;
     return;
   }
   if (command === "events") {
@@ -1648,7 +1650,7 @@ export async function main() {
       const { serveEvents } = await import("./events");
       if (shuttingDown) return;
       const eventsPort = Number(option("events-port", String(Number(port) + 1)));
-      try { feed = serveEvents(kernelRecord(kernel), settings.id, kernel.mailbox, eventsPort, testControls(kernel)); }
+      try { feed = serveEvents(kernelRecord(kernel), settings.id, kernel.mailbox, eventsPort, testControls(kernel, () => localStateSummary(root))); }
       catch { console.warn(`Port ${eventsPort} is taken, so the events page is off. Choose another with --events-port, or run events.`); }
       if (shuttingDown) return;
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
@@ -1699,5 +1701,9 @@ export async function main() {
 
 if (import.meta.main) main().catch(error => {
   if (shutdownSignalCode !== undefined) process.exitCode = shutdownSignalCode;
-  else { console.error(error.message); process.exitCode = 1; }
+  else {
+    if (error instanceof ScenarioRefusal) console.error(JSON.stringify(error.result, null, 2));
+    else console.error(error.message);
+    process.exitCode = 1;
+  }
 });

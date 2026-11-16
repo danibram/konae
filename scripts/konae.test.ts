@@ -1,14 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { templateChoices } from "../src/lib/templates";
 import { packageComponentFiles } from "../src/lib/portable-package";
 import { PROJECT_TEMPLATES_FILE, renderProjectTemplates } from "./project-templates";
 import { deploymentRecord, formatEvent, kernelEvents, mailEvents, serveEvents, type ReadRecord } from "./events";
-import { runScenario, testReply } from "./local-test";
+import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testControls, testReply } from "./local-test";
 import { usageRange } from "../src/lib/usage";
 import { rehearsePulledSnapshot } from "./rehearse";
 import type { Sources } from "../src/lib/what-happened";
@@ -1177,6 +1177,15 @@ setInterval(() => {}, 1000);
     const received: string[] = [];
     const runner = { run: async (_args: string[], input?: string) => { received.push(input || ""); return JSON.stringify({ accepted: true }); } };
     await expect(testReply(runner, "call-a", JSON.stringify({ responseNumber: 0, status: 200, body: {} }))).rejects.toThrow("positive responseNumber");
+    await expect(testReply(runner, "call-a", "null")).rejects.toThrow("Reply JSON must be a JSON object");
+    await expect(testReply(runner, "call-a", JSON.stringify({ responseNumber: 1, status: 200, body: {}, extra: true }))).rejects.toThrow("unknown field");
+    expect(await testReply({ run: async () => JSON.stringify({ accepted: false }) }, "call-a", JSON.stringify({ responseNumber: 1, error: "timeout" }))).toEqual({ accepted: false });
+    await expect(testReply({ run: async () => "null" }, "call-a", JSON.stringify({ responseNumber: 1, error: "timeout" }))).rejects.toThrow("Kernel reply result must be a JSON object");
+    await expect(testReply({ run: async () => JSON.stringify({ accepted: "yes" }) }, "call-a", JSON.stringify({ responseNumber: 1, error: "timeout" }))).rejects.toThrow("accepted boolean");
+    expect(localResetSummary({ executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3, backup: "/private/host/path" })).toEqual({ executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3 });
+    expect(localResetSummary({ executionId: "exec-1", snapshotId: "snap-1", resetAt: "bad", callsRetired: 2, mailRetired: 3 })).toBeUndefined();
+    const controls = testControls({ run: async (args) => args[1] === "status" ? JSON.stringify({ mode: "test", pausedSchedules: [] }) : JSON.stringify({ calls: [] }) }, async () => ({ executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3 }));
+    expect(await controls.status()).toEqual({ mode: "test", pausedSchedules: [], localState: { executionId: "exec-1", snapshotId: "snap-1", resetAt: 1, callsRetired: 2, mailRetired: 3 } });
     const directory = await mkdtemp(path.join(tmpdir(), "konae-scenario-"));
     try {
       const filename = path.join(directory, "scenario.json");
@@ -1186,19 +1195,66 @@ setInterval(() => {}, 1000);
         { callId: "c2", action: "mail.send", responseNumber: 2, awaitingAt: 5 },
       ] }) };
       await expect(runScenario(ambiguous, filename)).rejects.toThrow("matched 2 awaiting calls");
+      const backoffUntil = Date.now() + 60_000;
+      const backoff = { run: async () => JSON.stringify({ calls: [{ callId: "retry-1", action: "mail.send", responseNumber: 2, state: "pending", nextAttemptAt: backoffUntil }] }) };
+      let retryRefusal: ScenarioRefusal | undefined;
+      try { await runScenario(backoff, filename); } catch (error) { if (error instanceof ScenarioRefusal) retryRefusal = error; else throw error; }
+      expect(retryRefusal?.message).toContain("retry for mail.send is pending");
+      expect(retryRefusal?.result.pending).toMatchObject([{ callId: "retry-1", nextAttemptAt: backoffUntil }]);
       await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: { input: { recipient: "ana" } }, response: { responseNumber: 2, status: 202, body: { ok: true } } }] }));
       const commands: string[][] = [];
+      let callReads = 0;
       const exact = { run: async (args: string[], input?: string) => {
         commands.push(args);
-        if (args[1] === "calls") return JSON.stringify({ calls: [{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 2, awaitingAt: 8 }] });
+        if (args[1] === "calls") return JSON.stringify({ calls: callReads++ === 0 ? [{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 2, awaitingAt: 8 }] : [{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 3, attempts: 2, nextAttemptAt: 100 }] });
         expect(JSON.parse(input!)).toEqual({ responseNumber: 2, status: 202, body: { ok: true } });
-        return JSON.stringify({ accepted: true });
+        return JSON.stringify({ accepted: true, attempt: 1 });
       } };
       const applied = await runScenario(exact, filename);
       expect(applied.applied).toHaveLength(1);
-      expect(commands).toEqual([["test", "calls"], ["test", "reply", "c3"]]);
+      expect(applied.pending).toEqual([{ callId: "c3", action: "mail.send", input: { recipient: "ana", subject: "Hi" }, responseNumber: 3, attempts: 2, nextAttemptAt: 100 }]);
+      expect(commands).toEqual([["test", "calls"], ["test", "reply", "c3"], ["test", "calls"]]);
       await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: { input: { recipient: "ana" } }, response: { responseNumber: 1, status: 202, body: { ok: true } } }] }));
-      await expect(runScenario(exact, filename)).rejects.toThrow("expected response 2, got 1");
+      const mismatch = { run: async () => JSON.stringify({ calls: [{ callId: "c3", action: "mail.send", input: { recipient: "ana" }, responseNumber: 3, awaitingAt: 10 }] }) };
+      await expect(runScenario(mismatch, filename)).rejects.toThrow("expected response 3, got 1");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: {}, response: { responseNumber: 2, status: 200, body: {}, extra: true } }] }));
+      await expect(runScenario(exact, filename)).rejects.toThrow("unknown field");
+      await writeFile(filename, "[]");
+      await expect(runScenario(exact, filename)).rejects.toThrow("Scenario must be a JSON object");
+      await writeFile(filename, " ".repeat(1024 * 1024 + 1));
+      await expect(runScenario(exact, filename)).rejects.toThrow("regular file no larger than");
+      const root = path.join(directory, "project"); const tests = path.join(root, "tests"); const outside = path.join(directory, "outside.json");
+      await mkdir(tests, { recursive: true }); await writeFile(outside, "{}");
+      const escaped = path.join(tests, "escape.json"); await symlink(outside, escaped);
+      await expect(resolveScenarioPath(root, escaped)).rejects.toThrow("inside project tests/");
+      await writeFile(path.join(tests, "okay.json"), "{}");
+      expect(await resolveScenarioPath(root, path.join(tests, "okay.json"))).toBe(await realpath(path.join(tests, "okay.json")));
+      const oversized = path.join(directory, "reply.json"); await writeFile(oversized, " ".repeat(64 * 1024 + 1));
+      await expect(readReplyFile(oversized)).rejects.toThrow("regular file no larger than");
+      await expect(readReplyInput(new Blob([" ".repeat(64 * 1024 + 1)]).stream())).rejects.toThrow("Reply JSON exceeds");
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [
+        { action: "mail.send", match: { input: { recipient: "one" } }, response: { responseNumber: 1, status: 200, body: {} } },
+        { action: "mail.send", match: { input: { recipient: "two" } }, response: { responseNumber: 99, status: 200, body: {} } },
+      ] }));
+      let reads = 0;
+      const partial = { run: async (args: string[], input?: string) => {
+        if (args[1] === "calls") return JSON.stringify({ calls: reads++ === 0 ? [
+          { callId: "first", action: "mail.send", input: { recipient: "one" }, responseNumber: 1, awaitingAt: 1 },
+          { callId: "second", action: "mail.send", input: { recipient: "two" }, responseNumber: 2, awaitingAt: 2 },
+        ] : [{ callId: "second", action: "mail.send", input: { recipient: "two" }, responseNumber: 2, awaitingAt: 2 }] });
+        if (args[1] === "reply") return JSON.stringify({ accepted: true });
+        throw Error("Unexpected command");
+      } };
+      let refusal: ScenarioRefusal | undefined;
+      try { await runScenario(partial, filename); } catch (error) { if (error instanceof ScenarioRefusal) refusal = error; else throw error; }
+      expect(refusal?.result).toMatchObject({ refused: true, applied: [{ callId: "first" }], pending: [{ callId: "second" }] });
+      await writeFile(filename, JSON.stringify({ version: 1, responses: [{ action: "mail.send", match: {}, response: { responseNumber: 1, error: "timeout" } }] }));
+      const rejectedReply = { run: async (args: string[]) => args[1] === "calls"
+        ? JSON.stringify({ calls: [{ callId: "stale", action: "mail.send", responseNumber: 1, awaitingAt: 1 }] })
+        : JSON.stringify({ accepted: false, reason: "stale" }) };
+      let rejected: ScenarioRefusal | undefined;
+      try { await runScenario(rejectedReply, filename); } catch (error) { if (error instanceof ScenarioRefusal) rejected = error; else throw error; }
+      expect(rejected?.result).toMatchObject({ refused: true, applied: [], pending: [{ callId: "stale" }] });
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
@@ -1217,11 +1273,16 @@ setInterval(() => {}, 1000);
       const get = (route: string, headers: Record<string, string> = {}) => fetch(new URL(route, base), { headers: { "X-Konae-Control": token, ...headers } });
       expect((await get("test/status")).status).toBe(200);
       expect((await get("test/calls", { Origin: "http://localhost:4173" })).status).toBe(403);
+      expect((await get("events.json", { Origin: "http://localhost:4173" })).status).toBe(403);
       expect((await fetch(new URL("test/status", base))).status).toBe(403);
       const reply = await fetch(new URL("test/reply/c-1", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: '{"responseNumber":1}' });
       expect(await reply.json()).toEqual({ accepted: false });
       const schedule = await fetch(new URL("test/schedule/digest.run", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: "{}" });
       expect(await schedule.json()).toEqual({ ok: true });
+      const oversized = await fetch(new URL("test/reply/c-2", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: " ".repeat(65537) });
+      expect(oversized.status).toBe(413);
+      const invalidSchedule = await fetch(new URL("test/schedule/digest.run", base), { method: "POST", headers: { "X-Konae-Control": token, Origin: feed.origin, "content-type": "application/json" }, body: "[]" });
+      expect(invalidSchedule.status).toBe(400);
       expect(mutations).toEqual(["reply:c-1:{\"responseNumber\":1}", "schedule:digest.run"]);
     } finally { feed.stop(); }
   });

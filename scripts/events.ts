@@ -153,7 +153,7 @@ export const EVENTS_PAGE = `<!doctype html>
   <p class="lede">Email, calls to other services, scheduled runs, routes and Signals of the app on this machine, newest first. Email is written to a file here and never sent.</p>
   <div class="filters" id="filters" role="group" aria-label="Show"></div>
   <section class="controls" id="test-controls" hidden aria-labelledby="test-heading">
-    <h2 id="test-heading">Local test controls</h2><p id="test-policy" class="detail"></p>
+    <h2 id="test-heading">Local test controls</h2><p id="test-policy" class="detail"></p><p id="reset-state" class="detail"></p>
     <h3>Paused schedules</h3><pre id="schedules"></pre>
     <form id="schedule-form"><label>Run a schedule now <input name="action" required></label> <button>Run</button></form>
     <h3>Awaiting calls</h3><div id="calls"></div>
@@ -216,6 +216,10 @@ export const EVENTS_PAGE = `<!doctype html>
       const status = await statusResponse.json(); const calls = await callsResponse.json();
       controls.hidden = false;
       document.getElementById("test-policy").textContent = "Execution mode: " + status.mode;
+      const reset = status.localState;
+      document.getElementById("reset-state").textContent = reset
+        ? "Last reset " + new Date(reset.resetAt).toLocaleString() + ". Snapshot " + reset.snapshotId + ", execution " + reset.executionId + "; retired " + reset.callsRetired + " calls and " + reset.mailRetired + " emails."
+        : "No local reset record.";
       document.getElementById("schedules").textContent = JSON.stringify(status.pausedSchedules || [], null, 2);
       const host = document.getElementById("calls"); host.replaceChildren();
       for (const call of calls.calls || []) {
@@ -232,6 +236,7 @@ export const EVENTS_PAGE = `<!doctype html>
   async function mutate(url, body) {
     const response = await authorized(url, { method: "POST", headers: { "content-type": "application/json" }, body });
     const result = await response.json(); if (!response.ok) throw Error(result.error || "The local test control refused this request.");
+    if (url.startsWith("test/reply/") && result.accepted === false) throw Error("The Kernel did not accept this response. Refresh the call list before replying again.");
     return result;
   }
   document.getElementById("schedule-form").onsubmit = async (event) => { event.preventDefault(); const action = new FormData(event.currentTarget).get("action"); try { await mutate("test/schedule/" + encodeURIComponent(action), "{}"); await loadTestControls(); } catch (problem) { const error = document.getElementById("error"); error.textContent = problem.message; error.hidden = false; } };
@@ -275,10 +280,15 @@ export function serveEvents(read: ReadRecord, deploymentId: string, mailbox: str
       }
       const match = /^\/test\/(reply|schedule)\/([^/]+)$/.exec(url.pathname);
       if (controls && match && request.method === "POST") {
+        if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") return Response.json({ error: "Content-Type must be application/json." }, { status: 415, headers });
         let body: string;
         try { body = await boundedBody(request, 65536); }
         catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413, headers }); }
         try {
+          if (match[1] === "schedule") {
+            const value = JSON.parse(body);
+            if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length) throw Error("Schedule request must be an empty JSON object.");
+          }
           const result = match[1] === "reply" ? await controls.reply(decodeURIComponent(match[2]), body) : await controls.schedule(decodeURIComponent(match[2]));
           return Response.json(result, { headers });
         } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400, headers }); }
