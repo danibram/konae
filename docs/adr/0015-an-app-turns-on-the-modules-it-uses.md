@@ -1,0 +1,62 @@
+# An app turns on the modules it uses
+
+Status: proposed.
+
+Every app carries a database, accounts, files and routes whether it uses them or not. The Konae home is HTML, CSS and one script, and it still ships an `actions.json` with no action, a `schema.sql`, and the SDK in every page. Each option of an app has a tool of its own, so a new one needs a tool, an entry in the build agent's allowlist and a form in the editor, and the permission it needs lives in code under the tool's name. Search listing (ADR-0016) is the next capability, and it should not add a fourth way to set an option.
+
+## Decision
+
+### A module is one capability of an app
+
+- A module holds four things: the calls a page makes on `window.miniapp`, the keys it adds to Capsule files, the options an owner sets, and what the Kernel does for it. `auth`, `actions`, `files`, `calls` and `http` are modules today, and `calls` and `http` have no browser call.
+- `src/sdk/contract.ts` describes every module once. It gains, for each module, its options, the permission a change needs, whether the build agent may change it after the owner confirms or never, the modules it requires, and how to tell that an app uses it.
+- `bun run sdk:render` writes the readers: the build agent's prompt, the `sdk` topic of `platform_guide`, `docs/sdk.md` and `kernel-rs/kernel/src/modules.json`. The Kernel reads the last one, so the `kernel` binary checks an option the way Konae does. `src/sdk/contract.test.ts` fails when a reader disagrees.
+
+### `konae.json` says which modules are on
+
+- `konae.json` holds `"modules": { "<name>": { "on": true, "<option>": <value> } }`. An export carries it. A secret never goes there.
+- A module is off until someone turns it on. `konae init` and the editor's templates turn on what the template uses.
+- The state belongs to the project, so it exists before the first publish. A change applies at once and has no draft.
+- A module that `konae.json` does not name has never been decided for that app. Only an app made before the module existed is in that state.
+
+### The published app never uses a module that is off
+
+- A release is refused when the Capsule uses a module that is off. The Validation Gate and the Kernel answer `module.off` with the same sentence, which names the module and says where to turn it on.
+- Turning a module off is refused with `module.in-use` while the published app uses it.
+- Turning a module on is refused with `module.requires` while a module it requires is off. `http`, `calls` and a page route (ADR-0017) require `actions`. A private app requires `auth`.
+
+### Two tools change every module
+
+- `modules_read { projectId }` needs `read`. It answers every module with its state, its options, what in the app uses it, and what it does right now.
+- `module_set { projectId, module, on?, options?, expected? }` needs the permission the contract names for that module. `expected` is the state the caller read, and a call whose `expected` no longer matches is refused with `module.changed`. The read-back is `modules_read`.
+- The editor's Modules tab is drawn from the contract and calls the same two tools. The build agent gets them through the allowlist of ADR-0007, and a change waits for the owner in a dialog. The `kernel` binary has `kernel module`, which calls the same function.
+- `konae dev` reads the folder's `konae.json`. A publish sends `modules` only with the first release. After that the installation's state decides, and `konae pull` brings it into the folder.
+
+### An app made before a module keeps working
+
+- When a Kernel opens an app whose `konae.json` does not name a module, it decides once: on when the app uses the module, off when it does not, and on when the folder cannot tell. It writes the answer and logs it. An import does the same.
+- The operator reads what each app got with `kernel modules`, before and after the upgrade.
+- The `kernel` field of `konae.json` cannot answer this. Every release rewrites it with the running version.
+
+### Modules move one at a time
+
+- `seo` comes first, because it is new and replaces no tool. Then `files`, `auth`, `actions`, and last `http` and `calls`.
+- Moving a module puts its options under `module_set` and removes the tools they had in the same change. Until a module moves, it behaves as it does today.
+
+## Rejected options
+
+- **Plugins the Kernel loads, or a layer in Konae that switches behaviour.** The `kernel` binary serves an exported folder with no Konae around it, so the behaviour has to be Kernel code.
+- **One tool for each option.** It is what exists. Each option costs a tool, an allowlist entry and a form, and two options can disagree about who may change them.
+- **Options in the Capsule manifest, applied at a release.** The build agent may not save the manifest (ADR-0007), and an agent with MCP alone cannot publish, so it could not operate a module.
+- **Leave the database, accounts and files always on.** A static app keeps a database it never opens, and nobody can read from the folder what an app is able to do.
+- **Read which modules are on from the Capsule at each release, and store nothing.** The owner could not refuse a capability, options would have no place, and `files` and `seo` add no key to read.
+- **Turn on a required module without asking.** An app would gain accounts because someone turned on files.
+- **Decide from the `kernel` field whether an app predates a module.** The next publish overwrites the field, and the app would lose its modules.
+
+## Consequences
+
+- After `actions` moves, an app with every module off is its static files: no `actions.json`, no `schema.sql`, no SDK script and no database. Until then the home keeps what it ships today.
+- A publish can now be refused for a module that is off. The refusal names the module and the tool, so one call clears it.
+- The Validation Gate needs the project's module state. The editor reads it with `modules_read`, and the CLI reads the folder's `konae.json`.
+- A tool that a moved module replaces stops existing. An agent that still calls it gets the name of `module_set` from `platform_guide`.
+- Words change with the decision. `CONTEXT.md` gets a Module entry, and the SDK module entry becomes the part of a module a page calls.
