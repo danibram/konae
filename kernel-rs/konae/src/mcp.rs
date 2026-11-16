@@ -1994,15 +1994,17 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
-/// The contact email a release of `project` carries: the one the payload
-/// names from its folder's konae.json, else the one the published app has,
-/// which the owner may have set in App settings, else the owner's.
+/// The first release may take the folder's contact email. Later releases keep
+/// the Deployment value so a stale app folder cannot replace an owner change.
 async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
-    if let Some(given) = given {
-        let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
-        return Ok(Some(email));
+    let deployment = find_project_deployment(&*state.deployments.read().await, project);
+    if deployment.is_none() {
+        if let Some(given) = given {
+            let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
+            return Ok(Some(email));
+        }
     }
-    let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
+    let kept = deployment.and_then(|deployment| deployment.contact_email);
     Ok(kept.or_else(|| owner_email(state, &owner.id)))
 }
 

@@ -697,7 +697,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const { artifact, source } = prepared;
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
-      initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
+      initialSignupPolicy: first ? wanted : undefined, contactEmail: first ? config.contactEmail : undefined,
     };
   }, confirm, (error) => warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
     if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
@@ -731,6 +731,12 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const current = inspected?.deployment?.signupPolicy;
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
+  }
+  if (!first && config.contactEmail) {
+    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id });
+    if (current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
+      warn(`The app folder asks for contact email ${config.contactEmail}, but this app has ${current.contactEmail ?? "none"}. A publish keeps the app's contact email after its first release. Change it with contact_email_set.`);
+    }
   }
   return Object.assign(receipt, { first });
 }
