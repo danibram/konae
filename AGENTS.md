@@ -64,7 +64,7 @@ These are not bugs to paper over. Say them when they matter.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
 - The editor preview writes no canonical, card, `robots.txt` or sitemap. `konae dev` writes them using the local host as the address.
 - The editor's build reads npm packages from esm.sh; `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
-- The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
+- The Validation Gate checks schema, `actions.json` and that each module the Capsule uses is on, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
 - The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When preview lacks a declared table or column, the Gate reports `PREVIEW_BEHIND`, names the difference and says to try `konae dev` or a Deployment; its summary marks row checks skipped.
 - `konae dev` sends no email. Account email and notices land in `.konae/kernel/mail-testbox.jsonl`, and `konae events` lists them.
 
