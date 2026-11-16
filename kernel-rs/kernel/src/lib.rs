@@ -5327,7 +5327,7 @@ pub mod tests {
         let replaced = crate::layout::private(&root, &deployment.id).join("page-swap-replaced.sqlite");
         for path in [&live, &staged] {
             let connection = Connection::open(path).unwrap();
-            connection.execute_batch("CREATE TABLE posts(slug TEXT PRIMARY KEY, title TEXT NOT NULL);").unwrap();
+            connection.execute_batch("CREATE TABLE posts(slug TEXT PRIMARY KEY, title TEXT);").unwrap();
             connection.execute("INSERT INTO posts VALUES('hello', ?1)", [if path == &live { "Old" } else { "New" }]).unwrap();
         }
         let lock = database_lock(&state, &deployment.id).await;
@@ -5357,6 +5357,13 @@ pub mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
         assert!(body.contains("New"), "{body}");
+        writer.execute("UPDATE posts SET title=NULL WHERE slug='hello'", []).unwrap();
+        let headers = HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]);
+        let untitled = serve_key_with_routes(state.clone(), headers, "posts/hello".into(), Some(http::route_table(&deployment))).await;
+        assert_eq!(untitled.headers()["x-robots-tag"], "noindex");
+        let untitled = String::from_utf8(axum::body::to_bytes(untitled.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(untitled.contains("name=\"konae-page-params\""));
+        assert!(untitled.contains("&quot;slug&quot;:&quot;hello&quot;"));
         let reopened = Connection::open(crate::layout::database(&root, &deployment.id)).unwrap();
         assert_eq!(reopened.query_row("SELECT title FROM posts WHERE slug='later'", [], |row| row.get::<_, String>(0)).unwrap(), "WAL row");
         drop(writer);
