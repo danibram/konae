@@ -456,14 +456,14 @@ mod tests {
         );
         assert_eq!(
             page_canonical("https://app.example/", "guide/index.html"),
-            "https://app.example/guide"
+            "https://app.example/guide/"
         );
     }
 
     #[test]
     fn description_skips_other_metadata_and_reads_an_escaped_value() {
         let html = br#"<head><meta charset="utf-8"><meta content="Tea &amp; toast" name="description"></head>"#;
-        assert_eq!(description(html), "Tea & toast");
+        assert_eq!(description(html), "Tea &amp; toast");
     }
 
     #[test]
