@@ -221,15 +221,20 @@ fn escape_all(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-pub fn page_canonical(base: &str, file: &str) -> String {
-    let mut path = file
-        .trim_end_matches(".html")
-        .trim_end_matches(".htm")
-        .to_owned();
-    if path == "index" {
+pub fn page_canonical(base: &str, file: &str, routing: crate::artifact::Routing) -> String {
+    let mut path = file.to_owned();
+    if path == "index.html" {
         path.clear();
-    } else if let Some(directory) = path.strip_suffix("/index") {
-        path = format!("{directory}/");
+    } else if routing == crate::artifact::Routing::Pages && path.ends_with("/index.html") {
+        path.truncate(path.len() - "/index.html".len());
+        path.push('/');
+    } else if routing == crate::artifact::Routing::Pages && path.ends_with(".html") {
+        let extensionless = path.trim_end_matches(".html");
+        if !extensionless.rsplit('/').next().unwrap_or(extensionless).contains('.')
+            && crate::artifact::candidates(extensionless, routing).iter().any(|candidate| candidate == file)
+        {
+            path = extensionless.to_owned();
+        }
     }
     format!(
         "{}{}",
@@ -266,7 +271,7 @@ pub fn html_response(
     if !(candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
         return None;
     }
-    let canonical = page_canonical(&address.url, candidate);
+    let canonical = page_canonical(&address.url, candidate, crate::artifact::routing(&deployment.manifest));
     let Some(title) = title(&bytes) else {
         let mut response = cache.respond(headers, bytes.to_vec(), candidate);
         response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
@@ -386,7 +391,7 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
             if title(&bytes).is_some() {
                 xml.push_str(&format!(
                     "<url><loc>{}</loc></url>",
-                    escape(&page_canonical(base, &file))
+                    escape(&page_canonical(base, &file, crate::artifact::routing(&deployment.manifest)))
                 ));
             }
         }
@@ -567,17 +572,29 @@ mod tests {
     #[test]
     fn canonical_pages_drop_html_suffix_and_index_names() {
         assert_eq!(
-            page_canonical("https://app.example/", "index.html"),
+            page_canonical("https://app.example/", "index.html", crate::artifact::Routing::Pages),
             "https://app.example/"
         );
         assert_eq!(
-            page_canonical("https://app.example/", "about.html"),
+            page_canonical("https://app.example/", "about.html", crate::artifact::Routing::Pages),
             "https://app.example/about"
         );
         assert_eq!(
-            page_canonical("https://app.example/", "guide/index.html"),
+            page_canonical("https://app.example/", "guide/index.html", crate::artifact::Routing::Pages),
             "https://app.example/guide/"
         );
+    }
+
+    #[test]
+    fn file_canonicals_resolve_to_the_same_artifact_in_each_routing_mode() {
+        for routing in [crate::artifact::Routing::Pages, crate::artifact::Routing::Spa] {
+            for file in ["v1.2.html", "page.htm", "about.html", "index.html", "guide/index.html"] {
+                let canonical = page_canonical("https://app.example", file, routing);
+                let path = canonical.strip_prefix("https://app.example/").unwrap_or("");
+                let answer = crate::artifact::candidates(path, routing);
+                assert!(answer.iter().any(|candidate| candidate == file), "{routing:?} {file} canonicalized to {canonical}, candidates were {answer:?}");
+            }
+        }
     }
 
     #[test]
