@@ -1053,10 +1053,35 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     ...(options.confirmSchema ? { KONAE_CONFIRM_SCHEMA: options.confirmSchema } : {}),
   };
   const run = async (args: string[], input?: string) => {
-    const child = Bun.spawn([binary, ...args, "--app", settings.id], { env, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe" });
-    const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    if (code !== 0) throw Error(error.trim().replace(/^Error: /, "") || `kernel ${args[0]} stopped with ${code}.`);
-    return output;
+    const mutatesTestState = args[0] === "test" && (args[1] === "reply" || args[1] === "schedule");
+    const release = mutatesTestState ? await acquireLocalControlLock(root) : undefined;
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let interrupted: "SIGINT" | "SIGTERM" | undefined;
+    const onSignal = (signal: "SIGINT" | "SIGTERM") => {
+      interrupted = signal;
+      shutdownSignalCode = signal === "SIGINT" ? 130 : 143;
+      process.exitCode = shutdownSignalCode;
+      child?.kill(signal);
+    };
+    const onSigint = () => onSignal("SIGINT");
+    const onSigterm = () => onSignal("SIGTERM");
+    if (mutatesTestState) {
+      process.once("SIGINT", onSigint);
+      process.once("SIGTERM", onSigterm);
+    }
+    try {
+      child = Bun.spawn([binary, ...args, "--app", settings.id], { env, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe" });
+      const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      if (interrupted) throw Error(`Local ${args[1]} control stopped by ${interrupted}.`);
+      if (code !== 0) throw Error(error.trim().replace(/^Error: /, "") || `kernel ${args[0]} stopped with ${code}.`);
+      return output;
+    } finally {
+      await release?.();
+      if (mutatesTestState) {
+        process.removeListener("SIGINT", onSigint);
+        process.removeListener("SIGTERM", onSigterm);
+      }
+    }
   };
   return { binary, env, data, mailbox: path.join(data, "mail-testbox.jsonl"), run };
 }
@@ -1157,6 +1182,29 @@ export async function acquireLocalLifecycleLock(root: string): Promise<() => Pro
   }
 }
 
+/** Serializes test replies and schedules with local data replacement. */
+export async function acquireLocalControlLock(root: string): Promise<() => Promise<void>> {
+  const file = path.join(root, ".konae/control.lock");
+  await mkdir(path.dirname(file), { recursive: true });
+  let created = false;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(file, "wx", 0o600);
+    created = true;
+    await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+    await handle.close();
+    handle = undefined;
+    return async () => { await rm(file, { force: true }); };
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    if (created) await rm(file, { force: true }).catch(() => {});
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const owner = await json<{ pid?: number }>(file).catch(() => undefined);
+    if (owner?.pid && processExists(owner.pid)) throw Error(`A local test control or reset (pid ${owner.pid}) holds ${file}. Wait for it to finish before running another test control or reset.`);
+    throw Error(`A local control lock at ${file} needs operator recovery. Check that no local test control or reset is running, then remove the stale lock.`);
+  }
+}
+
 function processExists(pid: number) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
@@ -1165,8 +1213,10 @@ function processExists(pid: number) {
 type LocalResetRecord = { snapshotId: string; executionId: string; packageId?: string; resetAt: number; backup: string; callsRetired: number; mailRetired: number };
 
 export async function resetData(root: string, kernel: Pick<LocalKernel, "run" | "data">, pulled: Pulled | undefined, confirmSchema?: string, options: { lockHeld?: boolean } = {}) {
-  const release = options.lockHeld ? undefined : await acquireLocalLifecycleLock(root);
+  const releaseLifecycle = options.lockHeld ? undefined : await acquireLocalLifecycleLock(root);
+  let releaseControl: (() => Promise<void>) | undefined;
   try {
+    releaseControl = await acquireLocalControlLock(root);
     const executionId = crypto.randomUUID();
     const snapshotId = pulled?.snapshotId ?? crypto.randomUUID();
     const backup = path.join(root, ".konae/backups", `local-reset-${executionId}`);
@@ -1194,7 +1244,10 @@ export async function resetData(root: string, kernel: Pick<LocalKernel, "run" | 
       catch (restoreError) { throw Error(`Reset failed (${error instanceof Error ? error.message : String(error)}); restoring its data and delivery queues also failed (${restoreError instanceof Error ? restoreError.message : String(restoreError)}). Backup ${backup} remains available.`); }
       throw error;
     }
-  } finally { await release?.(); }
+  } finally {
+    await releaseControl?.();
+    await releaseLifecycle?.();
+  }
 }
 
 async function snapshotLocalState(root: string, kernelData: string, backup: string) {
