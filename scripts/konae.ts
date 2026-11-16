@@ -31,6 +31,7 @@ import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
+import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
@@ -45,7 +46,7 @@ let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
 /** `url` is absent in a project that `init` wrote without one, until a publish names the installation. */
 /** What a publish sends. `contactEmail` is where notices to the owner go, from konae.json. */
-type Config = { url?: string; project: Project; contactEmail?: string };
+type Config = { url?: string; project: Project; contactEmail?: string; modules?: AppSettings["modules"] };
 type SignupMode = "open" | "invitation" | "closed" | "allowlist";
 export type SignupPolicy = { mode: SignupMode; allowlist: string[] };
 
@@ -494,6 +495,7 @@ export function configOf(settings: AppSettings, url?: string): Config {
   return {
     ...(url ? { url } : {}),
     ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
+    modules: settings.modules ?? defaultModuleStates(),
     project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
   };
 }
@@ -653,6 +655,7 @@ async function productionRequirements(root: string, confirmation?: string | null
 
 export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, confirm: ConfirmSchema = keepData, planOnly = false) {
   if (!config.url) throw Error(NO_INSTALLATION);
+  const initialModules = config.modules ?? defaultModuleStates();
   const client = new McpClient(endpoint(config.url), { token });
   const wanted = manifestSignupPolicy(config.project.manifest);
   // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
@@ -668,7 +671,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   checkArtifact(prepared.artifact);
   const identity = { id: project.id, name: project.name, slug: project.slug, manifest: project.manifest };
   const initialSignupPolicy = wanted ? { mode: wanted.mode, allowlist: wanted.allowlist } : undefined;
-  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}) })));
+  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}), initialModules })));
   let first = false;
   let observedSourcesRevision: number | undefined;
   let publishedSourceDigest = "";
@@ -698,6 +701,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
       initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
+      initialModules: first ? initialModules : undefined,
     };
   }, confirm, (error) => warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
     if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
@@ -974,7 +978,7 @@ export async function initLocal(root: string, options: { name?: string; template
   // The template says who may open the app. Only people the owner invites can create an account.
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
-    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: { version: 1 },
+    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules: defaultModuleStates(), manifest: { version: 1 },
   };
   await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
   await writeEntries(root, await folderFiles(root, settings));

@@ -706,7 +706,11 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         path_read_tool(),
         tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"projectId":text}), &["projectId"], true),
         tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
+        tool("modules_read", "Read every SDK module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
     ]);
+    if owner.scopes.iter().any(|scope| ["publish", "write", "manage_users"].contains(&scope.as_str())) {
+        tools.push(tool("module_set", "Turn an SDK module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
+    }
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
             tool(
@@ -1704,6 +1708,19 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::notify::contact_view(&deployment))
         }
+        "modules_read" => {
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
+            kernel::modules::read(&state.data_root, &deployment.id)
+        }
+        "module_set" => {
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let module = a["module"].as_str().unwrap_or_default();
+            let registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json"))?;
+            let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::anyhow!("Unknown SDK module {module}."))?;
+            let deployment = owned_deployment(state, owner, id, scope).await?;
+            let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
+            kernel::modules::set(&state.data_root, &deployment.id, module, a["on"].as_bool(), a.get("options"), a.get("expected")).await
+        }
         "contact_email_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
             let deployment = owned_deployment(state, owner, id, "publish").await?;
@@ -2505,6 +2522,33 @@ mod tests {
         assert_eq!(inspected["deployment"]["hostname"], moved["hostname"]);
         assert_eq!(inspected["deployment"]["url"], moved["url"]);
         assert!(moved["hostname"].as_str().unwrap().starts_with("scope-two."), "{moved}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn module_tools_read_back_changes_and_refuse_stale_or_unauthorized_writes() {
+        let root = std::env::temp_dir().join(format!("konae-module-tools-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let body = json!({
+            "project":{"id":"app_modules","name":"Modules","slug":"modules","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Modules</title>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_modules','o','{}')", []).unwrap();
+        let publisher = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
+        let reader = Owner { scopes:vec!["read".into()], ..publisher.clone() };
+        let before = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        let expected = before["modules"]["seo"]["state"].clone();
+        admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":true,"options":{"canonical":"path"},"expected":expected})).await.unwrap();
+        let after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        assert_eq!(after["modules"]["seo"]["state"]["on"], true);
+        assert_eq!(after["modules"]["seo"]["state"]["canonical"], "path");
+        let stale = admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false,"expected":expected})).await.unwrap_err();
+        let refusal = stale.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(refusal.code, "module.changed");
+        let denied = admin_call(&state, &reader, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false})).await.unwrap_err().to_string();
+        assert_eq!(denied, "Permission denied for publish.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

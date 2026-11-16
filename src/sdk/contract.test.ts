@@ -44,6 +44,46 @@ function withExtraCall(): SdkContract {
 }
 
 describe("the SDK contract", () => {
+  test("describes module settings and renders the Kernel reader", () => {
+    const seo = sdkContract.modules.find((module) => module.name === "seo");
+    expect(seo).toMatchObject({
+      permission: "publish",
+      agentRule: "after-owner-confirms",
+      requires: [],
+      options: [
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], default: "domain" },
+        { key: "image", type: "path", default: null },
+      ],
+    });
+    expect(seo?.uses).toBeDefined();
+    expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
+    const modules = JSON.parse(renderAll()["kernel-rs/kernel/src/modules.json"]);
+    expect(modules.modules.seo.options).toEqual(seo?.options);
+  });
+
+  test("the shared module cases keep editor answers aligned with the Kernel", () => {
+    const cases = JSON.parse(read("kernel-rs/kernel/src/module-cases.json")) as Array<Record<string, any>>;
+    const answer = (item: Record<string, any>) => {
+      const module = item.module;
+      if (item.rule === "expected" && JSON.stringify(item.state) !== JSON.stringify(item.expected)) {
+        return { code: "module.changed", message: `Module ${module} changed since it was read. Read modules_read and try again.` };
+      }
+      if (item.rule === "on" && item.state.on !== true) {
+        return { code: "module.off", message: `Module ${module} is off. Turn it on with module_set.` };
+      }
+      if (item.rule === "requires" && item.requiredState.on !== true) {
+        return { code: "module.requires", message: `Module ${module} requires ${item.required}, which is off. Turn ${item.required} on first.` };
+      }
+      if (item.rule === "in-use" && item.used) {
+        return { code: "module.in-use", message: `Module ${module} is in use by the published app. Remove its use before turning it off.` };
+      }
+      return null;
+    };
+    for (const item of cases) {
+      expect(answer(item), item.case).toEqual(item.error === null ? null : { code: item.code, message: item.error });
+    }
+  });
+
   test("lists each module and call once, with a signature and an example that name it", () => {
     const calls = contractCalls();
     expect(new Set(calls).size).toBe(calls.length);
@@ -144,10 +184,14 @@ describe("the rendered readers", () => {
   test("editing the contract changes every reader", () => {
     const before = renderAll();
     const after = renderAll(withExtraCall());
-    for (const file of Object.values(renderedPaths)) {
+    for (const file of Object.values(renderedPaths).filter((file) => file !== renderedPaths.modules)) {
       expect(after[file]).not.toBe(before[file]);
       expect(after[file]).toContain("miniapp.auth.refresh()");
     }
+    expect(after[renderedPaths.modules]).toBe(before[renderedPaths.modules]);
+    const changedMetadata = structuredClone(sdkContract) as unknown as SdkContract;
+    changedMetadata.modules.find((module) => module.name === "seo")!.permission = "manage_users";
+    expect(renderAll(changedMetadata)[renderedPaths.modules]).not.toBe(before[renderedPaths.modules]);
   });
 
   test("the build agent's prompt carries the rendered section and names no other call", () => {

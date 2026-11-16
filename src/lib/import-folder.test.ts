@@ -7,7 +7,7 @@ import { encodeBase64 } from "../mcp/client";
 
 const settings: AppSettings = {
   id: "notes-1", name: "Notes", slug: "notes", visibility: "private",
-  signupPolicy: { mode: "invitation" }, signInMethods: ["password"], kernel: "0.1.0", manifest: { version: 1, routing: "pages" },
+  signupPolicy: { mode: "invitation" }, signInMethods: ["password"], kernel: "0.1.0", modules: { seo: { on: true, canonical: "path", image: null } }, manifest: { version: 1, routing: "pages" },
 };
 const bytes = (text: string) => new TextEncoder().encode(text);
 
@@ -38,6 +38,7 @@ describe("reading an exported app folder", () => {
     const { archive, files } = exported();
     const folder = readAppFolder(archive);
     expect(folder.settings.id).toBe("notes-1");
+    expect(folder.settings.modules).toEqual(settings.modules);
     expect(Object.keys(folder.sources.files).sort()).toEqual(["actions.json", "public/logo.png", "schema.sql"]);
     expect(folder.sources.encodings).toEqual({ "public/logo.png": "base64" });
     expect(folder.sources.files["public/logo.png"]).toBe(encodeBase64(new Uint8Array([0x89, 0x50, 0xff, 0x00])));

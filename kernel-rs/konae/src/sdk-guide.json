@@ -1217,6 +1217,13 @@
         }
       ],
       "calls": []
+    },
+    {
+      "name": "seo",
+      "summary": "Search listing and page cards, once the Kernel implements this module.",
+      "notes": [],
+      "declarations": [],
+      "calls": []
     }
   ]
 }

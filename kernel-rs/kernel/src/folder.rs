@@ -132,6 +132,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         },
         initial_signup_policy: None,
         initial_sign_in_methods: None,
+        initial_modules: None,
         initial_package: None,
         contact_email: settings.contact_email.clone().or_else(|| released.as_ref().and_then(|snapshot| snapshot.contact_email.clone())),
         schema_confirmation: None,
@@ -184,7 +185,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         sign_in_methods, contact_email: input.contact_email.clone(), released_schema: schema,
     };
     open_auth(state, &deployment)?;
-    if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories, schema_transforms.as_deref()).await?; }
+    if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories, schema_transforms.as_deref(), None).await?; }
     else if candidate_sources || fresh_sources { crate::persist_folder_snapshot_with_transforms(state, &deployment, &dist_digest, schema_transforms.as_deref()).await?; }
     else { crate::persist_folder_snapshot(state, &deployment, &dist_digest).await?; }
     let mut deployments = state.deployments.write().await;
@@ -333,6 +334,25 @@ mod tests {
         assert_eq!((again.hostname.as_str(), again.artifact_version.as_str()), (first.hostname.as_str(), first.artifact_version.as_str()));
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_folder_from_0_9_0_opens_and_lists_every_module_off() {
+        let root = scratch();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-mechanism-0.9.0");
+        for relative in ["konae.json", "app/actions.json", "app/schema.sql", "dist/index.html"] {
+            let destination = layout::folder(&root, "app_legacy_modules").join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::copy(fixture.join(relative), destination).unwrap();
+        }
+        let state = AppState::for_test(&root);
+        let deployment = open(&state, "app_legacy_modules", None).await.unwrap();
+        let served = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
+        assert!(String::from_utf8(served).unwrap().contains("Legacy app"));
+        let listed = crate::modules::read(&root, "app_legacy_modules").unwrap();
+        assert_eq!(listed["modules"].as_object().unwrap().len(), 6);
+        assert!(listed["modules"].as_object().unwrap().values().all(|module| module["state"]["on"] == false));
         std::fs::remove_dir_all(root).unwrap();
     }
 

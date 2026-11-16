@@ -6,7 +6,7 @@ Konae is the guardrail that lets a person who does not write code, and a person 
 
 Read "Words an app author uses" to make an app, edit its files or take it elsewhere. Read "Words for running an installation" only to operate a Kernel or a Konae installation. Each entry gives the meaning now and the words to avoid; the decision records in `docs/adr/` hold the rules.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, these terms are written in lowercase, because that is how the editor and the Kernel say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client, file store, app user, contact email and schema change. Usage, Signal and Action Contract keep their capitals.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, these terms are written in lowercase, because that is how the editor and the Kernel say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client, file store, app user, contact email, schema change, module and module state. Usage, Signal and Action Contract keep their capitals.
 
 ## Words an app author uses
 
@@ -163,8 +163,16 @@ The calls a Deployment queued, in the installation's `calls.sqlite`, which the o
 _Avoid_: call log, queue (the mail queue holds email)
 
 **SDK Module**:
-A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, described once in `src/sdk/contract.ts`, from which the build agent's prompt, `platform_guide` topic `sdk` and `docs/sdk.md` are rendered.
+A part of an SDK module that a page calls on `window.miniapp`, such as `auth`, `actions` or `files`, described in `src/sdk/contract.ts`.
 _Avoid_: plugin, library, extension
+
+**Module**:
+One capability of an app, described in `src/sdk/contract.ts` with its calls, Capsule keys, options, permission, agent rule, requirements and use markers. `konae.json` names every known module and whether it is on. `modules_read` reads the state and `module_set` changes it; the Kernel binary reads the same state from an exported app folder (ADR-0015).
+_Avoid_: plugin, extension
+
+**Module State**:
+The on/off value and options for every module the Kernel knows, held in `konae.json`. A change applies at once, and export carries the value to import.
+_Avoid_: plugin configuration
 
 **Action Contract**:
 The generated description of a Capsule's Server Actions, `action-contract.json` and `action-contract.md`: inputs, returned columns, Signals, callers, errors and limits. `konae conform` checks a backend against it (ADR-0004).

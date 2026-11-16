@@ -54,6 +54,7 @@ pub(super) const READ_BACK: &[(&str, &str)] = &[
     ("path_clear", "path_read"),
     ("maintenance_set", "maintenance_read"),
     ("contact_email_set", "contact_email_read"),
+    ("module_set", "modules_read"),
     ("transfer_begin", "transfer_status"),
     ("transfer_complete", "transfer_status"),
     ("transfer_cancel", "transfer_status"),

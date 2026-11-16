@@ -29,7 +29,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 - `modules_read { projectId }` needs `read`. It answers every module with its state, its options, what in the app uses it, and what it does right now.
 - `module_set { projectId, module, on?, options?, expected? }` needs the permission the contract names for that module. `expected` is the state the caller read, and a call whose `expected` no longer matches is refused with `module.changed`. The read-back is `modules_read`.
-- The editor's Modules tab is drawn from the contract and calls the same two tools. The build agent gets them through the allowlist of ADR-0007, and a change waits for the owner in a dialog. The `kernel` binary has `kernel module`, which calls the same function.
+- The editor's modules tab is drawn from the contract and calls the same two tools. The build agent gets them through the allowlist of ADR-0007, and a change waits for the owner in a dialog. The `kernel` binary has `kernel module`, which calls the same function.
 - `konae dev` reads the folder's `konae.json`. A publish sends `modules` only with the first release. After that the installation's state decides, and `konae pull` brings it into the folder.
 
 ### An app made before a module keeps working
@@ -59,4 +59,4 @@ Every app carries a database, accounts, files and routes whether it uses them or
 - A publish can now be refused for a module that is off. The refusal names the module and the tool, so one call clears it.
 - The Validation Gate needs the project's module state. The editor reads it with `modules_read`, and the CLI reads the folder's `konae.json`.
 - A tool that a moved module replaces stops existing. An agent that still calls it gets the name of `module_set` from `platform_guide`.
-- Words change with the decision. `CONTEXT.md` gets a Module entry, and the SDK module entry becomes the part of a module a page calls.
+- Words change with the decision. `CONTEXT.md` gets a module entry, and the SDK module entry becomes the part of a module a page calls.

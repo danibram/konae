@@ -533,3 +533,7 @@ Limits:
 - fields: 1 to 32 inputs, each path $ and 1 to 16 .name or [index] steps, up to 200 characters
 - the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
 - 50 live API keys per Deployment
+
+## The seo module, declared, with no browser call
+
+Search listing and page cards, once the Kernel implements this module.
