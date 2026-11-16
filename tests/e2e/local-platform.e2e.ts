@@ -681,7 +681,7 @@ test("Modules settings show fixed modules and read back seo after reload", async
   await fromMore(page, "App settings");
   settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
-  const filesCard = settings.locator(".module-settings-card").filter({ hasText: "files" });
+  const filesCard = settings.locator(".module-settings-card").first();
   await settings.getByLabel("Who can read every file", { exact: true }).selectOption("app-users");
   await filesCard.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(settings.getByLabel("Who can read every file", { exact: true })).toHaveValue("app-users");
