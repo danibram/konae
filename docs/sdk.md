@@ -37,9 +37,11 @@ Error messages below are the exact text a published app receives as `error.messa
 | `MCP request exceeds 200 KB.` | one request body is larger than 200,000 bytes | Kernel | Never refuses |
 | `Invalid MCP response.` | the response does not answer the request the SDK sent | SDK | Never refuses |
 
-## miniapp.auth
+### Accounts (`auth`)
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
+
+Owner control: on and not switchable yet. Permission: `manage_users`. Build agent: cannot change it.
 
 - Visibility decides who may open the app shell. It never grants data access on its own.
 - An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.
@@ -108,9 +110,11 @@ Returns { ok: true }.
 
 Editor preview: Switches to the signed-out state and returns the anonymous session.
 
-## miniapp.actions
+### App actions (`actions`)
 
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
 
 - A binding passes who calls: { "source": "actor", "field": "id" } is the signed-in person's ID or the API key's ID, and refuses a caller without one. It cannot come from the input. Roles are rows in the app's own tables, checked in SQL against that ID.
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
@@ -273,9 +277,11 @@ Limits:
 
 Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or on konae dev. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.
 
-## miniapp.page
+### undefined (`page`)
 
 Values from the page address. The Kernel fills params when a declared page path answers.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
 
 ### miniapp.page.params
 
@@ -309,9 +315,15 @@ Returns The path with the current /p/<name> prefix when the app uses a path addr
 
 Editor preview: Returns the app path unchanged.
 
-## miniapp.files
+### File storage (`files`)
 
 Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: cannot change it.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `fileAccess` (Who can read every file) | `enum`: `app-users` (All signed-in users) | Only the uploader | Let every signed-in user read all files in this app. |
 
 - By default, only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
@@ -448,9 +460,11 @@ Limits:
 
 - a row that still names the file ID keeps it; the app removes that row with its own action
 
-## The calls module, declared, with no browser call
+### Calls to other services (`calls`)
 
 Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
 
 - The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.
 - http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.
@@ -515,9 +529,11 @@ Limits:
 
 - 10 origins
 
-## The http module, declared, with no browser call
+### HTTP routes (`http`)
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
 
 - Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
@@ -589,6 +605,13 @@ Limits:
 - the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
 - 50 live API keys per Deployment
 
-## The seo module, declared, with no browser call
+### Search listing (`seo`)
 
 Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `canonical` (Canonical address) | `enum`: `domain` (Custom domain), `hostname` (Generated hostname), `path` (Path address) | Use the default address | Choose the address search engines and link previews should use. |
+| `image` (Card image) | `path` | Default | Choose an image path from the app's published files. |

@@ -54,6 +54,7 @@ export type SdkDeclaration = {
 
 export type SdkModule = {
   name: string;
+  title: string;
   summary: string;
   switch: boolean;
   options: SdkModuleOption[];
@@ -70,6 +71,9 @@ export type SdkModuleOption = {
   key: string;
   type: "boolean" | "enum" | "path" | "string" | "number";
   values?: string[];
+  valueLabels?: Record<string, string>;
+  defaultLabel?: string;
+  valuesFrom?: "app-images";
   default: string | number | boolean | null;
   label: string;
   help: string;
@@ -124,6 +128,7 @@ export const sdkContract = {
   modules: [
     {
       name: "auth",
+      title: "Accounts",
       summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
       switch: false, options: [], permission: "manage_users", agentRule: "never", requires: [], uses: ["manifest.signupPolicy", "manifest.visibility"],
       declarations: [],
@@ -196,6 +201,7 @@ export const sdkContract = {
     },
     {
       name: "actions",
+      title: "App actions",
       summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
       switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
       declarations: [
@@ -380,8 +386,9 @@ export const sdkContract = {
     },
     {
       name: "files",
+      title: "File storage",
       summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
-      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], default: null, label: "File access", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: [], uses: ["miniapp.files"],
+      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read every file", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: [], uses: ["miniapp.files"],
       declarations: [{ key: "fileAccess", file: "module", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.' }],
       notes: [
         "By default, only the uploader can list or read a private file.",
@@ -504,6 +511,7 @@ export const sdkContract = {
     },
     {
       name: "calls",
+      title: "Calls to other services",
       summary: "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
       switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json kind=call"],
       calls: [],
@@ -578,6 +586,7 @@ export const sdkContract = {
     },
     {
       name: "http",
+      title: "HTTP routes",
       summary: "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
       switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json http"],
       calls: [],
@@ -658,11 +667,12 @@ export const sdkContract = {
     },
     {
       name: "seo",
+      title: "Search listing",
       summary: "Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.",
       switch: true,
       options: [
-        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },
-        { key: "image", type: "path", default: null, label: "Card image", help: "Choose an image path from the app's published files." },
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], valueLabels: { domain: "Custom domain", hostname: "Generated hostname", path: "Path address" }, defaultLabel: "Use the default address", default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },
+        { key: "image", type: "path", valuesFrom: "app-images", default: null, label: "Card image", help: "Choose an image path from the app's published files." },
       ],
       permission: "publish",
       agentRule: "after-owner-confirms",

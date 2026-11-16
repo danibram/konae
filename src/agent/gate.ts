@@ -64,7 +64,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const filesState = facts.modules?.files;
     const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
     if (filesCall && filesOff) {
-      return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code) }, ["sources"]);
+      return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code as "module.off") }, ["sources"]);
     }
     const errors: ValidationError[] = [];
     const checked: ValidationStage[] = ["sources"];

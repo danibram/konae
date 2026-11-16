@@ -36,6 +36,8 @@ After any write through MCP or the editor, observe the effect through the same d
 | Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
+| Turn an app capability on or set its options | `modules_read` and `module_set`, then read it back with `modules_read` | A separate tool or a setting in the Capsule |
+| Be listed in search | Turn on `seo` with `module_set`, after `modules_read` | Assume a public app is listed |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | export and import of the app folder | Copy (moves the installation) |
 | Debug or rehearse a source change against published rows | `konae pull --data-only`, `dev --reset`, local `dev`, then `rehearse` | Publishing to find out |
@@ -61,8 +63,9 @@ These are not bugs to paper over. Say them when they matter.
 - The preview opens one `srcDoc` document in an iframe. It has no app URL or page history, so it cannot resolve declared page paths or populate `miniapp.page.params`. Try page paths on `konae dev` or a Deployment. It writes no `<head>` tags for row values.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number. `konae dev` applies the same 2 MiB per file, and `KONAE_FILE_MAX_BYTES` raises it there. Its quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
+- The editor preview writes no canonical, card, `robots.txt` or sitemap. `konae dev` writes them using the local host as the address.
 - The editor's build reads npm packages from esm.sh; `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
-- The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
+- The Validation Gate checks schema, `actions.json` and that each module the Capsule uses is on, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
 - The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When preview lacks a declared table or column, the Gate reports `PREVIEW_BEHIND`, names the difference and says to try `konae dev` or a Deployment; its summary marks row checks skipped.
 - `konae dev` sends no email. Account email and notices land in `.konae/kernel/mail-testbox.jsonl`, and `konae events` lists them.
 

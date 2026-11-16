@@ -16,9 +16,9 @@ pub fn address(state: &AppState, deployment: &Deployment) -> Address {
         let reason = if crate::domain::read_record(state, &deployment.id)
             .is_some_and(|record| record.verified)
         {
-            "verified custom domain is the default"
+            "Verified custom domain is the default."
         } else {
-            "generated hostname is the default"
+            "Generated hostname is the default."
         };
         Address {
             url,
@@ -29,19 +29,19 @@ pub fn address(state: &AppState, deployment: &Deployment) -> Address {
         None => default(),
         Some("domain") => {
             if crate::domain::read_record(state, &deployment.id).is_some_and(|record| record.verified) {
-                Address { url: crate::domain::app_url(state, deployment), reason: "verified custom domain was chosen".into() }
+                Address { url: crate::domain::app_url(state, deployment), reason: "Verified custom domain was chosen.".into() }
             } else {
-                Address { reason: "custom domain is not verified; using the generated hostname".into(), ..default() }
+                Address { reason: "Custom domain is not verified, so the generated hostname is in use.".into(), ..default() }
             }
         }
         Some("hostname") => Address {
             url: deployment.url.clone(),
-            reason: "hostname was chosen".into(),
+            reason: "Generated hostname was chosen.".into(),
         },
         Some("path") => {
             let Some(origin) = &state.path_origin else {
                 return Address {
-                    reason: "path address is unavailable; using the default address".into(),
+                    reason: "Path address is unavailable, so the default address is in use.".into(),
                     ..default()
                 };
             };
@@ -49,20 +49,20 @@ pub fn address(state: &AppState, deployment: &Deployment) -> Address {
                 crate::path::read_record(state, &deployment.id).filter(|record| record.enabled)
             else {
                 return Address {
-                    reason: "path address is not enabled; using the default address".into(),
+                    reason: "Path address is not enabled, so the default address is in use.".into(),
                     ..default()
                 };
             };
             if record.name.as_deref() == Some(crate::path::HOME_NAME) {
                 Address {
                     url: format!("{}/", origin.trim_end_matches('/')),
-                    reason: "home path address was chosen".into(),
+                    reason: "Home path address was chosen.".into(),
                 }
             } else {
                 let segment = record.name.unwrap_or_else(|| deployment.id.clone());
                 Address {
                     url: format!("{}/p/{segment}/", origin.trim_end_matches('/')),
-                    reason: "path address was chosen".into(),
+                    reason: "Path address was chosen.".into(),
                 }
             }
         }

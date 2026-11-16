@@ -21,6 +21,8 @@ The preview has no HTTP routes, schedule timer, notice email, Usage store or cal
 
 The editor preview opens one `srcDoc` document in an iframe. It has no app URL or page history, so it cannot resolve declared page paths or populate `miniapp.page.params`. Use `konae dev` or a Deployment to check page paths. It writes no `<head>` tags for row values.
 
+The editor preview does not write canonical addresses, page cards, `robots.txt` or a sitemap. `konae dev` does, using its local host as the address. Check the `seo` module on `konae dev` or a published Deployment.
+
 Saved public assets work in the preview, including images in `public/`, linked stylesheets, imported CSS, media conditions and SVG fragments. Programmatic `fetch()` of local saved assets and runtime-created URLs that point to local saved assets need `konae dev` or a Deployment. The preview's missing Content Security Policy still allows fetches to other origins.
 
 ## Email on konae dev

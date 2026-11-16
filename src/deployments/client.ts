@@ -3,6 +3,7 @@ import type { DatabaseAdminHost, DatabaseBackup, DatabasePage, DatabaseRunResult
 import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
+import { defaultModuleStates } from "../lib/app-folder";
 import { McpError, platformMcp, type Transfer } from "../mcp/client";
 import { publishProject, type ConfirmSchema } from "./release";
 
@@ -12,8 +13,34 @@ export function isSettingChanged(error: unknown): boolean {
   return error instanceof McpError && error.refusal?.code === "setting.changed";
 }
 
+export function isModuleChanged(error: unknown): boolean {
+  return error instanceof McpError && error.refusal?.code === "module.changed";
+}
+
+export type ModuleRead = {
+  projectId: string;
+  modules: Record<string, {
+    state: Record<string, unknown>;
+    switch: boolean;
+    message: string | null;
+    summary: string;
+    options: { key: string; type: string; values?: string[]; default: unknown; label: string; help: string }[];
+    current?: unknown;
+  }>;
+};
+
+export function readModules(projectId: string) {
+  return platformMcp.call<ModuleRead>("modules_read", { projectId });
+}
+
+export async function setModule(projectId: string, name: string, state: Record<string, unknown>, on?: boolean, options?: Record<string, unknown>) {
+  await platformMcp.call("module_set", { projectId, module: name, ...(on === undefined ? {} : { on }), ...(options ? { options } : {}), expected: state });
+  return readModules(projectId);
+}
+
+
 export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number, initialModules?: MiniAppProject["modules"]): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
-  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, initialModules }), confirmSchema, () => {}, undefined, observedSourcesRevision);
+  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, ...(initialModules ? { initialModules: defaultModuleStates(initialModules) } : {}) }), confirmSchema, () => {}, undefined, observedSourcesRevision);
   return { receipt, sourcesRevision: plan.expectedSourcesRevision + 1 };
 }
 

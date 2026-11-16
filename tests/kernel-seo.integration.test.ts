@@ -108,7 +108,7 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   await mkdir(path.dirname(domainRecord), { recursive: true });
   await writeFile(domainRecord, JSON.stringify({ hostname: "verified.example.org", token: "test", verified: true, createdAt: Date.now() }));
   const verified = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
-  expect(verified.modules.seo.current.canonical.reason).toContain("verified custom domain");
+  expect(verified.modules.seo.current.canonical.reason).toBe("Verified custom domain was chosen.");
   const afterDomain = await appFetch(kernel, deployment.hostname, "/about", { headers: { "if-none-match": tag } });
   expect(afterDomain.status).toBe(200);
   const customCanonical = `http://verified.example.org:${new URL(kernel.url).port}/about`;

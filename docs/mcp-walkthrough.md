@@ -950,10 +950,14 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
       "options": [
         {
           "default": null,
+          "defaultLabel": "Only the uploader",
           "help": "Let every signed-in user read all files in this app.",
           "key": "fileAccess",
-          "label": "File access",
+          "label": "Who can read every file",
           "type": "enum",
+          "valueLabels": {
+            "app-users": "All signed-in users"
+          },
           "values": [
             "app-users"
           ]
@@ -1021,10 +1025,14 @@ An upload is a transfer of at most the installation's per-file limit, 2 MiB by d
       "options": [
         {
           "default": null,
+          "defaultLabel": "Only the uploader",
           "help": "Let every signed-in user read all files in this app.",
           "key": "fileAccess",
-          "label": "File access",
+          "label": "Who can read every file",
           "type": "enum",
+          "valueLabels": {
+            "app-users": "All signed-in users"
+          },
           "values": [
             "app-users"
           ]

@@ -1,4 +1,5 @@
 import type { AgentTool } from "./contracts";
+import { sdkContract, type SdkModuleOption } from "../sdk/contract";
 
 export type McpToolDefinition = {
   name: string;
@@ -46,6 +47,7 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   app_users_list: "read",
   domain_read: "read",
   path_read: "read",
+  modules_read: "read",
   signup_policy_set: "confirm",
   sign_in_methods_set: "confirm",
   app_invitations_create: "confirm",
@@ -54,6 +56,7 @@ export const platformToolPolicy: Readonly<Record<string, Policy>> = {
   domain_clear: "confirm",
   path_set: "confirm",
   path_clear: "confirm",
+  module_set: "confirm",
 };
 
 const readOnlyDatabaseOperations = new Set(["inspect", "browse", "list-backups"]);
@@ -81,6 +84,16 @@ export function describeCall(name: string, args: Record<string, unknown>): strin
       const emails = Array.isArray(args.emails) ? args.emails.map(String) : [];
       return `The agent will email an invitation to ${emails.join(", ") || "nobody"}.`;
     }
+    case "module_set": {
+      const name = String(args.module);
+      const module = sdkContract.modules.find((item) => item.name === name);
+      const change = typeof args.on === "boolean" ? `turn ${args.on ? "on" : "off"}` : "update";
+      const options = args.options && typeof args.options === "object" ? Object.entries(args.options as Record<string, unknown>).map(([key, value]) => {
+        const option = module?.options.find((item) => item.key === key) as SdkModuleOption | undefined;
+        return `${option?.label ?? key} to ${option?.valueLabels?.[String(value)] ?? String(value)}`;
+      }) : [];
+      return `The agent will ${change} ${module?.title ?? name} (${name})${options.length ? ` and set ${options.join(", ")}` : ""}.`;
+    }
     case "hostname_set": return `The agent will move this app's generated address to ${String(args.name)}. The old address redirects there, and app users sign in again on the new one.`;
     case "domain_set": return `The agent will set ${String(args.hostname)} as this app's domain and check its TXT record.`;
     case "domain_clear": return "The agent will remove this app's custom domain. The generated address keeps working.";
@@ -106,6 +119,7 @@ const publishedProjectTools = new Set([
   "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend",
   "app_invitation_revoke", "api_keys_create", "api_keys_revoke", "project_import", "contact_email_set",
   "maintenance_set", "hostname_set", "domain_set", "domain_clear", "path_set", "path_clear",
+  "modules_read", "module_set",
 ]);
 
 function modelSchema(schema: McpToolDefinition["inputSchema"]) {
@@ -168,6 +182,10 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
         }
         const confirm = needsConfirmation(tool.name, given);
         if (confirm) {
+          if (tool.name === "module_set") {
+            const module = sdkContract.modules.find((item) => item.name === String(given.module));
+            if (!module || module.agentRule === "never") throw new Error(`The ${String(given.module)} module cannot be changed by the build agent.`);
+          }
           const approved = await binding.confirm({ projectId, tool: tool.name, summary: describeCall(tool.name, given), arguments: given });
           check(signal);
           if (!approved) throw new Error(`The owner declined ${tool.name}. Nothing was changed.`);
@@ -179,8 +197,13 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
         try {
           result = await binding.call(tool.name, args, signal);
         } catch (error) {
+          if (tool.name === "module_set" && (error as { refusal?: { code?: string } } | null)?.refusal?.code === "module.changed") {
+            const current = await binding.call("modules_read", { projectId }, signal).catch(() => null);
+            throw new Error(`${explain(error).message}${current ? ` Current modules_read state: ${text(current)}` : ""}`);
+          }
           throw explain(error);
         }
+        if (tool.name === "module_set") result = await binding.call("modules_read", { projectId }, signal);
         check(signal);
         if (confirm) binding.onChanged?.(tool.name);
         return { content: [{ type: "text" as const, text: text(result) }], details: result };
