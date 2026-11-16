@@ -27,6 +27,7 @@ const FORMAT_VERSION: u32 = 1;
 const MAX_TRANSITIONS: usize = 256;
 const MAX_STATEMENTS: usize = 100;
 const MAX_STATEMENT_BYTES: usize = 20_000;
+const MAX_DOCUMENT_BYTES: usize = 20 * 1024 * 1024;
 const MAX_ROWS: u64 = 100_000;
 const MAX_SQLITE_BYTES: i32 = 2 * 1024 * 1024;
 const STATE_TABLE: &str = "__konae_schema_state";
@@ -40,6 +41,7 @@ const BEFORE_MISMATCH: &str = "schema-transform.before-mismatch";
 const AFTER_MISMATCH: &str = "schema-transform.after-mismatch";
 const ROW_LIMIT: &str = "schema-transform.row-limit";
 const FINAL_SCHEMA_MISMATCH: &str = "schema-transform.final-schema-mismatch";
+const HISTORY_VERSION: &str = "schema-transform.history-version";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -129,6 +131,11 @@ fn after_error(message: impl Into<String>) -> Refusal {
 
 /// Parses and statically checks the bounded v1 file.
 pub fn parse(source: &str) -> Result<Definition, Refusal> {
+    if source.len() > MAX_DOCUMENT_BYTES {
+        return Err(invalid(format!(
+            "schema-transforms.json must be at most {MAX_DOCUMENT_BYTES} bytes."
+        )));
+    }
     let definition: Definition = serde_json::from_str(source)
         .map_err(|_| invalid("schema-transforms.json must be valid JSON."))?;
     validate_definition(&definition)?;
@@ -228,6 +235,15 @@ fn validate_statement(statement: &str) -> Result<(), String> {
     if words.is_empty() || words.contains(&";".to_owned()) {
         return Err("Write one supported SQL statement without a second statement.".into());
     }
+    if words
+        .windows(3)
+        .any(|triple| triple == ["on", "conflict", "rollback"])
+    {
+        return Err(
+            "ROLLBACK conflict policies are refused because they can end the caller's transaction."
+                .into(),
+        );
+    }
     let first = words[0].as_str();
     let table_at = match first {
         "create" => validate_create(&words)?,
@@ -282,6 +298,15 @@ fn validate_create(words: &[String]) -> Result<Option<usize>, String> {
     if is_qualified(name) || name == "temp" || name == "temporary" {
         return Err("Use an unqualified app table or index name.".into());
     }
+    if object == "table"
+        && words.get(name_at + 1).is_some_and(|word| word == "as")
+        && words.get(name_at + 2).is_some_and(|word| word == "select")
+    {
+        return Err(
+            "CREATE TABLE AS SELECT is refused. Use CREATE TABLE and a bounded INSERT SELECT."
+                .into(),
+        );
+    }
     if object == "index" && !words.iter().any(|word| word == "on") {
         return Err("CREATE INDEX must name its table with ON.".into());
     }
@@ -324,6 +349,16 @@ fn validate_insert(words: &[String]) -> Result<Option<usize>, String> {
     if words.iter().any(|word| word == "replace") {
         return Err("INSERT OR REPLACE and REPLACE are refused.".into());
     }
+    if words.windows(2).any(|pair| pair == ["or", "rollback"])
+        || words
+            .windows(3)
+            .any(|triple| triple == ["on", "conflict", "rollback"])
+    {
+        return Err(
+            "ROLLBACK conflict policies are refused because they can end the caller's transaction."
+                .into(),
+        );
+    }
     let into = words
         .iter()
         .position(|word| word == "into")
@@ -347,11 +382,17 @@ fn validate_insert(words: &[String]) -> Result<Option<usize>, String> {
 fn validate_update(words: &[String]) -> Result<Option<usize>, String> {
     let mut table_at = 1;
     if words.get(table_at).is_some_and(|word| word == "or") {
+        if words
+            .get(table_at + 1)
+            .is_some_and(|word| word == "rollback")
+        {
+            return Err("ROLLBACK conflict policies are refused because they can end the caller's transaction.".into());
+        }
         if !words
             .get(table_at + 1)
-            .is_some_and(|word| matches!(word.as_str(), "abort" | "fail" | "ignore" | "rollback"))
+            .is_some_and(|word| matches!(word.as_str(), "abort" | "fail" | "ignore"))
         {
-            return Err("UPDATE OR supports ABORT, FAIL, IGNORE or ROLLBACK.".into());
+            return Err("UPDATE OR supports ABORT, FAIL or IGNORE.".into());
         }
         table_at += 2;
     }
@@ -360,6 +401,15 @@ fn validate_update(words: &[String]) -> Result<Option<usize>, String> {
     };
     if is_qualified(table) || !words.iter().skip(table_at + 1).any(|word| word == "set") {
         return Err("UPDATE must name an unqualified app table and SET columns.".into());
+    }
+    if words
+        .windows(3)
+        .any(|triple| triple == ["on", "conflict", "rollback"])
+    {
+        return Err(
+            "ROLLBACK conflict policies are refused because they can end the caller's transaction."
+                .into(),
+        );
     }
     Ok(Some(table_at))
 }
@@ -386,7 +436,7 @@ fn is_forbidden_object(name: &str) -> bool {
 /// and comments, normalizes identifiers and keywords, and preserves literal
 /// string case. It does not claim equivalence beyond those token rules.
 pub fn fingerprint(connection: &Connection) -> Result<String, Refusal> {
-    let mut statement = connection.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'")
+    let mut statement = connection.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'")
         .map_err(|error| invalid(format!("Cannot read SQLite schema: {error}")))?;
     let mut objects = statement
         .query_map([], |row| {
@@ -415,6 +465,33 @@ pub fn fingerprint(connection: &Connection) -> Result<String, Refusal> {
     });
     let mut hash = Sha256::new();
     for (kind, name, table, sql) in objects {
+        let mut identifiers =
+            HashSet::from([name.to_ascii_lowercase(), table.to_ascii_lowercase()]);
+        let mut default_tokens = HashSet::new();
+        let table_sql = format!("PRAGMA table_xinfo(\"{}\")", table.replace('"', "\"\""));
+        let mut columns = connection
+            .prepare(&table_sql)
+            .map_err(|error| invalid(format!("Cannot inspect table {table}: {error}")))?;
+        let mut rows = columns
+            .query([])
+            .map_err(|error| invalid(format!("Cannot inspect table {table}: {error}")))?;
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| invalid(format!("Cannot inspect table {table}: {error}")))?
+        {
+            let column: String = row
+                .get(1)
+                .map_err(|error| invalid(format!("Cannot inspect table {table}: {error}")))?;
+            identifiers.insert(column.to_ascii_lowercase());
+            if kind == "table" {
+                let default: Option<String> = row
+                    .get(4)
+                    .map_err(|error| invalid(format!("Cannot inspect table {table}: {error}")))?;
+                if let Some(default) = default {
+                    default_tokens.extend(schema_change::double_quoted_tokens(&default));
+                }
+            }
+        }
         let fields = [
             kind.to_ascii_lowercase(),
             name.to_ascii_lowercase(),
@@ -423,7 +500,7 @@ pub fn fingerprint(connection: &Connection) -> Result<String, Refusal> {
         for field in fields {
             hash_field(&mut hash, field.as_bytes());
         }
-        let tokens = schema_change::canonical_tokens(&sql);
+        let tokens = schema_change::fingerprint_tokens(&sql, &identifiers, &default_tokens);
         hash_field(&mut hash, &(tokens.len() as u64).to_be_bytes());
         for token in tokens {
             hash_field(&mut hash, token.as_bytes());
@@ -469,14 +546,15 @@ pub fn load_history(connection: &Connection) -> Result<HistoryState, Refusal> {
     let state = connection
         .query_row(
             &format!(
-                "SELECT head_id, fingerprint, baseline_kind FROM {STATE_TABLE} WHERE singleton=1"
+                "SELECT format_version, head_id, fingerprint, baseline_kind FROM {STATE_TABLE} WHERE singleton=1"
             ),
             [],
             |row| {
                 Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             },
         )
@@ -510,15 +588,24 @@ pub fn load_history(connection: &Connection) -> Result<HistoryState, Refusal> {
                 "The schema transformation history is unreadable: {error}"
             ))
         })?;
-    if entries.last().map(|entry| entry.id.as_str()) != state.0.as_deref() {
+    if state.0 != FORMAT_VERSION as i64 {
+        return Err(refuse(
+            HISTORY_VERSION,
+            format!(
+                "The app uses schema transformation history version {}; this Kernel supports {FORMAT_VERSION}.",
+                state.0
+            ),
+        ));
+    }
+    if entries.last().map(|entry| entry.id.as_str()) != state.1.as_deref() {
         return Err(history_error(
             "The schema transformation state does not match its history.",
         ));
     }
     Ok(HistoryState {
-        head_id: state.0,
-        fingerprint: Some(state.1),
-        baseline_kind: Some(state.2),
+        head_id: state.1,
+        fingerprint: Some(state.2),
+        baseline_kind: Some(state.3),
         entries,
     })
 }
@@ -911,7 +998,7 @@ fn write_history(
     baseline_kind: &str,
 ) -> Result<(), Refusal> {
     transaction.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS {STATE_TABLE}(singleton INTEGER PRIMARY KEY CHECK(singleton=1), head_id TEXT, fingerprint TEXT NOT NULL, baseline_kind TEXT NOT NULL);\
+        "CREATE TABLE IF NOT EXISTS {STATE_TABLE}(singleton INTEGER PRIMARY KEY CHECK(singleton=1), format_version INTEGER NOT NULL, head_id TEXT, fingerprint TEXT NOT NULL, baseline_kind TEXT NOT NULL);\
          CREATE TABLE IF NOT EXISTS {HISTORY_TABLE}(ordinal INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, predecessor TEXT, definition_sha256 TEXT NOT NULL, before_fingerprint TEXT NOT NULL, after_fingerprint TEXT NOT NULL, affected_rows INTEGER NOT NULL, baseline_skipped INTEGER NOT NULL CHECK(baseline_skipped IN (0,1)))"
     )).map_err(|error| history_error(format!("Cannot create the schema transformation journal: {error}")))?;
     let mut ordinal: i64 = transaction
@@ -958,8 +1045,8 @@ fn write_history(
         .last()
         .map(|item| item.id.clone())
         .or(previous_head);
-    transaction.execute(&format!("INSERT INTO {STATE_TABLE}(singleton,head_id,fingerprint,baseline_kind) VALUES (1,?1,?2,?3) ON CONFLICT(singleton) DO UPDATE SET head_id=excluded.head_id,fingerprint=excluded.fingerprint,baseline_kind=excluded.baseline_kind"),
-        rusqlite::params![head, fingerprint, baseline_kind])
+    transaction.execute(&format!("INSERT INTO {STATE_TABLE}(singleton,format_version,head_id,fingerprint,baseline_kind) VALUES (1,?1,?2,?3,?4) ON CONFLICT(singleton) DO UPDATE SET format_version=excluded.format_version,head_id=excluded.head_id,fingerprint=excluded.fingerprint,baseline_kind=excluded.baseline_kind"),
+        rusqlite::params![FORMAT_VERSION, head, fingerprint, baseline_kind])
         .map_err(|error| history_error(format!("Cannot update the schema transformation state: {error}")))?;
     Ok(())
 }
@@ -968,7 +1055,6 @@ fn transform_authorizer(context: AuthContext<'_>) -> Authorization {
     match context.action {
         AuthAction::Attach { .. }
         | AuthAction::Detach { .. }
-        | AuthAction::Pragma { .. }
         | AuthAction::CreateTrigger { .. }
         | AuthAction::CreateTempTrigger { .. }
         | AuthAction::CreateView { .. }
@@ -987,6 +1073,12 @@ fn transform_authorizer(context: AuthContext<'_>) -> Authorization {
         {
             Authorization::Deny
         }
+        AuthAction::Pragma { pragma_name, .. }
+            if pragma_name.eq_ignore_ascii_case("table_xinfo") =>
+        {
+            Authorization::Allow
+        }
+        AuthAction::Pragma { .. } => Authorization::Deny,
         AuthAction::Read { table_name, .. } if is_internal_name(table_name) => Authorization::Deny,
         AuthAction::Insert { table_name } if is_internal_name(table_name) => Authorization::Deny,
         AuthAction::Update { table_name, .. } if is_internal_name(table_name) => {
@@ -1058,6 +1150,165 @@ mod tests {
     }
 
     #[test]
+    fn shared_static_cases_run_through_parse_with_exact_words() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("schema-transform-cases.json")).unwrap();
+        for case in cases["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["scope"] == "static")
+        {
+            let source = case["source"].as_str().unwrap();
+            match (case["error"].as_str(), parse(source)) {
+                (None, Ok(_)) => {}
+                (None, Err(error)) => panic!("{} refused: {error}", case["case"]),
+                (Some(expected), Ok(_)) => panic!("{} passed, expected {expected}", case["case"]),
+                (Some(expected), Err(error)) => {
+                    assert_eq!(error.message, expected, "{}", case["case"]);
+                    assert_eq!(
+                        error.code,
+                        case["code"].as_str().unwrap(),
+                        "{}",
+                        case["case"]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_runtime_cases_run_through_sqlite_engine() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("schema-transform-cases.json")).unwrap();
+        for case in cases["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["scope"] == "runtime")
+        {
+            let fixture = &case["fixture"];
+            let schema = fixture["databaseSchema"].as_str().unwrap_or("");
+            let connection = db(schema);
+            if let Some(rows) = fixture["databaseRows"].as_array() {
+                for row in rows {
+                    connection
+                        .execute(
+                            "INSERT INTO tasks(label) VALUES (?1)",
+                            [&row["label"].as_str().unwrap()],
+                        )
+                        .unwrap();
+                }
+            }
+            let database_fingerprint = fingerprint(&connection).unwrap();
+            let mut source = case["source"]
+                .as_str()
+                .unwrap()
+                .replace("$databaseFingerprint", &database_fingerprint);
+            match case["case"].as_str().unwrap() {
+                "history entry changed" => {
+                    let original_source = source.replace("lower(label)", "trim(label)");
+                    let original = parse(&original_source).unwrap();
+                    let planned = plan(&connection, &original).unwrap();
+                    let tx = connection.unchecked_transaction().unwrap();
+                    apply_in_transaction(&tx, &planned, schema).unwrap();
+                    tx.commit().unwrap();
+                    let changed = parse(&source).unwrap();
+                    let error = plan(&connection, &changed).unwrap_err();
+                    assert_runtime_case(case, error);
+                }
+                "legacy before fingerprint mismatch" => {
+                    let wrong = fixture["wrongFingerprint"].as_str().unwrap();
+                    let target = fixture["targetFingerprint"].as_str().unwrap();
+                    source = source
+                        .replace("$wrongFingerprint", wrong)
+                        .replace("$targetFingerprint", target);
+                    let definition = parse(&source).unwrap();
+                    let error = plan(&connection, &definition).unwrap_err();
+                    assert_runtime_case_with(
+                        case,
+                        error,
+                        &[
+                            ("$wrongFingerprint", wrong),
+                            ("$databaseFingerprint", &database_fingerprint),
+                        ],
+                    );
+                }
+                "transition after fingerprint mismatch" => {
+                    let target_schema = fixture["targetSchema"].as_str().unwrap();
+                    let target_fingerprint = fingerprint_schema(target_schema).unwrap();
+                    source = source.replace("$targetFingerprint", &target_fingerprint);
+                    let definition = parse(&source).unwrap();
+                    let planned = plan(&connection, &definition).unwrap();
+                    let tx = connection.unchecked_transaction().unwrap();
+                    let error = apply_in_transaction(&tx, &planned, target_schema).unwrap_err();
+                    let actual =
+                        fingerprint_schema(fixture["actualAfterSchema"].as_str().unwrap()).unwrap();
+                    assert_runtime_case_with(
+                        case,
+                        error,
+                        &[
+                            ("$actualFingerprint", &actual),
+                            ("$targetFingerprint", &target_fingerprint),
+                        ],
+                    );
+                    tx.rollback().unwrap();
+                }
+                "row cap exceeded" => {
+                    let definition = parse(&source).unwrap();
+                    let planned = plan(&connection, &definition).unwrap();
+                    let tx = connection.unchecked_transaction().unwrap();
+                    let error = apply_in_transaction(&tx, &planned, schema).unwrap_err();
+                    assert_runtime_case(case, error);
+                    tx.rollback().unwrap();
+                }
+                "final schema mismatch" => {
+                    let definition = parse(&source).unwrap();
+                    let planned = plan(&connection, &definition).unwrap();
+                    let tx = connection.unchecked_transaction().unwrap();
+                    let error =
+                        apply_in_transaction(&tx, &planned, fixture["schemaSql"].as_str().unwrap())
+                            .unwrap_err();
+                    assert_runtime_case(case, error);
+                    tx.rollback().unwrap();
+                }
+                "unsupported history format" => {
+                    connection.execute_batch(
+                        "CREATE TABLE __konae_schema_state(singleton INTEGER PRIMARY KEY, format_version INTEGER NOT NULL, head_id TEXT, fingerprint TEXT NOT NULL, baseline_kind TEXT NOT NULL);\
+                         INSERT INTO __konae_schema_state VALUES (1,2,NULL,'sha256:0000000000000000000000000000000000000000000000000000000000000000','legacy');\
+                         CREATE TABLE __konae_schema_history(ordinal INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, predecessor TEXT, definition_sha256 TEXT NOT NULL, before_fingerprint TEXT NOT NULL, after_fingerprint TEXT NOT NULL, affected_rows INTEGER NOT NULL, baseline_skipped INTEGER NOT NULL);",
+                    ).unwrap();
+                    let error = load_history(&connection).unwrap_err();
+                    assert_runtime_case(case, error);
+                }
+                other => panic!("unhandled shared runtime case {other}"),
+            }
+        }
+    }
+
+    fn assert_runtime_case(case: &serde_json::Value, error: Refusal) {
+        assert_runtime_case_with(case, error, &[]);
+    }
+
+    fn assert_runtime_case_with(
+        case: &serde_json::Value,
+        error: Refusal,
+        replacements: &[(&str, &str)],
+    ) {
+        let mut expected = case["error"].as_str().unwrap().to_owned();
+        for (key, value) in replacements {
+            expected = expected.replace(key, value);
+        }
+        assert_eq!(error.message, expected, "{}", case["case"]);
+        assert_eq!(
+            error.code,
+            case["code"].as_str().unwrap(),
+            "{}",
+            case["case"]
+        );
+    }
+
+    #[test]
     fn fingerprints_use_shared_token_normalization_and_preserve_literal_case() {
         let left = db("CREATE TABLE tasks(id INTEGER, label TEXT DEFAULT 'X'); /* comment */");
         let right =
@@ -1068,6 +1319,12 @@ mod tests {
             fingerprint(&left).unwrap(),
             fingerprint(&changed_literal).unwrap()
         );
+        let dqs_upper = fp("CREATE TABLE t(label TEXT DEFAULT \"X\");");
+        let dqs_lower = fp("CREATE TABLE t(label TEXT DEFAULT \"x\");");
+        assert_ne!(dqs_upper, dqs_lower);
+        let check_upper = fp("CREATE TABLE t(label TEXT CHECK(label = \"X\"));");
+        let check_lower = fp("CREATE TABLE t(label TEXT CHECK(label = \"x\"));");
+        assert_ne!(check_upper, check_lower);
     }
 
     #[test]
@@ -1089,6 +1346,17 @@ mod tests {
         let serialized = serde_json::to_value(parsed).unwrap();
         assert_eq!(serialized["transitions"][0]["maxRows"], 7);
         assert!(serialized["transitions"][0].get("max_rows").is_none());
+    }
+
+    #[test]
+    fn parser_bounds_the_document_before_json_allocation() {
+        let source = " ".repeat(MAX_DOCUMENT_BYTES + 1);
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.code, DOCUMENT_INVALID);
+        assert_eq!(
+            error.message,
+            "schema-transforms.json must be at most 20971520 bytes."
+        );
     }
 
     #[test]
@@ -1131,6 +1399,28 @@ mod tests {
         let tx = connection.unchecked_transaction().unwrap();
         let applied = apply_in_transaction(&tx, &plan, after).unwrap();
         assert_eq!(applied.transitions[0].id, "rename");
+        tx.commit().unwrap();
+        assert_eq!(fingerprint(&connection).unwrap(), fp(after));
+    }
+
+    #[test]
+    fn quoted_identifiers_survive_alter_rename_fingerprinting() {
+        let before = "CREATE TABLE \"todos\"(\"id\" INTEGER PRIMARY KEY, \"title\" TEXT);";
+        let after = "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY, title TEXT);";
+        let connection = db(before);
+        let definition = Definition {
+            version: 1,
+            transitions: vec![transition(
+                "quoted-rename",
+                None,
+                &fp(before),
+                &fp(after),
+                "ALTER TABLE \"todos\" RENAME TO \"tasks\"",
+            )],
+        };
+        let planned = plan(&connection, &definition).unwrap();
+        let tx = connection.unchecked_transaction().unwrap();
+        apply_in_transaction(&tx, &planned, after).unwrap();
         tx.commit().unwrap();
         assert_eq!(fingerprint(&connection).unwrap(), fp(after));
     }
@@ -1341,6 +1631,13 @@ mod tests {
             "UPDATE tasks SET label=readfile('/etc/passwd')",
             "INSERT INTO sqlite_schema(name) VALUES ('x')",
             "UPDATE tasks SET label='x'; DELETE FROM tasks",
+            "INSERT OR ROLLBACK INTO tasks(label) VALUES ('x')",
+            "UPDATE OR ROLLBACK tasks SET label='x'",
+            "UPDATE OR REPLACE tasks SET label='x'",
+            "CREATE TABLE tasks AS SELECT * FROM todos",
+            "CREATE TABLE tasks(id INTEGER, value TEXT CHECK(value = \"sqlite_schema\"))",
+            "UPDATE tasks SET label=(SELECT name FROM main.\"sqlite_schema\")",
+            "CREATE TABLE tasks(id INTEGER, value TEXT, UNIQUE(value) ON CONFLICT ROLLBACK)",
         ] {
             assert!(validate_statement(sql).is_err(), "accepted {sql}");
         }
@@ -1419,5 +1716,109 @@ mod tests {
                 .code,
             HISTORY_MISMATCH
         );
+    }
+
+    #[test]
+    fn unsupported_history_format_refuses() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(
+            "CREATE TABLE __konae_schema_state(singleton INTEGER PRIMARY KEY, format_version INTEGER NOT NULL, head_id TEXT, fingerprint TEXT NOT NULL, baseline_kind TEXT NOT NULL);\
+             INSERT INTO __konae_schema_state VALUES (1,2,NULL,'sha256:0000000000000000000000000000000000000000000000000000000000000000','legacy');\
+             CREATE TABLE __konae_schema_history(ordinal INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, predecessor TEXT, definition_sha256 TEXT NOT NULL, before_fingerprint TEXT NOT NULL, after_fingerprint TEXT NOT NULL, affected_rows INTEGER NOT NULL, baseline_skipped INTEGER NOT NULL);",
+        ).unwrap();
+        let error = load_history(&connection).unwrap_err();
+        assert_eq!(error.code, HISTORY_VERSION);
+        assert_eq!(
+            error.message,
+            "The app uses schema transformation history version 2; this Kernel supports 1."
+        );
+    }
+
+    #[test]
+    fn transition_after_fingerprint_mismatch_rolls_back_and_clears_authorizer() {
+        let schema = "CREATE TABLE IF NOT EXISTS todos(id INTEGER PRIMARY KEY);";
+        let connection = db("CREATE TABLE todos(id INTEGER PRIMARY KEY);");
+        let definition = Definition {
+            version: 1,
+            transitions: vec![transition(
+                "rename",
+                None,
+                &fp(schema),
+                &fp(schema),
+                "ALTER TABLE todos RENAME TO tasks",
+            )],
+        };
+        let planned = plan(&connection, &definition).unwrap();
+        let tx = connection.unchecked_transaction().unwrap();
+        assert_eq!(
+            apply_in_transaction(&tx, &planned, schema)
+                .unwrap_err()
+                .code,
+            AFTER_MISMATCH
+        );
+        // The engine removes its authorizer even when a transition refuses.
+        tx.execute_batch("CREATE TABLE caller_owned(id INTEGER);")
+            .unwrap();
+        tx.rollback().unwrap();
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='caller_owned')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!exists);
+    }
+
+    #[test]
+    fn final_schema_mismatch_refuses_before_applying() {
+        let actual_schema = "CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY);";
+        let other_schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);";
+        let connection = db("CREATE TABLE tasks(id INTEGER PRIMARY KEY);");
+        let definition = Definition {
+            version: 1,
+            transitions: vec![],
+        };
+        let planned = plan(&connection, &definition).unwrap();
+        let tx = connection.unchecked_transaction().unwrap();
+        let error = apply_in_transaction(&tx, &planned, other_schema).unwrap_err();
+        assert_eq!(error.code, FINAL_SCHEMA_MISMATCH);
+        assert_eq!(fingerprint(&tx).unwrap(), fp(actual_schema));
+        tx.rollback().unwrap();
+    }
+
+    #[test]
+    fn row_cap_counts_trigger_and_foreign_key_cascade_writes() {
+        let schema = "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); CREATE TABLE audit(value INTEGER);";
+        let connection = db(
+            "PRAGMA foreign_keys=ON; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); CREATE TABLE audit(value INTEGER); INSERT INTO parent VALUES(1); INSERT INTO child VALUES(1,1); CREATE TRIGGER audit_parent AFTER UPDATE ON parent BEGIN INSERT INTO audit VALUES(new.id); END;",
+        );
+        let definition = Definition {
+            version: 1,
+            transitions: vec![Transition {
+                id: "cascade".into(),
+                predecessor: None,
+                before: fp(schema),
+                after: fp(schema),
+                max_rows: 2,
+                statements: vec!["UPDATE parent SET id=2 WHERE id=1".into()],
+            }],
+        };
+        let planned = plan(&connection, &definition).unwrap();
+        let tx = connection.unchecked_transaction().unwrap();
+        let final_schema = "CREATE TABLE IF NOT EXISTS parent(id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE); CREATE TABLE IF NOT EXISTS audit(value INTEGER);";
+        let result = apply_in_transaction(&tx, &planned, final_schema);
+        assert_eq!(result.unwrap_err().code, ROW_LIMIT);
+        tx.rollback().unwrap();
+        let parent_id: i64 = connection
+            .query_row("SELECT id FROM parent", [], |row| row.get(0))
+            .unwrap();
+        let child_parent_id: i64 = connection
+            .query_row("SELECT parent_id FROM child", [], |row| row.get(0))
+            .unwrap();
+        let audit_count: i64 = connection
+            .query_row("SELECT count(*) FROM audit", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!((parent_id, child_parent_id, audit_count), (1, 1, 0));
     }
 }

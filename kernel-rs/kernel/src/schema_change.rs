@@ -460,6 +460,7 @@ fn type_name(declared: &str) -> &str {
 #[derive(Debug)]
 struct Token {
     text: String,
+    quote: Option<char>,
     start: usize,
     end: usize,
 }
@@ -501,15 +502,15 @@ fn tokens(sql: &str) -> Vec<Token> {
             }
             index = (index + 1).min(chars.len());
             let text = if char == '\'' { format!("'{text}'") } else { text.to_lowercase() };
-            tokens.push(Token { text, start, end: end_of(index) });
+            tokens.push(Token { text, quote: Some(char), start, end: end_of(index) });
         } else if char.is_alphanumeric() || char == '_' || char == '$' {
             let begin = index;
             while index < chars.len() && (chars[index].1.is_alphanumeric() || chars[index].1 == '_' || chars[index].1 == '$' || chars[index].1 == '.' && index > begin) { index += 1; }
             let text: String = chars[begin..index].iter().map(|(_, c)| *c).collect();
-            tokens.push(Token { text: text.to_lowercase(), start, end: end_of(index) });
+            tokens.push(Token { text: text.to_lowercase(), quote: None, start, end: end_of(index) });
         } else {
             index += 1;
-            tokens.push(Token { text: char.to_string(), start, end: end_of(index) });
+            tokens.push(Token { text: char.to_string(), quote: None, start, end: end_of(index) });
         }
     }
     tokens
@@ -526,6 +527,25 @@ pub(crate) fn canonical_tokens(sql: &str) -> Vec<String> {
         }
     }
     words
+}
+
+/// Fingerprint tokens that preserve ambiguous double-quoted values. SQLite
+/// accepts double-quoted string literals for compatibility. The fingerprint
+/// caller supplies identifiers resolved for this object and default-value
+/// tokens reported by SQLite, so ALTER quoting still normalizes by name.
+pub(crate) fn fingerprint_tokens(sql: &str, identifiers: &std::collections::HashSet<String>, defaults: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut words: Vec<String> = tokens(sql).into_iter().map(|token| {
+        let raw = &sql[token.start..token.end];
+        if token.quote == Some('"') && (defaults.contains(raw) || !identifiers.contains(&token.text)) { raw.to_owned() } else { token.text }
+    }).collect();
+    if let Some(at) = words.windows(3).position(|window| window == ["if", "not", "exists"]) {
+        if at <= 3 { words.drain(at..at + 3); }
+    }
+    words
+}
+
+pub(crate) fn double_quoted_tokens(sql: &str) -> std::collections::HashSet<String> {
+    tokens(sql).into_iter().filter(|token| token.quote == Some('"')).map(|token| sql[token.start..token.end].to_owned()).collect()
 }
 
 fn same_sql(a: &str, b: &str) -> bool {

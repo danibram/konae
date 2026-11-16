@@ -125,6 +125,7 @@
   "schema-transform.document-invalid": { "fix": "capsule", "remedy": "Fix the version, predecessor order, fingerprints, bounds and statements in app/schema-transforms.json." },
   "schema-transform.final-schema-mismatch": { "fix": "capsule", "remedy": "Make the last transition produce the schema declared by app/schema.sql." },
   "schema-transform.history-mismatch": { "fix": "capsule", "remedy": "Restore the applied transition definitions and order from the app folder that produced this database." },
+  "schema-transform.history-version": { "fix": "operator", "remedy": "Run a Kernel that supports this schema transformation journal version, or restore a compatible app database copy." },
   "schema-transform.row-limit": { "fix": "capsule", "remedy": "Lower the affected rows or split the data change into smaller transitions." },
   "schema-transform.statement-refused": { "fix": "capsule", "remedy": "Use only CREATE TABLE/INDEX, ALTER TABLE RENAME/ADD COLUMN, INSERT or UPDATE in a transition." },
 

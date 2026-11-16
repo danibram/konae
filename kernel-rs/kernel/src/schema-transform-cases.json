@@ -1,13 +1,155 @@
 {
-  "note": "Static refusal words for schema_transform.rs and the editor Gate.",
+  "note": "Shared executable inputs and expected refusal words for the Kernel and Validation Gate. Static cases run through parse; runtime cases need SQLite fixtures and engine execution.",
   "cases": [
-    { "case": "malformed JSON", "error": "schema-transforms.json must be valid JSON.", "code": "schema-transform.document-invalid" },
-    { "case": "unsupported document version", "error": "schema-transforms.json version must be 1.", "code": "schema-transform.document-invalid" },
-    { "case": "destructive SQL", "error": "Use CREATE TABLE/INDEX, ALTER TABLE RENAME/ADD COLUMN, INSERT or UPDATE.", "code": "schema-transform.statement-refused" },
-    { "case": "applied definition changed", "error": "Applied transition rename was changed or moved in schema-transforms.json.", "code": "schema-transform.history-mismatch" },
-    { "case": "legacy starting fingerprint differs", "error": "Transition rename expects sha256:wrong, but the database is at sha256:actual.", "code": "schema-transform.before-mismatch" },
-    { "case": "wrong transition result", "error": "Transition rename produced sha256:actual, but declares sha256:wrong.", "code": "schema-transform.after-mismatch" },
-    { "case": "row cap exceeded", "error": "Transition backfill changed more than its 1 row limit.", "code": "schema-transform.row-limit" },
-    { "case": "final schema differs", "error": "The transformed database does not match schema.sql.", "code": "schema-transform.final-schema-mismatch" }
+    {
+      "case": "malformed JSON",
+      "scope": "static",
+      "source": "{",
+      "error": "schema-transforms.json must be valid JSON.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "unsupported document version",
+      "scope": "static",
+      "source": "{\"version\":2,\"transitions\":[]}",
+      "error": "schema-transforms.json version must be 1.",
+      "code": "schema-transform.document-invalid"
+    },
+    {
+      "case": "destructive SQL",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"maxRows\":10,\"statements\":[\"DROP TABLE tasks\"]}]}",
+      "error": "Transition t1: Use CREATE TABLE/INDEX, ALTER TABLE RENAME/ADD COLUMN, INSERT or UPDATE.",
+      "code": "schema-transform.statement-refused"
+    },
+    {
+      "case": "INSERT OR ROLLBACK",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"maxRows\":10,\"statements\":[\"INSERT OR ROLLBACK INTO tasks(label) VALUES ('x')\"]}]}",
+      "error": "Transition t1: ROLLBACK conflict policies are refused because they can end the caller's transaction.",
+      "code": "schema-transform.statement-refused"
+    },
+    {
+      "case": "UPDATE OR REPLACE",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"maxRows\":10,\"statements\":[\"UPDATE OR REPLACE tasks SET label='x'\"]}]}",
+      "error": "Transition t1: UPDATE OR supports ABORT, FAIL or IGNORE.",
+      "code": "schema-transform.statement-refused"
+    },
+    {
+      "case": "CREATE TABLE AS SELECT",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"maxRows\":10,\"statements\":[\"CREATE TABLE tasks AS SELECT * FROM todos\"]}]}",
+      "error": "Transition t1: CREATE TABLE AS SELECT is refused. Use CREATE TABLE and a bounded INSERT SELECT.",
+      "code": "schema-transform.statement-refused"
+    },
+    {
+      "case": "qualified sqlite schema access",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"maxRows\":10,\"statements\":[\"UPDATE tasks SET label=(SELECT name FROM main.\\\"sqlite_schema\\\")\"]}]}",
+      "error": "Transition t1: A transition cannot access SQLite schema tables or Konae's reserved metadata tables.",
+      "code": "schema-transform.statement-refused"
+    },
+    {
+      "case": "quoted internal metadata access",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"maxRows\":10,\"statements\":[\"UPDATE tasks SET label=(SELECT head_id FROM \\\"__KONAE_SCHEMA_STATE\\\")\"]}]}",
+      "error": "Transition t1: A transition cannot access SQLite schema tables or Konae's reserved metadata tables.",
+      "code": "schema-transform.statement-refused"
+    },
+    {
+      "case": "quoted identifier and semicolon string",
+      "scope": "static",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"after\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"maxRows\":10,\"statements\":[\"CREATE TABLE IF NOT EXISTS \\\"tasks\\\"(\\\"id\\\" INTEGER, label TEXT DEFAULT 'a;b')\"]}]}",
+      "error": null,
+      "code": null
+    },
+    {
+      "case": "history entry changed",
+      "scope": "runtime",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"$databaseFingerprint\",\"after\":\"$databaseFingerprint\",\"maxRows\":10,\"statements\":[\"UPDATE tasks SET label=lower(label)\"]}]}",
+      "fixture": {
+        "databaseSchema": "CREATE TABLE IF NOT EXISTS tasks(label TEXT);",
+        "databaseRows": [
+          {
+            "label": " X "
+          }
+        ],
+        "initialAppliedSql": "UPDATE tasks SET label=trim(label)",
+        "changedSql": "UPDATE tasks SET label=lower(label)",
+        "expected": "schema-transform.history-mismatch"
+      },
+      "error": "Applied transition t1 was changed or moved in schema-transforms.json.",
+      "code": "schema-transform.history-mismatch"
+    },
+    {
+      "case": "legacy before fingerprint mismatch",
+      "scope": "runtime",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"$wrongFingerprint\",\"after\":\"$targetFingerprint\",\"maxRows\":10,\"statements\":[\"ALTER TABLE todos RENAME TO tasks\"]}]}",
+      "fixture": {
+        "databaseSchema": "CREATE TABLE IF NOT EXISTS todos(id INTEGER);",
+        "wrongFingerprint": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "targetFingerprint": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "expected": "schema-transform.before-mismatch"
+      },
+      "error": "Transition t1 expects $wrongFingerprint, but the database is at $databaseFingerprint.",
+      "code": "schema-transform.before-mismatch"
+    },
+    {
+      "case": "transition after fingerprint mismatch",
+      "scope": "runtime",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"$databaseFingerprint\",\"after\":\"$targetFingerprint\",\"maxRows\":10,\"statements\":[\"ALTER TABLE todos RENAME TO notes\"]}]}",
+      "fixture": {
+        "databaseSchema": "CREATE TABLE IF NOT EXISTS todos(id INTEGER);",
+        "wrongFingerprint": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "expected": "schema-transform.after-mismatch",
+        "targetSchema": "CREATE TABLE IF NOT EXISTS tasks(id INTEGER);",
+        "actualAfterSchema": "CREATE TABLE IF NOT EXISTS notes(id INTEGER);"
+      },
+      "error": "Transition t1 produced $actualFingerprint, but declares $targetFingerprint.",
+      "code": "schema-transform.after-mismatch"
+    },
+    {
+      "case": "row cap exceeded",
+      "scope": "runtime",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"backfill\",\"predecessor\":null,\"before\":\"$databaseFingerprint\",\"after\":\"$databaseFingerprint\",\"maxRows\":1,\"statements\":[\"UPDATE tasks SET label='x'\"]}]}",
+      "fixture": {
+        "databaseSchema": "CREATE TABLE IF NOT EXISTS tasks(label TEXT);",
+        "databaseRows": [
+          {
+            "label": "a"
+          },
+          {
+            "label": "b"
+          }
+        ],
+        "expected": "schema-transform.row-limit"
+      },
+      "error": "Transition backfill changed more than its 1 row limit.",
+      "code": "schema-transform.row-limit"
+    },
+    {
+      "case": "final schema mismatch",
+      "scope": "runtime",
+      "source": "{\"version\":1,\"transitions\":[{\"id\":\"t1\",\"predecessor\":null,\"before\":\"$databaseFingerprint\",\"after\":\"$databaseFingerprint\",\"maxRows\":10,\"statements\":[\"ALTER TABLE todos RENAME TO tasks\"]}]}",
+      "fixture": {
+        "databaseSchema": "CREATE TABLE IF NOT EXISTS todos(id INTEGER);",
+        "schemaSql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER);",
+        "expected": "schema-transform.final-schema-mismatch"
+      },
+      "error": "The planned final fingerprint does not match schema.sql.",
+      "code": "schema-transform.final-schema-mismatch"
+    },
+    {
+      "case": "unsupported history format",
+      "scope": "runtime",
+      "source": "{\"version\":1,\"transitions\":[]}",
+      "fixture": {
+        "journalVersion": 2,
+        "expected": "schema-transform.history-version"
+      },
+      "error": "The app uses schema transformation history version 2; this Kernel supports 1.",
+      "code": "schema-transform.history-version"
+    }
   ]
 }
