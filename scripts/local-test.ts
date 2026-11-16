@@ -169,7 +169,7 @@ export async function runScenario(kernel: LocalTestRunner, scenarioFile: string)
     const awaiting = pending.filter((call) => {
       if (!call || typeof call !== "object") return false;
       const value = call as Record<string, unknown>;
-      return Number.isInteger(value.responseNumber) && (value.awaitingAt !== undefined || (value.state === "pending" && value.error === "awaiting-response"));
+      return Number.isInteger(value.responseNumber) && (typeof value.awaitingAt === "number" || (value.state === "pending" && value.error === "awaiting-response"));
     });
     const candidates = awaiting.filter((call) => (call as Record<string, unknown>).action === step!.action && isSubset(call, step!.match));
     if (candidates.length !== 1) {

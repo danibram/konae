@@ -1196,7 +1196,7 @@ setInterval(() => {}, 1000);
       ] }) };
       await expect(runScenario(ambiguous, filename)).rejects.toThrow("matched 2 awaiting calls");
       const backoffUntil = Date.now() + 60_000;
-      const backoff = { run: async () => JSON.stringify({ calls: [{ callId: "retry-1", action: "mail.send", responseNumber: 2, state: "pending", nextAttemptAt: backoffUntil }] }) };
+      const backoff = { run: async () => JSON.stringify({ calls: [{ callId: "retry-1", action: "mail.send", responseNumber: 2, state: "pending", awaitingAt: null, nextAttemptAt: backoffUntil }] }) };
       let retryRefusal: ScenarioRefusal | undefined;
       try { await runScenario(backoff, filename); } catch (error) { if (error instanceof ScenarioRefusal) retryRefusal = error; else throw error; }
       expect(retryRefusal?.message).toContain("retry for mail.send is pending");

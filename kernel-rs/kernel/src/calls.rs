@@ -863,16 +863,21 @@ pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<V
         let db = connection(&root)?;
         let mut query = db.prepare(
             "SELECT id, action, state, attempts, next_attempt_at, error, method, url, request_body, request_headers,
-                    created_at, updated_at, then_action, then_state, then_message
+                    created_at, updated_at, then_action, then_state, then_message, input
              FROM calls WHERE deployment = ?1 AND execution_mode = 'test'
                AND (state = 'pending' OR then_state IN ('processing', 'interrupted'))
              ORDER BY created_at, rowid",
         )?;
-        let rows = query.query_map([app_id], |row| {
+        let rows = query.query_map([&app_id], |row| {
+            let input: String = row.get(15)?;
+            let error: Option<String> = row.get(5)?;
+            let awaiting_at = (error.as_deref() == Some("awaiting-response")).then(|| row.get::<_, i64>(11)).transpose()?;
             let call_state: String = row.get(2)?;
             let next_attempt_at = if call_state == "pending" { Some(row.get::<_, i64>(4)?) } else { None };
             Ok(json!({
                 "callId": row.get::<_, String>(0)?, "action": row.get::<_, String>(1)?,
+                "deployment": app_id, "input": redact_value(&serde_json::from_str(&input).unwrap_or(json!({}))),
+                "awaitingAt": awaiting_at,
                 "state": call_state, "attempts": row.get::<_, i64>(3)?,
                 "responseNumber": row.get::<_, i64>(3)? + 1,
                 "nextAttemptAt": next_attempt_at,
@@ -1974,6 +1979,10 @@ mod tests {
         assert_eq!(request["url"], "https://hooks.invalid/send?token=%5Bredacted%5D");
         assert_eq!(request["body"], json!({"message":"hello","password":"[redacted]"}));
         assert_eq!(request["input"]["password"], "[redacted]");
+        let readback = list_test_calls_for_app(&state, &app.id).await.unwrap().remove(0);
+        assert_eq!(readback["input"], request["input"]);
+        assert_eq!(readback["deployment"], app.id);
+        assert!(readback["awaitingAt"].is_i64());
         assert_eq!(connection(&root).unwrap().query_row("SELECT attempts, error FROM calls WHERE id = ?1", [&call_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))).unwrap(), (0, "awaiting-response".into()));
 
         // A restarted live worker must not drain a job captured in test mode.
@@ -1990,6 +1999,7 @@ mod tests {
         let (attempts, error, state_name): (i64, Option<String>, String) = connection(&root).unwrap().query_row("SELECT attempts, error, state FROM calls WHERE id = ?1", [&call_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
         assert_eq!((attempts, error, state_name.as_str()), (1, None, "pending"));
         let retry_state = list_test_calls_for_app(&restarted, &app.id).await.unwrap().remove(0);
+        assert!(retry_state["awaitingAt"].is_null());
         let wait = retry_state["nextAttemptAt"].as_i64().unwrap() - now();
         assert!((FIRST_BACKOFF_MS - 1000..=FIRST_BACKOFF_MS).contains(&wait));
         assert_eq!(retry_state["responseNumber"], 2);
