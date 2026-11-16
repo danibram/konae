@@ -345,17 +345,7 @@ cat /tmp/orders/konae.json
     "password"
   ],
   "kernel": "<Kernel version>",
-  "modules": {
-    "files": {
-      "on": false,
-      "fileAccess": null
-    },
-    "seo": {
-      "on": false,
-      "canonical": null,
-      "image": null
-    }
-  },
+  "modules": {},
   "manifest": {
     "version": 1
   }
@@ -1456,7 +1446,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "chunkBytes": 4194304,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
-      "size": 29696,
+      "size": 30208,
       "transferId": "<folder download>"
     },
     "manifest": {
