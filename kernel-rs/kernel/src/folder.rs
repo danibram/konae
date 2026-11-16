@@ -76,25 +76,33 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         .with_context(|| format!("apps/{id}/dist/ is missing or not readable. Build it with npm run build"))?;
     let dist_digest = version_of(&dist);
     let rebuilt = released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
+    let candidate_sources = state.execution_mode.is_test();
     let source_actions = || async { tokio::fs::read_to_string(sources.join("actions.json")).await.with_context(|| format!("apps/{id}/app/actions.json is missing")) };
     let source_schema = || async { tokio::fs::read_to_string(sources.join("schema.sql")).await.unwrap_or_default() };
-    let actions = if rebuilt || (released.is_none() && stored.is_none()) {
+    let source_transforms = || async { optional_text(&sources.join("schema-transforms.json")).await };
+    let actions = if candidate_sources || rebuilt || (released.is_none() && stored.is_none()) {
         source_actions().await?
     } else if let Some(snapshot) = released.as_ref() {
         snapshot.actions.clone()
     } else if let Some(record) = stored.as_ref() {
         record.actions.clone()
     } else { source_actions().await? };
-    let schema = if rebuilt || (released.is_none() && stored.is_none()) {
+    let schema = if candidate_sources || rebuilt || (released.is_none() && stored.is_none()) {
         source_schema().await
     } else if let Some(snapshot) = released.as_ref() {
         snapshot.schema_sql.clone()
     } else {
         crate::sources::database_schema(root, id)?
     };
-    let mut manifest = if rebuilt { settings.manifest.clone() } else { released.as_ref().map(|snapshot| snapshot.manifest.clone()).unwrap_or_else(|| settings.manifest.clone()) };
+    let fresh_sources = released.is_none() && stored.is_none();
+    let schema_transforms = if candidate_sources || rebuilt || fresh_sources {
+        source_transforms().await?
+    } else {
+        released.as_ref().and_then(|snapshot| snapshot.schema_transforms.clone())
+    };
+    let mut manifest = if candidate_sources || rebuilt { settings.manifest.clone() } else { released.as_ref().map(|snapshot| snapshot.manifest.clone()).unwrap_or_else(|| settings.manifest.clone()) };
     manifest = crate::sources::manifest_without_runtime(&manifest);
-    let visibility = if rebuilt { settings.visibility.as_str() } else { released.as_ref().map(|snapshot| snapshot.visibility.as_str()).unwrap_or(&settings.visibility) };
+    let visibility = if candidate_sources || rebuilt { settings.visibility.as_str() } else { released.as_ref().map(|snapshot| snapshot.visibility.as_str()).unwrap_or(&settings.visibility) };
     if let Some(object) = manifest.as_object_mut() {
         object.insert("visibility".into(), Value::String(visibility.to_owned()));
     }
@@ -104,9 +112,13 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let input = DeployInput {
         project: ProjectInput {
             id: id.to_owned(),
-            name: if rebuilt { settings.name.clone() } else { applied_name.to_owned() },
-            slug: if rebuilt { settings.slug.clone() } else { applied_slug.to_owned() },
-            files: HashMap::from([("actions.json".to_owned(), actions.clone()), ("schema.sql".to_owned(), schema.clone())]),
+        name: if candidate_sources || rebuilt { settings.name.clone() } else { applied_name.to_owned() },
+        slug: if candidate_sources || rebuilt { settings.slug.clone() } else { applied_slug.to_owned() },
+            files: {
+                let mut files = HashMap::from([("actions.json".to_owned(), actions.clone()), ("schema.sql".to_owned(), schema.clone())]);
+                if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
+                files
+            },
             encodings: HashMap::new(),
             directories: settings.directories.clone(),
             manifest,
@@ -133,14 +145,20 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     if !database.exists() {
         initialize_database(&database)?;
     }
-    let plan = plan(state, &database, &schema, &program)?;
+    let plan = plan(state, &database, &schema, &program, schema_transforms.as_deref())?;
     if let Some(expected) = plan.confirmation() {
         if confirmation != Some(expected.as_str()) {
-            let losses = plan.losses.iter().map(|loss| loss.sentence.as_str()).collect::<Vec<_>>().join(" ");
-            bail!("app/schema.sql asks for a change that loses data. {losses} To apply it, start the Kernel with {CONFIRM_SCHEMA}={expected}.");
+            let mut effects = plan.losses.iter().map(|loss| loss.sentence.clone()).collect::<Vec<_>>();
+            if let Some(transformations) = &plan.transformations {
+                effects.extend(transformations.iter().map(|item| format!("Transition {} changed {} existing row(s) in the dry run.", item.id, item.affected_rows)));
+            }
+            if plan.transformations.as_ref().is_some_and(|items| !items.is_empty()) {
+                bail!("app/schema-transforms.json asks to change existing data. {} To apply these changes, start the Kernel with {CONFIRM_SCHEMA}={expected}.", effects.join(" "));
+            }
+            bail!("app/schema.sql asks for a change that loses data. {} To apply it, start the Kernel with {CONFIRM_SCHEMA}={expected}.", effects.join(" "));
         }
     }
-    schema_change::apply(&database, &schema, &program, schema_change::Mode::Apply(plan.confirmation().as_deref()))?;
+    schema_change::apply_with_transforms(&database, &schema, &program, schema_transforms.as_deref(), schema_change::Mode::Apply(plan.confirmation().as_deref()))?;
     let existing = find_project_deployment(&*state.deployments.read().await, id);
     let (hostname, created_at, _taking) = match existing.as_ref() {
         Some(deployment) => (deployment.hostname.clone(), deployment.created_at, None),
@@ -153,9 +171,9 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     // A start that finds the files the record names keeps their release time
     // and the digest of the sources they were built from, so app/ edits not
     // yet built into dist/ still read as changes.
-    let unchanged = !rebuilt;
+    let unchanged = !rebuilt && !candidate_sources;
     let released_at = if unchanged { released.as_ref().and_then(|snapshot| snapshot.released_at).or_else(|| stored.as_ref().and_then(|record| record.released_at)).or_else(|| existing.as_ref().map(|current| current.released_at)).unwrap_or_else(now_ms) } else { now_ms() };
-    let source_digest = if rebuilt || (released.is_none() && stored.is_none()) { Some(crate::sources::digest_folder(&sources).await?) } else { released.as_ref().and_then(|snapshot| snapshot.source_digest.clone()).or_else(|| stored.as_ref().and_then(|record| record.source_digest.clone())).or_else(|| existing.as_ref().and_then(|current| current.source_digest.clone())) };
+    let source_digest = if candidate_sources || rebuilt || fresh_sources { Some(crate::sources::digest_folder(&sources).await?) } else { released.as_ref().and_then(|snapshot| snapshot.source_digest.clone()).or_else(|| stored.as_ref().and_then(|record| record.source_digest.clone())).or_else(|| existing.as_ref().and_then(|current| current.source_digest.clone())) };
     let artifact_version = if unchanged { stored.as_ref().map(|record| record.artifact_version.clone()).or_else(|| existing.as_ref().map(|current| current.artifact_version.clone())).unwrap_or_else(|| format!("v{}", &dist_digest[..32])) } else { format!("v{}", &dist_digest[..32]) };
     let policy = settings.signup_policy.clone();
     let sign_in_methods = settings.sign_in_methods.clone();
@@ -166,7 +184,8 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         sign_in_methods, contact_email: input.contact_email.clone(), released_schema: schema,
     };
     open_auth(state, &deployment)?;
-    if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories).await?; }
+    if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories, schema_transforms.as_deref()).await?; }
+    else if candidate_sources || fresh_sources { crate::persist_folder_snapshot_with_transforms(state, &deployment, &dist_digest, schema_transforms.as_deref()).await?; }
     else { crate::persist_folder_snapshot(state, &deployment, &dist_digest).await?; }
     let mut deployments = state.deployments.write().await;
     deployments.retain(|_, served| served.id != id);
@@ -176,12 +195,20 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     Ok(deployment)
 }
 
+async fn optional_text(path: &Path) -> Result<Option<String>> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// The change `schema` asks of the live database, read from a copy.
-fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::ActionProgram) -> Result<schema_change::Change> {
+fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::ActionProgram, transforms: Option<&str>) -> Result<schema_change::Change> {
     let copy = state.data_root.join(format!("validate-{}.sqlite", Uuid::new_v4()));
     let result = (|| {
         Connection::open(database)?.execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()])?;
-        schema_change::apply(&copy, schema, program, schema_change::Mode::Plan)
+        schema_change::apply_with_transforms(&copy, schema, program, transforms, schema_change::Mode::Plan)
     })();
     let _ = std::fs::remove_file(&copy);
     result
@@ -339,6 +366,62 @@ mod tests {
             .query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(row, "applied row");
         assert_eq!(running.artifact_version, first.artifact_version);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mode_applies_schema_only_source_edits_when_dist_is_unchanged() {
+        let root = scratch();
+        let mut state = AppState::for_test(&root);
+        state.execution_mode = crate::execution::ExecutionMode::Test;
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        let first = open(&state, "notes_app", None).await.unwrap();
+        let database = layout::database(&root, "notes_app");
+        Connection::open(&database).unwrap().execute("INSERT INTO notes(body) VALUES('kept')", []).unwrap();
+        let original_artifact = first.artifact_version.clone();
+        std::fs::write(layout::sources(&root, "notes_app").join("schema.sql"), "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL, extra TEXT);").unwrap();
+
+        let restarted = open(&state, "notes_app", None).await.unwrap();
+
+        assert_eq!(restarted.artifact_version, original_artifact);
+        assert!(restarted.released_schema.contains("extra TEXT"));
+        assert!(crate::table_columns(&Connection::open(&database).unwrap(), "notes").unwrap().iter().any(|column| column["name"] == "extra"));
+        let kept: String = Connection::open(&database).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(kept, "kept");
+        assert_eq!(restarted.source_digest.as_deref(), Some(crate::sources::digest_folder(&layout::sources(&root, "notes_app")).await.unwrap().as_str()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mode_uses_and_persists_transform_source_edits_when_dist_is_unchanged() {
+        let root = scratch();
+        let mut state = AppState::for_test(&root);
+        state.execution_mode = crate::execution::ExecutionMode::Test;
+        write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
+        open(&state, "notes_app", None).await.unwrap();
+        let database = layout::database(&root, "notes_app");
+        let before = crate::schema_transform::fingerprint(&Connection::open(&database).unwrap()).unwrap();
+        let schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL, extra TEXT);";
+        let document = serde_json::json!({
+            "version": 1,
+            "transitions": [{
+                "id": "add-extra",
+                "predecessor": null,
+                "before": before,
+                "after": crate::schema_transform::fingerprint_schema(schema).unwrap(),
+                "maxRows": 10,
+                "statements": ["ALTER TABLE notes ADD COLUMN extra TEXT"]
+            }]
+        }).to_string();
+        std::fs::write(layout::sources(&root, "notes_app").join("schema.sql"), schema).unwrap();
+        std::fs::write(layout::sources(&root, "notes_app").join("schema-transforms.json"), &document).unwrap();
+
+        let running = open(&state, "notes_app", None).await.unwrap();
+
+        assert!(crate::table_columns(&Connection::open(&database).unwrap(), "notes").unwrap().iter().any(|column| column["name"] == "extra"));
+        let settings = Settings::read(&root, "notes_app").unwrap();
+        assert_eq!(settings.released.unwrap().schema_transforms.as_deref(), Some(document.as_str()));
+        assert_eq!(running.artifact_version, format!("v{}", &version_of(&read_dist(&layout::dist(&root, "notes_app")).unwrap())[..32]));
         std::fs::remove_dir_all(root).unwrap();
     }
 

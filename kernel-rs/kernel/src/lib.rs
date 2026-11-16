@@ -223,6 +223,8 @@ pub struct ReleasedSettings {
     pub actions: String,
     #[serde(default)]
     pub schema_sql: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_transforms: Option<String>,
     #[serde(default)]
     pub source_digest: Option<String>,
     #[serde(default)]
@@ -240,6 +242,7 @@ fn released_settings(deployment: &Deployment) -> ReleasedSettings {
         signup_policy: deployment.signup_policy.clone(), sign_in_methods: deployment.sign_in_methods.clone(),
         contact_email: deployment.contact_email.clone(), manifest,
         actions: deployment.actions.clone(), schema_sql: deployment.released_schema.clone(),
+        schema_transforms: None,
         source_digest: deployment.source_digest.clone(), released_at: Some(deployment.released_at),
         artifact_digest: None,
     }
@@ -971,6 +974,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         .map(|item| item.url.clone())
         .unwrap_or_else(|| deployment_url(&state.public_origin, &hostname));
     let released_schema = input.project.files.get("schema.sql").cloned().unwrap_or_default();
+    let released_transforms = input.project.files.get("schema-transforms.json").cloned();
     let mut manifest = input.project.manifest;
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
@@ -1067,7 +1071,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     // Database, so none writes a row the copy below would miss.
     let database_guard = database_lock(&state, &id).await;
     let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
-    let staged = stage_database(&db_path, &staged_database, &schema, &program, input.schema_confirmation.as_deref())
+    let staged = stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref())
         .and_then(|change| release_step(&id, "schema_change").map(|()| change));
     let change = match staged {
         Ok(change) => change,
@@ -1121,7 +1125,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             }
         }
     };
-    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories)
+    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref())
         .await
         .and_then(|()| release_step(&id, "persist_deployment"))
     {
@@ -1220,10 +1224,10 @@ pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::
 /// Copies the live database with `VACUUM INTO` and applies `schema` to the
 /// copy, so a change that fails, or a release that fails after it, leaves the
 /// live database as it was. The caller holds the database lock alone.
-fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, confirmation: Option<&str>) -> Result<schema_change::Change> {
+fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, transforms: Option<&str>, confirmation: Option<&str>) -> Result<schema_change::Change> {
     remove_database_files(staged);
     Connection::open(live)?.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
-    let change = schema_change::apply(staged, schema, program, schema_change::Mode::Apply(confirmation))?;
+    let change = schema_change::apply_with_transforms(staged, schema, program, transforms, schema_change::Mode::Apply(confirmation))?;
     // The copy leaves in rollback mode. Closing this connection checkpoints
     // and removes its WAL, so only the file moves into place.
     Connection::open(staged)?.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
@@ -2516,7 +2520,7 @@ pub async fn action_lock(state: &AppState, id: &str, kind: &str) -> ActionLock {
 
 pub fn inspect_database(path: &Path) -> Result<Vec<Value>> {
     let db = Connection::open(path)?;
-    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+    let mut statement = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY name")?;
     let names = statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -2529,6 +2533,7 @@ pub fn inspect_database(path: &Path) -> Result<Vec<Value>> {
 }
 
 pub fn table_columns(db: &Connection, table: &str) -> Result<Vec<Value>> {
+    anyhow::ensure!(!schema_transform::is_internal_table(table), "Reserved Kernel table.");
     if !table_exists(db, table)? {
         anyhow::bail!("Table not found: {table}");
     }
@@ -2641,6 +2646,10 @@ pub fn run_admin_sql(path: &Path, sql: &str) -> Result<Value> {
     }
     if sql.len() > 100_000 {
         anyhow::bail!("SQL script is too large.");
+    }
+    let tokens = sql_tokens(sql);
+    if tokens.windows(3).any(|tokens| tokens[0].is_word("RENAME") && tokens[1].is_word("TO") && matches!(tokens[2].kind, SqlTokKind::Word | SqlTokKind::Ident) && schema_transform::is_internal_table(&tokens[2].text)) {
+        anyhow::bail!("SQL cannot rename a table to a reserved Kernel table.");
     }
     let db = Connection::open(path)?;
     restrict_database(&db)?;
@@ -3073,6 +3082,15 @@ pub fn validate_action(name: &str, action: &ActionDefinition) -> std::result::Re
 
 pub fn validate_declarations(name: &str, action: &ActionDefinition) -> std::result::Result<(), refusal::Refusal> {
     action_shape::check_action(name, action)?;
+    let tokens = sql_tokens(&action.statement);
+    if tokens.iter().enumerate().any(|(index, token)| {
+        let after_modifier = if token.is_word("UPDATE") && tokens.get(index + 1).is_some_and(|next| next.is_word("OR")) { index + 3 } else { index + 1 };
+        let target = if tokens.get(after_modifier + 1).is_some_and(|dot| dot.is_symbol(".")) { tokens.get(after_modifier + 2) } else { tokens.get(after_modifier) };
+        token.is_any(&["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "REFERENCES"])
+            && target.is_some_and(|target| matches!(target.kind, SqlTokKind::Word | SqlTokKind::Ident) && schema_transform::is_internal_table(&target.text))
+    }) {
+        return Err(refusal::refuse("schema-transform.statement-refused", format!("Action {name} cannot read or write a reserved Kernel table.")));
+    }
     if calls::check_kind(name, action)?.is_some() {
         return Ok(());
     }
@@ -3465,15 +3483,19 @@ pub fn safe_relative_path(path: &str) -> bool {
 
 /// Persists changes made to the applied Deployment while keeping editable settings intact.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
-    persist_applied(state, deployment, None).await
+    persist_applied(state, deployment, None, None).await
 }
 
 /// Records the artifact currently in a folder without replacing its saved draft.
 pub async fn persist_folder_snapshot(state: &AppState, deployment: &Deployment, artifact_digest: &str) -> Result<()> {
-    persist_applied(state, deployment, Some(artifact_digest)).await
+    persist_applied(state, deployment, Some(artifact_digest), None).await
 }
 
-async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_digest: Option<&str>) -> Result<()> {
+pub async fn persist_folder_snapshot_with_transforms(state: &AppState, deployment: &Deployment, artifact_digest: &str, schema_transforms: Option<&str>) -> Result<()> {
+    persist_applied(state, deployment, Some(artifact_digest), Some(schema_transforms)).await
+}
+
+async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_digest: Option<&str>, schema_transforms: Option<Option<&str>>) -> Result<()> {
     let mut settings = match Settings::read(&state.data_root, &deployment.id) {
         Ok(settings) => settings,
         Err(_) if !layout::settings(&state.data_root, &deployment.id).exists() => Settings::of(deployment),
@@ -3496,6 +3518,11 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
     settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
     let mut released = released_settings(deployment);
     if released.schema_sql.trim().is_empty() { released.schema_sql = recovered.schema_sql; }
+    if let Some(schema_transforms) = schema_transforms {
+        released.schema_transforms = schema_transforms.map(str::to_owned);
+    } else if released.schema_transforms.is_none() {
+        released.schema_transforms = recovered.schema_transforms;
+    }
     if released.source_digest.is_none() { released.source_digest = recovered.source_digest; }
     released.artifact_digest = artifact_digest.map(str::to_owned).or(recovered.artifact_digest);
     settings.released = Some(released.clone());
@@ -3503,12 +3530,13 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
 }
 
 /// Persists the new source and artifact state after a successful release.
-pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String]) -> Result<()> {
+pub async fn persist_release(state: &AppState, deployment: &Deployment, artifact_digest: &str, directories: &[String], schema_transforms: Option<&str>) -> Result<()> {
     let mut settings = Settings::of(deployment);
     if let Ok(previous) = Settings::read(&state.data_root, &deployment.id) { settings.updated_at = previous.updated_at; }
     settings.directories = directories.to_vec();
     let mut released = settings.released.clone().expect("Settings::of records released settings");
     released.artifact_digest = Some(artifact_digest.to_owned());
+    released.schema_transforms = schema_transforms.map(str::to_owned);
     settings.released = Some(released.clone());
     persist_settings_and_record(state, deployment, settings, released).await
 }
@@ -3828,6 +3856,15 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
     arm_deadline(db);
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
+        AuthAction::CreateTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::CreateIndex { index_name, table_name } if schema_transform::is_internal_table(index_name) || schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::AlterTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::DropTable { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::DropIndex { index_name, table_name } if schema_transform::is_internal_table(index_name) || schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Read { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Insert { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Update { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
+        AuthAction::Delete { table_name } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
         // Konae runs no triggers or views, and Studio and the schema change
         // use this connection too, so neither can add one the Gate never saw.
         AuthAction::CreateTrigger { .. } | AuthAction::CreateTempTrigger { .. } => Authorization::Deny,
@@ -4186,6 +4223,24 @@ pub fn refusal_error(refused: &refusal::Refusal) -> Response {
 #[allow(dead_code, unused_imports)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn the_transformation_journal_is_hidden_and_owner_sql_cannot_rewrite_it() {
+        let root = std::env::temp_dir().join(format!("konae-schema-journal-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("database.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY); CREATE TABLE __konae_schema_state(format_version INTEGER NOT NULL); CREATE TABLE __konae_schema_history(id TEXT);").unwrap();
+        drop(db);
+        let tables = inspect_database(&path).unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0]["name"], "notes");
+        assert!(run_admin_sql(&path, "SELECT * FROM __konae_schema_state").is_err());
+        assert!(run_admin_sql(&path, "CREATE TABLE __konae_schema_state(id INTEGER)").is_err());
+        assert!(run_admin_sql(&path, "DROP TABLE __konae_schema_history").is_err());
+        assert!(run_admin_sql(&path, "ALTER TABLE notes RENAME TO __konae_schema_state").is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn deploy_input_reads_the_initial_signup_policy() {

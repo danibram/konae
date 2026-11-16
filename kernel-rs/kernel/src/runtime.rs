@@ -716,7 +716,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         } else {
             initialize_database(&temp)?;
         }
-        super::schema_change::apply(
+        super::schema_change::apply_with_transforms(
             &temp,
             input
                 .project
@@ -725,6 +725,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
                 .map(String::as_str)
                 .unwrap_or(""),
             &program,
+            input.project.files.get("schema-transforms.json").map(String::as_str),
             super::schema_change::Mode::Plan,
         )
     })();
