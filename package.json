@@ -15,6 +15,7 @@
     "test:e2e:local": "playwright test --config playwright.local.config.ts",
     "konae": "bun run scripts/konae.ts",
     "docs:site": "bun run scripts/docs-site.ts",
+    "home:site": "bun run scripts/home-site.ts",
     "sdk:render": "bun run scripts/render-sdk.ts",
     "templates:render": "bun run scripts/render-templates.ts",
     "ui:render": "bun run scripts/render-app-ui.ts",
@@ -32,6 +33,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "esbuild-wasm": "0.25.12",
     "lucide-react": "^0.468.0",
+    "marked": "18.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sql.js": "^1.12.0"

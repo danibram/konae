@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { slug } from "../examples/docs-site/slug.js";
-import { docsRoot, readSite, sections, seedStatements } from "./docs-site";
+import { descriptionOf, renderMarkdown } from "../examples/docs-site/render.js";
+import { docsRoot, readSite, renderPage, sections, seedStatements } from "./docs-site";
 
 const repo = path.resolve(import.meta.dir, "..");
 const site = await readSite();
+const template = readFileSync(path.join(repo, "examples/docs-site/page.template"), "utf8");
+const htmlEscape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
 function anchors(markdown: string) {
   const seen = new Map<string, number>();
@@ -25,6 +28,25 @@ function links(markdown: string) {
 }
 
 describe("the docs site", () => {
+  test("generated pages ship their body and a description from the first paragraph", () => {
+    for (const page of site.pages) {
+      const html = renderPage(template, site, page, "test");
+      const firstParagraph = descriptionOf(page.markdown);
+      expect(html).toContain("<article id=\"content\"");
+      expect(firstParagraph.length).toBeLessThanOrEqual(160);
+      expect(html).toContain(`<meta name="description" content="${htmlEscape(firstParagraph)}">`);
+      expect(html).toContain(`<title>${htmlEscape(page.title)} · Konae docs</title>`);
+      expect(html).toContain(renderMarkdown(page.markdown));
+      expect(html).not.toContain("Loading the markdown of this page");
+    }
+  });
+
+  test("each docs app card image exists and stays under the size limit", () => {
+    const image = readFileSync(path.join(repo, "examples/docs-site/public/card.png"));
+    expect(image.byteLength).toBeLessThan(600 * 1024);
+    expect(image.readUInt32BE(16)).toBeGreaterThanOrEqual(300);
+  });
+
   test("every page in the navigation exists, has a title and its own route", () => {
     expect(site.pages.length).toBeGreaterThan(30);
     expect(new Set(site.pages.map((page) => page.route)).size).toBe(site.pages.length);
