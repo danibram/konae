@@ -35,7 +35,7 @@ pub struct Loss {
     pub sentence: String,
 }
 
-/// The statements the Kernel ran, or would run, and what they lose.
+/// The planned statements, transformation row counts, and data losses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Change {
     pub statements: Vec<String>,
@@ -57,8 +57,8 @@ pub struct Transformation {
 }
 
 impl Change {
-    /// The confirmation a change that loses something needs. It is a digest
-    /// of the statements and reported losses, including their row and value counts.
+    /// Binds confirmation to statements, transformation definitions and row
+    /// counts, and reported losses.
     pub fn confirmation(&self) -> Option<String> {
         (!self.losses.is_empty() || self.transformation_confirmation == Some(true)).then(|| {
             let mut scope = json!({
@@ -77,7 +77,7 @@ impl Change {
     }
 
     /// `{ statements, losses, confirmation }` as `release_plan` answers it.
-    /// `confirmation` is null when the change loses nothing.
+    /// `confirmation` is null when no loss or data transformation needs approval.
     pub fn to_json(&self) -> Value {
         let mut output = json!({
             "statements": self.statements,

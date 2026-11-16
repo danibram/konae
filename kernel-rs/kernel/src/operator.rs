@@ -332,8 +332,11 @@ async fn import(state: &AppState, id: &str, words: &mut Arguments) -> Result<Val
     let target = Target::sources(state, id)?;
     match import_folder(state, &deployment, &folder, &target, confirmation.as_deref()).await? {
         Outcome::NeedsConfirmation(change) => {
-            let losses = change.losses.iter().map(|loss| loss.sentence.as_str()).collect::<Vec<_>>().join(" ");
-            bail!("app/schema.sql asks for a change of the imported data that loses data. {losses} To import it, run again with --confirm-schema {}.", change.confirmation().unwrap_or_default())
+            let mut details = change.losses.iter().map(|loss| loss.sentence.clone()).collect::<Vec<_>>();
+            for transition in change.transformations.iter().flatten() {
+                details.push(format!("Transition {} changes {} rows, with a limit of {}.", transition.id, transition.affected_rows, transition.max_rows));
+            }
+            bail!("The imported data requires schema change confirmation. {} To import it, run again with --confirm-schema {}.", details.join(" "), change.confirmation().unwrap_or_default())
         }
         Outcome::Imported { backup, change } => Ok(json!({"imported": true, "replace": "data", "backup": backup, "schema": change.to_json()})),
     }
