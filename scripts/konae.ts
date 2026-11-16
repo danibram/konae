@@ -16,7 +16,7 @@ import {
 import { describeSchemaChange, publishProject, type ConfirmSchema } from "../src/deployments/release";
 import { type ProjectTemplates } from "./project-templates";
 import type { AppEvent, ReadRecord } from "./events";
-import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testCalls, testControls, testReply, testSchedule, testStatus } from "./local-test";
+import { localResetSummary, readReplyFile, readReplyInput, resolveScenarioPath, runScenario, ScenarioRefusal, testCalls, testControls, testReply, testSchedule } from "./local-test";
 import { PULL_DIRECTORY, describePulled, downloadData, pullLocal, readPulled, type Pulled } from "./pull";
 import { pushData } from "./push";
 import {
@@ -1490,7 +1490,7 @@ export async function main() {
     const settings = await readSettings(root);
     const kernel = await localKernel(root, settings, { build: false });
     let result: unknown;
-    if (action === "status" && rest.length === 0) result = await testStatus(kernel);
+    if (action === "status" && rest.length === 0) result = await testControls(kernel, () => localStateSummary(root)).status();
     else if (action === "calls" && rest.length === 0) result = await testCalls(kernel);
     else if (action === "schedule" && rest.length === 1) result = await testSchedule(kernel, rest[0]);
     else if (action === "reply" && rest.length === 1) {

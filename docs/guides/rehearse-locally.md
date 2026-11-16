@@ -53,4 +53,4 @@ bun run konae -- publish --dir ./my-app --plan
 bun run konae -- publish --dir ./my-app
 ```
 
-Publish changes sources and the built artifact against current production rows. It never uploads local rows. If the production plan requests a schema confirmation, pass that plan's value to `publish --confirm-schema`. `konae push --yes` is a separate operation that replaces published data with local `data/`; back up the Deployment first and use push only when replacing those rows is intended.
+Publish changes sources and the built artifact against current production rows. It never uploads local rows. If the production plan requests a schema confirmation, pass that plan's value to `publish --confirm-schema`. `konae push --yes` takes a backup, then replaces published data with local `data/`. Use it when you intend to replace those rows.
