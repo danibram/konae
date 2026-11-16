@@ -2606,6 +2606,8 @@ mod tests {
 
     #[tokio::test]
     async fn first_release_persists_inferred_files_state_for_missing_and_partial_initial_modules() {
+        use base64::Engine;
+        use sha2::Digest;
         let root = std::env::temp_dir().join(format!("konae-first-files-release-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = Konae::for_test(AppState::for_test(&root));
@@ -2617,8 +2619,14 @@ mod tests {
                 "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<script>miniapp.files.upload()</script>"}}
             });
             if let Some(modules) = initial_modules { payload["initialModules"] = modules; }
-            let response = deploy(&state, payload.to_string().as_bytes()).await;
-            assert_eq!(response.status(), StatusCode::OK, "{}", String::from_utf8_lossy(&axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap()));
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
             let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
             assert_eq!(deployment.modules["files"]["on"], true, "{id}");
             let settings = crate::Settings::read(&state.data_root, id).unwrap();
@@ -2629,6 +2637,86 @@ mod tests {
             let expected = read["modules"]["seo"]["state"].clone();
             admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"seo","on":true,"expected":expected})).await.unwrap();
         }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn project_create_normalizes_legacy_file_access_on_both_metadata_inputs() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-create-file-access-{}", Uuid::new_v4()));
+        let (kernel_state, _) = kernel::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(kernel_state);
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into()], projects:vec![], session:false };
+        let source = json!({"id":"app_legacy_access","name":"Legacy access","slug":"legacy-access","files":{"index.html":"<main>Legacy</main>"},"directories":[],"manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"updatedAt":1});
+        let bytes = serde_json::to_vec(&source).unwrap();
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
+        let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":null,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+        let transfer_id = transfer["transferId"].as_str().unwrap();
+        transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+        transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":"app_legacy_access","name":"Legacy access","slug":"legacy-access","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"sourcesTransferId":transfer_id})).await.unwrap();
+        let saved = super::super::sources::read(&state.data_root, "app_legacy_access").await.unwrap().unwrap();
+        assert!(saved["manifest"].get("fileAccess").is_none());
+        assert_eq!(saved["files"]["index.html"], "<main>Legacy</main>");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_file_access_survives_release_apply_and_project_import_for_other_users() {
+        async fn upload_release(state: &Konae, payload: &Value, project: &str) -> String {
+            let bytes = serde_json::to_vec(payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":project,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            transfer_id.to_owned()
+        }
+        use axum::{http::{Request, header}, Router};
+        use base64::Engine;
+        use sha2::Digest;
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("konae-file-access-doors-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        let id = "app_file_access_doors";
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"File access","slug":"file-access","manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+        let payload = json!({"project":{"id":id,"name":"File access","slug":"file-access","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>File access</title>"}}});
+        let transfer_id = upload_release(&state, &payload, id).await;
+        let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+        let deployment = state.kernel.deployments.read().await.values().find(|item| item.id == id).unwrap().clone();
+        assert_eq!(deployment.modules["files"]["fileAccess"], "app-users");
+
+        let auth = kernel::auth::AuthService::open(kernel::layout::identity(&state.data_root, id)).unwrap();
+        let uploader = auth.signup("uploader@example.test", "correct horse battery").unwrap();
+        let other = auth.signup("other@example.test", "correct horse battery").unwrap();
+        let file_id = "018f2b2c-4a10-7a01-8000-000000000001";
+        let file_dir = kernel::layout::files(&state.data_root, id);
+        tokio::fs::create_dir_all(&file_dir).await.unwrap();
+        tokio::fs::write(file_dir.join(format!("{file_id}.blob")), b"door proof\n").await.unwrap();
+        let file = json!([{"id":file_id,"name":"proof.txt","type":"text/plain","size":11,"visibility":"private","ownerId":uploader.user.user_id,"createdAt":1}]);
+        tokio::fs::write(file_dir.join("index.json"), serde_json::to_vec(&file).unwrap()).await.unwrap();
+        let read_as = |token: &str| {
+            let request = Request::builder().uri(format!("/_konae/files/{file_id}")).header(header::HOST, deployment.hostname.as_str()).header(header::COOKIE, format!("konae_app_session={token}")).body(axum::body::Body::empty()).unwrap();
+            kernel::stack(state.kernel.clone(), Router::new()).oneshot(request)
+        };
+        let first_read = read_as(&other.token).await.unwrap();
+        assert_eq!(first_read.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(first_read.into_body(), 1024).await.unwrap().as_ref(), b"door proof\n");
+
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"files","options":{"fileAccess":null},"expected":current["modules"]["files"]["state"]})).await.unwrap();
+        assert_ne!(read_as(&other.token).await.unwrap().status(), StatusCode::OK);
+        let import_transfer = upload_release(&state, &payload, id).await;
+        admin_call(&state, &owner, "owner:o", "project_import", json!({"projectId":id,"replace":"sources","transferId":import_transfer})).await.unwrap();
+        let final_deployment = state.kernel.deployments.read().await.values().find(|item| item.id == id).unwrap().clone();
+        assert_eq!(final_deployment.modules["files"]["fileAccess"], "app-users");
+        let final_read = read_as(&other.token).await.unwrap();
+        assert_eq!(final_read.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(final_read.into_body(), 1024).await.unwrap().as_ref(), b"door proof\n");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
