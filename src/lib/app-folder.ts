@@ -251,7 +251,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appEntries, appEntry, assembleStaticArtifact, pageRoutesFromActions } from './static-artifact.mjs';
+import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
 import { bundleModule } from './local-builder.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -278,7 +278,6 @@ const artifact = await assembleStaticArtifact({
   bundle: (relative) => bundleModule(app, relative, development),
   runtime,
   routing: settings.manifest?.routing,
-  pageRoutes: pageRoutesFromActions(await readFile(path.join(app, 'actions.json'), 'utf8')),
   warn: (message) => console.warn('Warning: ' + message),
 });
 await rm(dist, { recursive: true, force: true });

@@ -4,7 +4,7 @@ import type { MiniAppProject } from "../lib/types";
 import { normalizeProjectPath } from "../lib/project-files";
 import { sourceBytes, sourceContents, textFiles } from "../lib/source-files";
 import { hostedRuntime, type BuildArtifact } from "./artifact";
-import { appEntry, assembleStaticArtifact, pageRoutesFromActions, resolveReference, servedPath } from "../lib/static-artifact.js";
+import { appEntry, assembleStaticArtifact, resolveReference, servedPath } from "../lib/static-artifact.js";
 
 let initialized: Promise<void> | undefined;
 
@@ -16,7 +16,6 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
     routing: project.manifest.routing,
-    pageRoutes: pageRoutesFromActions(project.files["actions.json"] ?? '{"actions":{}}'),
   });
 }
 
@@ -35,7 +34,6 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
     routing: project.manifest.routing,
-    pageRoutes: pageRoutesFromActions(project.files["actions.json"] ?? '{"actions":{}}'),
   });
   return compiled;
 }

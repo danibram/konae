@@ -1,8 +1,17 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { McpClient } from "../../src/mcp/client";
 import { publishProject } from "../../src/deployments/release";
-import { assembleStaticArtifact, pageRoutesFromActions } from "../../src/lib/static-artifact.js";
 import { expect, test } from "playwright/test";
+
+let buildRoot: string | undefined;
+
+test.afterEach(async () => {
+  if (buildRoot) await rm(buildRoot, { recursive: true, force: true });
+  buildRoot = undefined;
+});
 
 test("page files load scripts at host and path addresses", async ({ page, baseURL }) => {
   const email = `page-${crypto.randomUUID()}@example.test`;
@@ -21,6 +30,16 @@ test("page files load scripts at host and path addresses", async ({ page, baseUR
   const slug = `page-${crypto.randomUUID().slice(0, 8)}`;
   const blog = new URL("../../examples/product-fit/blog/", import.meta.url);
   const files = Object.fromEntries(await Promise.all(["schema.sql", "actions.json", "index.html", "post.html", "app.js"].map(async (name) => [name, await readFile(new URL(name, blog), "utf8")])));
+  buildRoot = await mkdtemp(path.join(tmpdir(), "konae-page-path-build-"));
+  const app = path.join(buildRoot, "app");
+  await mkdir(app);
+  await writeFile(path.join(buildRoot, "konae.json"), JSON.stringify({ manifest: {} }));
+  await Promise.all(Object.entries(files).map(([name, contents]) => writeFile(path.join(app, name), contents)));
+  const artifact = JSON.parse(execFileSync("bun", ["-e", "import { buildLocal } from './scripts/konae.ts'; const { artifact } = await buildLocal(process.env.KONAE_BUILD_ROOT); process.stdout.write(JSON.stringify(artifact));"], {
+    cwd: path.resolve(import.meta.dirname, "../.."),
+    env: { ...process.env, KONAE_BUILD_ROOT: buildRoot },
+    encoding: "utf8",
+  }));
   const project = { id, name: "Browser page", slug, manifest: { version: 1, visibility: "public" }, updatedAt: Date.now(), directories: [], files };
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(project)));
   let created: { sourcesRevision: number };
@@ -29,15 +48,6 @@ test("page files load scripts at host and path addresses", async ({ page, baseUR
   } finally {
     await client.cancel(transfer.transferId).catch(() => {});
   }
-  const runtime = await readFile(new URL("../../src/mcp/runtime.js", import.meta.url), "utf8");
-  const artifact = await assembleStaticArtifact({
-    paths: Object.keys(files),
-    read: async (source) => files[source as keyof typeof files],
-    compile: async () => ({ styles: "", script: "" }),
-    bundle: async (source) => ({ script: files[source as keyof typeof files], styles: "" }),
-    runtime,
-    pageRoutes: pageRoutesFromActions(files["actions.json"]),
-  });
   const published = await publishProject(client, project, () => ({ project, visibility: "public", artifact }), async () => true, undefined, undefined, created.sourcesRevision);
   const receipt = published.receipt as { url: string };
   await client.call("database_execute", { projectId: id, operation: "sql", input: { sql: "INSERT INTO posts VALUES ('hello', 'Hello', 'Summary', 'cover.png', 'Body rendered by the page script', 1, 1)" } });

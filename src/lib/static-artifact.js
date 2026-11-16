@@ -188,8 +188,9 @@ export async function assembleStaticArtifact(input) {
     return typeof contents === "string" ? contents : new TextDecoder().decode(contents);
   };
 
+  const pageRoutes = held.has("actions.json") ? pageRoutesFromActions(await text("actions.json")) : [];
   const pages = [...sources].filter(([served]) => served.endsWith(".html") && !sources.get(served).startsWith("public/"));
-  const pageDepths = new Map((input.pageRoutes ?? []).map(({ path, file }) => [file, path.split("/").filter(Boolean).length]));
+  const pageDepths = new Map(pageRoutes.map(({ path, file }) => [file, path.split("/").filter(Boolean).length]));
   if (!sources.has("index.html")) pages.unshift(["index.html", null]);
   let compiled;
   let usesRuntimeFile = false;
@@ -218,16 +219,16 @@ export async function assembleStaticArtifact(input) {
     const sourceHtml = source === null ? defaultBody : seen[source];
     const bom = sourceHtml.startsWith("\uFEFF") ? "\uFEFF" : "";
     const html = bom ? sourceHtml.slice(1) : sourceHtml;
+    const depth = pageDepths.get(served) ?? 0;
     if (!isDocument(html)) {
       compiled ??= withoutModulePaths(await input.compile(), held);
       scanHtml(html, served, reference);
       scanCss(compiled.styles, served, reference);
-      files[served] = bom + renderCapsuleDocument({ body: html, styles: compiled.styles, script: compiled.script, runtime: input.runtime, head: input.head });
+      files[served] = bom + renderCapsuleDocument({ body: rewritePageUrls(html, depth), styles: rewriteCssUrls(compiled.styles, depth), script: compiled.script, runtime: input.runtime, head: input.head });
       continue;
     }
     scanHtml(html, served, reference);
     // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
-    const depth = pageDepths.get(served) ?? 0;
     const page = insertIntoHead(rewritePageUrls(withoutRuntimeTags(html, served), depth), `${input.head ?? ""}${runtimeLoaderScript()}`);
     usesRuntimeFile = true;
     files[served] = bom + page;
@@ -268,7 +269,7 @@ export async function assembleStaticArtifact(input) {
   return artifact;
 }
 
-export function pageRoutesFromActions(source) {
+function pageRoutesFromActions(source) {
   const actions = JSON.parse(source).actions;
   return Object.values(actions ?? {}).flatMap((action) => {
     const page = action?.page;
@@ -276,21 +277,25 @@ export function pageRoutesFromActions(source) {
   });
 }
 
-function rewritePageUrls(html, depth) {
+function pageUrl(value, depth) {
   const prefix = "../".repeat(Math.max(0, depth - 1));
-  if (!prefix) return html;
+  const trimmed = value.trim();
+  if (!prefix || !trimmed || trimmed.startsWith("/") || trimmed.startsWith("#") || trimmed.startsWith("?") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return value;
+  return `${prefix}${value}`;
+}
+
+function rewriteCssUrls(value, depth) {
+  return value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth)}${after}`);
+}
+
+function rewritePageUrls(html, depth) {
+  if (depth < 2) return html;
   const scripts = [];
   const source = html.replace(/(<script\b[^>]*>)([\s\S]*?<\/script\s*>)/gi, (_, start, body) => `${start}\u0000${scripts.push(body) - 1}\u0000`);
-  const url = (value) => {
-    const trimmed = value.trim();
-    if (!trimmed || trimmed.startsWith("/") || trimmed.startsWith("#") || trimmed.startsWith("?") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return value;
-    return `${prefix}${value}`;
-  };
-  const css = (value) => value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${url(target)}${after}`);
-  const styles = source.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_, start, body, end) => `${start}${css(body)}${end}`);
-  const inline = styles.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, body) => `${before}${quote}${css(body)}${quote}`);
-  const srcset = (value) => value.split(",").map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${url(target)}`)).join(",");
-  return inline.replace(/(\b(?:href|src|action|formaction|poster|data)\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${url(value)}${quote}`)
+  const styles = source.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_, start, body, end) => `${start}${rewriteCssUrls(body, depth)}${end}`);
+  const inline = styles.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, body) => `${before}${quote}${rewriteCssUrls(body, depth)}${quote}`);
+  const srcset = (value) => value.split(",").map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${pageUrl(target, depth)}`)).join(",");
+  return inline.replace(/(\b(?:href|src|action|formaction|poster|data)\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${pageUrl(value, depth)}${quote}`)
     .replace(/(\bsrcset\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${srcset(value)}${quote}`)
     .replace(/\u0000(\d+)\u0000/g, (_, index) => scripts[Number(index)]);
 }
