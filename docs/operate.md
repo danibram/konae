@@ -314,7 +314,7 @@ Each app database is capped at 256 MiB and each identity database at 64 MiB. Wri
 
 - The Kernel binds each runtime request to the Deployment its hostname resolves to, and the browser cannot select another database.
 - A Private Deployment requires an app session before it serves the shell. The Signup Policy decides who can create that account.
-- Set `manifest.fileAccess` to `"app-users"` in the app folder's `konae.json` to share all uploads, including existing files, with signed-in users of that app. The Kernel checks the session on each file read. This policy rejects public visibility and keeps deletion with the uploader.
+- Set the `files` module option `fileAccess` to `"app-users"` with `module_set` to let signed-in users read all uploads, including existing files. The Kernel checks the session on each file read and keeps deletion with the uploader.
 - By default a file is private to its uploader unless it is made public, and only the uploader changes its visibility or deletes it. Uploads need an app session. A signed-out visitor of a Public Deployment may read public files, and an API key reads only the visibilities it names.
 - Public HTML is readable by anyone. Data is reachable only through declared actions, and a signed-out visitor reaches only the actions declared `anonymous`. An HTTP route answers only the callers it takes, and an action whose route does not answer anyone is not callable through the runtime endpoint.
 - The Kernel stores API keys as hashes. A key names the actions and file visibilities it may use, and the runtime endpoint refuses it. Route signatures cover the method, path, query string, body, time and a nonce, and the Kernel refuses a replay across restarts.

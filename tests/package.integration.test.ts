@@ -52,7 +52,7 @@ function payload(id: string) {
         "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id,title FROM notes WHERE user_id=?1 ORDER BY id LIMIT 50", bindings: [{ source: "actor", field: "id" }] },
         "notes.create": { kind: "mutation", access: "authenticated", statement: "INSERT INTO notes(title,user_id) VALUES(?1,?2)", bindings: [{ source: "input", key: "title", type: "string", maxLength: 100 }, { source: "actor", field: "id" }] },
       } }),
-    } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Package proof</main>" } },
+    } }, visibility: "public", initialModules: { files: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Package proof</main>" } },
   };
 }
 
@@ -163,7 +163,8 @@ describe("chunked package", () => {
       expect(portableSettings.name).toBe("Legacy saved draft");
       expect(portableSettings.slug).toBe("legacy-draft");
       expect(portableSettings.visibility).toBe("private");
-      expect(portableSettings.manifest.fileAccess).toBe("app-users");
+      expect(portableSettings.manifest.fileAccess).toBeUndefined();
+      expect(portableSettings.modules.files.fileAccess).toBeUndefined();
       expect(portableSettings.manifest.runtime).toBeUndefined();
       expect(portableSettings.directories).toEqual(["empty/nested"]);
       expect(portableSettings.released.actions).toBe(record.actions);

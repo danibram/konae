@@ -5,7 +5,8 @@ import { contractFromProgram } from "../lib/action-contract";
 import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artifact.js";
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
-import { checkFileAccess } from "../deployments/manifest";
+import { checkModuleChange } from "../lib/module-state";
+import { sourcesUseFiles } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -59,6 +60,12 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       });
     }
     const SQL = await this.loadSql();
+    const filesCall = sourcesUseFiles(Object.values(files));
+    const filesState = facts.modules?.files;
+    const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
+    if (filesCall && filesOff) {
+      return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code as "module.off") }, ["sources"]);
+    }
     const errors: ValidationError[] = [];
     const checked: ValidationStage[] = ["sources"];
     const warnings: ValidationWarning[] = [];
@@ -66,11 +73,6 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     let clone: Database | undefined;
 
     try {
-      try {
-        checkFileAccess(facts);
-      } catch (error) {
-        return failure({ stage: "actions", message: describe(error) }, checked);
-      }
       const transforms = files[SCHEMA_TRANSFORMS_FILE];
       if (typeof transforms === "string") {
         const refused = schemaTransformsRefusal(transforms);

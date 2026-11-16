@@ -3,7 +3,6 @@ import type { DomainRules } from "../lib/domain-name";
 import { hintOf, type Refusal, type RefusalCode } from "../kernel/refusal";
 
 export type ReleaseFacts = {
-  fileAccess?: unknown;
   secrets?: { name: string; use?: string; svixKey?: boolean }[];
   rules?: DomainRules;
 };

@@ -260,9 +260,13 @@ Editor preview: Ignores the Deployment's visibility and rate limits, and keeps i
 
 ### File storage (`files`)
 
-Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
+Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.
 
-Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: cannot change it.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `fileAccess` (Who can read every file) | `enum`: `app-users` (All signed-in users) | Only the uploader | Let every signed-in user read all files in this app. |
 
 - By default, only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
@@ -271,7 +275,7 @@ Owner control: on and not switchable yet. Permission: `publish`. Build agent: ca
 - The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 - A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
-Declared with `fileAccess` in `manifest`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.
+Declared with `fileAccess` in `module`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.
 
 ### miniapp.files.list()
 
@@ -552,5 +556,5 @@ Owner control: the owner can change this module with module_set. Permission: `pu
 
 | Option | Type | Default | Help |
 | --- | --- | --- | --- |
-| `canonical` (Canonical address) | `enum`: `domain` (Custom domain), `hostname` (Generated hostname), `path` (Path address) | Default | Choose the address search engines and link previews should use. |
+| `canonical` (Canonical address) | `enum`: `domain` (Custom domain), `hostname` (Generated hostname), `path` (Path address) | Use the default address | Choose the address search engines and link previews should use. |
 | `image` (Card image) | `path` | Default | Choose an image path from the app's published files. |

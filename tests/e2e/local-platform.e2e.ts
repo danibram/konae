@@ -670,10 +670,12 @@ test("Modules settings show fixed modules and read back seo after reload", async
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
   await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
-  await expect(settings.locator(".module-settings-card")).toHaveCount(1);
-  await expect(settings.locator(".module-settings-card").first()).toContainText("Search listing");
-  await expect(settings.locator(".module-settings-card").first()).toContainText("seo");
-  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(5);
+  await expect(settings.locator(".module-settings-card")).toHaveCount(2);
+  await expect(settings.locator(".module-settings-card").first()).toContainText("File storage");
+  await expect(settings.locator(".module-settings-card").first()).toContainText("files");
+  await expect(settings.locator(".module-settings-card").nth(1)).toContainText("Search listing");
+  await expect(settings.locator(".module-settings-card").nth(1)).toContainText("seo");
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(4);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");
@@ -683,8 +685,9 @@ test("Modules settings show fixed modules and read back seo after reload", async
   await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("");
   await expect(settings.getByLabel("Card image", { exact: true }).locator("option")).toContainText(["public/retained.png"]);
   await settings.getByLabel("Card image", { exact: true }).selectOption("public/retained.png");
-  await settings.getByRole("button", { name: "Save changes", exact: true }).click();
-  await expect(settings.getByText("seo settings saved.", { exact: true })).toBeVisible();
+  const seoCard = settings.locator(".module-settings-card").filter({ hasText: "seo" });
+  await seoCard.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(settings.getByText("Search listing settings saved.", { exact: true })).toBeVisible();
   await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("public/retained.png");
   await expect(settings.getByRole("switch", { name: "Turn Search listing on", exact: true })).toHaveAttribute("aria-checked", "false");
   await settings.getByRole("switch", { name: "Turn Search listing on", exact: true }).click();
@@ -732,6 +735,35 @@ test("the build agent confirms module changes and reads them back", async ({ pag
   await expect(page.getByText("I read the module state after the change.", { exact: true }).last()).toBeVisible({ timeout: 30_000 });
   const current = await client.call<{ modules: { seo: { state: { on: boolean } } } }>("modules_read", { projectId: secondPath.split("/").at(-1) });
   expect(current.modules.seo.state.on).toBe(false);
+});
+
+test("files module cannot be turned off while the app has an uploaded file", async ({ page, context }) => {
+  const projectPath = await createProject(page, "Files module in use");
+  const publishedUrl = await publish(page);
+  await fromMore(page, "App settings");
+  let settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await expect(settings.getByRole("switch", { name: "Turn File storage off", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "files" }).getByText("On", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
+
+  const app = await context.newPage();
+  await app.goto(publishedUrl);
+  await app.goto(new URL("/_konae/login", publishedUrl).href);
+  await signInApp(app);
+  await expect(app.getByRole("heading", { name: "Tiny Tasks", exact: true })).toBeVisible();
+  const uploaded = await app.evaluate(async () => {
+    const sdk = (window as unknown as { miniapp: { files: { upload(file: File): Promise<{ id: string }> } } }).miniapp;
+    return sdk.files.upload(new File(["module in use"], "module-in-use.txt", { type: "text/plain" }));
+  });
+  expect(uploaded.id).toBeTruthy();
+
+  await page.goto(projectPath);
+  await fromMore(page, "App settings");
+  settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await settings.getByRole("switch", { name: "Turn File storage off", exact: true }).click();
+  await expect(settings.getByRole("alert")).toHaveText("Module files is in use by the published app. Remove its use before turning it off.");
 });
 
 test("browser builds, republishes, backs up and exports a persistent app", async ({ page, context }, testInfo) => {

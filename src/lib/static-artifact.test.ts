@@ -391,10 +391,11 @@ describe("the Validation Gate refuses a page that never runs the app, as the bui
     const validator = createCapsuleValidator(() => initSqlJs());
     const files = { ...starterProject.files, "index.html": page("App", '<div id="app"></div>') };
     const message = 'index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.';
-    const result = await validator.validate(files);
+    const facts = { modules: { files: { on: true } } };
+    const result = await validator.validate(files, undefined, facts);
     expect(result.ok).toBe(false);
     expect(result.errors).toContainEqual({ stage: "actions", message });
     await expect(assemble(files)).rejects.toThrow(message);
-    expect((await validator.validate(starterProject.files)).ok).toBe(true);
+    expect((await validator.validate(starterProject.files, undefined, facts)).ok).toBe(true);
   });
 });

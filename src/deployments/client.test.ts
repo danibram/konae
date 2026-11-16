@@ -147,7 +147,7 @@ describe("first publish signup policy", () => {
       if (name === "release_plan") return { planId: "p", schema: noChange };
       return {};
     });
-    await deployProject(project, "private", artifact, askNever);
+    await deployProject(project, "private", artifact, askNever, undefined, undefined, project.modules);
     expect(payload.initialModules).toMatchObject({ seo: { on: true, canonical: "path", image: null } });
   });
 
@@ -160,7 +160,7 @@ describe("first publish signup policy", () => {
       if (name === "release_plan") return { planId: "p", schema: noChange };
       return {};
     });
-    await deployProject(project, "private", artifact, askNever, undefined, undefined, false);
+    await deployProject(project, "private", artifact, askNever, undefined, undefined, undefined);
     expect(payload).not.toHaveProperty("initialModules");
   });
 });

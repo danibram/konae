@@ -971,9 +971,11 @@ export async function initLocal(root: string, options: { name?: string; template
     await writeFile(target, source, { flag: "wx" });
   }
   // The template says who may open the app. Only people the owner invites can create an account.
+  const modules = defaultModuleStates();
+  modules.files.on = Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source));
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
-    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules: defaultModuleStates(), manifest: { version: 1 },
+    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
   };
   await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
   await writeEntries(root, await folderFiles(root, settings));

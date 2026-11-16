@@ -66,7 +66,7 @@ Do not treat the URL `publish` printed as proof. Read the Deployment back throug
 
 ## What differs from the editor preview
 
-`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema, `actions.json`, `manifest.fileAccess` and whether any page runs the app, so a page that names a missing file fails at build or publish.
+`dev` runs the same Kernel as a Deployment, so HTTP routes, the schedule timer, notice email, Usage and the call outbox all work there. The editor preview has none of them. The Validation Gate checks the schema, `actions.json` and whether any page runs the app. It also refuses a Capsule that uses `miniapp.files` while the `files` module is off.
 
 ## Read next
 

@@ -162,7 +162,7 @@ describe("HTTP routes", () => {
     const listed = await owner.call<{ secrets: { name: string }[] }>("secrets_list", { projectId: "http_routes" });
     expect(listed.secrets.map(item => item.name)).toEqual(["orders_webhook"]);
     expect(JSON.stringify(listed)).not.toContain(secret);
-    const receipt = await release("http_routes", files);
+    const receipt = await release("http_routes", files, { initialModules: { files: { on: true } } });
     host = receipt.hostname;
     deploymentId = receipt.id;
     await expect(owner.call("secret_delete", { projectId: "http_routes", name: "orders_webhook" })).rejects.toThrow(

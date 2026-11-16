@@ -57,7 +57,7 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
     try {
       setView(await setModule(projectId, name, current.state, on, options));
       setDrafts((value) => ({ ...value, [name]: {} }));
-      setNotice(`${contract.name} settings saved.`);
+      setNotice(`${contract.title} settings saved.`);
     } catch (cause) {
       if (isModuleChanged(cause)) {
         try { setView(await readModules(projectId)); } catch { }
@@ -90,7 +90,7 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
           if (option.type === "boolean") return <Switch key={option.key} checked={value === true} onChange={(next) => change(contract.name, option.key, next)} label={option.label} disabled={busy || reading || !switchable || !projectId} />;
           if (option.type === "enum") return <Field key={option.key} label={option.label} help={live?.options.find((item) => item.key === option.key)?.help ?? option.help}>
             <Select value={String(value ?? "")} onChange={(event) => change(contract.name, option.key, event.target.value || null)} disabled={busy || reading || !switchable || !projectId}>
-              {value === null && <option value="">Use the default address</option>}
+              {value === null && <option value="">{option.defaultLabel ?? "Use the default"}</option>}
               {(option.values ?? []).map((item) => <option key={item} value={item}>{option.valueLabels?.[item] ?? item}</option>)}
             </Select>
           </Field>;

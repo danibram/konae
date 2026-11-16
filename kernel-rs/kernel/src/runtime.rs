@@ -642,8 +642,15 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
             "Invalid or reserved artifact path."
         );
     }
+    let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
+    let uses_files = super::modules::artifact_uses_files(artifact.values().map(Vec::as_slice))
+        || super::modules::sources_use_files(input.project.files.values().map(String::as_bytes));
+    if uses_files {
+        let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
+        let modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+        if let Err(refused) = super::modules::require_on(&modules, "files") { return Err(anyhow::Error::new(refused)); }
+    }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
-    super::artifact::check_file_access(&input.project.manifest).map_err(anyhow::Error::msg)?;
     super::calls::check_connects(&input.project.manifest)?;
     let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
     let sizes = artifact.iter().map(|(path, bytes)| (path.as_str(), bytes.len()));

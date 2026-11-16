@@ -1,12 +1,22 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { encodeBase64 } from "../src/mcp/client";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
+import { readSite, renderPage } from "../scripts/docs-site";
 
 let root: string;
 let kernel: Kernel;
 let deployment: { id: string; hostname: string; url: string };
+
+async function curlApp(hostname: string, route: string) {
+  const process = Bun.spawn(["curl", "-fsS", "-H", `Host: ${hostname}`, `${kernel.url}${route}`], { stdout: "pipe", stderr: "pipe" });
+  const body = await new Response(process.stdout).text();
+  const error = await new Response(process.stderr).text();
+  if (await process.exited !== 0) throw Error(`curl ${route} failed: ${error}`);
+  return body;
+}
 
 beforeAll(async () => {
   await buildKernel();
@@ -98,7 +108,7 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   await mkdir(path.dirname(domainRecord), { recursive: true });
   await writeFile(domainRecord, JSON.stringify({ hostname: "verified.example.org", token: "test", verified: true, createdAt: Date.now() }));
   const verified = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
-  expect(verified.modules.seo.current.canonical.reason).toContain("verified custom domain");
+  expect(verified.modules.seo.current.canonical.reason).toBe("Verified custom domain was chosen.");
   const afterDomain = await appFetch(kernel, deployment.hostname, "/about", { headers: { "if-none-match": tag } });
   expect(afterDomain.status).toBe(200);
   const customCanonical = `http://verified.example.org:${new URL(kernel.url).port}/about`;
@@ -107,3 +117,36 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   const pathAddress = await appFetch(kernel, "apps.example.org", `/p/${deployment.id}/about`);
   expect(await pathAddress.text()).toContain(customCanonical);
 }, 120_000);
+
+test("module_set accepts each public app card file and serves its image URL", async () => {
+  const homeHtml = await readFile(path.resolve(import.meta.dir, "../examples/home/index.html"), "utf8");
+  const spanishHomeHtml = await readFile(path.resolve(import.meta.dir, "../examples/home/pages/es/index.html"), "utf8");
+  const docsApp = path.resolve(import.meta.dir, "../examples/docs-site");
+  const docsTemplate = await readFile(path.join(docsApp, "page.template"), "utf8");
+  const docs = await readSite();
+  const docsHtml = renderPage(docsTemplate, docs, docs.pages.find((page) => page.route === "index")!, "test");
+  for (const app of [
+    { id: "issue10_home", name: "Konae home", html: homeHtml, spanishHtml: spanishHomeHtml, cardPath: "../examples/home/public/card.png" },
+    { id: "issue10_docs", name: "Konae docs", html: docsHtml, cardPath: "../examples/docs-site/public/card.png" },
+  ]) {
+    const card = encodeBase64(await readFile(path.resolve(import.meta.dir, app.cardPath)));
+    await kernel.owner.call("project_create", { projectId: app.id, name: app.name });
+    const { receipt } = await release(kernel.owner, {
+      project: { id: app.id, name: app.name, slug: app.id, manifest: { version: 1, visibility: "public" }, files: { "schema.sql": "", "actions.json": JSON.stringify({ version: 1, actions: {} }) } },
+      visibility: "public",
+      artifact: { version: 1, entrypoint: "index.html", files: { "index.html": app.html, ...(app.spanishHtml ? { "es/index.html": app.spanishHtml } : {}), "card.png": card }, encodings: { "card.png": "base64" } },
+    }, app.id);
+    const offState = await kernel.owner.call<any>("modules_read", { projectId: receipt.id });
+    await kernel.owner.call("module_set", { projectId: receipt.id, module: "seo", on: true, options: { image: "card.png" }, expected: offState.modules.seo.state });
+    const html = await curlApp(receipt.hostname, "/");
+    expect(html).toContain(`property="og:image" content="${receipt.url}/card.png"`);
+    expect(html).toContain(app.id === "issue10_home" ? "Describe an app." : "Konae");
+    if (app.spanishHtml) {
+      const spanishHtml = await curlApp(receipt.hostname, "/es/");
+      expect(spanishHtml).toContain('<html lang="es">');
+      expect(spanishHtml).toContain("Describe una app.");
+    }
+    const image = await appFetch(kernel, receipt.hostname, "/card.png");
+    expect(image.headers.get("content-type")).toContain("image/png");
+  }
+});

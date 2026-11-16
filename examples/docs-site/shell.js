@@ -1,4 +1,3 @@
-import { marked } from "marked";
 import { slug } from "./slug.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -183,18 +182,17 @@ function showSource(figure, reason) {
   figure.replaceChildren(pre, note);
 }
 
-async function render() {
-  const [site, page] = await Promise.all([fetch(`${root}content/site.json`), fetch(`${root}content/${route}.md`)]);
-  if (!site.ok || !page.ok) throw Error(`This page's markdown did not load (HTTP ${page.ok ? site.status : page.status}).`);
-  content.innerHTML = marked.parse(await page.text(), { gfm: true });
+async function enhance() {
+  const site = await fetch(`${root}content/site.json`);
+  if (!site.ok) throw Error(`The docs index did not load (HTTP ${site.status}).`);
   decorate(await site.json());
   tableOfContents();
   diagrams();
   content.removeAttribute("aria-busy");
   if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
 }
-if (route) render().catch((error) => {
-  content.querySelector(".loading")?.replaceChildren(error.message);
+if (route) enhance().catch((error) => {
+  content.setAttribute("data-index-error", error.message);
   content.removeAttribute("aria-busy");
 });
 

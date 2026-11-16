@@ -4,7 +4,7 @@ Use `miniapp.files` for the bytes and a mutation for the row that remembers the 
 
 ## How it works
 
-The Kernel stores small files for one Deployment, in its file store. A file is private to the person who uploaded it unless the upload asks for `"public"`. An app that sets `manifest.fileAccess` to `"app-users"` shares every file with its signed-in users instead. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
+The Kernel stores small files for one Deployment, in its file store. A file is private to the person who uploaded it unless the upload asks for `"public"`. The `files` module option `fileAccess` can let every signed-in app user read every file. Large bytes do not belong in a SQLite column. Keep the file's ID in a row and let the Kernel keep the bytes.
 
 ```mermaid
 sequenceDiagram
@@ -96,10 +96,10 @@ The page never talks to the file store. The Kernel takes the upload, checks it, 
 
 ## Share every file with the app's users
 
-`manifest.fileAccess` decides who reads files across the whole app. It has one value, `"app-users"`. Leave it out to keep each file's own visibility. A release with any other value is refused with `manifest.fileAccess must be "app-users" when set.`, in the editor and on the Kernel.
+The `files` module option `fileAccess` decides who reads files across the whole app. Set it to `"app-users"` with `module_set`. The option applies at once, including to existing files. Leave it unset to keep each file's own visibility.
 
 ```json
-{ "manifest": { "fileAccess": "app-users" } }
+{ "module": "files", "options": { "fileAccess": "app-users" } }
 ```
 
 Put it in `konae.json`, or pick "All signed-in app users" under "Who can read uploaded files" in the editor's Users view. It takes effect at the next publish.

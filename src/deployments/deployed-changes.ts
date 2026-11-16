@@ -21,7 +21,7 @@ export function accessNotDeployed(project: Pick<MiniAppProject, "files" | "manif
   if (!deployment) return false;
   if (deployment.actions !== undefined && (project.files["actions.json"] ?? "") !== deployment.actions) return true;
   if (project.manifest.visibility !== deployment.manifest.visibility) return true;
-  return (project.manifest.fileAccess ?? null) !== (deployment.manifest.fileAccess ?? null);
+  return false;
 }
 
 export function sameAsDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined, digest: string | null): boolean | null {

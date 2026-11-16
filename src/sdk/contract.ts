@@ -72,6 +72,7 @@ export type SdkModuleOption = {
   type: "boolean" | "enum" | "path" | "string" | "number";
   values?: string[];
   valueLabels?: Record<string, string>;
+  defaultLabel?: string;
   valuesFrom?: "app-images";
   default: string | number | boolean | null;
   label: string;
@@ -361,9 +362,9 @@ export const sdkContract = {
     {
       name: "files",
       title: "File storage",
-      summary: "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
-      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["manifest.fileAccess", "miniapp.files"],
-      declarations: [{ key: "fileAccess", file: "manifest", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.' }],
+      summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read every file", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: [], uses: ["miniapp.files"],
+      declarations: [{ key: "fileAccess", file: "module", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.' }],
       notes: [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
@@ -645,7 +646,7 @@ export const sdkContract = {
       summary: "Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.",
       switch: true,
       options: [
-        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], valueLabels: { domain: "Custom domain", hostname: "Generated hostname", path: "Path address" }, default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], valueLabels: { domain: "Custom domain", hostname: "Generated hostname", path: "Path address" }, defaultLabel: "Use the default address", default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },
         { key: "image", type: "path", valuesFrom: "app-images", default: null, label: "Card image", help: "Choose an image path from the app's published files." },
       ],
       permission: "publish",

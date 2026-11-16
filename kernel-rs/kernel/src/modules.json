@@ -24,14 +24,28 @@
       ]
     },
     "files": {
-      "summary": "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
-      "switch": false,
-      "options": [],
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
+      "options": [
+        {
+          "key": "fileAccess",
+          "type": "enum",
+          "values": [
+            "app-users"
+          ],
+          "valueLabels": {
+            "app-users": "All signed-in users"
+          },
+          "defaultLabel": "Only the uploader",
+          "default": null,
+          "label": "Who can read every file",
+          "help": "Let every signed-in user read all files in this app."
+        }
+      ],
       "permission": "publish",
       "agentRule": "never",
       "requires": [],
       "uses": [
-        "manifest.fileAccess",
         "miniapp.files"
       ]
     },
@@ -78,6 +92,7 @@
             "hostname": "Generated hostname",
             "path": "Path address"
           },
+          "defaultLabel": "Use the default address",
           "default": null,
           "label": "Canonical address",
           "help": "Choose the address search engines and link previews should use."

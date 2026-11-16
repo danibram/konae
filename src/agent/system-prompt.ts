@@ -14,11 +14,11 @@ const PIECES = `| Need | Use | Not |
 | Another service calls this app | \`http\` on an anonymous action with callers / signature / key | A call action (that is outbound) |
 | This app calls another host | \`kind: call\` | \`fetch\` of a secret from the browser |
 | Uploaded files | \`miniapp.files\` | Large bytes in a SQLite column |
-| Every signed-in user reads every uploaded file | \`manifest.fileAccess\` set to \`app-users\` | Each upload as public |
+| Every signed-in user reads every uploaded file | \`files.fileAccess\` set to \`app-users\` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |`;
 
-const MODULES = sdkContract.modules.map((module) => `- ${module.title} (${module.name}): ${module.summary}${module.switch ? ` Options: ${module.options.map((option) => `${option.label} (${option.key})`).join(", ")}.` : " This module is on and cannot be changed yet."} Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`).join("\n");
+const MODULES = sdkContract.modules.map((module) => `- ${module.name}: ${module.summary}${module.switch ? ` Options: ${module.options.map((option) => `${option.label} (${option.key})`).join(", ")}.` : " This module is on and cannot be changed yet."} Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`).join("\n");
 
 export function buildSystemPrompt(project: MiniAppProject): string {
   const visibility = project.manifest.visibility;
@@ -128,7 +128,7 @@ The other tools come from the owner's own MCP session, the same tools and the sa
 
 - Read platform_guide when you need a rule you do not have here. Its topics are the same words the Kernel uses.
 - After a change, read it back through the same door before you say it worked: project_inspect after hostname_set, domain_read after domain_set, path_read after path_set and path_clear, project_inspect after signup_policy_set, sign_in_methods_read after sign_in_methods_set, app_users_list after app_invitations_create, project_inspect after publish.
-- modules_read answers every module, its state, options, permission and current behavior. module_set changes a switchable module or its options; read modules_read after it before saying it worked. A module.changed refusal means read modules_read and ask before retrying.
+- module_set changes switchable modules or their options; read modules_read after each change. On module.changed, read again and ask before retrying.
 - Module list from the contract:
 ${MODULES}
 - Before contact_email_set, domain_set, hostname_set, path_set or maintenance_set, read the current value and pass it as expected. Use contactEmail from contact_email_read, hostname from domain_read, deployment.hostname from project_inspect, { enabled, name, acceptSharedOrigin } from path_read, or maintenance from maintenance_read. If the tool answers setting.changed, read again and ask before retrying.

@@ -6,12 +6,6 @@ import {
 } from "./manifest";
 
 describe("deployment manifest", () => {
-  test("preserves the app-user file policy and refuses invalid values", () => {
-    expect(normalizeManifest({ fileAccess: "app-users" }).fileAccess).toBe("app-users");
-    for (const fileAccess of [null, "private", "", 1]) {
-      expect(() => normalizeManifest({ fileAccess })).toThrow('manifest.fileAccess must be "app-users" when set.');
-    }
-  });
   test("migrates projects created before manifest v1", () => {
     const manifest = normalizeManifest(undefined);
     expect(manifest.version).toBe(1);

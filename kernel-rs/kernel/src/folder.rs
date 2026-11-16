@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
@@ -47,6 +47,7 @@ pub async fn open_all(state: &AppState, confirmation: Option<&str>) -> Result<Ve
 pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Result<Deployment> {
     let root = &state.data_root;
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
+    decide_files_module(root, id).await?;
     let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
     let sources = layout::sources(root, id);
@@ -122,7 +123,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         },
         initial_signup_policy: None,
         initial_sign_in_methods: None,
-        initial_modules: None,
+        initial_modules: Some(settings.modules.clone()),
         initial_package: None,
         contact_email: settings.contact_email.clone().or_else(|| released.as_ref().and_then(|snapshot| snapshot.contact_email.clone())),
         schema_confirmation: None,
@@ -180,6 +181,25 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     drop(deployments);
     crate::http::routes_published(&deployment);
     Ok(deployment)
+}
+
+pub async fn decide_files_module(root: &Path, id: &str) -> Result<Option<bool>> {
+    let raw_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(root, id)).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?)?;
+    if !raw_settings["modules"]["files"].is_null() {
+        if raw_settings["manifest"]["fileAccess"].is_null() && raw_settings["released"]["manifest"]["fileAccess"].is_null() { return Ok(None); }
+        let settings = Settings::read(root, id)?;
+        settings.write(root).await?;
+        return Ok(None);
+    }
+    let legacy_file_access = raw_settings["manifest"]["fileAccess"].as_str().or(raw_settings["released"]["manifest"]["fileAccess"].as_str());
+    let used = crate::modules::uses_files(root, id, &json!({"fileAccess": legacy_file_access}));
+    let mut settings = Settings::read(root, id)?;
+    let files_state = settings.modules.get_mut("files").expect("files is switchable");
+    files_state["on"] = json!(used);
+    if legacy_file_access == Some("app-users") { files_state["fileAccess"] = json!("app-users"); }
+    settings.write(root).await?;
+    eprintln!("konae: decided files module for {id}: {}", if used { "on" } else { "off" });
+    Ok(Some(used))
 }
 
 async fn optional_text(path: &Path) -> Result<Option<String>> {
@@ -322,7 +342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_folder_from_0_9_0_keeps_unmoved_modules_implicit() {
+    async fn a_folder_from_0_9_0_decides_file_module_state_once() {
         let root = scratch();
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-mechanism-0.9.0");
         for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
@@ -340,8 +360,41 @@ mod tests {
         let listed = crate::modules::read(&state, &deployment);
         assert_eq!(listed["modules"]["actions"]["state"]["on"], true);
         let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
-        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["seo".to_owned()].into());
+        assert_eq!(rewritten["modules"]["files"]["on"], false);
+        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["files".to_owned(), "seo".to_owned()].into());
         assert_eq!(rewritten["modules"]["seo"]["on"], false);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_0_9_0_folder_with_uploads_keeps_files_served_after_migration() {
+        use axum::{extract::{Path as AxumPath, State}, http::{HeaderMap, HeaderValue, StatusCode, header}};
+        let root = scratch();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-files-0.9.0");
+        for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
+            let destination = layout::folder(&root, "legacy_uploads").join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            let source = if relative == "konae.json" { fixture.join(relative) } else { std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-mechanism-0.9.0").join(relative) };
+            std::fs::copy(source, destination).unwrap();
+        }
+        let index = layout::files(&root, "legacy_uploads");
+        std::fs::create_dir_all(&index).unwrap();
+        std::fs::copy(fixture.join("files-index.json"), index.join("index.json")).unwrap();
+        std::fs::copy(fixture.join("files-018f2b2c-4a10-7a01-8000-000000000001.blob"), index.join("018f2b2c-4a10-7a01-8000-000000000001.blob")).unwrap();
+        let dist = layout::dist(&root, "legacy_uploads");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<!doctype html><title>Legacy uploads</title>").unwrap();
+        let state = AppState::for_test(&root);
+        let deployment = open(&state, "legacy_uploads", None).await.unwrap();
+        assert_eq!(deployment.modules["files"]["on"], true);
+        let rewritten: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "legacy_uploads")).unwrap()).unwrap();
+        assert_eq!(rewritten["modules"]["files"]["on"], true);
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("legacy-uploads.localhost"));
+        let response = crate::serve_file(State(state), AxumPath("018f2b2c-4a10-7a01-8000-000000000001".into()), headers).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(bytes.as_ref(), b"legacy file\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -512,22 +565,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn folder_preserves_file_access_and_refuses_an_invalid_policy() {
+    async fn folder_migrates_the_legacy_file_access_option() {
         let root = scratch();
         let state = AppState::for_test(&root);
         write_folder(&root, "notes_app", "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);");
         let path = layout::settings(&root, "notes_app");
-        let mut settings: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        settings.manifest["fileAccess"] = serde_json::json!("app-users");
+        let mut settings: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        settings.as_object_mut().unwrap().remove("modules");
+        settings["manifest"]["fileAccess"] = serde_json::json!("app-users");
         std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
         let deployment = open(&state, "notes_app", None).await.unwrap();
-        assert_eq!(deployment.manifest["fileAccess"], "app-users");
-        assert_eq!(Settings::of(&deployment).manifest["fileAccess"], "app-users");
-        settings.manifest["fileAccess"] = serde_json::json!("other");
-        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
-        reload(&state, deployment.clone()).await;
-        assert_eq!(state.deployments.read().await[&deployment.hostname].manifest["fileAccess"], "app-users");
-        assert!(refused(open(&state, "notes_app", None).await).contains(crate::artifact::FILE_ACCESS_MESSAGE));
+        assert_eq!(deployment.modules["files"]["on"], true);
+        assert_eq!(deployment.modules["files"]["fileAccess"], "app-users");
+        assert!(deployment.manifest.get("fileAccess").is_none());
+        let persisted: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["modules"]["files"]["fileAccess"], "app-users");
+        assert!(persisted["manifest"].get("fileAccess").is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 

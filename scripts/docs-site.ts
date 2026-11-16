@@ -2,6 +2,7 @@
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { slug } from "../examples/docs-site/slug.js";
+import { descriptionOf, renderMarkdown } from "../examples/docs-site/render.js";
 import { McpClient } from "../src/mcp/client";
 
 const repo = path.resolve(import.meta.dir, "..");
@@ -49,11 +50,11 @@ const hrefOf = (root: string, route: string) => (route === "index" ? root || "./
 
 async function assetsVersion() {
   const hash = new Bun.CryptoHasher("sha256");
-  for (const file of ["shell.js", "slug.js", "site.css", "public/styles.css", "package.json"]) hash.update(await readFile(path.join(appRoot, file)));
+  for (const file of ["shell.js", "slug.js", "render.js", "site.css", "public/styles.css", "package.json"]) hash.update(await readFile(path.join(appRoot, file)));
   return hash.digest("hex").slice(0, 10);
 }
 
-function shell(template: string, site: Site, page: Pick<Page, "route" | "title">, v: string) {
+export function renderPage(template: string, site: Site, page: Page, v: string) {
   const root = rootOf(page.route);
   const bySource = new Map(site.pages.map((entry) => [entry.source, entry]));
   const nav = site.config.nav.map(({ section, pages }) => {
@@ -64,7 +65,7 @@ function shell(template: string, site: Site, page: Pick<Page, "route" | "title">
     });
     return `      <h2>${esc(section)}</h2>\n      <ul>${items.join("")}</ul>`;
   }).join("\n");
-  const values: Record<string, string> = { title: esc(page.title), root, route: page.route, home: hrefOf(root, "index"), nav, v };
+  const values: Record<string, string> = { title: esc(page.title), description: esc(descriptionOf(page.markdown)), body: renderMarkdown(page.markdown), root, route: page.route, home: hrefOf(root, "index"), nav, v };
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key]);
 }
 
@@ -153,7 +154,7 @@ export async function writeSite(site: Site) {
   };
   for (const page of site.pages) {
     await write(`public/content/${page.route}.md`, page.markdown);
-    await write(page.route === "index" ? "index.html" : `pages/${page.route}.html`, shell(template, site, page, v));
+    await write(page.route === "index" ? "index.html" : `pages/${page.route}.html`, renderPage(template, site, page, v));
   }
   await write("public/content/site.json", JSON.stringify({
     repository: site.config.repository.replace(/\/$/, ""),
