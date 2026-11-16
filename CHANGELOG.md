@@ -6,7 +6,22 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-11-15
+## [0.9.0] - 2026-11-16
+
+### Added
+
+- `konae dev` runs in Kernel test mode on loopback. It captures outbound calls, keeps email in a separate local mailbox, uses local files, pauses schedules, and refuses Google sign-in and external browser connections.
+- `konae test status`, `calls`, `reply`, `schedule` and `scenario` inspect and control local test runs. The events page exposes those controls through an owner token. Captured calls retain retry timing and response numbers, and interrupted continuations do not replay.
+- `konae pull --data-only` refreshes the published data snapshot while keeping local sources. `dev --reset` verifies the snapshot components, backs up local data and queues, and restores them if the reset fails. Reset and test controls cannot mutate local state at the same time.
+- `konae rehearse` builds the current sources and checks them against an isolated copy of the verified pull snapshot. `konae publish --plan` reports the production schema plan without applying it or creating a remote project.
+- Optional `app/schema-transforms.json` records an append-only chain of bounded SQLite transitions. Planning reports affected rows; applying checks fingerprints, actions and constraints in one transaction. The journal travels with the database through export, import and restore. `konae schema fingerprint` reads the source schema or local database without starting an app.
+- Guides for [local rehearsal](./docs/guides/rehearse-locally.md) and [schema transformations](./docs/guides/schema-transformations.md) document the development and publication workflow.
+
+### Fixed
+
+- Schema confirmations include reported loss counts and transformation definitions and row counts, so changed production counts require a new confirmation.
+- Test-mode restarts apply schema and transformation edits even when the built browser files have not changed. Publishing preserves transformed rows and their journal when it swaps the staged database.
+- Local shutdown waits for an active reload before releasing its lifecycle lock and stops the final Kernel process.
 
 ### Changed
 
