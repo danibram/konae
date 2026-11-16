@@ -5,7 +5,6 @@ import { hintOf, joinRefusals, ownerFixes, refusal, refusalCodes } from "./refus
 
 const dir = path.join(import.meta.dir, "../../kernel-rs/kernel/src");
 
-/** Every refusal case in every shape case file, as kernel-rs/kernel/src/refusal.rs reads them. */
 function refusalCases(): { file: string; case: string; code?: string }[] {
   const found: { file: string; case: string; code?: string }[] = [];
   for (const file of readdirSync(dir).filter((name) => name.endsWith("-cases.json")).sort()) {

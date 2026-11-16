@@ -1,35 +1,3 @@
-//! "Continue with Google" for the app accounts of a Deployment.
-//!
-//! Each app has its own Google OAuth client: the owner sets its client ID
-//! and secret as the project secrets `google_client_id` and
-//! `google_client_secret`, and registers this app's own callback,
-//! `https://<app host>/_konae/auth/google/callback`, in the Google
-//! console, once for the generated host, once for a verified custom
-//! domain and once for its path address (`<domain>/p/<id>`) when it has one.
-//! A path address shares its origin with every other path, so its callback
-//! names the Deployment's id, which a rename does not change. The home
-//! address, `<domain>/`, offers no Google sign-in. The whole flow stays on
-//! the app's host:
-//!
-//! `/_konae/auth/google/start` → Google → `/_konae/auth/google/callback`
-//!
-//! `start` records the flow (its `state`, the ID token's `nonce`, the PKCE
-//! verifier, the Deployment and the app origin) and gives the browser a
-//! cookie that names it. The callback takes the flow once, only on the same
-//! Deployment, origin and browser, exchanges Google's code with the app's
-//! client, checks the ID token and opens the app's session.
-//!
-//! The account is the one that holds the email Google vouched for. Google
-//! vouches only for an address it is the authority for (`google_vouches_for`).
-//! Signup Policy decides whether an email without an account gets one, in
-//! the transaction that creates it.
-//!
-//! Google's signing keys are fetched only from the fixed JWKS URL, never from
-//! a URL a token names, cached by the answer's Cache-Control and fetched again
-//! when a token names an unknown key, at most once per `REFETCH_COOLDOWN`, so
-//! a stream of fresh flows cannot make the Kernel call Google each time. The
-//! keys are Google's, not a client's, so the installation keeps one cache for
-//! every app.
 
 use std::{
     sync::Mutex,
@@ -46,11 +14,8 @@ use sha2::{Digest, Sha256};
 use super::*;
 use auth::{IdentityIntent, IdentityOutcome, VerifiedIdentity};
 
-/// A flow between start and callback lives this long.
 const FLOW_TTL_SECONDS: i64 = 10 * 60;
 const MAX_JWKS_BYTES: usize = 64 * 1024;
-/// A token that names a key the fresh cache lacks fetches the keys again at
-/// most this often. Google publishes a new key well before it signs with it.
 const REFETCH_COOLDOWN: Duration = Duration::from_secs(60);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
 pub const CALLBACK_PATH: &str = "/_konae/auth/google/callback";
@@ -90,12 +55,9 @@ pub fn still_on(name: &str) -> String {
     format!("Google sign-in is on for this app and needs {name}. Turn Google off before deleting it.")
 }
 
-/// Google's fixed endpoints. Only a development build may replace them, with
-/// `KONAE_GOOGLE_TEST_ISSUER` (see `Google::from_env`).
 const AUTHORIZE: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN: &str = "https://oauth2.googleapis.com/token";
 const JWKS: &str = "https://www.googleapis.com/oauth2/v3/certs";
-/// Google signs ID tokens with either issuer value.
 const ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
 
 #[derive(Clone, Debug)]
@@ -103,7 +65,6 @@ struct Endpoints {
     authorize: String,
     token: String,
     jwks: String,
-    /// The `iss` values a token may carry.
     issuers: Vec<String>,
 }
 
@@ -117,7 +78,6 @@ impl Endpoints {
         }
     }
 
-    /// A local stand-in for Google at `base`, for development and tests.
     fn fake(base: &str) -> Self {
         let base = base.trim_end_matches('/');
         Self {
@@ -197,15 +157,11 @@ impl Google {
         Self { endpoints, http, keys: Mutex::new(None) }
     }
 
-    /// Endpoints at a fake issuer at `base`, for tests.
     #[cfg(any(test, feature = "testing"))]
     pub fn for_test(base: &str) -> Self {
         Self::with(Endpoints::fake(base))
     }
 
-    /// Checks an ID token: its RS256 signature by a key from the JWKS URL,
-    /// Google as issuer, this app's client as audience, an unexpired time,
-    /// the nonce the flow set, and an email Google verified and vouches for.
     async fn verify(&self, token: &str, client_id: &str, nonce: &str, now: i64) -> std::result::Result<VerifiedIdentity, &'static str> {
         let parts: Vec<&str> = token.split('.').collect();
         if token.len() > 16384 || parts.len() != 3 {
@@ -340,12 +296,6 @@ impl Google {
     }
 }
 
-/// Whether Google is the authority for this address, so its word proves who
-/// holds it. Google manages every `@gmail.com` address, and a Workspace
-/// domain names itself in the `hd` claim. A Google account made with an
-/// outside address only proves that someone once read mail there, and
-/// Google's own docs warn that `email` alone is not a unique, permanent
-/// identifier, so such an address does not sign in to an account.
 fn google_vouches_for(email: &str, hosted_domain: Option<&str>) -> bool {
     let Some((_, domain)) = email.rsplit_once('@') else { return false };
     domain.eq_ignore_ascii_case("gmail.com") || hosted_domain.is_some_and(|hd| hd.eq_ignore_ascii_case(domain))
@@ -367,14 +317,12 @@ fn local_http(origin: &str) -> bool {
     })
 }
 
-/// The app's client ID and secret as stored, each when set. Values stay in the Kernel.
 #[derive(Default)]
 pub struct StoredClient {
     pub id: Option<String>,
     pub secret: Option<String>,
 }
 
-/// Which halves of the app's Google client are set, never their values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientSet {
     pub id: bool,
@@ -387,7 +335,6 @@ impl ClientSet {
     }
 }
 
-/// The app's Google client, when the owner set both its ID and its secret.
 fn client(state: &AppState, deployment: &Deployment) -> Option<Client> {
     match stored_client(state, deployment) {
         StoredClient { id: Some(id), secret: Some(secret) } => Some(Client { id, secret }),
@@ -434,8 +381,6 @@ pub fn redirect_uris(state: &AppState, deployment: &Deployment) -> Vec<String> {
     uris
 }
 
-/// The callback of the Deployment's path address while its path is on. It
-/// names the id, so the name address uses it too and a rename keeps it.
 fn path_callback(state: &AppState, deployment: &Deployment) -> Option<String> {
     let origin = state.path_origin.as_deref()?.trim_end_matches('/');
     path::read_record(state, &deployment.id)
@@ -443,8 +388,6 @@ fn path_callback(state: &AppState, deployment: &Deployment) -> Option<String> {
         .map(|_| format!("{origin}/p/{}{CALLBACK_PATH}", deployment.id))
 }
 
-/// The callback this request's address sends to Google. It is the host's own,
-/// or on the path host the path address's, and Err on the home address.
 fn callback_uri(state: &AppState, deployment: &Deployment, headers: &HeaderMap, origin: &str) -> std::result::Result<String, &'static str> {
     if path::on_path_host(state, headers) {
         return match path::prefix(headers) {
@@ -502,7 +445,6 @@ fn app_origin(state: &AppState, headers: &HeaderMap) -> Option<String> {
 }
 
 /// The flow cookie's name. On the path host every app shares the origin, so
-/// the name carries the Deployment's id and two apps' flows do not collide.
 fn cookie_name(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> String {
     let base = if state.public_origin.starts_with("https://") { "__Host-konae_google" } else { "konae_google" };
     if path::on_path_host(state, headers) { format!("{base}_{}", deployment.id) } else { base.to_owned() }
@@ -514,14 +456,11 @@ fn browser_cookie(state: &AppState, deployment: &Deployment, headers: &HeaderMap
     HeaderValue::from_str(&format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")).unwrap()
 }
 
-// ---------------------------------------------------------------------------
-// Routes
 
 pub fn routes() -> Router<AppState> {
     Router::new().route(START_PATH, get(start_get).post(start_post)).route(CALLBACK_PATH, get(callback))
 }
 
-/// Starts a sign-in. A navigation, so it answers with a redirect to Google.
 async fn start_get(State(state): State<AppState>, request: Request) -> Response {
     if state.execution_mode.is_test() { return error(StatusCode::FORBIDDEN, "Google sign-in is unavailable in local test mode."); }
     let headers = request.headers().clone();
@@ -545,9 +484,6 @@ struct InvitationStart {
     invitation: String,
 }
 
-/// Starts an invitation answer with Google. The invitation page posts the
-/// token from its fragment, so it never sits in a URL, and navigates to the
-/// location this returns.
 async fn start_post(State(state): State<AppState>, request: Request) -> Response {
     if state.execution_mode.is_test() { return error(StatusCode::FORBIDDEN, "Google sign-in is unavailable in local test mode."); }
     let headers = request.headers().clone();
@@ -576,8 +512,6 @@ async fn start_post(State(state): State<AppState>, request: Request) -> Response
     }
 }
 
-/// Records a flow and returns Google's authorization URL and the cookie
-/// that ties the flow to this browser.
 async fn begin(
     state: &AppState,
     deployment: &Deployment,
@@ -593,8 +527,6 @@ async fn begin(
     if let Err(wait) = state.guards.auth_attempt(&deployment.id, ip, "google") {
         return Err((StatusCode::TOO_MANY_REQUESTS, format!("Too many sign-in attempts. Try again in {} seconds.", wait.as_secs().max(1))));
     }
-    // Google sends the person back only to a URI the owner registered, so
-    // the flow starts only on a host whose callback is one of them.
     let origin = app_origin(state, headers).ok_or((StatusCode::BAD_REQUEST, FAILED.to_owned()))?;
     let redirect_uri = callback_uri(state, deployment, headers, &origin).map_err(|message| (StatusCode::BAD_REQUEST, message.to_owned()))?;
     if !redirect_uris(state, deployment).contains(&redirect_uri) {
@@ -646,16 +578,12 @@ struct CallbackQuery {
     error: Option<String>,
 }
 
-/// A flow the callback took.
 struct Flow {
     nonce: String,
     verifier: String,
     intent: IdentityIntent,
 }
 
-/// Takes a flow once, on the Deployment and origin it started on, in the
-/// browser that started it. A flow that fails a check stays, so a request
-/// on another host cannot burn it.
 fn take_flow(db: &Connection, flow_state: &str, deployment_id: &str, origin: &str, browser: Option<&str>, now: i64) -> std::result::Result<Flow, &'static str> {
     let row: Option<(String, String, String, String, String, String, String, i64)> = db
         .query_row(
@@ -723,7 +651,6 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
     let Some(code) = query.code.filter(|code| !code.is_empty() && code.len() <= 2048) else {
         return login_link_page(StatusCode::BAD_REQUEST, FAILED);
     };
-    // The owner may have turned Google off or changed the client since start.
     let client = match client(state, deployment) {
         Some(client) if deployment.sign_in_methods.contains(&SignInMethod::Google) => client,
         _ => return login_link_page(StatusCode::NOT_FOUND, NOT_ON),
@@ -753,7 +680,6 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
             response.headers_mut().insert(header::SET_COOKIE, accounts::app_session_cookie(&session_cookie, &signed.session));
             response
         }
-        // Google proved the email, so a waiting invitation may be named.
         Err(AuthError::AccountPending) => {
             let invited = accounts::invitation_pending(state, deployment, &email).await;
             login_link_page(StatusCode::FORBIDDEN, &accounts::pending_message(state, invited))
@@ -770,8 +696,6 @@ async fn callback_in(state: &AppState, deployment: &Deployment, headers: &Header
     }
 }
 
-/// Runs the account decision under the identity lock, with the Deployment's
-/// current Signup Policy read inside the transaction, as the password path does.
 async fn sign_in(
     state: &AppState,
     deployment: &Deployment,
@@ -807,8 +731,6 @@ async fn sign_in(
     .await
 }
 
-// ---------------------------------------------------------------------------
-// Pages
 
 fn escape(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
@@ -827,9 +749,6 @@ fn page_with_link(status: StatusCode, message: &str, link: &str) -> Response {
     html(status, format!("{PAGE_HEAD}{}</p><p><a href=\"{}\">Back to sign in</a></p></main></html>", escape(message), escape(link)))
 }
 
-/// A page with a link back to sign in. The start and callback paths sit in
-/// `/_konae/auth/google/`, so the relative link reaches the sign-in page
-/// under a path address's prefix too.
 fn login_link_page(status: StatusCode, message: &str) -> Response {
     page_with_link(status, message, "../../login")
 }
@@ -850,14 +769,12 @@ mod tests {
     const KERNEL: &str = "http://localhost:8790";
     const APP: &str = "practice.localhost:8790";
     const OTHER: &str = "other.localhost:8790";
-    /// The installation's domain, where the home and every path address answer.
     const PATH_ORIGIN: &str = "http://localhost:8790";
     const PATH_HOST: &str = "localhost:8790";
     const APP_CLIENT: &str = "1001-practice.apps.googleusercontent.com";
     const OTHER_CLIENT: &str = "1002-other.apps.googleusercontent.com";
     const CLIENT_SECRET_VALUE: &str = "GOCSPX-test-secret-value";
 
-    /// What the fake issuer hands out for one authorization code.
     #[derive(Clone)]
     struct Grant {
         claims: Value,
@@ -889,8 +806,6 @@ mod tests {
     }
 
     /// A local stand-in for Google's token and JWKS endpoints. The token
-    /// endpoint checks the client secret, the redirect URI and PKCE as
-    /// Google does, and answers once per code.
     async fn fake_google() -> (Fake, String) {
         let fake = Fake::default();
         let jwks_fake = fake.clone();
@@ -1026,7 +941,6 @@ mod tests {
         String::from_utf8(axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec()).unwrap()
     }
 
-    /// The Google person a test signs in as.
     struct Person {
         subject: &'static str,
         email: &'static str,
@@ -1061,9 +975,6 @@ mod tests {
             (cookie, url.query_pairs().into_owned().collect())
         }
 
-        /// Plays Google: grants a code for `person` with the claims `edit`
-        /// leaves, then follows the redirect to the callback on `host` in the
-        /// browser that holds `cookie`.
         async fn google(&self, host: &str, cookie: &str, query: &HashMap<String, String>, person: &Person, kid: &'static str, edit: impl FnOnce(&mut Value)) -> Response {
             let now = auth::now_seconds();
             let mut claims = json!({
@@ -1102,7 +1013,6 @@ mod tests {
             )
             .unwrap();
             let session = store.create_account(auth::NewAccount::prepare(email, "correct horse battery").unwrap()).unwrap();
-            // A password account on an installation that requires verification proved its email.
             self.identity(&deployment.id).execute("UPDATE app_users SET verified_at = 1 WHERE email = ?1", [email]).unwrap();
             session.user.user_id
         }
@@ -1116,7 +1026,6 @@ mod tests {
     async fn a_person_signs_in_with_google_on_the_apps_own_host_and_gets_one_stable_account() {
         let fixture = fixture(SignupMode::Open).await;
         let (cookie, query) = fixture.start(APP).await;
-        // The app's own client and the app host's own callback.
         assert_eq!(query["client_id"], APP_CLIENT);
         assert_eq!(query["redirect_uri"], format!("http://{APP}{CALLBACK_PATH}"));
         let first = fixture.google(APP, &cookie, &query, &ANA, "local-test", |_| {}).await;
@@ -1128,7 +1037,6 @@ mod tests {
         assert_eq!(user["role"], "member");
         let again = fixture.sign_in(APP, &ANA).await;
         assert_eq!(fixture.session_user(APP, &again).await["userId"], user["userId"]);
-        // The account has a password hash nobody chose: no password opens it.
         let app = fixture.deployment(APP).await;
         let (verified, hash): (Option<i64>, String) = fixture
             .identity(&app.id)
@@ -1136,7 +1044,6 @@ mod tests {
             .unwrap();
         assert!(verified.is_some());
         assert!(hash.starts_with("pbkdf2-sha256$600000$") && hash != auth::NO_PASSWORD);
-        // Accounts stay on their Deployment.
         assert_eq!(fixture.users(&fixture.deployment(OTHER).await.id), 0);
     }
 
@@ -1148,13 +1055,11 @@ mod tests {
         assert_eq!(shown, vec![format!("http://{APP}{CALLBACK_PATH}")]);
         let (_, query) = fixture.start(APP).await;
         assert!(shown.contains(&query["redirect_uri"]));
-        // A verified custom domain adds its own callback, and starts there send it.
         let record = domain::Record { hostname: "practice.example.com".into(), token: "t".into(), verified: true, verified_at: Some(1), created_at: 1 };
         std::fs::create_dir_all(crate::layout::private(&fixture.root, &app.id)).unwrap();
         std::fs::write(crate::layout::private(&fixture.root, &app.id).join(domain::RECORD_FILE), serde_json::to_vec(&record).unwrap()).unwrap();
         let shown = redirect_uris(&fixture.state, &app);
         assert_eq!(shown[1], format!("http://practice.example.com:8790{CALLBACK_PATH}"));
-        // A host whose callback the owner was not shown does not start a flow.
         let request = Request::builder().uri(START_PATH).header(header::HOST, "practice.localhost:9999").body(Body::empty()).unwrap();
         let refused = start_get(State(fixture.state.clone()), request).await;
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
@@ -1166,7 +1071,6 @@ mod tests {
         use tower::ServiceExt;
         let fixture = fixture(SignupMode::Open).await;
         let app = fixture.deployment(APP).await;
-        // Before the path is on, the owner is shown no path callback.
         assert!(!redirect_uris(&fixture.state, &app).iter().any(|uri| uri.contains("/p/")));
         path::turn_on_for_test(&fixture.state, &app.id, Some("spring-practice")).await;
         let callback_uri = format!("{PATH_ORIGIN}/p/{}{CALLBACK_PATH}", app.id);
@@ -1179,7 +1083,6 @@ mod tests {
             }
             request.body(Body::empty()).unwrap()
         };
-        // The name address starts a flow that returns to the id address, which a rename keeps.
         let started = router(fixture.state.clone()).oneshot(get("/p/spring-practice/_konae/auth/google/start".into(), None)).await.unwrap();
         assert_eq!(started.status(), StatusCode::SEE_OTHER);
         let query: HashMap<String, String> = url::Url::parse(&location(&started)).unwrap().query_pairs().into_owned().collect();
@@ -1195,7 +1098,6 @@ mod tests {
         assert_eq!(location(&signed), format!("/p/{}/", app.id), "the app opens under its prefix");
         assert!(set_cookies(&signed).iter().any(|c| c.starts_with(&format!("konae_app_session_{}=", app.id))), "the session is named for the app on the shared origin");
         assert_eq!(fixture.users(&app.id), 1);
-        // The home address shares the origin and has no callback, so Google does not start there.
         path::turn_on_for_test(&fixture.state, &app.id, Some(path::HOME_NAME)).await;
         let home = router(fixture.state.clone()).oneshot(get("/_konae/auth/google/start".into(), None)).await.unwrap();
         assert_eq!(home.status(), StatusCode::BAD_REQUEST);
@@ -1213,12 +1115,11 @@ mod tests {
             ("unknown key", "someone-else", Box::new(|_| {})),
             ("expired", "local-test", Box::new(|c| c["exp"] = json!(auth::now_seconds() - 1))),
             ("another app's client", "local-test", Box::new(|c| { c["aud"] = json!(OTHER_CLIENT); c["azp"] = json!(OTHER_CLIENT); })),
-            ("wrong issuer", "local-test", Box::new(|c| c["iss"] = json!("https://issuer.example"))),
+            ("wrong issuer", "local-test", Box::new(|c| c["iss"] = json!("https:
             ("wrong nonce", "local-test", Box::new(|c| c["nonce"] = json!("not-the-nonce"))),
             ("unverified email", "local-test", Box::new(|c| c["email_verified"] = json!(false))),
         ];
         for (case, kid, edit) in cases {
-            // Each case is a new person's first try, not one client's sixth.
             fixture.state.guards = Arc::new(limits::Guards::new(Vec::new()));
             let (cookie, query) = fixture.start(APP).await;
             let response = fixture.google(APP, &cookie, &query, &ANA, kid, edit).await;
@@ -1227,7 +1128,6 @@ mod tests {
             let expected = if case == "unverified email" { UNVERIFIED } else { CHECKS };
             assert!(body.contains(&escape(expected)), "{case}: {body}");
         }
-        // A token whose payload was changed after signing fails the signature.
         let (_, query) = fixture.start(APP).await;
         let token = signed("local-test", &json!({"iss": fixture.base, "aud": APP_CLIENT, "sub": "1", "email": ANA.email, "email_verified": true, "nonce": query["nonce"], "iat": 0, "exp": i64::MAX}));
         let parts: Vec<&str> = token.split('.').collect();
@@ -1236,7 +1136,6 @@ mod tests {
         assert_eq!(google.verify(&forged, APP_CLIENT, &query["nonce"], auth::now_seconds()).await, Err(CHECKS));
         assert!(google.verify(&token, APP_CLIENT, &query["nonce"], auth::now_seconds()).await.is_ok());
         assert_eq!(google.verify(&token, OTHER_CLIENT, &query["nonce"], auth::now_seconds()).await, Err(CHECKS));
-        // Keys are cached, and the unknown kid did not fetch them again within the cooldown.
         assert_eq!(fixture.fake.key_fetches.load(Ordering::SeqCst), 1);
         assert_eq!(fixture.users(&fixture.deployment(APP).await.id), 0);
     }
@@ -1253,7 +1152,6 @@ mod tests {
         }
         assert_eq!(fetches(), 1, "fresh flows naming an unknown key do not reach Google each time");
         assert!(google.key("local-test").await.is_some());
-        // A minute later an unknown key fetches once more, then waits again.
         let backdate = |google: &Google| {
             let mut cache = google.keys.lock().unwrap();
             let cache = cache.as_mut().unwrap();
@@ -1263,7 +1161,6 @@ mod tests {
         assert!(google.key("rotated-in").await.is_none());
         assert!(google.key("rotated-in").await.is_none());
         assert_eq!(fetches(), 2);
-        // A stale cache fetches whatever the cooldown says.
         google.keys.lock().unwrap().as_mut().unwrap().fresh_until = Instant::now() - Duration::from_secs(1);
         assert!(google.key("local-test").await.is_some());
         assert_eq!(fetches(), 3);
@@ -1272,16 +1169,13 @@ mod tests {
     #[tokio::test]
     async fn google_proves_only_an_address_it_manages() {
         let fixture = fixture(SignupMode::Open).await;
-        // A Google account made with an outside address is refused.
         let outside = fixture.sign_in(APP, &CARL).await;
         assert_eq!(outside.status(), StatusCode::FORBIDDEN);
         assert!(text(outside).await.contains(&escape(NOT_AUTHORITATIVE)));
-        // So is a Workspace claim for another domain.
         let (cookie, query) = fixture.start(APP).await;
         let foreign = fixture.google(APP, &cookie, &query, &BEA, "local-test", |c| c["hd"] = json!("other.example")).await;
         assert!(text(foreign).await.contains(&escape(NOT_AUTHORITATIVE)));
         assert_eq!(fixture.users(&fixture.deployment(APP).await.id), 0);
-        // A Workspace address whose hd names its domain signs in.
         let workspace = fixture.sign_in(APP, &BEA).await;
         assert_eq!(workspace.status(), StatusCode::SEE_OTHER, "{}", text(workspace).await);
         assert_eq!(fixture.session_user(APP, &workspace).await["name"], BEA.email);
@@ -1300,7 +1194,6 @@ mod tests {
     async fn a_flow_works_once_only_on_its_deployment_origin_and_browser_and_only_until_it_expires() {
         let fixture = fixture(SignupMode::Open).await;
         let (cookie, query) = fixture.start(APP).await;
-        // Another Deployment, another origin of this one, or another browser: refused, and the flow stays.
         let other = fixture.google(OTHER, &cookie, &query, &ANA, "local-test", |_| {}).await;
         assert_eq!(other.status(), StatusCode::GONE);
         assert!(text(other).await.contains(&escape(STALE)));
@@ -1308,11 +1201,9 @@ mod tests {
         assert_eq!(port.status(), StatusCode::GONE);
         let stranger = fixture.google(APP, "konae_google=someone-else", &query, &ANA, "local-test", |_| {}).await;
         assert!(text(stranger).await.contains(&escape(OTHER_BROWSER)));
-        // The right one works once.
         assert_eq!(fixture.google(APP, &cookie, &query, &ANA, "local-test", |_| {}).await.status(), StatusCode::SEE_OTHER);
         let replay = fixture.google(APP, &cookie, &query, &ANA, "local-test", |_| {}).await;
         assert_eq!(replay.status(), StatusCode::GONE);
-        // An expired flow is refused.
         let (cookie, query) = fixture.start(APP).await;
         open(&fixture.state).unwrap().execute("UPDATE google_flows SET expires_at = ?1", [auth::now_seconds() - 1]).unwrap();
         assert_eq!(fixture.google(APP, &cookie, &query, &ANA, "local-test", |_| {}).await.status(), StatusCode::GONE);
@@ -1320,7 +1211,6 @@ mod tests {
 
     #[tokio::test]
     async fn each_signup_policy_admits_and_refuses_with_the_password_paths_words() {
-        // Open creates; Allowlist admits listed emails only; Closed and Invitation only create nobody.
         let open = fixture(SignupMode::Open).await;
         assert_eq!(open.sign_in(APP, &ANA).await.status(), StatusCode::SEE_OTHER);
         let list = fixture(SignupMode::Allowlist).await;
@@ -1331,7 +1221,6 @@ mod tests {
             assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{mode:?}");
             assert!(text(refused).await.contains(SIGNUP_REFUSED), "{mode:?}");
         }
-        // Closed still admits an account that exists.
         let closed = fixture(SignupMode::Open).await;
         assert_eq!(closed.sign_in(APP, &ANA).await.status(), StatusCode::SEE_OTHER);
         for item in closed.state.deployments.write().await.values_mut() {
@@ -1355,8 +1244,6 @@ mod tests {
         let fixture = fixture(SignupMode::Open).await;
         let first = fixture.sign_in(APP, &ANA).await;
         let user = fixture.session_user(APP, &first).await;
-        // The package carries identity.sqlite; the destination app has its
-        // own client, and Google gives this person another subject there.
         let (app, other) = (fixture.deployment(APP).await, fixture.deployment(OTHER).await);
         let moved = crate::layout::identity(&fixture.root, &other.id);
         fixture.identity(&app.id).execute("VACUUM INTO ?1", [moved.to_string_lossy().as_ref()]).unwrap();
@@ -1370,8 +1257,6 @@ mod tests {
         assert_eq!(fixture.session_user(OTHER, &there).await["userId"], user["userId"]);
     }
 
-    /// Creates a pending account and its invitation as `app_invitations_create`
-    /// does, and returns the token.
     async fn invite(fixture: &Fixture, email: &str) -> String {
         let deployment = fixture.deployment(APP).await;
         let store = invitations::store(&fixture.state, &deployment).unwrap();
@@ -1413,11 +1298,9 @@ mod tests {
     async fn an_invitation_accepted_with_google_needs_the_invited_email_and_activates_the_account() {
         let fixture = fixture(SignupMode::Invitation).await;
         let token = invite(&fixture, BEA.email).await;
-        // The invited person must use the Google account of the invited email.
         let wrong = accept_with_google(&fixture, &token, &ANA).await;
         assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
         assert!(text(wrong).await.contains("This invitation is for another email."));
-        // Signing in from the sign-in page does not accept an invitation.
         let pending = fixture.sign_in(APP, &BEA).await;
         assert_eq!(pending.status(), StatusCode::FORBIDDEN);
         let accepted = accept_with_google(&fixture, &token, &BEA).await;
@@ -1432,7 +1315,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!((state.as_str(), invitation.as_str()), ("active", "accepted"));
-        // The link worked once; later sign-ins match the email.
         assert_eq!(accept_with_google(&fixture, &token, &BEA).await.status(), StatusCode::GONE);
         assert_eq!(fixture.sign_in(APP, &BEA).await.status(), StatusCode::SEE_OTHER);
     }
@@ -1450,7 +1332,6 @@ mod tests {
         let response = start(fixture.state.clone()).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(text(response).await.contains(&escape(NOT_ON)));
-        // On, but the client secret is not set here, as after an import.
         for item in fixture.state.deployments.write().await.values_mut() {
             item.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
         }

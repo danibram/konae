@@ -16,7 +16,6 @@ function capsule(actions: Record<string, unknown>) {
 }
 
 describe("the release plan at the editor's door", () => {
-  // kernel-rs/kernel/src/http.rs `require_secrets` and calls.rs `check_release` give these answers at release_plan.
   test("every case in kernel-rs/kernel/src/release-cases.json gets the Kernel's answer", () => {
     expect(file.cases.length).toBeGreaterThanOrEqual(20);
     for (const item of file.cases) {
@@ -34,8 +33,6 @@ describe("the release plan at the editor's door", () => {
     }
   });
 
-  // The owner's decision: no edit to the files clears a secret, so the agent may
-  // apply and says what to set. Deploy still refuses (action-readiness.ts).
   test("a refusal only the owner can clear is a warning; one the files clear stays an error", async () => {
     let owner = 0;
     for (const item of file.cases) {

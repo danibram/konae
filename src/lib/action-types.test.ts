@@ -13,7 +13,6 @@ const actionsSource = JSON.stringify({
   },
 });
 
-/** The errors TypeScript reports for `page` compiled beside the generated declarations. */
 function check(page: string): string[] {
   const files: Record<string, string> = {
     "/app/actions.d.ts": renderActionTypes(generateActionContract({ actionsSource, schemaSource }).contract),

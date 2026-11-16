@@ -5,8 +5,6 @@ import { McpClient, type Transfer } from "../../src/mcp/client";
 import { publishProject } from "../../src/deployments/release";
 
 test.beforeEach(async ({ page }) => {
-  // The Kernel limits owner signups per client address. The test server trusts the local
-  // proxy, so give each test its own forwarded address and repeated runs stay under the limit.
   const client = `198.51.100.${1 + Math.floor(Math.random() * 254)}`;
   const response = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
   expect(response.ok()).toBe(true);
@@ -31,12 +29,9 @@ test("platform pages require an owner session and return to the requested page a
   const client = `203.0.113.${1 + Math.floor(Math.random() * 254)}`;
   const signup = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
   expect(signup.ok()).toBe(true);
-  // A fresh owner has no projects, so a link to the browser starter would fall back to the
-  // project list. Create a project first so the requested page is a real workspace.
   const projectPath = await createProject(page, `Return here ${Date.now()}`);
   await page.request.post("/_konae/owner/logout");
 
-  // The component gallery is public (0b179e2), so only the workspace pages ask for sign-in.
   for (const path of ["/", projectPath]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/_konae\/owner\/login\?returnTo=/);
@@ -45,7 +40,6 @@ test("platform pages require an owner session and return to the requested page a
   }
 
   await page.goto(projectPath);
-  // The owner page also holds the hidden reset and new-password forms.
   const signIn = page.locator("form#auth");
   await signIn.getByLabel("Email").fill(email);
   await signIn.getByLabel("Password").fill(password);
@@ -129,8 +123,6 @@ async function readSavedSources(page: Page, projectId: string) {
   return JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
 }
 
-// The editor sends project sources to the Kernel 500 ms after the last edit (App.tsx) and
-// shows "Saving" until the Kernel has them. A reload before that loads the older sources.
 async function waitForKernelSave(page: Page) {
   await page.waitForTimeout(1_000);
   await expect(page.getByRole("banner").getByText("Saving")).toHaveCount(0, { timeout: 30_000 });
@@ -245,13 +237,11 @@ async function askFixture(page: Page, prompt: string) {
   await page.getByRole("button", { name: "Send", exact: true }).click();
 }
 
-// Export and App settings live in the top bar's More menu.
 async function fromMore(page: Page, item: "Export" | "App settings") {
   await page.getByRole("banner").getByRole("button", { name: "More" }).click();
   await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
-// Files has a File list button that opens New file and New folder beside the editor.
 async function openExplorer(page: Page) {
   await showSection(page, "Files");
   const explorer = page.getByRole("navigation", { name: "Project files" });
@@ -273,10 +263,8 @@ async function openFile(page: Page, path: string) {
   return page.getByLabel(`${path} code editor`);
 }
 
-// The top bar's button reads "Deploy" on a draft and "Deploy changes" once the app is published.
 async function publish(page: Page) {
   await page.getByRole("banner").getByRole("button", { name: /^Deploy( changes)?$/ }).click();
-  // A first publish of a private template starts on Private; these tests publish public apps.
   const visibility = page.getByRole("radiogroup", { name: "Deployment visibility" });
   if (await visibility.count()) await visibility.getByText("Public", { exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: /^Deploy (public|changes)$/ }).click();
@@ -306,7 +294,6 @@ test("uploads added through the app appear in the editor file list", async ({ pa
   await createProject(page, "Preview files");
   await showSection(page, "Preview");
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
-  // Guest first: the app must sign in and still keep the chosen file.
   await preview.locator('input[type="file"]').setInputFiles({ name: "elena furia.png", mimeType: "image/png", buffer: Buffer.from("fake-png-bytes") });
   await expect(preview.getByRole("img", { name: "elena furia.png" })).toBeVisible();
   await expect(preview.getByText("Alice", { exact: true })).toBeVisible();
@@ -658,7 +645,6 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
 test("browser builds, republishes, backs up and exports a persistent app", async ({ page, context }, testInfo) => {
   await createProject(page, `Browser tasks ${Date.now()}`);
   const explorer = await openExplorer(page);
-  // The button closes the File list and the fold shortcut still brings it back.
   await page.getByRole("button", { name: "File list", exact: true }).click();
   await expect(explorer).toBeHidden();
   await page.keyboard.press("Control+b");
@@ -666,10 +652,8 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await explorer.getByRole("button", { name: "New file" }).click();
   await page.getByLabel("File path").fill("src/label.js");
   await page.getByRole("button", { name: "Create", exact: true }).click();
-  // The new file opens in the editor and the File list stays beside it.
   await page.getByLabel("src/label.js code editor").fill("export const label = 'Compiled in the browser';");
   await expect(explorer).toBeVisible();
-  // The Action Contract is generated from the Capsule and cannot be edited.
   await explorer.getByRole("button", { name: "action-contract.md" }).click();
   const contract = page.getByLabel("action-contract.md, generated, read only");
   await expect(contract).toHaveValue(/^# Action Contract for Browser tasks/);
@@ -681,7 +665,6 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   await expect(explorer).toBeVisible();
   const source = await editor.inputValue();
   await editor.fill(`import { label } from './src/label.js';\n${source.replace("Nothing here yet. Anyone with this link sees the same list.", "' + label + '")}`);
-  // Run shows the rebuilt preview without a trip to the Preview section.
   await page.getByRole("button", { name: "Run", exact: true }).click();
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
   await expect(preview.getByText("Compiled in the browser")).toBeVisible();
@@ -691,17 +674,13 @@ test("browser builds, republishes, backs up and exports a persistent app", async
   const url = await publish(page);
   const app = await context.newPage();
   await app.goto(url);
-  // The tasks starter declares anonymous actions, so a signed-out visitor of a public app can use them.
   await expect(app.getByText("Compiled in the browser")).toBeVisible();
   await app.getByPlaceholder(/Add one small thing/).fill("Survives a new release");
   await app.getByRole("button", { name: "Add task" }).click();
   await expect(app.getByText("Survives a new release")).toBeVisible();
-  // Uploads still need a session.
   await app.goto(new URL("/_konae/login", url!).href);
   await signInApp(app);
   await expect(app.getByText("Survives a new release")).toBeVisible();
-  // The SDK hands out the Kernel's file path on the app's own origin, which connect-src allows.
-  // That path must hand the HTML back as a download, never a page.
   const attachment = await app.evaluate(async () => {
     const sdk = (window as unknown as { miniapp: { files: { upload(file: File): Promise<{ id: string }> } } }).miniapp;
     const stored = await sdk.files.upload(new File(['<script>document.body.dataset.executed="yes"</script>'], "untrusted.html", { type: "text/html" }));
@@ -739,7 +718,6 @@ test("browser builds, republishes, backs up and exports a persistent app", async
 test("the editor reloads sources published from an app folder", async ({ page, baseURL }, testInfo) => {
   const projectId = (await createProject(page, `Folder publish ${Date.now()}`)).split("/").pop()!;
   await publish(page);
-  // The owner's browser session delegates a token, as `konae login` does.
   const token = await page.evaluate(async (projectId) => {
     const rpc = async (method: string, params: object) => (await (await fetch("/mcp", {
       method: "POST",
@@ -749,7 +727,6 @@ test("the editor reloads sources published from an app folder", async ({ page, b
     await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
     return (await rpc("tools/call", { name: "token_create", arguments: { scopes: ["read", "write", "publish"], projectIds: [projectId], ttlSeconds: 600 } })).structuredContent.result.token as string;
   }, projectId);
-  // An exported folder with one changed query, published through publishProject as `konae publish` does.
   const folder = new McpClient(new URL("/mcp", baseURL).href, { token });
   const saved = await folder.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
   const project = JSON.parse(new TextDecoder().decode(await folder.download(saved.transfer)));
@@ -924,7 +901,6 @@ test("full document navigation cancels allocated source reads before their respo
     await page.goto("/");
     await page.locator(`a.project-card-link[href="${projectPath}"]`).click();
     await ready;
-    // Leave the document while the allocated source response is still held.
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     await expect.poll(() => completedCancels).toBe(attempt + 1);
@@ -1064,9 +1040,6 @@ test("the editor keeps edits made while a release response is pending", async ({
 test("public notes authenticate users and isolate private rows", async ({ page, context }, testInfo) => {
   await createProject(page, `Personal notes ${Date.now()}`, "notes");
   const preview = page.frameLocator('iframe[title="Mini-app preview"]');
-  // The template's web font swaps in late and reflows the heading above the
-  // button, so a click aimed before the swap can land on empty space. Signing
-  // in twice is harmless, so retry until the notes composer shows.
   const composer = preview.getByPlaceholder("Keep a thought…");
   await expect(async () => {
     if (!(await composer.isVisible())) await preview.getByRole("button", { name: "Sign in", exact: true }).click({ timeout: 2_000 });
@@ -1075,9 +1048,7 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await preview.getByPlaceholder("Keep a thought…").fill("Alice preview note");
   await preview.getByRole("button", { name: "Save", exact: true }).click();
   await expect(preview.getByText("Alice preview note")).toBeVisible();
-  // One section shows at a time, so pick the preview user in Auth and look in Preview.
   await showSection(page, "Access");
-  // The list rule agrees with the template: only a signed-in person lists notes.
   await expect(page.getByText("A signed-in person can run it. The list stops at 100 rows.")).toBeVisible();
   await page.getByLabel("Preview user").selectOption("bob");
   await showSection(page, "Preview");
@@ -1121,8 +1092,6 @@ test("public notes authenticate users and isolate private rows", async ({ page, 
   await download.saveAs(testInfo.outputPath("notes-app-folder.tar"));
 });
 
-// playwright.local.config.ts starts the Kernel with KONAE_MAIL_TRANSPORT=development,
-// which writes each message to mailbox.jsonl in the data directory instead of sending it.
 async function invitationLink(to: string) {
   const mailbox = path.join(process.env.KONAE_E2E_DATA_DIR!, "mailbox.jsonl");
   let link: string | undefined;
@@ -1140,7 +1109,6 @@ test("a private Invitation only app admits the person the owner invites from the
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
   await page.getByRole("radiogroup", { name: "Deployment visibility" }).getByText("Private", { exact: true }).click();
   await expect(page.getByRole("radio", { name: /^Private/ })).toBeChecked();
-  // A private first publish proposes Invitation only and says what it means.
   const signup = page.getByLabel("Who can create an app account");
   await expect(signup).toHaveValue("invitation");
   await expect(page.getByText("Only people you invite by email can create an app account", { exact: false })).toBeVisible();
@@ -1151,7 +1119,6 @@ test("a private Invitation only app admits the person the owner invites from the
   await expect(page.getByText("New app accounts: Invitation only.")).toBeVisible();
   await page.getByRole("button", { name: "Invite people", exact: true }).click();
 
-  // An uninvited visitor finds no way to create an app account.
   const app = await context.newPage();
   await app.goto(url);
   await expect(app.getByRole("heading", { name: "Sign in to this app" })).toBeVisible();
@@ -1162,7 +1129,6 @@ test("a private Invitation only app admits the person the owner invites from the
   const invitee = `guest-${crypto.randomUUID()}@example.test`;
   await users.getByLabel("Email addresses").fill(invitee);
   await users.getByRole("button", { name: "Send invitation", exact: true }).click();
-  // The local stack writes mail to its mailbox, so the answer hands over the link.
   await expect(users.getByRole("list", { name: "Invitation results" })).toContainText("Send this link to the person yourself");
   const invitations = users.getByRole("group", { name: "Invitations" });
   const row = invitations.getByRole("row").filter({ hasText: invitee });
@@ -1171,7 +1137,6 @@ test("a private Invitation only app admits the person the owner invites from the
   await expect(row).toContainText(/Expires /);
   await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: invitee })).toContainText("Pending");
 
-  // The person opens the emailed link, chooses a password and enters.
   await app.goto(await invitationLink(invitee));
   await expect(app.getByRole("heading", { name: `Join ${name}` })).toBeVisible();
   await app.getByLabel("Choose a password").fill("Invited-password-2026");
@@ -1189,8 +1154,6 @@ test("a private Invitation only app admits the person the owner invites from the
   await expect(row.getByRole("button", { name: /Resend/ })).toHaveCount(0);
   await expect(users.getByRole("group", { name: "App accounts" }).getByRole("row").filter({ hasText: invitee })).toContainText("Active");
 
-  // The Access panel scrolls inside the window, so a tall window shows the whole view.
-  // Buttons fade their colour on a theme change; "disabled" finishes that before the capture.
   await page.setViewportSize({ width: 1280, height: 2000 });
   await page.evaluate(() => window.scrollTo(0, 0));
   for (const scheme of ["light", "dark"] as const) {
@@ -1198,7 +1161,6 @@ test("a private Invitation only app admits the person the owner invites from the
     await page.screenshot({ path: testInfo.outputPath(`users-${scheme}.png`), animations: "disabled" });
   }
 
-  // Integrations: a signing secret by name only, and an API key shown once with a working curl.
   await page.emulateMedia({ colorScheme: "light" });
   await page.getByRole("tablist", { name: "Access views" }).getByRole("tab", { name: "Integrations" }).click();
   const integrations = page.getByRole("region", { name: "Integrations" });
@@ -1247,13 +1209,11 @@ test("a person who writes code adds a page, a public file and a signed route, an
     http: { method: "POST", path: "/hooks/orders", signature: { header: "X-Signature", secret: "orders_webhook" } },
   };
   await actions.fill(JSON.stringify(program, null, 2));
-  // The readout above actions.json names the route as the action's only door and the guard's answer.
   await page.getByText("What each action does", { exact: true }).click();
   await expect(page.getByText("Receive. Only its route, POST /hooks/orders, runs it, for a signed request or an API key.")).toBeVisible();
   await expect(page.getByText('Mark a row done. Anyone can run it. When no row changes it refuses with "That task is gone.".')).toBeVisible();
   await waitForKernelSave(page);
 
-  // The deploy dialog reads the release plan first, so it names the unset secret and keeps Deploy off.
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /^Deploy / });
   await expect(dialog).toContainText("Action orders.receive signs with the secret orders_webhook, which is not set for this project.");
@@ -1285,13 +1245,11 @@ test("usage counts signed-in accounts as people, never a visitor, and shows what
     await app.getByRole("button", { name: "Add task" }).click();
     await expect(app.getByText(text)).toBeVisible();
   };
-  // A visitor without an account runs an action: an operation, never a person.
   const anonymous = await browser.newContext();
   const visitor = await anonymous.newPage();
   await visitor.goto(url);
   await addTask(visitor, "From a visitor");
   await anonymous.close();
-  // Two people with accounts, one busier than the other.
   for (const tasks of [3, 1]) {
     const context = await browser.newContext();
     const person = await context.newPage();
@@ -1311,7 +1269,6 @@ test("usage counts signed-in accounts as people, never a visitor, and shows what
   await row.getByRole("link", { name: `View usage for ${name}` }).click();
   const people = page.getByRole("region", { name: "People" });
   await expect(people.locator(".ui-stats")).toContainText("Active accounts2");
-  // Actions count every call an account made, the list queries the page runs as well as the adds.
   const ranked = people.getByRole("figure").filter({ hasText: "Actions by account" });
   await expect(ranked.locator("tbody tr")).toHaveCount(2);
   const counts = (await ranked.locator("tbody .ui-barlist-value").allTextContents()).map(Number);

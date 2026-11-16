@@ -1,21 +1,3 @@
-/**
- * The Action Contract: a machine-readable description of every Server Action
- * a Capsule declares, written from `actions.json` and `schema.sql`. It states
- * what a caller sends, what it gets back, who may call and what the Kernel
- * refuses, so a second backend can be held to the same answers by the
- * conformance runner in src/lib/action-conformance.ts.
- *
- * The generator reads SQL with the tokenizer the Validation Gate uses. It does
- * not run SQLite, so it works in the editor, in the CLI and in an exported app
- * folder.
- * Output column names follow SQLite's rule for a result column: the alias when
- * there is one, otherwise the column's own name. An expression with no alias
- * gets the text SQLite happens to print for it, which another backend would
- * not reproduce, so the contract lists it as unnamed and the Gate warns.
- *
- * Error messages are not written here. They come from the SDK contract in
- * src/sdk/contract.ts, whose test checks each against the Kernel's source.
- */
 import { parseServerActionSource, type HttpBinding, type RouteCaller, type ScheduleDeclaration, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import type { RouteSignature, SignatureScheme } from "../kernel/route-declaration";
 import { thenOf, type CallDeclaration } from "../kernel/calls";
@@ -29,15 +11,12 @@ export const ACTION_CONTRACT_FILE = "action-contract.json";
 export const ACTION_CONTRACT_MARKDOWN = "action-contract.md";
 export const ACTION_CONTRACT_SCHEMA_FILE = "action-contract.schema.json";
 
-/** SQLite type affinity, plus "any" for a column declared without a type and "unknown" for an expression. */
 export type ColumnType = "integer" | "real" | "text" | "blob" | "numeric" | "any" | "unknown";
 
 export type ContractColumn = {
   name: string;
   type: ColumnType;
-  /** null when the generator cannot tell. */
   nullable: boolean | null;
-  /** The table column it reads, when it reads one directly. */
   from?: { table: string; column: string };
 };
 
@@ -45,7 +24,6 @@ export type ContractOutput =
   | {
     kind: "rows";
     columns: ContractColumn[];
-    /** Result columns with no name a second backend could match: expressions without AS. */
     unnamed: { expression: string }[];
   }
   | { kind: "changes"; fields: ["changes", "lastInsertId"] }
@@ -54,25 +32,20 @@ export type ContractOutput =
   /** A call action: the Kernel queued the request (ADR-0013). */
   | { kind: "queued"; fields: ["callId", "queued"] };
 
-/** What a call action sends and what its then mutation reads (ADR-0013). */
 export type ContractCall = {
   method: "GET" | "POST";
   url: string;
-  /** Body key to an input key or a constant; a GET sends them as query parameters. */
   body: Record<string, string | { value: string | number | boolean | null }>;
   auth?: { secret: string; header: string; scheme: string } | { key: string };
   then?: { action: string; inputs: Record<string, string> };
-  /** The document a then mutation's pointers read. */
   answer: string;
 };
 
 export type ContractInput = {
   key: string;
   type: "string" | "number" | "boolean";
-  /** A required input must be present; a nullable one may be omitted or null. */
   required: boolean;
   nullable: boolean;
-  /** UTF-16 code units, for string inputs. */
   maxLength?: number;
 };
 
@@ -88,24 +61,14 @@ export type ContractCaller = {
   actor: "none" | "user id" | "key id";
 };
 
-/**
- * How a sender signs the route: the scheme actions.json declares, its
- * settings, the headers it sets, what the MAC covers and how a replay is
- * refused (ADR-0013).
- */
 export type ContractSignature = {
   scheme: SignatureScheme;
-  /** The header the MAC arrives in. */
   header: string;
-  /** Every header the sender sets. */
   headers: string[];
   secret: string;
-  /** What the sender computes, written out. */
   format: string;
-  /** How far a signature's time may sit from the server's clock, or null when the scheme carries none. */
   windowSeconds: number | null;
   acceptedOnce: true;
-  /** How a second copy of a request is refused. */
   replay: string;
   algorithm?: "sha256" | "sha1";
   encoding?: "hex" | "base64";
@@ -118,30 +81,20 @@ export type ContractHttp = {
   path: string;
   input: string;
   signature?: ContractSignature;
-  /** Input keys and the JSON path each is read from in the POST body; the body's other keys are left out. */
   fields?: Record<string, string>;
   callers: ContractCaller[];
-  /** The `callers` list actions.json declares, when it declares one. */
   declaredCallers?: RouteCaller[];
-  /**
-   * When the route is the action's only door, so the runtime endpoint refuses
-   * the action: always for a signed route or one with declared callers, and on
-   * a private Deployment for an unsigned one (ADR-0013).
-   */
   onlyDoor: "always" | "on a private Deployment";
 };
 
 export type ContractError = {
   message: string;
   when: string;
-  /** Where the refusal is seen: the runtime endpoint, the HTTP route, or both. */
   via: "runtime" | "http" | "both";
-  /** The HTTP status, for refusals on a route. */
   status?: number;
 };
 
 export type ContractLimits = {
-  /** The top-level LIMIT of a query, or null when the bound is a single row. */
   limit: number | null;
   bound: "limit" | "single-row" | "none";
   maxRows: number;
@@ -155,32 +108,14 @@ export type ContractAction = {
   name: string;
   kind: "query" | "mutation" | "signal" | "call";
   access: "anonymous" | "authenticated";
-  /** Whether a binding passes the caller's ID; such an action refuses a caller without one. */
   actorBound: boolean;
   inputs: ContractInput[];
   output: ContractOutput;
-  /**
-   * The Signal the action records when it succeeds, and for a mutation only
-   * when it changed a row, with the input keys copied into its properties and
-   * `actor` for the caller's ID (ADR-0010).
-   */
   signal?: { name: string; properties: string[] };
-  /** A mutation's refusal when its statement changes no row; it is listed among the errors too. */
   guard?: string;
-  /**
-   * The email a mutation queues when it changes a row (ADR-0012). It does not
-   * change the answer: the call succeeds whether or not the email can be sent.
-   */
   notify?: { to: "owner" | "actor" | { column: string }; changes?: string[]; subject: string; body: string };
-  /**
-   * When the Kernel's timer runs the mutation, with no caller: `actor` binds
-   * null, the guard does not apply, and Usage counts the run under `scheduled`
-   * (ADR-0011). Without an http route only the timer runs it.
-   */
   schedule?: ScheduleDeclaration;
-  /** A call action's request and its then mutation. */
   call?: ContractCall;
-  /** The call whose then this mutation is: only the Kernel runs it, after that call ends. */
   thenOf?: string;
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
@@ -194,17 +129,13 @@ export type ActionContract = {
   format: "konae-action-contract";
   version: 1;
   project?: { id: string; name: string };
-  /** Refusals any action can return, and the one for a name no action declares. */
   errors: ContractError[];
   actions: ContractAction[];
-  /** Plain sentences on what a reader must not assume. */
   notes: string[];
 };
 
 export type ContractWarning = { action: string; message: string };
 
-// The numbers below are the Kernel's. src/lib/action-contract.test.ts reads
-// kernel-rs/kernel/src/limits.rs and main.rs and fails when they move.
 const RATE = [
   { caller: "visitor, per client address and Deployment", calls: 30, seconds: 10 },
   { caller: "signed-in person or API key, each", calls: 120, seconds: 10 },
@@ -220,7 +151,6 @@ const SIGNATURE_SCHEME = "t=<unix seconds>,n=<nonce>,v1=<hex HMAC-SHA256, keyed 
 const SVIX_WINDOW = 300;
 const FAILED_DELIVERY = "a delivery whose action fails is not remembered, so the provider's retry runs";
 
-/** The contract's description of a route's signature. kernel-rs/kernel/src/provider.rs verifies the provider schemes. */
 function contractSignature(signature: RouteSignature): ContractSignature {
   const base = { header: signature.header, secret: signature.secret, acceptedOnce: true as const };
   if (signature.scheme === "hmac-body") {
@@ -251,7 +181,6 @@ function contractSignature(signature: RouteSignature): ContractSignature {
   return { scheme: "konae", ...base, headers: [signature.header], format: SIGNATURE_SCHEME, windowSeconds: SIGNATURE_WINDOW, replay: "each signature is accepted once" };
 }
 
-/** The route signature a contract's signature describes: the inverse of contractSignature. */
 export function routeSignature(signature: ContractSignature): RouteSignature {
   const { header, secret } = signature;
   if (signature.scheme === "hmac-body") {
@@ -262,11 +191,6 @@ export function routeSignature(signature: ContractSignature): RouteSignature {
   return { header, secret };
 }
 
-/**
- * Writes the contract for a Capsule's actions.json and schema.sql. Throws the
- * parser's own message when actions.json does not parse: a Capsule the Gate
- * refuses has no contract.
- */
 export function generateActionContract(input: {
   actionsSource: string;
   schemaSource: string;
@@ -311,7 +235,6 @@ export function contractFromProgram(program: ServerActionProgram, schemaSource: 
   return { contract, warnings };
 }
 
-/** The Gate's warning for a result column a second backend cannot name. */
 export function unnamedWarning(action: string, expression: string): string {
   return `Server action ${action} returns ${expression} without a name. Add AS <name> so every backend returns the same key.`;
 }
@@ -329,7 +252,6 @@ function contractCall(call: CallDeclaration): ContractCall {
 }
 
 function contractAction(action: ServerActionDefinition, tables: SchemaTables, callOf: string | null = null): ContractAction {
-  // The parser refuses "granted" until grants exist, so it never reaches here.
   if (action.access === "granted") throw new Error(`Action ${action.name} uses "access": "granted", which the Kernel does not support yet.`);
   const access = action.access;
   const inputs: ContractInput[] = [];
@@ -347,7 +269,6 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
     }
     return { source: "input", key: binding.key };
   });
-  // The role binds null for a caller without one, so only the ID refuses them.
   const actorBound = action.bindings.some((binding) => binding.source === "actor" && binding.field === "id");
   const output: ContractOutput = action.kind === "query"
     ? { kind: "rows", ...deriveOutputColumns(action.statement, tables) }
@@ -357,7 +278,6 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
         ? { kind: "queued", fields: ["callId", "queued"] }
         : { kind: "changes", fields: ["changes", "lastInsertId"] };
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
-  // A scheduled mutation with no route belongs to the Kernel's timer (ADR-0011).
   const timerOnly = Boolean(action.schedule && !action.http);
   return {
     name: action.name,
@@ -415,13 +335,11 @@ function contractHttp(http: HttpBinding, kind: "query" | "mutation" | "signal" |
   };
 }
 
-// --- Errors -------------------------------------------------------------------
 
 const actionsCall = sdkContract.modules.find((module) => module.name === "actions")!.calls.find((call) => call.name === "call")!;
 const httpDeclaration = sdkContract.modules.find((module) => module.name === "http")!.declarations.find((declaration) => declaration.key === "http")!;
 const sdkErrors: readonly SdkError[] = [...sdkContract.errors, ...actionsCall.errors, ...(httpDeclaration.errors ?? [])];
 
-/** A refusal the http module lists with its status, for a message the runtime also uses without one. */
 function httpError(message: string): ContractError {
   const errors: readonly SdkError[] = httpDeclaration.errors ?? [];
   const error = errors.find((candidate) => candidate.message === message && candidate.status !== undefined);
@@ -444,7 +362,6 @@ function fromSdk(message: string, via: ContractError["via"], values: Record<stri
 function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], actorBound: boolean): ContractError[] {
   const http = action.http;
   const onlyDoor = http ? Boolean(http.signature || http.callers) : false;
-  // A binding refusal is seen wherever the action runs: on its route alone when that is its only door.
   const both = !http ? "runtime" : onlyDoor ? "http" : "both";
   const errors: ContractError[] = [];
   if (http) {
@@ -456,7 +373,6 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
   if (action.access === "authenticated") errors.push(fromSdk("authentication-required", "runtime"));
   errors.push({ ...fromSdk("Sign in to use Konae MCP.", "runtime"), when: "the Deployment is private and the caller has no session" });
   if (actorBound && action.access === "anonymous") errors.push(fromSdk("This action requires an authenticated actor.", both));
-  // A route with fields leaves undeclared body keys out, so only the runtime endpoint refuses them.
   const unexpected = http?.fields ? (onlyDoor ? null : "runtime") : both;
   if (unexpected) errors.push(fromSdk("Unexpected action input: <key>", unexpected));
   for (const input of inputs) {
@@ -472,16 +388,13 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
   }
   if (action.kind === "query") errors.push(fromSdk("Query result exceeds 2 MiB or 1000 rows.", both));
   if (action.kind === "call") errors.push(fromSdk("This app reached its limit of calls in the last minute. Try again in a minute.", "runtime"));
-  // The app's own refusal: 403 on a route, set below with the route's statuses.
   if (action.guard) errors.push({ message: action.guard, when: "the statement changes no row, so the action's rule refused the call. Usage counts it under refused and no Signal is recorded", via: both });
   errors.push(fromSdk("rate-limited", "runtime"));
   if (http) {
-    // A binding refusal answers 400 on a route, and a guard 403.
     for (const error of errors) if (error.via === "both" || error.via === "http") error.status = error.message === action.guard ? 403 : 400;
     const takes = (caller: RouteCaller) => http.callers ? http.callers.includes(caller) : caller !== "session" || !http.signature;
     if (http.signature) {
       errors.push(fromSdk("invalid-signature", "http"));
-      // A body-only MAC carries no time to be stale.
       if (http.signature.scheme !== "hmac-body") errors.push(fromSdk("stale-timestamp", "http"));
       errors.push(fromSdk("replayed-signature", "http"));
     } else {
@@ -509,8 +422,6 @@ function actionErrors(action: ServerActionDefinition, inputs: ContractInput[], a
 }
 
 function actionLimits(action: ServerActionDefinition): ContractLimits {
-  // The parser has already refused a query that reads rows without a top-level
-  // LIMIT, so a query without one returns a single row (ADR-0004).
   const query = action.kind === "query";
   const bound: ContractLimits["bound"] = !query ? "none" : hasTopLevelLimit(action.statement) ? "limit" : "single-row";
   return {
@@ -528,7 +439,6 @@ function hasTopLevelLimit(sql: string): boolean {
   return limitIndex(sqlTokens(sql).filter((token) => token.depth === 0)) !== -1;
 }
 
-/** The number after a top-level LIMIT, or null when it is a parameter or an expression. */
 function topLevelLimit(sql: string): number | null {
   const tokens = sqlTokens(sql).filter((token) => token.depth === 0);
   const index = limitIndex(tokens);
@@ -540,12 +450,10 @@ function topLevelLimit(sql: string): number | null {
   return Number(next.text);
 }
 
-// --- Schema -------------------------------------------------------------------
 
 export type SchemaColumn = { name: string; type: ColumnType; nullable: boolean };
 export type SchemaTables = Map<string, SchemaColumn[]>;
 
-/** Tables and columns of every CREATE TABLE in schema.sql, keyed by lower-case table name. */
 export function parseSchemaTables(schemaSql: string): SchemaTables {
   const tables: SchemaTables = new Map();
   for (const statement of sqlStatementTokens(schemaSql)) {
@@ -585,12 +493,10 @@ function schemaColumn(name: string, rest: SqlToken[]): SchemaColumn {
   const declared = typeWords.join(" ");
   const words = rest.map((token) => token.kind === "word" ? token.text.toUpperCase() : "");
   const notNull = words.some((word, index) => word === "NOT" && words[index + 1] === "NULL");
-  // Only INTEGER PRIMARY KEY is the rowid; SQLite lets another primary key column hold NULL.
   const rowid = declared === "INTEGER" && words.includes("PRIMARY");
   return { name, type: affinity(declared), nullable: !(notNull || rowid) };
 }
 
-/** SQLite's affinity rules, section 3.1 of its datatype documentation. */
 function affinity(declared: string): ColumnType {
   if (!declared) return "any";
   if (declared.includes("INT")) return "integer";
@@ -600,16 +506,9 @@ function affinity(declared: string): ColumnType {
   return "numeric";
 }
 
-// --- Output columns -----------------------------------------------------------
 
-/**
- * The result columns of a SELECT, named as SQLite names them, typed from the
- * schema where a column is read directly. Expressions with no alias are
- * returned separately as `unnamed`.
- */
 export function deriveOutputColumns(statement: string, tables: SchemaTables): { columns: ContractColumn[]; unnamed: { expression: string }[] } {
   const tokens = sqlTokens(statement);
-  // The first top-level SELECT names the columns, also for a compound select.
   const select = tokens.findIndex((token) => token.depth === 0 && isWord(token, "SELECT"));
   if (select === -1) return { columns: [], unnamed: [{ expression: statement.trim() }] };
   const end = tokens.findIndex((token, index) => index > select && token.depth === 0
@@ -624,7 +523,6 @@ export function deriveOutputColumns(statement: string, tables: SchemaTables): { 
   for (const expression of splitTopLevel(list, 0)) {
     if (expression.length === 0) continue;
     const text = statement.slice(expression[0].start, expression[expression.length - 1].end);
-    // `*` and `t.*`
     if (isSymbol(expression[expression.length - 1], "*") && (expression.length === 1 || (expression.length === 3 && isSymbol(expression[1], ".")))) {
       const qualifier = expression.length === 3 ? nameOf(expression[0])?.toLowerCase() : undefined;
       const expanded = [...from.entries()].filter(([alias]) => !qualifier || alias === qualifier);
@@ -657,7 +555,6 @@ export function deriveOutputColumns(statement: string, tables: SchemaTables): { 
 
 type Source = { table: string | null; columns: SchemaColumn[] | null; nullable: boolean };
 
-/** FROM and JOIN sources by the name a column qualifier uses, lower-cased. */
 function sources(tokens: SqlToken[], from: number, tables: SchemaTables): Map<string, Source> {
   const result = new Map<string, Source>();
   const stop = new Set(["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "UNION", "EXCEPT", "INTERSECT", "WINDOW"]);
@@ -668,7 +565,6 @@ function sources(tokens: SqlToken[], from: number, tables: SchemaTables): Map<st
     if (token.depth !== 0) { index += 1; continue; }
     if (token.kind === "word" && stop.has(token.text.toUpperCase())) break;
     if (isSymbol(token, "(")) {
-      // A subquery or a table-valued function: its columns are not read here.
       let close = index + 1;
       while (close < tokens.length && !(tokens[close].depth === 0 && isSymbol(tokens[close], ")"))) close += 1;
       const alias = aliasAfter(tokens, close + 1);
@@ -740,7 +636,6 @@ function fromColumn(name: string, column: SchemaColumn, source: Source): Contrac
   };
 }
 
-/** `name`, `t.name`, or a quoted form of either. */
 function columnReference(tokens: SqlToken[]): { qualifier?: string; column: string } | null {
   if (tokens.length === 1) {
     const column = nameOf(tokens[0]);
@@ -758,15 +653,12 @@ function isLiteralWord(token: SqlToken): boolean {
   return token.kind === "word" && ["NULL", "TRUE", "FALSE", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"].includes(token.text.toUpperCase());
 }
 
-/** Separates a trailing `AS alias` or bare alias from a result column. */
 function splitAlias(tokens: SqlToken[]): { body: SqlToken[]; alias?: string } {
   const last = tokens[tokens.length - 1];
   const before = tokens[tokens.length - 2];
   if (tokens.length >= 3 && before && isWord(before, "AS") && (last.kind === "word" || last.kind === "identifier" || last.kind === "string")) {
     return { body: tokens.slice(0, -2), alias: aliasText(last) };
   }
-  // `expr alias`: a name directly after a complete expression. `t.col` and
-  // `count(*)` end in a name or `)`, so a bare word after them is an alias.
   if (tokens.length >= 2 && (last.kind === "word" || last.kind === "identifier") && before
     && !isSymbol(before, ".") && (before.kind !== "word" || isLiteralWord(before) || !isKeyword(before))) {
     if (last.kind === "word" && isKeyword(last)) return { body: tokens };
@@ -785,7 +677,6 @@ function isKeyword(token: SqlToken): boolean {
   return token.kind === "word" && keywords.has(token.text.toUpperCase());
 }
 
-/** The type of an aliased expression, where its outermost function settles it. */
 function expressionType(tokens: SqlToken[]): Pick<ContractColumn, "type" | "nullable"> {
   const head = tokens[0];
   const call = head?.kind === "word" && isSymbol(tokens[1], "(") && isSymbol(tokens[tokens.length - 1], ")") && tokens[tokens.length - 1].depth === head.depth
@@ -806,7 +697,6 @@ function expressionType(tokens: SqlToken[]): Pick<ContractColumn, "type" | "null
   return { type: "unknown", nullable: null };
 }
 
-/** Splits tokens on commas at `depth`, ignoring commas inside parentheses. Stops at the first `)` that closes `depth`. */
 function splitTopLevel(tokens: SqlToken[], depth: number): SqlToken[][] {
   const parts: SqlToken[][] = [[]];
   for (const token of tokens) {
@@ -832,9 +722,7 @@ function nameOf(token: SqlToken | undefined): string | undefined {
   return undefined;
 }
 
-// --- Markdown -------------------------------------------------------------------
 
-/** The contract as Markdown for a person. The JSON is the authority. */
 export function renderActionContractMarkdown(contract: ActionContract): string {
   const lines: string[] = [];
   const title = contract.project ? `Action Contract for ${contract.project.name}` : "Action Contract";
@@ -953,19 +841,11 @@ function escapeCell(text: string): string {
   return text.replaceAll("|", "\\|");
 }
 
-/** Pretty JSON with a trailing newline, the form written to disk and into the export. */
 export function serializeActionContract(contract: ActionContract): string {
   return `${JSON.stringify({ $schema: `./${ACTION_CONTRACT_SCHEMA_FILE}`, ...contract }, null, 2)}\n`;
 }
 
-// --- Schema check ---------------------------------------------------------------
 
-/**
- * Checks a value against action-contract.schema.json. It reads the subset of
- * JSON Schema that file uses: type, const, enum, properties, required,
- * additionalProperties, items, minimum, oneOf and $ref to $defs. Returns the
- * problems, empty when the value conforms.
- */
 export function checkActionContract(value: unknown): string[] {
   return checkSchema(value, actionContractSchema, actionContractSchema, "$");
 }
@@ -1036,7 +916,6 @@ function jsonType(value: unknown, type: string): boolean {
   }
 }
 
-/** The actions.json program a contract describes, for the round-trip check. */
 export function programFromContract(contract: ActionContract): ServerActionProgram {
   const actions: ServerActionProgram["actions"] = {};
   for (const action of contract.actions) {

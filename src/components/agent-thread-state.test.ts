@@ -310,11 +310,6 @@ describe("agent thread apply gate", () => {
     expect(state.proposal?.changedFiles).toEqual(["styles.css"]);
   });
 
-  /**
-   * The bug this pins: the footer said "schema, preview rows and actions hold" for
-   * any pass, including one where the live database could not be read and the
-   * preview-rows stage never ran.
-   */
   test("a pass only claims the stages that ran", () => {
     expect(validationSummary(["sources", "schema", "actions", "preview-rows"])).toBe("Validated. Sources, schema, preview rows and actions hold.");
     expect(validationSummary(["sources", "schema", "actions"])).toBe("Validated. Sources, schema and actions hold. The preview rows were not checked.");

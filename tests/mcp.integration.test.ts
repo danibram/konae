@@ -22,13 +22,9 @@ let bob: McpClient;
 let aliceCookie: string;
 const setupKey = "mcp-integration-setup-secret";
 const password = "integration-password-2026";
-// Sign-in is rate limited per client address. The Kernel trusts X-Forwarded-For
-// from 127.0.0.1 here, so each helper call can present its own address.
 let nextClient = 0;
 const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient / 250)}.${nextClient % 250 + 1}`; };
 
-// The setup key creates only the first owner; later owners sign up with an
-// invitation code the operator issues from the Kernel executable.
 function invitationCode() {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_"))), KONAE_DATA_DIR: root };
   const created = Bun.spawnSync(["kernel-rs/target/debug/konae", "owner-code-create"], { env });
@@ -100,7 +96,6 @@ function signup(hostname: string, email: string) {
   return fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email, password }) });
 }
 
-/** project_export's manifest, with every download released. */
 async function exportApp(deploymentId: string) {
   const exported = await alice.call<any>("project_export", { projectId: deploymentId });
   for (const transfer of [exported.folder, ...Object.values<any>(exported.downloads)]) await alice.cancel(transfer.transferId).catch(() => {});
@@ -217,7 +212,6 @@ describe("authenticated MCP", () => {
     const upload = await alice.upload(new TextEncoder().encode(JSON.stringify(project)));
     await expect(bob.call("project_create", { ...args, sourcesTransferId: upload.transferId })).rejects.toThrow();
     await alice.call("project_create", { ...args, sourcesTransferId: upload.transferId });
-    // Retrying a response lost in transit must not overwrite a later edit.
     await alice.call("project_create", { ...args, sourcesTransferId: upload.transferId });
     const saved = await alice.call<{ revision: number; transfer: Parameters<McpClient["download"]>[0] }>("project_sources_read", { projectId: id });
     expect(saved.revision).toBe(1);
@@ -841,10 +835,8 @@ describe("authenticated MCP", () => {
     expect(published.trimEnd().split(/\r?\n/).filter((line) => line.trim()).at(-1)).toBe(`http://external-proof.localhost:${new URL(url).port}`);
     const settings = await Bun.file(path.join(directory, "konae.json")).json();
     const config = { project: settings };
-    // init made the ID without a Kernel, and the first publish registered the project.
     const state = await alice.call<{ revision: number; sourcesRevision: number }>("project_inspect", { projectId: config.project.id });
     expect(state).toMatchObject({ revision: 1, sourcesRevision: 1 });
-    // The project published from the folder takes the editor's saves too.
     expect(await alice.call<{ revision: number; transfer: unknown }>("project_sources_read", { projectId: config.project.id })).toMatchObject({ revision: 1, transfer: expect.any(Object) });
     const editorFiles = { id: config.project.id, name: config.project.name, slug: config.project.slug, files: { "index.html": "<main>From the editor</main>" }, directories: [], manifest: { version: 1, visibility: "private", runtime: { database: { mode: "declared-actions", actions: [] }, auth: { mode: "required" }, files: { access: "deployment" } } }, updatedAt: 1 };
     const editorUpload = await alice.upload(new TextEncoder().encode(JSON.stringify(editorFiles)), config.project.id);
@@ -864,7 +856,6 @@ describe("authenticated MCP", () => {
       })();
       const result = await Promise.race([output, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error("Development CLI timed out.")), 60_000); })]);
       expect(result).toContain(`http://external-proof.localhost:${port}`);
-      // dev runs the kernel binary on the folder itself: no owner, no MCP, and data/ holds the app's data.
       const kernelData = path.join(directory, ".konae/kernel");
       for (const file of ["owners.sqlite", "mcp.sqlite"]) expect(await Bun.file(path.join(kernelData, file)).exists()).toBe(false);
       expect(await Bun.file(path.join(directory, "data/database.sqlite")).exists()).toBe(true);
@@ -1028,8 +1019,6 @@ describe("authenticated MCP", () => {
     const inspected = await scoped.call<{ sourcesRevision: number }>("project_inspect", { projectId: grantedId });
     await publishProject(publishingClient, request.project, () => request, async () => true, () => {}, undefined, inspected.sourcesRevision);
     expect(uploads).toHaveLength(2);
-    // publishProject's finally path cancels both uploads after apply. Repeating
-    // cancellation remains safe for a scoped token after those rows are gone.
     for (const transferId of uploads) {
       await expect(scoped.cancel(transferId)).resolves.toMatchObject({ ok: true });
       await expect(alice.call("transfer_status", { transferId })).rejects.toThrow("not found or expired");
@@ -1151,8 +1140,6 @@ describe("authenticated MCP", () => {
     expect(await other.download(await other.call<any>("files_read", { fileId: shared.id }))).toEqual(sharedBytes);
     const download = await user.call<any>("files_read", { fileId: saved.id });
     expect(await user.download(download)).toEqual(file);
-    // Only the uploader changes or deletes a file. A file another user may not
-    // read answers as a missing one; one they read but did not upload says so.
     await expect(other.call("files_update", { fileId: saved.id, visibility: "public" })).rejects.toThrow("File not found.");
     await expect(other.call("files_delete", { fileId: shared.id })).rejects.toThrow("Only the person who uploaded this file may change or delete it.");
     await expect(user.call("files_update", { fileId: saved.id, visibility: "organizers" })).rejects.toThrow("Value is outside the allowed choices.");
@@ -1174,7 +1161,6 @@ describe("authenticated MCP", () => {
     }
     await expect(alice.call("database_execute", { projectId: receipt.id, operation: "sql", input: { sql: "ATTACH DATABASE '/tmp/other.sqlite' AS other;" } })).rejects.toThrow();
     await user.call("auth_logout");
-    // The revoked cookie now reads as a signed-out visitor of this public app.
     expect(await user.call("auth_session")).toMatchObject({ role: "anonymous" });
     await expect(user.call("actions_invoke", { name: "notes.list" })).rejects.toThrow("authentication-required");
   });
@@ -1209,7 +1195,6 @@ describe("authenticated MCP", () => {
     const scoped = new McpClient(`${url}/mcp`, { token: reader.token });
     expect(await scoped.call<any>("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist" } } });
     await expect(scoped.call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
-    // An app host never serves the owner MCP endpoint, so app cookies cannot reach owner tools.
     expect((await fetch(`${url}/mcp`, { method: "POST", headers: { host: receipt.hostname }, body: "{}" })).status).toBe(403);
   });
 
@@ -1232,7 +1217,6 @@ describe("authenticated MCP", () => {
       } finally { await client.cancel(transfer.transferId).catch(() => {}); }
     };
 
-    // publish may choose the policy of a first release, and the first request finds it.
     const receipt = await publishWith(publisher, { ...payload(id, "private"), initialSignupPolicy: { mode: "invitation", allowlist: [] } });
     expect(await publisher.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "invitation" }, manifest: { visibility: "private" } } });
     expect((await signup(receipt.hostname, "stranger@app.test")).status).toBe(403);
@@ -1240,17 +1224,14 @@ describe("authenticated MCP", () => {
     expect(page).toContain("Only invited people can create an account");
     expect(page).not.toContain("/_konae/auth/signup");
 
-    // Without manage_users, publish changes who may join neither directly nor through a republish.
     await expect(publisher.call("signup_policy_set", { projectId: receipt.id, mode: "open" })).rejects.toThrow("Unknown tool");
     await expect(publisher.call("app_invitations_create", { projectId: receipt.id, emails: ["x@app.test"], idempotencyKey: "publisher-key" })).rejects.toThrow("Unknown tool");
     await expect(publishWith(publisher, { ...payload(id, "public"), initialSignupPolicy: { mode: "open", allowlist: [] } })).rejects.toThrow("first deployment");
     await publishWith(publisher, payload(id, "private"));
     expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "invitation" } } });
-    // A token from before manage_users existed does not gain it.
     const legacy = await grant(["read", "write", "publish"]);
     await expect(legacy.call("app_users_list", { projectId: receipt.id })).rejects.toThrow("Unknown tool");
 
-    // A project-limited token cannot touch another project's users.
     const other = (await release("invitation_other")).receipt;
     await expect(manager.call("app_users_list", { projectId: other.id })).rejects.toThrow("outside this token's grants");
     await expect(manager.call("app_invitations_create", { projectId: other.id, emails: ["x@app.test"], idempotencyKey: "other-project" })).rejects.toThrow("outside this token's grants");
@@ -1260,18 +1241,15 @@ describe("authenticated MCP", () => {
     const created = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
     const acceptUrl = (created.results[0] as { acceptUrl?: string }).acceptUrl;
     expect(created.results[0]).toMatchObject({ status: "invited", delivery: "local-mailbox" });
-    // A retry with the same key answers the stored result, which never holds the link.
     const retried = await manager.call<{ results: Array<{ status: string; delivery: string; invitationId: string }> }>("app_invitations_create", request);
     expect(retried.results[0]).toMatchObject({ status: "invited", invitationId: created.results[0].invitationId });
     expect(retried.results[0]).not.toHaveProperty("acceptUrl");
-    // The queue's worker writes the development mailbox shortly after the call returns.
     const readInvitations = async () => (await Bun.file(path.join(root, "mailbox.jsonl")).text().catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((message) => message.purpose === "invitation");
     let mailbox = await readInvitations();
     for (const deadline = Date.now() + 10_000; mailbox.length === 0 && Date.now() < deadline; mailbox = await readInvitations()) await Bun.sleep(100);
     expect(mailbox).toHaveLength(1);
     expect(mailbox[0]).toMatchObject({ to: "ana@app.test", scope: `deployment:${receipt.id}` });
     const token = new URL(mailbox[0].link).hash.slice("#invitation=".length);
-    // The development transport sends nothing, so the first answer carries the link once; a retry does not.
     expect(acceptUrl).toBe(mailbox[0].link);
     expect(JSON.stringify(retried)).not.toContain(token);
 
@@ -1370,10 +1348,7 @@ describe("authenticated MCP", () => {
     const visitor = runtimeClient(receipt.hostname);
     for (let i = 0; i < 30; i++) expect(await visitor.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 0 }]);
     await expect(visitor.call("actions_invoke", { name: "notes.count" })).rejects.toThrow("rate-limited");
-    // Signed-in users are not counted against the anonymous limit; each has a
-    // bucket of 120 calls per 10 seconds.
     const member = await appUser(receipt.hostname, "member@limit.test");
-    // The bucket refills while the loop runs, so count calls until refused.
     let accepted = 0;
     for (; accepted < 400; accepted++) {
       try { await member.call("actions_invoke", { name: "notes.count" }); }
@@ -1383,15 +1358,12 @@ describe("authenticated MCP", () => {
     expect(accepted).toBeLessThan(400);
     const other = await appUser(receipt.hostname, "other@limit.test");
     expect(await other.call("actions_invoke", { name: "notes.count" })).toEqual([{ total: 0 }]);
-    // Only an upload that stores a new file is audited. Failures and receipt
-    // replays leave no row, so a stranger cannot grow the audit table with them.
     const upload = await other.upload(new TextEncoder().encode("audited once"));
     const saved = await other.call("files_upload", { transferId: upload.transferId, name: "once.txt", type: "text/plain" });
     for (let i = 0; i < 3; i++) expect(await other.call("files_upload", { transferId: upload.transferId, name: "once.txt", type: "text/plain" })).toEqual(saved);
     await other.cancel(upload.transferId);
     await expect(other.call("files_upload", { transferId: crypto.randomUUID(), name: "missing.txt" })).rejects.toThrow();
     await expect(other.call("files_upload", { transferId: "not-a-uuid", name: "bad.txt" })).rejects.toThrow("Invalid transfer ID");
-    // A visibility change is not audited; a delete that removes a file is, once.
     const savedId = (saved as { id: string }).id;
     for (const visibility of ["public", "private", "public"]) await other.call("files_update", { fileId: savedId, visibility });
     await other.call("files_delete", { fileId: savedId });
@@ -1420,7 +1392,6 @@ describe("authenticated MCP", () => {
     const attempt = (route: string, client: string, email: string, host?: string) => fetch(`${url}${route}`, { method: "POST", headers: { ...(host ? { host } : {}), "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email, password: "wrong-password-123" }) });
     for (const [route, host] of [["/_konae/auth/login", receipt.hostname], ["/_konae/owner/login", undefined]] as const) {
       const client = freshClient();
-      // Concurrent, so the test also shows that password checks run in parallel.
       expect((await Promise.all(Array.from({ length: 10 }, (_, i) => attempt(route, client, `guess${i}@limit.test`, host)))).map(r => r.status)).toEqual(Array(10).fill(401));
       const refused = await attempt(route, client, "another@limit.test", host);
       expect(refused.status).toBe(429);
@@ -1430,7 +1401,6 @@ describe("authenticated MCP", () => {
       expect((await attempt(route, guesser, "Target@limit.test", host)).status).toBe(429);
       expect((await attempt(route, freshClient(), "Target@limit.test", host)).status).toBe(401);
     }
-    // Signup counts against the same buckets.
     const client = freshClient();
     for (let i = 0; i < 10; i++) await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email: `new${i}@limit.test`, password: "x" }) });
     expect((await fetch(`${url}/_konae/auth/signup`, { method: "POST", headers: { host: receipt.hostname, "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email: "late@limit.test", password }) })).status).toBe(429);
@@ -1456,8 +1426,6 @@ describe("authenticated MCP", () => {
     let started = performance.now();
     expect((await login("steady@app.test", password)).status).toBe(200);
     const oneHash = performance.now() - started;
-    // Logout takes the identity lock but hashes nothing. Before the fix it
-    // queued behind every password check in flight.
     const flood = Array.from({ length: 6 }, (_, i) => login(`flood${i}@app.test`, "wrong-password-123"));
     await Bun.sleep(20);
     started = performance.now();
@@ -1476,7 +1444,6 @@ describe("authenticated MCP", () => {
     expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist", allowlist: ["@kept.test"] } } });
     expect((await signup(receipt.hostname, "someone@other.test")).status).toBe(403);
     expect((await signup(receipt.hostname, "someone@kept.test")).status).toBe(200);
-    // A redeploy keeps the owner's choice.
     await release("restart_proof");
     expect(await alice.call("project_inspect", { projectId: receipt.id })).toMatchObject({ deployment: { signupPolicy: { mode: "allowlist", allowlist: ["@kept.test"] } } });
   }, 30_000);
@@ -1490,8 +1457,6 @@ describe("authenticated MCP", () => {
     const args = { client_id: registration.client_id, redirect_uri: registration.redirect_uris[0], response_type: "code", code_challenge_method: "S256", code_challenge: challenge, scope: "read", resource: `${url}/mcp`, state: "test-state" };
     const consent = await fetch(`${url}/oauth/authorize?${new URLSearchParams(args)}`, { headers: { cookie: aliceCookie } });
     const html = await consent.text();
-    // Cursor's registered callback returns a 308 to another origin; Chromium
-    // applies form-action to that redirect too.
     expect(consent.headers.get("content-security-policy")).not.toContain("form-action");
     expect(consent.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(consent.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
@@ -1548,7 +1513,6 @@ describe("authenticated MCP", () => {
     } finally { await client.close(); await first.close(); }
   });
 
-  // Keep this test last: the registration limit is per address and every test runs from 127.0.0.1.
   test("OAuth registration is rate limited per address", async () => {
     const register = () => fetch(`${url}/oauth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "Flood", redirect_uris: ["http://127.0.0.1:9997/callback"] }) });
     let refused: Response | undefined;
@@ -1563,8 +1527,6 @@ describe("authenticated MCP", () => {
   });
 });
 
-// A second Kernel that requires verification, for the flows that only exist
-// there. It shares the build and the helpers above but none of their state.
 describe("app accounts under required verification", () => {
   let strictRoot: string;
   let strictKernel: ReturnType<typeof Bun.spawn> | undefined;
@@ -1589,7 +1551,6 @@ describe("app accounts under required verification", () => {
 
   beforeAll(async () => {
     strictRoot = await mkdtemp(path.join(tmpdir(), "konae-mcp-strict-"));
-    // Its own range, so it never meets the admission suite's 19400 to 19489.
     const strictPort = Number(process.env.KONAE_MCP_STRICT_TEST_PORT) || 20400 + Math.floor(Math.random() * 90);
     strictUrl = `http://127.0.0.1:${strictPort}`;
     strictKernel = Bun.spawn(["kernel-rs/target/debug/konae"], {
@@ -1628,7 +1589,6 @@ describe("app accounts under required verification", () => {
 
   test("a sign-in before the link hints only in the browser that asked for it", async () => {
     const plain = "Email or password is incorrect.";
-    // The test Kernel uses the development transport, which emails nothing, so the hint names the mailbox file.
     const hint = "Email or password is incorrect. If you signed up with this email in this browser, open your confirmation link to choose your password first. This installation sends no email, so the link is in the mailbox.jsonl file on its server.";
     const started = await appPost("/_konae/auth/signup", { email: "ana@strict.test" });
     expect(started.status).toBe(202);
@@ -1641,13 +1601,11 @@ describe("app accounts under required verification", () => {
     expect(await login("ana@strict.test", password, browser)).toEqual([401, hint]);
     expect(await login("ana@strict.test", password)).toEqual([401, plain]);
     expect(await login("someone@strict.test", password, browser)).toEqual([401, plain]);
-    // An address with an active account: the probe's own signup sets the same cookie and gets the same hint.
     await appPost("/_konae/auth/signup", { email: "ben@strict.test" });
     expect((await appPost("/_konae/auth/verify", { token: await token("ben@strict.test", "verification"), password })).status).toBe(200);
     const probe = await appPost("/_konae/auth/signup", { email: "ben@strict.test" });
     expect(probe.status).toBe(202);
     expect(await login("ben@strict.test", "a-guessed-password", setCookie(probe))).toEqual([401, hint]);
-    // The runtime endpoint's auth_signup sets it too.
     const runtime = await fetch(`${strictUrl}/_konae/mcp`, {
       method: "POST", headers: { host, "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": freshClient() },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "auth_signup", arguments: { email: "cara@strict.test" } } }),
@@ -1664,7 +1622,6 @@ describe("app accounts under required verification", () => {
       } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Owner app</main>" } },
     });
     await owner.call("project_create", { projectId: id, name: "Owner app" });
-    // The Kernel keeps no role, so a binding of one is refused.
     const refused = await owner.upload(new TextEncoder().encode(JSON.stringify(release({
       "me.role": { kind: "query", access: "anonymous", statement: "SELECT ?1 AS role LIMIT 1", bindings: [{ source: "actor", field: "role" }] },
     }))), id);

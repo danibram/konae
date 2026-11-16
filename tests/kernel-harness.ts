@@ -1,5 +1,3 @@
-// Starts Kernels, publishes apps on them and imports a package into a new
-// project. Used by the security review and check-carry suites.
 import { open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { McpClient, encodeBase64, type Transfer } from "../src/mcp/client";
@@ -9,7 +7,6 @@ const repo = path.resolve(import.meta.dir, "..");
 export const kernelBinary = path.join(repo, "kernel-rs/target/debug/konae");
 export const password = "kernel-harness-password";
 let nextClient = 0;
-/** A client address per request, so the signup and sign-in limits never trip. */
 export const freshClient = () => { nextClient++; return `198.18.${Math.floor(nextClient / 250) % 250}.${nextClient % 250 + 1}`; };
 
 export async function buildKernel() {
@@ -28,7 +25,6 @@ export type Kernel = {
   mailbox(): Promise<{ to: string; purpose: string; link: string; scope: string }[]>;
 };
 
-/** Starts a Kernel on `port` with its data in `data`, and signs up its owner, or signs in an existing one. */
 export async function startKernel(options: { port: number; data: string; setupKey: string; ownerEmail: string; env?: Record<string, string>; signIn?: boolean }): Promise<Kernel> {
   const url = `http://127.0.0.1:${options.port}`;
   const env = {
@@ -73,7 +69,6 @@ export function runtime(kernel: Kernel, hostname: string, cookie?: string) {
   } });
 }
 
-/** A request to an app host with its own client address. */
 export function appFetch(kernel: Kernel, hostname: string, route: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("host", hostname);
@@ -82,7 +77,6 @@ export function appFetch(kernel: Kernel, hostname: string, route: string, init: 
   return fetch(`${kernel.url}${route}`, { ...init, headers, redirect: "manual" });
 }
 
-/** Signs up or in on an app and returns the session cookie. */
 export async function account(kernel: Kernel, hostname: string, route: "signup" | "login", email: string) {
   const response = await appFetch(kernel, hostname, `/_konae/auth/${route}`, { method: "POST", body: JSON.stringify({ email, password }) });
   if (response.status !== 200) throw Error(`${route} for ${email} answered ${response.status}: ${await response.text()}`);
@@ -101,7 +95,6 @@ export async function release(client: McpClient, payload: object, projectId: str
 
 export type Deployment = { id: string; hostname: string; url: string; projectId: string };
 
-/** A downloaded package: each component's file, and the release payload under `release`. */
 export type Captured = { manifest: PackageManifest; files: Record<string, string> };
 
 async function uploadFile(client: McpClient, file: string, content: { name: string; size: number; sha256: string }, projectId: string) {
@@ -119,7 +112,6 @@ async function uploadFile(client: McpClient, file: string, content: { name: stri
   return transfer.transferId;
 }
 
-/** Imports a downloaded package into `projectId`, creating the project if needed. */
 export async function importPackage(client: McpClient, captured: Captured, projectId: string, name = "Imported app") {
   await client.call("project_create", { projectId, name }).catch((error: Error) => {
     if (!/exists|already/i.test(error.message)) throw error;
@@ -136,7 +128,6 @@ export async function importPackage(client: McpClient, captured: Captured, proje
   }
 }
 
-/** Writes `bytes` to a file and returns its path. */
 export async function scratchFile(directory: string, name: string, bytes: string | Uint8Array) {
   const file = path.join(directory, name);
   await writeFile(file, bytes);

@@ -5,9 +5,6 @@ import path from "node:path";
 import type { UsageOverview, UsageSummary } from "../src/lib/usage";
 import { McpClient } from "../src/mcp/client";
 
-// ADR-0010 against a real Kernel, the same binary `bun run konae -- dev`
-// starts: Usage counts what the Kernel allowed and nothing it refused, a
-// Signal is recorded from the action's inputs, and only the owner reads them.
 
 setDefaultTimeout(60_000);
 
@@ -55,7 +52,6 @@ const actions = {
     },
   },
 };
-// The CHECK lets a call pass its bindings and still fail in SQL.
 const schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, topic TEXT NOT NULL, body TEXT NOT NULL CHECK (length(body) < 100));";
 
 async function release(id: string, files: Record<string, string>) {
@@ -184,19 +180,13 @@ describe("Usage and Signals", () => {
     const before = await totals();
     const signalsBefore = (await owner.call<{ signals: unknown[] }>("signals_read", { projectId: deploymentId })).signals.length;
     const visitor = runtime();
-    // Needs a session.
     await expect(visitor.call("actions_invoke", { name: "notes.mine" })).rejects.toThrow("authentication-required");
-    // An input the action does not declare.
     await expect(visitor.call("actions_invoke", { name: "notes.add", input: { topic: "x", body: "y", extra: 1 } })).rejects.toThrow("Unexpected action input: extra");
     await expect(visitor.call("actions_invoke", { name: "page.like", input: {} })).rejects.toThrow("Missing action input: page");
-    // Bindings pass, SQL refuses: the CHECK fails.
     await expect(visitor.call("actions_invoke", { name: "notes.add", input: { topic: "x", body: "y".repeat(150) } })).rejects.toThrow("CHECK");
-    // A route with a missing input.
     expect((await post("/hooks/orders", {})).status).toBe(400);
-    // A wrong password and a repeated signup.
     expect((await post("/_konae/auth/login", { email: "ana@usage.test", password: "wrong-password-123" })).status).toBe(401);
     expect((await post("/_konae/auth/signup", { email: "ana@usage.test", password })).status).not.toBe(200);
-    // A file another caller may not read.
     expect((await fetch(`${url}/_konae/files/${crypto.randomUUID()}`, { headers: { host } })).status).toBe(404);
     expect(await totals()).toEqual(before);
     expect((await owner.call<{ signals: unknown[] }>("signals_read", { projectId: deploymentId })).signals).toHaveLength(signalsBefore);

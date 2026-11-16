@@ -1,11 +1,3 @@
-//! The shape of a Server Action program, checked at every publish.
-//!
-//! An action's name, access, kind, bindings and size, and the number of
-//! actions a project declares. `parseServerActionSource` in
-//! src/kernel/actions.ts makes the same checks in the same order with the same
-//! messages, and kernel-rs/kernel/src/action-cases.json holds the cases both test
-//! suites run. Actions are checked in sorted name order, so with two bad
-//! actions both doors name the same one.
 
 use serde_json::Value;
 
@@ -47,9 +39,6 @@ pub fn read(source: &str) -> anyhow::Result<ActionProgram> {
     Ok(program)
 }
 
-/// The checks `parseActionBody` and `parseBinding` in src/kernel/actions.ts
-/// make before an action's SQL, on the JSON as written, so a value of the
-/// wrong type gets the rule's code instead of a parse error.
 fn check_types(name: &str, action: &Value) -> Result<(), Refusal> {
     if !valid_name(name) {
         return Err(refuse("action.name-invalid", format!("Invalid server action name: {name}")));
@@ -95,7 +84,6 @@ fn check_binding_types(name: &str, index: usize, binding: &Value) -> Result<(), 
         Some("input") if text("key").is_some() => match text("type") {
             Some("string") => {
                 let length = binding.get("maxLength");
-                // 100.0 is the integer 100 to the editor's JSON reader, so it is here too.
                 let whole = |length: &Value| length.as_f64().is_some_and(|length| length.fract() == 0.0 && (1.0..=MAX_STRING_LENGTH as f64).contains(&length));
                 if length.is_some_and(|length| !whole(length)) {
                     return Err(refuse("action.max-length-invalid", format!("Invalid maxLength in {name}.")));
@@ -107,7 +95,6 @@ fn check_binding_types(name: &str, index: usize, binding: &Value) -> Result<(), 
         },
         Some("actor") => text("field") == Some("id"),
         Some("kernel") => text("field") == Some("now"),
-        // An absent value and null both bind NULL.
         Some("literal") => binding.get("value").is_none_or(|value| value.is_null() || value.is_string() || value.is_number()),
         _ => false,
     };
@@ -118,7 +105,6 @@ fn check_binding_types(name: &str, index: usize, binding: &Value) -> Result<(), 
 /// that no two actions bind one route.
 pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
     if program.actions.len() > MAX_ACTIONS {
-        // Each message is written out so src/sdk/contract.test.ts finds it.
         return Err(refuse("action.count-over", "A project may declare at most 100 actions."));
     }
     let mut names = program.actions.keys().collect::<Vec<_>>();
@@ -137,7 +123,6 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
         return Err(refuse("action.name-invalid", format!("Invalid server action name: {name}")));
     }
     if action.access == "granted" {
-        // Reserved for per-grant access; the Kernel refuses it until grants exist.
         return Err(refuse(
             "action.access-unsupported",
             format!(r#"Action {name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated"."#),
@@ -157,7 +142,6 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
             "input" => binding.key.is_some() && matches!(binding.value_type.as_deref(), Some("string" | "number" | "boolean")),
             "actor" => binding.field.as_deref() == Some("id"),
             "kernel" => binding.field.as_deref() == Some("now"),
-            // An absent value and null both bind NULL.
             "literal" => binding.value.as_ref().is_none_or(|value| value.is_string() || value.is_number()),
             _ => false,
         };
@@ -176,9 +160,6 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
     Ok(())
 }
 
-/// The top-level keys each kind takes. `parseAction` in src/kernel/actions.ts
-/// holds the same lists. `statement` on a signal action or a call may only be
-/// empty, which `usage` and `calls` check.
 fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
         "query" => &["kind", "access", "statement", "bindings", "http"],
@@ -215,8 +196,6 @@ pub fn check_keys(name: &str, action: &ActionDefinition) -> Result<(), Refusal> 
     }
 }
 
-/// Lowercase words of letters and digits, each starting with a letter, joined
-/// by dots, at least two of them and at most 100 characters in all.
 fn valid_name(name: &str) -> bool {
     name.len() <= MAX_NAME_CHARS
         && name.split('.').count() >= 2
@@ -230,8 +209,6 @@ fn valid_name(name: &str) -> bool {
 mod tests {
     use serde_json::Value;
 
-    /// The editor runs the same file in src/kernel/actions.test.ts and through
-    /// the Validation Gate in src/agent/gate.test.ts.
     #[test]
     fn the_kernel_refuses_the_action_shapes_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("action-cases.json")).unwrap();

@@ -1,19 +1,13 @@
-// The hostname rules for a custom domain (ADR-0014). The Kernel's
-// kernel-rs/kernel/src/domain.rs applies the same rules with the same words, and both
-// test suites run kernel-rs/kernel/src/domain-cases.json.
 
 import type { RefusalCode } from "../kernel/refusal";
 
 export type DomainRules = {
-  /** The installation's app suffix, KONAE_HOST_SUFFIX. */
   suffix: string;
-  /** The hosts of KONAE_PUBLIC_ORIGIN and KONAE_MCP_ORIGIN. */
   installationHosts: string[];
 };
 
 export type HostnameCheck = { ok: true; hostname: string } | { ok: false; code: RefusalCode; message: string };
 
-/** The TXT record name that proves control of a hostname. */
 export const domainRecordName = (hostname: string) => `_konae.${hostname}`;
 
 export function checkHostname(raw: string, rules: DomainRules): HostnameCheck {
@@ -21,7 +15,6 @@ export function checkHostname(raw: string, rules: DomainRules): HostnameCheck {
   const hostname = (trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed).toLowerCase();
   const refuse = (code: RefusalCode, message: string): HostnameCheck => ({ ok: false, code, message });
   if (!hostname) return refuse("domain.missing", "Name a hostname, such as notes.example.org.");
-  // The Kernel counts bytes; a name with a non-ASCII character is refused below either way.
   if (new TextEncoder().encode(hostname).length > 253) return refuse("domain.too-long", "A hostname has at most 253 characters.");
   const labels = hostname.split(".");
   const validLabel = (label: string) => label.length >= 1 && label.length <= 63 && /^[a-z0-9-]+$/.test(label) && !label.startsWith("-") && !label.endsWith("-");

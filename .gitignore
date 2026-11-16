@@ -17,7 +17,6 @@ playwright-report/
 .konae-owner.env
 examples/architecture-map/konae.json
 
-# The docs site writes these from docs/ (bun run docs:site).
 examples/docs-site/index.html
 examples/docs-site/pages/
 examples/docs-site/public/content/

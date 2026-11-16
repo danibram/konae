@@ -1,19 +1,3 @@
-/**
- * A local stand-in for Google's OAuth endpoints, for trying "Continue with
- * Google" on a local Kernel without a real Google client.
- *
- *   bun run scripts/fake-google.ts            # listens on 127.0.0.1:8799
- *   KONAE_GOOGLE_TEST_ISSUER=http://127.0.0.1:8799 bun run dev:local
- *
- * Then set any client ID and secret for the app in Access > Users and turn
- * Google on. /authorize shows a form where you pick the Google subject, the
- * email, its Workspace domain (hd) and whether Google verified it. /token
- * checks that the client sends the secret it used, the redirect URI and
- * PKCE, and answers an ID token signed with the Kernel's RS256 test key.
- * /jwks serves the matching public key. A development build of the Kernel
- * reads KONAE_GOOGLE_TEST_ISSUER only with a local HTTP public origin; a
- * release build refuses to start with it set.
- */
 import { createHash, createPrivateKey, randomBytes, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -83,7 +67,6 @@ Bun.serve({
       const grant = grants.get(form.get("code") ?? "");
       grants.delete(form.get("code") ?? "");
       const verifier = createHash("sha256").update(form.get("code_verifier") ?? "").digest("base64url");
-      // Any client is registered here; the client must still send a secret and the same redirect URI.
       if (!grant || !form.get("client_secret") || form.get("client_id") !== grant.clientId || form.get("redirect_uri") !== grant.redirectUri || verifier !== grant.challenge) {
         return Response.json({ error: "invalid_grant" }, { status: 400 });
       }

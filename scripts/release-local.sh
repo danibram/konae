@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Builds the two install images on this machine and pushes them to GHCR, the
-# same images, tags and labels as .github/workflows/release.yml.
-# See "Release from your machine" in docs/releasing.md.
-#
-# Runs with macOS /bin/bash 3.2: no mapfile, no associative arrays.
 set -euo pipefail
 
 REGISTRY="${KONAE_RELEASE_REGISTRY:-ghcr.io}"
@@ -51,7 +46,6 @@ fail() {
   exit 1
 }
 
-# Every build and push goes through run, so --dry-run prints exactly what a real run does.
 run() {
   printf '+'
   printf ' %q' "$@"
@@ -64,13 +58,11 @@ run() {
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# --- Host -------------------------------------------------------------------
 
 if [ "$(uname -s)" != "Darwin" ] && [ "$ANY_HOST" -eq 0 ]; then
   fail "refused on $(uname -s). This script builds on your workstation and pushes to GHCR; the server only pulls. On a Linux workstation, pass --any-host."
 fi
 
-# --- Versions (same checks as the workflow) ---------------------------------
 
 command -v jq >/dev/null 2>&1 || fail "jq is missing. Install it (brew install jq) and run again."
 
@@ -96,7 +88,6 @@ rest="${version#*.}"
 minor="${rest%%.*}"
 major_minor="${major}.${minor}"
 
-# --- Git --------------------------------------------------------------------
 
 if [ -n "$(git status --porcelain)" ]; then
   fail "the working tree has uncommitted changes. The image is built from HEAD and labelled with its commit; commit or set the changes aside first."
@@ -109,9 +100,7 @@ elif [ "$(git rev-parse "v${version}^{commit}")" != "$revision" ]; then
   tag_note="Tag v${version} points at another commit than HEAD."
 fi
 
-# --- Docker -----------------------------------------------------------------
 
-# A dry run reports a failed Docker check and still prints the plan; a real run stops.
 BLOCKED=0
 docker_fail() {
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -122,7 +111,6 @@ docker_fail() {
   fi
 }
 
-# Reads only which registries have credentials, never the credentials.
 ghcr_logged_in() {
   local cfg helper
   cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
@@ -159,7 +147,6 @@ check_docker() {
 }
 check_docker
 
-# --- Plan -------------------------------------------------------------------
 
 echo "Konae ${version} (${major_minor}, latest) from ${revision}"
 [ -n "$tag_note" ] && echo "$tag_note This script does not tag; see docs/releasing.md."
@@ -190,8 +177,6 @@ if [ "$PUSH" -eq 1 ] && [ "$OVERWRITE" -eq 0 ]; then
   esac
 fi
 
-# Build from HEAD exported by git, as Actions builds from a fresh checkout.
-# The context then holds no node_modules, kernel-rs/target or local env files.
 if [ "$DRY_RUN" -eq 1 ]; then
   work="/tmp/konae-release.dry-run"
 else
@@ -231,9 +216,7 @@ build() {
 build konae Dockerfile.konae "Konae: Kernel with the editor, owner accounts, MCP and the project list"
 build konae-kernel Dockerfile.kernel "Kernel alone: serves app folders without Konae"
 
-# --- Result -----------------------------------------------------------------
 
-# Reads the digest buildx wrote to the metadata file. Prints nothing when the key is absent.
 digest_from_metadata() {
   jq -r "$1 // empty" "$2"
 }

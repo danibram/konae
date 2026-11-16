@@ -158,7 +158,6 @@ export async function runScenario(kernel: LocalTestRunner, scenarioFile: string)
       const responseValue = object(stepValue.response, "Scenario response");
       step = { action: stepValue.action, match: matchValue, response: responseValue as TestScenario["responses"][number]["response"] };
       const request = { responseNumber: responseValue.responseNumber, ...Object.fromEntries(Object.entries(responseValue).filter(([key]) => key !== "responseNumber")) };
-      // Validate the response shape before matching or changing Kernel state.
       const parsedResponse = object(JSON.parse(JSON.stringify(request)), "Scenario response");
       exactKeys(parsedResponse, ["responseNumber", "status", "body", "error"], "Scenario response");
       if (Object.hasOwn(parsedResponse, "status")) {

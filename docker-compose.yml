@@ -6,10 +6,6 @@ networks:
         - subnet: 172.30.10.0/24
 
 services:
-  # On 2026-11-06 the pinned minio/minio and minio/mc tags could not be pulled
-  # from Docker Hub or quay.io, while other images pulled fine. RustFS is an
-  # S3-compatible server under Apache 2 that answers the same health path, so the
-  # tests and the Kernel's S3 settings need no change.
   minio:
     image: rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
     environment:
@@ -63,15 +59,10 @@ services:
         condition: service_completed_successfully
     environment:
       KONAE_BIND: "0.0.0.0"
-      # The e2e suites sign up owners with this well-known key. The Kernel refuses
-      # it on a non-loopback bind unless KONAE_ALLOW_DEFAULT_KEY is 1. Only the
-      # gateway is published, and only on 127.0.0.1.
       KONAE_SETUP_KEY: local-development-key
       KONAE_ALLOW_DEFAULT_KEY: "1"
       KONAE_DATA_DIR: /data
       KONAE_KERNEL_PORT: "8787"
-      # Derives http://app.localhost:8080 as the public and MCP origin, and
-      # localhost as the app suffix (ADR-0014). The gateway publishes port 8080.
       KONAE_DOMAIN: localhost
       KONAE_PUBLIC_PORT: "8080"
       KONAE_S3_ENDPOINT: http://minio:9000
@@ -79,9 +70,6 @@ services:
       KONAE_S3_ACCESS_KEY: konae
       KONAE_S3_SECRET_KEY: konae-secret
       KONAE_S3_BUCKET: konae
-      # The gateway has a fixed address on the konae network. The Kernel
-      # trusts X-Forwarded-For only from that peer, so login and action limits
-      # count the client nginx appended, not the container address.
       KONAE_TRUSTED_PROXIES: 172.30.10.10
     networks:
       - konae

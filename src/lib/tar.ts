@@ -28,7 +28,6 @@ export function normalizeArchivePath(value: string): string {
   return path;
 }
 
-/** One ustar header block. Writers that stream file contents from disk use it with `tarPadding`. */
 export function tarHeader(path: string, size: number, mode: number): Uint8Array {
   const header = new Uint8Array(blockSize);
   const split = splitUstarPath(path);
@@ -85,7 +84,6 @@ function concatenate(chunks: readonly Uint8Array[]): Uint8Array {
   return result;
 }
 
-/** The regular files of a ustar archive, with the prefix field joined to each name. */
 export function readTar(archive: Uint8Array): { path: string; contents: Uint8Array }[] {
   const decoder = new TextDecoder();
   const field = (block: Uint8Array, offset: number, width: number) => decoder.decode(block.subarray(offset, offset + width)).replace(/\0.*$/s, "");

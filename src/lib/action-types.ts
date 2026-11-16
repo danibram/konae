@@ -1,17 +1,7 @@
 import type { ActionContract, ContractAction, ContractColumn, ContractInput, ContractOutput } from "./action-contract";
 
-/** The file next to the Action Contract that types `miniapp.actions.call`. */
 export const ACTION_TYPES_FILE = "actions.d.ts";
 
-/**
- * TypeScript declarations for `miniapp.actions.call`, from the Action
- * Contract: each action a page may call, by name, with its input and what it
- * answers. A query answers its rows with the columns the contract read from
- * schema.sql. A column whose type the generator cannot tell is `any`.
- *
- * Only `miniapp.actions` is typed. The other modules stay `any`, so a page
- * that uses them keeps compiling.
- */
 export function renderActionTypes(contract: ActionContract): string {
   const callable = contract.actions.filter(callableFromPage);
   const lines = [
@@ -46,11 +36,6 @@ export function renderActionTypes(contract: ActionContract): string {
   return lines.join("\n");
 }
 
-/**
- * Whether a page's `miniapp.actions.call` reaches the action. A scheduled
- * mutation, a call's then mutation and an action whose route is its only
- * door refuse it, so they are left out of the type.
- */
 function callableFromPage(action: ContractAction): boolean {
   return !action.schedule && !action.thenOf && action.http?.onlyDoor !== "always";
 }
@@ -72,7 +57,6 @@ function outputType(output: ContractOutput): string {
   }
 }
 
-/** A blob arrives as a hex string, as the Kernel writes it. */
 function columnType(column: ContractColumn): string {
   const types: Record<ContractColumn["type"], string> = { integer: "number", real: "number", numeric: "number", text: "string", blob: "string", any: "any", unknown: "any" };
   const type = types[column.type];

@@ -5,11 +5,6 @@ export type TreeNode =
   | { kind: "directory"; path: string; name: string; children: TreeNode[] }
   | { kind: "file"; path: string; name: string };
 
-/**
- * Turns flat project paths into a nested tree with folders first, then files,
- * each level sorted by name. Directories that only exist implicitly, as the parent
- * of a file, still get a node.
- */
 export function buildTree(files: string[], directories: string[]): TreeNode[] {
   const root: TreeNode[] = [];
   const folders = new Map<string, TreeNode[]>([["", root]]);
@@ -44,29 +39,21 @@ export function parentOf(path: string): string {
   return index < 0 ? "" : path.slice(0, index);
 }
 
-/** Every folder that contains `path`, outermost first. */
 export function ancestorsOf(path: string): string[] {
   const parts = path.split("/").slice(0, -1);
   return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
 }
 
-/** Files at `path` or below it, which is what deleting `path` removes. */
 export function filesUnder(files: Record<string, string>, path: string): string[] {
   return Object.keys(files).filter((name) => name === path || name.startsWith(`${path}/`));
 }
 
-/**
- * Moves a file or a folder, with everything inside it, to a new path. Uses the
- * same path rules as creating one, and refuses to overwrite anything.
- */
 export function renamePath(tree: ProjectTree, fromInput: string, toInput: string): ProjectTree {
   const from = normalizeProjectPath(fromInput);
   const to = normalizeProjectPath(toInput);
   if (!from) throw new Error("Choose a file or folder to rename.");
   if (!to) throw new Error(invalidPathMessage);
   if (from === to) return tree;
-  // Only the real protected files are pinned. A user file that merely differs
-  // in case, such as App.js from older data, must stay movable out of the way.
   const reservedSource = [...protectedProjectPaths].find((reserved) => from === reserved || from.startsWith(`${reserved}/`));
   if (reservedSource) throw new Error(`${reservedSource} is a reserved project file and cannot be renamed or moved.`);
   requireUnreservedPath(to);
@@ -80,13 +67,11 @@ export function renamePath(tree: ProjectTree, fromInput: string, toInput: string
   const moved = (name: string) => name === from ? to : name.startsWith(`${from}/`) ? `${to}${name.slice(from.length)}` : name;
   const staying = Object.keys(tree.files).filter((name) => moved(name) === name);
   const remaining = Object.fromEntries(staying.map((name) => [name, tree.files[name]]));
-  // Folders that stay, whether listed or only implied by the files inside them.
   const stayingDirectories = new Set([
     ...tree.directories.filter((name) => moved(name) === name),
     ...directoriesForFiles(remaining),
   ]);
 
-  // Compared without case: a case-insensitive filesystem writes App.js and app.js to one file.
   const takenFile = existingFile(remaining, to);
   if (takenFile) throw new Error(`A file already exists at ${takenFile}.`);
   const takenFolder = existingDirectory(stayingDirectories, to);
@@ -94,7 +79,6 @@ export function renamePath(tree: ProjectTree, fromInput: string, toInput: string
   const blocking = fileAncestor(remaining, to);
   if (blocking) throw new Error(`${blocking} is a file, so it cannot contain ${to}.`);
 
-  // Every moved path must land somewhere free, or two entries would collapse into one.
   const movedPaths = [
     ...Object.keys(tree.files).filter((name) => moved(name) !== name).map(moved),
     ...tree.directories.filter((name) => moved(name) !== name).map(moved),

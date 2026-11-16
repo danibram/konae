@@ -1,15 +1,6 @@
 import { useEffect, useState } from "react";
 import { sourceBytes, type SourceFiles } from "../lib/source-files";
 
-/**
- * The digest of an app's sources, the same one the Kernel stores on the
- * Deployment as `sourceDigest` (kernel-rs/kernel/src/sources.rs `digest`).
- * SHA-256 in lowercase hex over the files sorted by the UTF-8 bytes of their
- * path. Each file adds its path, a NUL, its length in bytes as decimal
- * digits, a NUL and its bytes, which for a file `encodings` names are the
- * decoded base64. kernel-rs/kernel/src/source-digest-cases.json holds the
- * cases both sides run.
- */
 export async function sourceDigest(source: SourceFiles): Promise<string> {
   const encoder = new TextEncoder();
   const entries = Object.keys(source.files).map((path) => [encoder.encode(path), sourceBytes(source, path)] as const);
@@ -34,8 +25,6 @@ function compareBytes(a: Uint8Array, b: Uint8Array) {
   return a.length - b.length;
 }
 
-// One digest per files object. The editor replaces the object on every edit,
-// and a change of encodings comes with new files, so a stale entry is never read.
 const digests = new WeakMap<Record<string, string>, Promise<string>>();
 
 export function cachedSourceDigest(source: SourceFiles): Promise<string> {
@@ -47,7 +36,6 @@ export function cachedSourceDigest(source: SourceFiles): Promise<string> {
   return digest;
 }
 
-/** The digest of `source`, or null until it is known. */
 export function useSourceDigest(source: SourceFiles | null | undefined): string | null {
   const files = source?.files;
   const [known, setKnown] = useState<{ files: Record<string, string>; digest: string } | null>(null);
@@ -60,7 +48,6 @@ export function useSourceDigest(source: SourceFiles | null | undefined): string 
   return files && known?.files === files ? known.digest : null;
 }
 
-/** The digest of each project's files by project ID, filled in as each one is known. */
 export function useSourceDigests(projects: (SourceFiles & { id: string })[]): ReadonlyMap<string, string> {
   const [known, setKnown] = useState<ReadonlyMap<string, { files: Record<string, string>; digest: string }>>(new Map());
   useEffect(() => {

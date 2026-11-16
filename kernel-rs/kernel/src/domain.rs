@@ -1,21 +1,3 @@
-//! A custom domain: one hostname alias per Deployment (ADR-0014).
-//!
-//! The owner names a hostname with `domain_set`. The Kernel checks the name
-//! by the rules in `domain-cases.json`, which the CLI runs too, records the
-//! claim in `apps/<id>/.konae/domain.json` with a token, and answers with the
-//! TXT record `_konae.<hostname>` that must hold the token. Each later
-//! `domain_set` looks the record up through the Kernel's own DNS query; when
-//! it holds the token, the alias serves. From then on a request whose `Host`
-//! is the alias resolves to the Deployment exactly as its generated hostname
-//! does, so the Origin check, the host-only cookies, the policy, the routes,
-//! the file path and the maintenance page all treat it as the app's origin.
-//!
-//! The Kernel issues no certificate. The operator's proxy terminates TLS for
-//! the alias and forwards `Host` unchanged.
-//!
-//! A token is only ever issued by the Kernel that checks it. A package
-//! carries the hostname without its token, because a package manifest is
-//! written by whoever uploads it, and the destination issues a new token.
 
 use super::refusal::{refuse, Refusal};
 use super::*;
@@ -29,7 +11,6 @@ pub const TXT_LABEL: &str = "_konae";
 const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const LOOKUP_ATTEMPTS: usize = 2;
 
-/// The claim a Deployment holds on a hostname.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
@@ -41,8 +22,6 @@ pub struct Record {
     pub created_at: u64,
 }
 
-// ---------------------------------------------------------------------------
-// Hostname rules
 
 /// The installation's own names, which no alias may take.
 pub struct Rules {
@@ -103,11 +82,7 @@ pub fn check_hostname(raw: &str, rules: &Rules) -> std::result::Result<String, R
     Ok(hostname)
 }
 
-// ---------------------------------------------------------------------------
-// Records and the alias index
 
-/// Alias to its Deployment, per data directory, so tests with their own data
-/// directories in one process do not see each other's aliases.
 type Index = HashMap<String, (String, bool)>;
 static INDEXES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Index>>> = OnceLock::new();
 
@@ -117,16 +92,12 @@ fn with_index<T>(state: &AppState, f: impl FnOnce(&mut Index) -> T) -> T {
     f(index)
 }
 
-/// Reads every `domain.json` on the volume, as `load_deployments` reads the
-/// records. A copy restored into this directory brings its files along.
 fn load_index(root: &Path) -> Index {
     let mut index = Index::new();
     let Ok(entries) = std::fs::read_dir(crate::layout::apps(&root)) else { return index };
     for entry in entries.flatten() {
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         if let Some(record) = std::fs::read(crate::layout::private(root, &id).join(RECORD_FILE)).ok().and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok()) {
-            // Two folders cannot both hold a verified claim on one name, but a
-            // hand-edited volume might; the first one read keeps it.
             let keep = index.get(&record.hostname).is_none_or(|(_, verified)| !verified && record.verified);
             if keep {
                 index.insert(record.hostname, (id, record.verified));
@@ -203,7 +174,6 @@ pub fn app_url(state: &AppState, deployment: &Deployment) -> String {
     }
 }
 
-/// Refuses a name another existing Deployment serves.
 async fn ensure_free(state: &AppState, id: &str, hostname: &str) -> Result<()> {
     let holder = with_index(state, |index| index.get(hostname).filter(|(holder, verified)| *verified && holder != id).map(|(holder, _)| holder.clone()));
     if let Some(holder) = holder {
@@ -218,8 +188,6 @@ fn new_token() -> String {
     format!("konae-verify-{}", Uuid::new_v4().simple())
 }
 
-// ---------------------------------------------------------------------------
-// DNS
 
 /// The resolver the Kernel asks: `KONAE_DNS_RESOLVER` as `ip` or
 /// `ip:port`, else the first `nameserver` in `/etc/resolv.conf`.
@@ -252,7 +220,6 @@ fn query(id: u16, name: &str) -> Vec<u8> {
     packet
 }
 
-/// The offset after a name, following no pointer.
 fn skip_name(packet: &[u8], mut at: usize) -> Result<usize> {
     loop {
         let length = *packet.get(at).context("The DNS answer ends inside a name.")? as usize;
@@ -267,8 +234,6 @@ fn skip_name(packet: &[u8], mut at: usize) -> Result<usize> {
     }
 }
 
-/// The TXT strings in an answer, each record's character strings joined.
-/// `None` means the name does not exist or has no TXT record.
 fn parse_answer(packet: &[u8], id: u16) -> Result<Option<Vec<String>>> {
     ensure!(packet.len() >= 12, "The DNS answer is too short.");
     ensure!(u16::from_be_bytes([packet[0], packet[1]]) == id, "The DNS answer has another ID.");
@@ -323,7 +288,6 @@ pub async fn lookup_txt(server: SocketAddr, name: &str) -> Result<Option<Vec<Str
             match tokio::time::timeout_at(deadline, socket.recv(&mut buffer)).await {
                 Err(_) => break,
                 Ok(Err(error_value)) => return Err(error_value.into()),
-                // A stray datagram with another ID is not our answer.
                 Ok(Ok(size)) if size >= 2 && u16::from_be_bytes([buffer[0], buffer[1]]) != id => continue,
                 Ok(Ok(size)) => return parse_answer(&buffer[..size], id),
             }
@@ -337,8 +301,6 @@ fn rand_u16() -> u16 {
     u16::from_be_bytes([bytes[0], bytes[1]])
 }
 
-// ---------------------------------------------------------------------------
-// Tools
 
 fn view(state: &AppState, deployment: &Deployment, record: Option<&Record>, dns: Option<String>) -> Value {
     let Some(record) = record else {
@@ -371,7 +333,6 @@ pub async fn admin_call(state: &AppState, deployment: &Deployment, name: &str, a
     match name {
         "domain_read" => {
             let mut value = view(state, &deployment, read_record(state, &deployment.id).as_ref(), None);
-            // The CLI checks a name by these before it calls domain_set.
             let rules = Rules::of(state);
             value["rules"] = json!({"suffix": rules.suffix, "installationHosts": rules.installation_hosts});
             Ok(value)
@@ -396,8 +357,6 @@ async fn set(state: &AppState, deployment: &Deployment, raw: &str, server: Resul
         if let Some(record) = existing.as_ref().filter(|record| record.hostname == hostname && record.verified) {
             return Ok(view(state, &deployment, Some(record), None));
         }
-        // One token per Deployment, kept when the hostname changes, so the
-        // owner can add the record for a new name before switching to it.
         let token = existing.as_ref().map(|record| record.token.clone()).unwrap_or_else(new_token);
         let (record, fresh) = match existing {
             Some(record) if record.hostname == hostname => (record, false),
@@ -418,7 +377,6 @@ async fn set(state: &AppState, deployment: &Deployment, raw: &str, server: Resul
     };
     if !values.iter().any(|value| value.trim() == record.token) {
         let shown = values.iter().map(|value| format!("\"{}\"", value.chars().take(80).collect::<String>())).collect::<Vec<_>>().join(", ");
-        // The owner could not have known a token this call issued.
         if fresh {
             return Ok(view(state, &deployment, Some(&record), Some(format!("The TXT record at {name} holds {shown}, not this token yet."))));
         }
@@ -426,7 +384,6 @@ async fn set(state: &AppState, deployment: &Deployment, raw: &str, server: Resul
     }
     let _domains = database_lock(state, "domains").await;
     ensure_free(state, &deployment.id, &hostname).await?;
-    // Another call may have cleared or replaced the claim during the lookup.
     let Some(mut current) = read_record(state, &deployment.id).filter(|current| current.hostname == hostname && current.token == record.token) else {
         bail!("The custom domain of this Deployment changed during the check. Call domain_set again.");
     };
@@ -438,8 +395,6 @@ async fn set(state: &AppState, deployment: &Deployment, raw: &str, server: Resul
     Ok(view(state, &deployment, Some(&current), Some(format!("{name} holds the token."))))
 }
 
-// ---------------------------------------------------------------------------
-// Packages
 
 /// The hostname a package carries, without its token.
 pub fn for_package(state: &AppState, id: &str) -> Option<String> {
@@ -462,7 +417,6 @@ pub async fn arrive(state: &AppState, id: &str, hostname: Option<&str>) -> Resul
 mod tests {
     use super::*;
 
-    /// The CLI runs the same file in src/lib/domain-name.test.ts.
     #[test]
     fn hostnames_are_refused_with_the_words_the_cli_uses() {
         let file: Value = serde_json::from_str(include_str!("domain-cases.json")).unwrap();
@@ -484,8 +438,6 @@ mod tests {
 
     type Zone = Arc<std::sync::Mutex<HashMap<String, Vec<String>>>>;
 
-    /// A resolver on a local port that answers TXT queries from a table, the
-    /// way the probes' fake resolver does.
     async fn fake_resolver(zone: Zone) -> SocketAddr {
         let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let address = socket.local_addr().unwrap();
@@ -509,7 +461,6 @@ mod tests {
                 reply.extend_from_slice(&[0, 0, 0, 0]);
                 reply.extend_from_slice(&buffer[12..end + 4]);
                 for value in answers {
-                    // A record split into two character strings, as long TXT values are.
                     let (first, second) = value.split_at(value.len() / 2);
                     reply.extend_from_slice(&[0xc0, 0x0c, 0, 16, 0, 1, 0, 0, 0, 60]);
                     reply.extend_from_slice(&((first.len() + second.len() + 2) as u16).to_be_bytes());
@@ -567,9 +518,6 @@ mod tests {
         headers
     }
 
-    /// The alias serves only once the Kernel's own lookup finds the token,
-    /// then answers as the app's origin next to the generated hostname, and
-    /// one name serves one Deployment.
     #[tokio::test]
     async fn an_alias_serves_after_its_txt_record_and_only_for_one_deployment() {
         let root = std::env::temp_dir().join(format!("konae-domain-{}", Uuid::new_v4()));
@@ -587,14 +535,12 @@ mod tests {
             }
         };
 
-        // A name under the installation's suffix is refused before anything is stored.
         assert_eq!(
             set(&notes.id, "notes.apps.example.com").await.unwrap_err().to_string(),
             "notes.apps.example.com is under this installation's app suffix apps.example.com, where Konae names apps itself. Move the app's generated hostname there with hostname_set, or name a hostname outside the suffix."
         );
         assert!(read_record(&state, &notes.id).is_none());
 
-        // The first call issues the token; the name does not serve yet.
         let pending = set(&notes.id, "Notes.Example.org.").await.unwrap();
         assert_eq!(pending["status"], "pending");
         assert_eq!(pending["hostname"], "notes.example.org");
@@ -604,13 +550,11 @@ mod tests {
         assert!(token.starts_with("konae-verify-"));
         assert!(deployment_for(&state, &host("notes.example.org")).await.is_none());
 
-        // A record that holds something else is refused and serves nothing.
         records.lock().unwrap().insert("_konae.notes.example.org".into(), vec!["konae-verify-someone-else".into()]);
         let wrong = set(&notes.id, "notes.example.org").await.unwrap_err().to_string();
         assert_eq!(wrong, format!("The TXT record at _konae.notes.example.org holds \"konae-verify-someone-else\", not this Deployment's token. Set it to {token} and call domain_set again."));
         assert!(deployment_for(&state, &host("notes.example.org")).await.is_none());
 
-        // The right token makes it serve, with any port and case.
         records.lock().unwrap().insert("_konae.notes.example.org".into(), vec!["v=spf1 -all".into(), token.clone()]);
         let active = set(&notes.id, "notes.example.org").await.unwrap();
         assert_eq!(active["status"], "active");
@@ -621,8 +565,6 @@ mod tests {
         assert_eq!(app_url(&state, &notes), "https://notes.example.org");
         assert_eq!(app_url(&state, &other), other.url);
 
-        // The alias is the app's origin: same-origin from itself, an app
-        // origin to administration, HSTS without includeSubDomains.
         let mut from_alias = host("notes.example.org");
         from_alias.insert(header::ORIGIN, HeaderValue::from_static("https://notes.example.org"));
         assert!(same_origin(&from_alias));
@@ -632,33 +574,26 @@ mod tests {
         assert!(!same_origin(&cross));
         assert_eq!(security::hsts(&state, &host("notes.example.org")), Some("max-age=31536000"));
         assert_eq!(security::hsts(&state, &host(&notes.hostname)), Some(security::HSTS));
-        // A route answers on the alias as on the generated hostname.
         let request = Request::builder().uri("/api/count").header(header::HOST, "notes.example.org").body(Body::empty()).unwrap();
         let response = http::get_route(State(state.clone()), axum::extract::Path("api/count".into()), request).await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        // A refused hostname keeps its code through the tool, for mcp.rs to answer.
         let local = set(&other.id, "notes.localhost").await.unwrap_err();
         let refused = crate::refusal::of(&local).expect("domain_set refuses with a code");
         assert_eq!((refused.code, local.to_string().as_str()), ("domain.local", "notes.localhost is a local name. Name a hostname under a domain you control."));
 
-        // Another Deployment cannot take the name, even with its own record.
         let taken = set(&other.id, "notes.example.org").await.unwrap_err().to_string();
         assert_eq!(taken, "notes.example.org already serves another Deployment on this installation. Clear it there with domain_clear first.");
-        // Nor can a package that names it.
         let arriving = crate::layout::data(&state.data_root, "arriving");
         tokio::fs::create_dir_all(&arriving).await.unwrap();
         assert_eq!(arrive(&state, "arriving", Some("notes.example.org")).await.unwrap_err().to_string(), taken);
 
-        // Clearing stops the alias; the generated hostname keeps answering.
         let cleared = admin_call(&state, &notes, "domain_clear", &json!({})).await.unwrap();
         assert_eq!(cleared["cleared"], "notes.example.org");
         assert!(deployment_for(&state, &host("notes.example.org")).await.is_none());
         assert!(!security::from_app_origin(&state, &from_alias).await);
         assert_eq!(deployment_for(&state, &host(&notes.hostname)).await.map(|d| d.id), Some(notes.id.clone()));
 
-        // A package's name arrives pending with a token this Kernel issues,
-        // so a token copied from DNS into a manifest proves nothing.
         assert_eq!(for_package(&state, &notes.id), None);
         arrive(&state, "arriving", Some("notes.example.org")).await.unwrap();
         let arrived = read_record(&state, "arriving").unwrap();
@@ -666,13 +601,11 @@ mod tests {
         assert_ne!(arrived.token, token);
         assert_eq!(serving(&state, "notes.example.org"), None);
 
-        // The index is rebuilt from the folders, as after a restart or a restore.
         let shop = set(&notes.id, "shop.example.org").await.unwrap();
         let second = shop["record"]["value"].as_str().unwrap().to_owned();
         assert_ne!(second, token, "a cleared claim's token is gone");
         records.lock().unwrap().insert("_konae.shop.example.org".into(), vec![second.clone()]);
         assert_eq!(set(&notes.id, "shop.example.org").await.unwrap()["status"], "active");
-        // Switching names keeps the token, so a record added first switches at once.
         records.lock().unwrap().insert("_konae.www.example.org".into(), vec![second.clone()]);
         assert_eq!(set(&notes.id, "www.example.org").await.unwrap()["status"], "active");
         assert_eq!(serving(&state, "shop.example.org"), None);

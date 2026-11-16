@@ -4,11 +4,6 @@ import { Button } from "./ui";
 
 type State = { error: Error | null };
 
-/**
- * The last line of defence. A render error anywhere below shows what broke and
- * a way out, instead of a blank page. Project files are saved separately, so
- * reloading does not lose work that already reached local storage.
- */
 export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   state: State = { error: null };
 

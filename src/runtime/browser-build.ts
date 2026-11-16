@@ -8,16 +8,10 @@ import { appEntry, assembleStaticArtifact, resolveReference, servedPath } from "
 
 let initialized: Promise<void> | undefined;
 
-/**
- * The editor's door to the static publishing contract in
- * src/lib/static-artifact.js, the same rules `konae build` runs. A referenced
- * binary asset reaches esbuild as bytes for a CSS URL token, then becomes a data URL.
- */
 export async function buildProjectInBrowser(project: MiniAppProject): Promise<BuildArtifact> {
   return assembleStaticArtifact({
     paths: Object.keys(project.files),
     read: async (path) => sourceContents(project, path),
-    // A Deploy minifies with NODE_ENV production, as konae build does; the preview stays readable, as konae dev does.
     compile: () => compileProjectInBrowser(project, { release: true }),
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
@@ -33,8 +27,6 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
     styles: [project.files["styles.css"] ?? "", bundled.styles].filter(Boolean).join("\n"),
     script: bundled.script,
   };
-  // Preview and release share the same path checks, including files referenced
-  // by styles imported from the app entry.
   await assembleStaticArtifact({
     paths: Object.keys(project.files),
     read: async (path) => sourceContents(project, path),
@@ -47,7 +39,6 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
 }
 
 async function bundleInBrowser(project: MiniAppProject, files: Record<string, string>, entrypoint: string, release = false): Promise<{ script: string; styles: string }> {
-  // A failed start (a wasm fetch that dropped, say) is not cached, or every later build would fail too.
   initialized ??= esbuild.initialize({ wasmURL: wasmUrl, worker: true }).catch((error) => {
     initialized = undefined;
     throw error;
@@ -87,7 +78,6 @@ function projectFilesPlugin(files: Record<string, string>, project: MiniAppProje
           const bytes = sourceBytes(project, source);
           return { path: `data:${mediaType(target)};base64,${bytesToBase64(bytes)}${fragmentSuffix(args.path)}`, external: true };
         }
-        // esbuild names an entry ./<path> when a file of that name sits in its working directory, as src/main.tsx does in this checkout.
         if (!args.importer) return { path: requireProjectFile(args.path.replace(/^\.\//, "")), namespace: "konae" };
         if (!args.path.startsWith(".")) return undefined;
         const parent = args.importer.includes("/") ? args.importer.slice(0, args.importer.lastIndexOf("/")) : "";
@@ -121,18 +111,10 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/**
- * The CDN the editor's build reads packages from. The build fetches each
- * module as text and esbuild links it into the app's own bundle, so the
- * published app loads nothing from this origin and nothing fetched here runs
- * in the editor.
- */
 export const packageOrigin = "https://esm.sh";
 
-/** Exact versions such as 1.2.3 or 2.0.0-beta.1, so every build reads the same code. */
 const exactVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-/** The `dependencies` of the Capsule's package.json, the one list npm and the editor both read. */
 export function declaredPackages(files: Record<string, string>): Map<string, string> {
   const source = files["package.json"];
   if (source === undefined) return new Map();
@@ -150,23 +132,19 @@ export function declaredPackages(files: Record<string, string>): Map<string, str
   return result;
 }
 
-/** The package name and the path inside it of a bare import such as `@scope/pkg/sub`. */
 function splitSpecifier(specifier: string): { name: string; subpath: string } {
   const parts = specifier.split("/");
   const size = specifier.startsWith("@") ? 2 : 1;
   return { name: parts.slice(0, size).join("/"), subpath: parts.slice(size).join("/") };
 }
 
-/** The CDN URL of a bare import, pinned to the version package.json names. */
 export function packageUrl(specifier: string, packages: Map<string, string>): string {
   if (specifier.startsWith("node:")) throw new Error(`${specifier} is a Node.js module. The app runs in a browser, so import a package that works there.`);
   const { name, subpath } = splitSpecifier(specifier);
   const version = packages.get(name);
   if (version === undefined) throw new Error(`${specifier} is not in package.json. Add "${name}": "<exact version>" to its dependencies.`);
   const path = `/${name}@${version}${subpath ? `/${subpath}` : ""}`;
-  // A stylesheet, a JSON file or an asset is served as published; only modules take esm.sh's build options.
   if (/\.[a-z0-9]+$/i.test(subpath) && !/\.(?:m?js|cjs|jsx?|tsx?)$/i.test(subpath)) return `${packageOrigin}${path}`;
-  // deps pins every declared package, so two packages that share one (a UI library and React, say) link the same copy.
   const deps = [...packages].filter(([other]) => other !== name).map(([other, pinned]) => `${other}@${pinned}`).join(",");
   return `${packageOrigin}${path}?target=es2022${deps ? `&deps=${deps}` : ""}`;
 }
@@ -182,24 +160,17 @@ function fetchModule(url: string): Promise<Uint8Array> {
     }, (error) => {
       throw new Error(`The build could not reach ${packageOrigin} for ${url}: ${error instanceof Error ? error.message : error}. Check the connection and build again.`);
     });
-    // A dropped connection is not cached, or every later build would fail too.
     pending.catch(() => fetchedModules.delete(url));
     fetchedModules.set(url, pending);
   }
   return pending;
 }
 
-/** A package's code and styles go in as source; a font or an image its CSS names goes in as a data: URL, which the published policy allows. */
 function packageLoader(url: string): esbuild.Loader {
   const { pathname } = new URL(url);
-  // A package root such as /react@19.0.0 ends in its version, so only a known asset extension counts.
   return /\.(?:woff2?|ttf|otf|eot|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(pathname) ? "dataurl" : loaderFor(pathname);
 }
 
-/**
- * Resolves bare imports against package.json and fetches them, with the
- * modules they import in turn, from packageOrigin. Only that origin is read.
- */
 function packagesPlugin(packages: Map<string, string>): esbuild.Plugin {
   return {
     name: "konae-packages",
@@ -207,7 +178,6 @@ function packagesPlugin(packages: Map<string, string>): esbuild.Plugin {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (args.namespace === "package") {
           if (args.path.startsWith("data:")) return { external: true };
-          // In CSS, url(fonts/a.woff2) and @import are relative to the stylesheet even without ./
           const relative = args.kind === "url-token" || args.kind === "import-rule";
           const url = relative || args.path.startsWith("/") || args.path.startsWith(".") || /^https?:/.test(args.path)
             ? new URL(args.path, args.importer).href

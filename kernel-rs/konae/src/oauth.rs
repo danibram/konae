@@ -20,16 +20,8 @@ pub fn routes() -> Router<Konae> {
         .route("/oauth/token", post(token))
 }
 
-/// Registered clients that never reach consent are deleted after this long.
-/// A person registers and consents within minutes, so an hour is plenty.
 const UNUSED_CLIENT_TTL_MS: u64 = 60 * 60 * 1000;
-/// Clients that reached consent are deleted once they go this long without
-/// obtaining a token and hold no live credential.
 const IDLE_CLIENT_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
-/// Clients that have not reached consent yet. Registration is open to anyone,
-/// so this cap bounds what strangers can store; consented clients do not count.
-/// At the cap the oldest unconsented client makes room for the new one, so
-/// strangers cannot lock registration.
 const MAX_UNUSED_CLIENTS: u64 = 1000;
 
 pub(super) fn install(db: &Connection) -> Result<()> {
@@ -40,7 +32,6 @@ pub(super) fn install(db: &Connection) -> Result<()> {
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     if !columns.iter().any(|name| name == "created") {
-        // Clients registered before this column existed get a fresh window.
         db.execute_batch(&format!(
             "ALTER TABLE oauth_clients ADD COLUMN created INTEGER NOT NULL DEFAULT 0;
              ALTER TABLE oauth_clients ADD COLUMN used INTEGER NOT NULL DEFAULT 0;
@@ -49,7 +40,6 @@ pub(super) fn install(db: &Connection) -> Result<()> {
         ))?;
     }
     if !columns.iter().any(|name| name == "last_used") {
-        // Clients that consented before this column existed count from now.
         db.execute_batch(&format!(
             "ALTER TABLE oauth_clients ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0;
              UPDATE oauth_clients SET last_used={} WHERE used=1;",
@@ -67,8 +57,6 @@ pub(super) fn install(db: &Connection) -> Result<()> {
 }
 
 pub(super) async fn valid_owner_host(state: &Konae, headers: &HeaderMap) -> bool {
-    // The path host serves apps and the home, so it never serves administration,
-    // even when it is `localhost` on a local installation.
     if super::path::on_path_host(state, headers) {
         return false;
     }
@@ -123,8 +111,6 @@ fn valid_redirect(value: &str) -> bool {
                 && [Some("127.0.0.1"), Some("localhost"), Some("[::1]")].contains(&url.host_str())))
 }
 
-/// Whether a redirect lands on the machine that runs the browser, as a native
-/// client's does (RFC 8252). `valid_redirect` allows plain http only there.
 fn is_loopback(redirect: &str) -> bool {
     url::Url::parse(redirect).is_ok_and(|url| {
         url.scheme() == "http"
@@ -132,9 +118,6 @@ fn is_loopback(redirect: &str) -> bool {
     })
 }
 
-/// How long a token lasts. One sent to a loopback redirect stays on the
-/// owner's machine and lasts 24 hours, as one from `konae login` does. Any
-/// other lasts an hour, and so does every token under Clerk, as in token_create.
 fn token_lifetime_ms(redirect: &str) -> Result<u64> {
     let clerk = super::clerk::ClerkConfig::from_env()?.is_some();
     Ok(if is_loopback(redirect) && !clerk { 86_400_000 } else { 3_600_000 })
@@ -194,7 +177,6 @@ async fn register(
     }
 }
 
-/// Deletes the oldest unconsented clients until fewer than `cap` remain.
 fn make_room_for_client(db: &Connection, cap: u64) -> Result<()> {
     db.execute(
         "DELETE FROM oauth_clients WHERE id IN (
@@ -205,8 +187,6 @@ fn make_room_for_client(db: &Connection, cap: u64) -> Result<()> {
     Ok(())
 }
 
-/// Deletes clients that never completed consent within an hour of registering,
-/// and consented clients idle for 30 days that hold no live credential.
 fn expire_clients(db: &Connection) -> Result<()> {
     let now = now_ms();
     db.execute(
@@ -260,8 +240,6 @@ fn authorization(
         "Resource must match this MCP endpoint."
     );
     let scopes = get("scope").split_whitespace().collect::<Vec<_>>();
-    // export_data downloads accounts and data, so only a token that stays on
-    // the owner's machine may hold it.
     let loopback = is_loopback(get("redirect_uri"));
     anyhow::ensure!(
         !scopes.is_empty()
@@ -275,8 +253,6 @@ fn authorization(
     Ok(client)
 }
 
-/// Where an owner signs in on this installation: the editor's page when
-/// Clerk holds owner identity, Konae's own page otherwise.
 pub(super) fn owner_login_path() -> &'static str {
     if super::clerk::ClerkConfig::from_env().ok().flatten().is_some() { "/platform-access" } else { "/_konae/owner/login" }
 }
@@ -337,8 +313,6 @@ async fn authorize_page(
         .unwrap_or_default();
     // Chromium applies form-action to the whole redirect chain after Allow.
     // Cursor's registered callback returns a 308 to another origin, which an
-    // origin-specific policy blocks. default-src 'none' keeps scripts out;
-    // the POST target and redirect_uri stay server-chosen.
     let pub_origin = origin(&state, &headers);
     let lifetime = match token_lifetime_ms(a.get("redirect_uri").map(String::as_str).unwrap_or("")) {
         Ok(86_400_000) => "24 hours",
@@ -356,8 +330,6 @@ async fn authorize_page(
         csrf: &csrf,
         lifetime,
     });
-    // The page runs no script. Its one inline stylesheet is allowed by hash
-    // and its typefaces come from this origin.
     let csp = owner_page_policy();
     (
         [
@@ -377,7 +349,6 @@ fn wants_html(headers: &HeaderMap) -> bool {
         .is_some_and(|accept| accept.contains("text/html"))
 }
 
-/// `host:port` of an origin, as the owner sees it in the address bar.
 fn host_of(origin: &str) -> String {
     url::Url::parse(origin)
         .ok()
@@ -385,7 +356,6 @@ fn host_of(origin: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The CSP of a page that runs no script and inlines only the owner stylesheet.
 fn owner_page_policy() -> String {
     format!(
         "default-src 'none'; style-src {}; font-src 'self'; img-src data:; frame-ancestors 'none'; base-uri 'none'",
@@ -393,8 +363,6 @@ fn owner_page_policy() -> String {
     )
 }
 
-/// The consent request a browser cannot continue, such as one whose client
-/// registration expired, in the consent page's shell.
 fn refusal_page(installation: &str, description: &str) -> Response {
     let body = format!(
         "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><meta name=referrer content=same-origin><title>This request cannot continue · Konae</title>{icon}<style>{css}</style><body>{header}<main class=main><div class=card><p class=kicker>Connect an agent · {installation}</p><h1>This request cannot continue</h1><div class=stack><p class=note>This server cannot honour the link that opened this page. Nothing was shared. Go back to your agent and connect again, which starts a fresh request.</p><p class=detail><span>Detail</span> {description}</p><div class=actions><a class=button href=/_konae/owner/login>Open your owner page</a></div></div></div></main></body></html>",
@@ -416,7 +384,6 @@ fn refusal_page(installation: &str, description: &str) -> Response {
         .into_response()
 }
 
-/// What the consent page shows. Every value arrives unescaped.
 struct Consent<'a> {
     client: &'a str,
     destination: &'a str,
@@ -431,9 +398,6 @@ struct Consent<'a> {
     lifetime: &'a str,
 }
 
-/// What each OAuth scope lets the client do, in the owner's words.
-/// The owner page's word for each OAuth scope, and what it lets the client do.
-/// `owner-login.html` uses the same words for the tokens it lists.
 fn scope_meaning(scope: &str) -> (&'static str, &'static str) {
     match scope {
         "read" => ("Read", "See your projects, their files and their data"),
@@ -526,9 +490,6 @@ async fn authorize(
     }
 }
 
-/// Marks the client as consented and stores the code in one transaction.
-/// The client may have expired since the consent page loaded; then no code is
-/// issued.
 fn issue_code(db: &mut Connection, client_id: &str, code: &str, body: &Value) -> Result<()> {
     let tx = db.transaction()?;
     tx.execute("DELETE FROM oauth_codes WHERE expires<=?1", [now_ms()])?;
@@ -650,8 +611,6 @@ fn escape(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// A browser that opens a consent link Konae cannot honour gets a page
-    /// with a way back; an agent or script gets the same words as JSON.
     #[tokio::test]
     async fn a_refused_consent_request_is_a_page_only_for_browsers() {
         use super::super::accounts::tests::fixture;
@@ -694,7 +653,6 @@ mod tests {
         ).await;
         assert_eq!(signup.status(), StatusCode::OK);
         let cookie = cookie_of(&signup).unwrap();
-        // The registered www callback returns a 308 to the cursor.com origin.
         let callback = "https://www.cursor.com/agents/mcp/oauth/callback";
         let client = json!({"client_name":"Cursor", "redirect_uris":[callback]});
         mcp::store(&state).unwrap().execute(
@@ -720,7 +678,6 @@ mod tests {
         for directive in ["default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"] {
             assert!(csp.contains(directive));
         }
-        // The page runs no script; only its own stylesheet is allowed inline.
         assert!(!csp.contains("script-src"));
         assert!(csp.contains(&format!("style-src {}", *crate::owner_page::STYLE_HASH)));
         let html = String::from_utf8(
@@ -728,8 +685,6 @@ mod tests {
         ).unwrap();
         assert!(html.contains(&format!("<style>{}</style>", crate::owner_page::CSS)));
         assert!(html.contains("<code>www.cursor.com</code>"));
-        // no-referrer makes a browser send `Origin: null` with the Allow form,
-        // which same_origin refuses.
         assert!(html.contains("<meta name=referrer content=same-origin>") && !html.contains("no-referrer"));
         let csrf = html.split("name=csrf value=\"").nth(1).unwrap().split('"').next().unwrap();
         let form = format!("{query}&csrf={csrf}");

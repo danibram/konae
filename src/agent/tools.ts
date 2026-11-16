@@ -25,28 +25,13 @@ export type PreviewFailureReport = {
 };
 
 export type CapsuleToolHooks = {
-  /** Called with the exact files a `validate_capsule` run saw, so the gate can trust the verdict. */
   onValidated?: (files: CapsuleFiles, result: ValidationResult) => void;
-  /** The live database, so the model's own validation runs the same stages the gate does. */
   liveDatabase?: LiveDatabaseExport;
-  /** Runtime failures the running preview reported; absent when no preview is attached. */
   previewErrors?: () => PreviewFailureReport[];
-  /** The project's secret names and the installation's hosts, so the Gate gives release_plan's sentences. */
   releaseFacts?: () => Promise<ReleaseFacts>;
-  /** Binary source files stay outside the agent workspace, so the Gate receives them separately. */
   sourceFiles?: () => SourceFiles;
 };
 
-/**
- * The Capsule tool set: read, write, edit, validate_capsule. No shell, no
- * listing and no search. All current files arrive in the first user message,
- * and `write` may create a new nested source file.
- *
- * Every tool that mutates the workspace, and the validation that reads it, runs
- * through one queue and declares `executionMode: "sequential"`: a single
- * assistant message may carry two edits to the same file, and a read-modify-write
- * interleaved with another would silently drop one of them.
- */
 export function createCapsuleTools(
   workspace: CapsuleWorkspace,
   validator: CapsuleValidator,
@@ -169,10 +154,6 @@ function writeTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
   });
 }
 
-/**
- * The Validation Gate proves the data layer holds; it cannot tell whether the
- * app still runs. This is the other half: what the live preview actually threw.
- */
 function previewErrorsTool(hooks: CapsuleToolHooks): AgentTool<any> {
   return defineTool({
     name: "preview_errors",
@@ -217,7 +198,6 @@ function validateTool(
     parameters: Type.Object({}),
     async execute() {
       return queue(async () => {
-        // The snapshot is taken inside the queue, so it is exactly what gets validated.
         const files = workspace.serialize().files;
         const validation = await validator.validate(files, await readLiveDatabase(hooks), await readValidationFacts(hooks));
         hooks.onValidated?.(files, validation);
@@ -227,11 +207,6 @@ function validateTool(
   });
 }
 
-/**
- * What the gate gets to know about the live database. A read that fails is
- * reported as such rather than as "there is none": the preview-rows stage is
- * skipped either way, but only one of the two is a stage nobody could check.
- */
 export async function readLiveDatabase(hooks: CapsuleToolHooks): Promise<LiveDatabase> {
   if (!hooks.liveDatabase) return { state: "absent" };
   try {
@@ -242,11 +217,6 @@ export async function readLiveDatabase(hooks: CapsuleToolHooks): Promise<LiveDat
   }
 }
 
-/**
- * What the editor could read of the facts release_plan reads. A read that
- * fails gives no facts, and the Gate stays silent on what it would decide
- * from them, the same as the Deploy dialog.
- */
 export async function readReleaseFacts(hooks: CapsuleToolHooks): Promise<ReleaseFacts> {
   if (!hooks.releaseFacts) return {};
   try {
@@ -263,7 +233,6 @@ export async function readValidationFacts(hooks: CapsuleToolHooks): Promise<Vali
   };
 }
 
-/** Widen a concretely-typed tool: the loop validates arguments against `parameters` before calling `execute`. */
 function defineTool<T extends TSchema, D>(definition: AgentTool<T, D>): AgentTool<any> {
   return definition as unknown as AgentTool<any>;
 }
@@ -287,7 +256,6 @@ export function formatValidation(validation: ValidationResult): string {
   return `Validation failed with ${validation.errors.length} problem${validation.errors.length === 1 ? "" : "s"}:\n${lines.join("\n")}${warnings}`;
 }
 
-/** The Kernel's code for a refused Capsule and its remedy (ADR-0004), so the agent can name the rule. */
 function refusalLine(finding: { code?: string; hint?: { remedy: string } }): string {
   return finding.code ? `\n  Code ${finding.code}: ${finding.hint?.remedy ?? ""}`.trimEnd() : "";
 }
@@ -304,11 +272,6 @@ function validationReminder(file: ProjectFile): string {
 
 type Snippet = { matches: number; index: number; needle: string };
 
-/**
- * Locate `oldString` literally. A Capsule imported from a CRLF file cannot be
- * edited byte-for-byte — the model never sees the \r — so a snippet that misses
- * is retried in its CRLF form before the edit is refused.
- */
 function findSnippet(content: string, oldString: string): Snippet {
   const direct = countOccurrences(content, oldString);
   if (direct > 0) return { matches: direct, index: content.indexOf(oldString), needle: oldString };
@@ -324,7 +287,6 @@ function toCrlf(text: string): string {
   return text.includes("\r") ? text : text.replaceAll("\n", "\r\n");
 }
 
-/** Overlapping occurrences count too: "must appear exactly once" has to mean it. */
 function countOccurrences(content: string, needle: string): number {
   let count = 0;
   let index = content.indexOf(needle);
@@ -337,7 +299,6 @@ function countOccurrences(content: string, needle: string): number {
 
 type Queue = <T>(run: () => Promise<T>) => Promise<T>;
 
-/** One workspace, one queue: no read-modify-write may interleave with another. */
 function createQueue(): Queue {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(run: () => Promise<T>) => {

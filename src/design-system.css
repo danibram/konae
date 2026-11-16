@@ -44,7 +44,6 @@
   --ds-space-4: 16px;
   --ds-space-6: 24px;
   --ds-space-8: 32px;
-  /* Offset shadows without blur; muted ink so one surface can stay quiet */
   --ds-shadow-sm: 2px 2px 0 #c5c1b5;
   --ds-shadow: 3px 3px 0 #bdb9ad;
   --ds-shadow-lg: 5px 5px 0 #bdb9ad;
@@ -75,7 +74,6 @@
     --ds-surface: #1c1f28;
     --ds-subtle: #262a34;
     --ds-border: #4a4f5c;
-    /* Ink stays the stroke colour in every theme; do not flip it to paper. */
     --ds-ink: #0d0e0b;
     --ds-stroke: #6b7182;
     --ds-field: #12141a;
@@ -128,7 +126,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
-  /* Flat by default: the hard offset shadow belongs to dialogs and to the one primary action. */
   box-shadow: none;
   transition: background 120ms ease, color 120ms ease, translate 80ms ease, box-shadow 80ms ease;
 }
@@ -191,7 +188,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   font: 400 13px/1.5 var(--ds-font);
   box-shadow: none;
 }
-/* A field shows focus with the same 2px outline as buttons and links; the tint alone is under 3:1 in both themes. */
 .ui-input:focus, .ui-select:focus, .ui-textarea:focus {
   outline: 2px solid var(--ds-blue);
   outline-offset: 1px;
@@ -289,7 +285,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   background: var(--ds-canvas);
 }
 
-/* Shared ui + legacy chrome class names */
 .project-search .ui-input {
   height: 100%;
   min-height: 0;
@@ -350,7 +345,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 .ds-type code { font: 12px var(--ds-mono); }
 .ds-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 760px; }
 
-/* Explorer tree */
 .explorer-tree { display: flex; flex-direction: column; min-width: 0; }
 .tree-group { display: flex; flex-direction: column; min-width: 0; }
 .explorer-tree button { min-width: 0; min-height: 28px; gap: 6px; padding-top: 4px; padding-bottom: 4px; }
@@ -364,7 +358,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 .explorer-create input[aria-invalid="true"] { border-color: var(--ds-danger); }
 .explorer-create span { color: var(--ds-danger); font-size: 11px; line-height: 1.4; }
 
-/* Preview problems */
 .preview-panel-body { display: flex; flex-direction: column; min-height: 0; }
 .preview-panel-body > .preview-canvas { flex: 1 1 auto; min-height: 0; }
 .preview-problems {
@@ -405,7 +398,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 .editor-status .is-failing { color: #f2a7ae; }
 .editor-status .is-failing .status-light { background: #e0707a; }
 
-/* Account chip and dashboard owner */
 .topbar .platform-access-link.ui-button,
 .topbar .icon-button.ui-button {
   border-radius: 0;
@@ -603,7 +595,6 @@ a.confirm-publish { text-decoration: none; }
 .platform-main {
   min-height: calc(100dvh - 57px);
   display: grid;
-  /* Top-aligned, so the card does not move when its content grows from a skeleton to the form or the signed-in tools. */
   align-content: start;
   justify-items: center;
   padding: clamp(24px, 12vh, 96px) 16px 24px;
@@ -705,7 +696,6 @@ a.confirm-publish { text-decoration: none; }
   .ui-button-icon, .ui-button.ui-button-icon { background: #1c1f28; color: #f4f2ea; border-color: #f4f2ea; }
 }
 
-/* Loading: skeleton shapes hold the layout and fade in after the loading delay. */
 @keyframes ui-skeleton-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes ui-loading-in { from { opacity: 0; } to { opacity: 1; } }
 .ui-skeleton {
@@ -732,7 +722,6 @@ a.confirm-publish { text-decoration: none; }
 @media (min-width: 761px) { .boot-card-body { min-height: 165px; } }
 @media (max-width: 760px) { .boot-wide { display: none; } }
 
-/* Gallery layout */
 .ds-index { position: sticky; top: 0; z-index: 4; display: flex; gap: 6px; overflow-x: auto; padding: 10px 0; margin-bottom: 4px; background: var(--paper); border-bottom: 1px solid var(--ds-border); scrollbar-width: none; }
 .ds-index a { flex: none; padding: 5px 10px; border: 1px solid var(--ds-line); color: var(--ds-text); font: 600 11px/1.3 var(--ds-mono); letter-spacing: .06em; text-transform: var(--ds-label-case); text-decoration: none; background: var(--ds-surface); }
 .ds-index a:hover { background: var(--ds-accent); color: var(--ds-on-accent); }

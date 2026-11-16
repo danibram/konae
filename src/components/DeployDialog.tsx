@@ -18,26 +18,18 @@ type Props = {
   deployment: DeploymentReceipt | null;
   publishing: boolean;
   error: string;
-  /** The Kernel's refusal code for `error`, when it refused the Capsule (ADR-0004). */
   errorCode?: string;
-  /** Signed out means deploying cannot work, so the dialog offers sign-in instead. */
   session: OwnerSession;
   signInHref: string;
   onClose: () => void;
-  /** The app as it is published now, or null before the first publish. */
   current?: DeploymentReceipt | null;
-  /** `signupMode` is set only on a first publish. */
   onDeploy: (visibility: DeploymentVisibility, signupMode?: SignupMode) => void;
   onEditAuth: () => void;
   onOpenUsers?: () => void;
-  /** Opens Access > Integrations, where the owner sets a signing secret. */
   onOpenIntegrations?: () => void;
   onOpenAppSettings?: () => void;
-  /** Opens actions.json in Files, where an edit clears the refusal. */
   onOpenActions?: () => void;
-  /** True when the editor holds exactly what the published app runs, false when it differs, null when the release does not say. */
   unchanged?: boolean | null;
-  /** The signed-in owner's email, which the receipt invites when a private app has no accounts yet. */
   ownerEmail?: string | null;
 };
 
@@ -49,7 +41,6 @@ function republishSentence(unchanged: boolean | null) {
 
 type PolicyRead = { status: "loading" } | { status: "ready"; mode: SignupMode } | { status: "unknown"; reason: string };
 
-/** Reads who may create an app account on a published app, for display only. */
 function usePublishedPolicy(deploymentId: string | undefined) {
   const [policy, setPolicy] = useState<PolicyRead>({ status: "loading" });
   useEffect(() => {
@@ -64,11 +55,6 @@ function usePublishedPolicy(deploymentId: string | undefined) {
   return policy;
 }
 
-/**
- * What release_plan reads that the editor can read too: the project's secret
- * names, uses and svix-key flags (never values) and, once the app is published, the installation's
- * hosts. A read that fails leaves its part out, and the check stays silent on it.
- */
 function useReleaseFacts(projectId: string, deploymentId: string | undefined, signedIn: boolean): ReleaseFacts {
   const [secrets, setSecrets] = useState<ReleaseFacts["secrets"]>();
   const [rules, setRules] = useState<ReleaseFacts["rules"]>();
@@ -89,7 +75,6 @@ function useReleaseFacts(projectId: string, deploymentId: string | undefined, si
   return { secrets, rules };
 }
 
-/** The owner clears this refusal by setting a secret, which Access > Integrations does. */
 function setsSecret(code: string | undefined): boolean {
   return code !== undefined && refusalCodes().includes(code as RefusalCode) && hintOf(code as RefusalCode).tool === "secret_set";
 }
@@ -97,7 +82,6 @@ function setsSecret(code: string | undefined): boolean {
 export function DeployDialog({ project, deployment, publishing, error, errorCode, session, signInHref, onClose, onDeploy, onEditAuth, current = null, onOpenUsers, onOpenIntegrations, onOpenAppSettings, onOpenActions, unchanged = null, ownerEmail }: Props) {
   const republish = Boolean(current);
   const [chosenVisibility, setVisibility] = useState<DeploymentVisibility>(project.manifest.visibility);
-  // A republish keeps who can join, set in Access > Users; only a first publish chooses here.
   const visibility = republish ? project.manifest.visibility : chosenVisibility;
   const [chosenMode, setChosenMode] = useState<SignupMode | null>(null);
   const signupMode = chosenMode ?? defaultSignupMode(visibility);
@@ -109,8 +93,6 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
   const signupPolicyId = useId();
   const address = current?.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-  // A failed deploy says why where focus is, so a screen reader hears it and
-  // the keyboard stays inside the dialog.
   useEffect(() => {
     if (error && !publishing) errorRef.current?.focus();
   }, [error, publishing]);
@@ -129,9 +111,6 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
         {signedOut ? (
           <a className="ui-button ui-button-md ui-button-primary deploy-confirm" href={signInHref}><KeyRound size={14} /> Sign in to deploy</a>
         ) : (
-          // A refusal disables the button outright. While publishing it stays
-          // enabled and says so: disabling the focused button would drop focus
-          // to the page body, and Escape and Tab would stop reaching the dialog.
           <Button
             variant="primary"
             className="deploy-confirm"
@@ -221,13 +200,6 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
   );
 }
 
-/**
- * Whether the receipt should offer the owner an invitation to their own app.
- * A private app with no active app account lets nobody in, the owner included.
- * An invitation not yet accepted counts as no account, since its holder cannot
- * sign in either. Null until both reads answer, or when either fails, so the
- * receipt says nothing it has not read.
- */
 function useSelfInvite(deploymentId: string, isPrivate: boolean, ownerEmail: string | null | undefined) {
   const [state, setState] = useState<{ noAccounts: boolean; mail: MailStatus } | null>(null);
   useEffect(() => {
@@ -261,9 +233,7 @@ function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAp
   const inviteRef = useRef<HTMLButtonElement>(null);
   const resultRef = useRef<HTMLParagraphElement>(null);
   const mailReasonId = useId();
-  // The Deploy button that had focus is gone now; the way to the app takes it.
   useEffect(() => { openRef.current?.focus(); }, []);
-  // The invitation becomes the first step once the accounts read says nobody can sign in yet.
   useEffect(() => {
     if (offerSelfInvite && document.activeElement === openRef.current) inviteRef.current?.focus();
   }, [offerSelfInvite]);
@@ -271,13 +241,11 @@ function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAp
 
   const inviteSelf = async () => {
     if (!ownerEmail || invite.status === "sending" || !mail.ready) return;
-    // A retry after a failure keeps its key, so the Kernel sends one email.
     const key = invite.status === "failed" ? invite.key : `self-${crypto.randomUUID()}`;
     setInvite({ status: "sending", key });
     try {
       const answer = await createAppInvitations(deployment.id, [ownerEmail], key);
       const result = answer.results[0];
-      // Read the invitation back through the same door before saying it went out.
       const created = result && (result.status === "invited" || result.status === "already-invited") && result.acceptable;
       const listed = created ? (await listAppInvitations(deployment.id, { limit: 25 })).invitations.find((row) => row.email.toLowerCase() === ownerEmail.toLowerCase() && row.status === "pending") : undefined;
       const outcome = selfInviteOutcome(result, listed, ownerEmail);

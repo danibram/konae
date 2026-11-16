@@ -5,10 +5,6 @@ import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, LoadingBlock } from "./ui";
 
-/**
- * Puts the published app in maintenance or takes it out. Each change shows
- * the state the Kernel answers with, never the one the button asked for.
- */
 export function AppMaintenance({ deploymentId, onSignedOut }: { deploymentId: string; onSignedOut: () => void }) {
   const [state, setState] = useState<MaintenanceState | null>(null);
   const [busy, setBusy] = useState(false);

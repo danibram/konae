@@ -1,5 +1,3 @@
-// The inbox reads and acknowledges events through declared Server Actions only.
-// Events arrive on the signed route POST /hooks/events, which this page never calls.
 
 const $ = (selector) => document.querySelector(selector);
 const list = $("#events");
@@ -8,9 +6,6 @@ const notice = $("#notice");
 const filters = $("#filters");
 const time = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-// Every status line reads a failure the same way. A refusal's message is the
-// sentence to show; the rate limit answers with a code and an unreachable
-// Kernel with a browser error, so those two get a sentence here.
 function reason(error) {
   if (error?.message === "rate-limited") return "Too many requests just now. Wait a few seconds and try again.";
   if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) return "The inbox could not reach its server. Check the connection and try again.";
@@ -24,7 +19,6 @@ function show(message) {
 
 function currentFilter() {
   const form = new FormData(filters);
-  // An empty choice is sent as null, which the nullable inputs bind as SQL NULL.
   return {
     severity: form.get("severity") || null,
     state: form.get("state") || null,
@@ -88,13 +82,10 @@ async function acknowledge(event, button) {
   button.disabled = true;
   let refused = "";
   try {
-    // The action records event.acknowledged with the actor when it changes the row,
-    // and its guard refuses when someone acknowledged the event first.
     await miniapp.actions.call("events.acknowledge", { id: event.id });
   } catch (error) {
     refused = reason(error);
   }
-  // load() clears the notice, so the refusal is shown after the list is redrawn.
   await load();
   if (refused) show(refused);
 }
@@ -104,8 +95,6 @@ if (session.role === "anonymous") {
   await miniapp.auth.signIn();
 } else {
   $("#who").textContent = `Signed in as ${session.name}`;
-  // The Kernel binds only the actor's ID, so the page states its own email for the
-  // "acknowledged by" line. The value is what this client sends, not a verified claim.
   try { await miniapp.actions.call("members.hello", { email: session.name }); } catch {}
   filters.addEventListener("change", load);
   $("#refresh").addEventListener("click", load);

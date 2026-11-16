@@ -1,12 +1,3 @@
-// Probe: one app calls another (ADR-0013). The tasks app escalates a task to
-// the desk app's signed route with a call action; the Kernel sends it from its
-// own process, through the desk's route code, and the tasks app's then
-// mutation stores what the desk answered, including the desk's guard refusal.
-// It also checks a call that sends an API key, a call signed with the wrong
-// secret, the refusals at both doors, the per-app limit, the outbox, Usage,
-// and connects with a public GET route read from another app's origin.
-//
-//   KONAE_PROBE_PORT=23070 bun run examples/probes/calls/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,8 +16,6 @@ await probe("calls", 23070, async (kit) => {
   const desk = await kit.publish(path.join(here, "desk"), { projectId: "probe_desk", visibility: "public", secrets: { tickets_hook: deskSecret } });
   const deskOrigin = `http://${desk.host}:${port}`;
 
-  // The tasks app holds the desk's secret to sign with. A route secret may not
-  // repeat another project's value; a secret set for calls only may.
   await owner.call("project_create", { projectId: "probe_tasks", name: "probe_tasks", slug: "probe-tasks", manifest: { version: 1, visibility: "public" } });
   const refusedReuse = await kit.errorText(owner.call("secret_set", { projectId: "probe_tasks", name: "desk_tickets", value: deskSecret }));
   assert.equal(refusedReuse, reused);
@@ -54,7 +43,6 @@ await probe("calls", 23070, async (kit) => {
     assert.fail(`Timed out waiting for ${what}.`);
   };
 
-  // A call to the desk's signed route, sent by the Kernel through the desk's route code.
   const queued = await ana.call<{ callId: string; queued: boolean }>("actions_invoke", { name: "tasks.escalate", input: { taskId: 1, title: "Printer is down" } });
   assert.equal(queued.queued, true);
   assert.match(queued.callId, /^call_[0-9a-f]{32}$/);
@@ -64,19 +52,16 @@ await probe("calls", 23070, async (kit) => {
   assert.deepEqual(await board.json(), { result: [{ ref: 1, title: "Printer is down" }] });
   kit.pass("A signed call to another app", `actions_invoke answers { callId, queued: true }. The Kernel signs POST ${deskOrigin}/hooks/tickets with desk_tickets in X-Desk-Signature, the desk's route verifies it and inserts the ticket, and the tasks app's then mutation stores status ${first[0].escalation_status}.`);
 
-  // The same task again: the desk's guard refuses, and its words reach the tasks app.
   await ana.call("actions_invoke", { name: "tasks.escalate", input: { taskId: 1, title: "Printer is down" } });
   const second = await until(mine, (rows) => rows[0].escalation_status === 403, "the desk's guard refusal");
   assert.equal(second[0].escalation_note, "A ticket for this task is already open.");
   kit.pass("The callee's guard reaches the caller's then", `A second escalation of task 1 is refused by the desk's guard with 403; tasks.escalated stores status ${second[0].escalation_status} and "${second[0].escalation_note}" from /body/error.`);
 
-  // The same route with the wrong secret: the desk's signature check refuses it.
   await ana.call("actions_invoke", { name: "tasks.forge", input: { taskId: 2, title: "Badge reader" } });
   const forged = await until(mine, (rows) => rows[1].escalation_status !== null, "the forged call");
   assert.deepEqual([forged[1].escalation_status, forged[1].escalation_note], [401, "invalid-signature"]);
   kit.pass("The callee's callers check", `A call signed with another secret gets ${forged[1].escalation_status} ${forged[1].escalation_note} from the desk's route, as a request from outside would, and the then mutation stores it.`);
 
-  // A call that sends an API key to the desk's keyed GET route.
   await ana.call("actions_invoke", { name: "desk.count", input: {} });
   const counts = await until(() => ana.call<{ open: number; status: number }[]>("actions_invoke", { name: "desk.counts" }), (rows) => rows.length > 0, "the keyed count");
   assert.deepEqual(counts, [{ open: 1, status: 200 }]);
@@ -96,7 +81,6 @@ await probe("calls", 23070, async (kit) => {
   assert.equal(noticeUsage.totals.find((row) => row.kind === "notify" && row.name === "desk.counted: no-account")?.count, 1);
   kit.pass("The then mutation's notices", "Three changed then mutations each emailed the owner with their bound inputs. A notice to actor records no-account because a call's answer has no caller.");
 
-  // Only the Kernel runs a then mutation.
   const thenOnly = await kit.errorText(ana.call("actions_invoke", { name: "tasks.escalated", input: { id: 2, status: 200, note: null } }));
   assert.equal(thenOnly, "Action tasks.escalated runs only after the call tasks.escalate answers.");
   const signedOut = await kit.errorText(visitor.call("actions_invoke", { name: "tasks.escalate", input: { taskId: 2, title: "x" } }));
@@ -105,7 +89,6 @@ await probe("calls", 23070, async (kit) => {
   assert.equal(badInput, "taskId must be a number.");
   kit.pass("Who may start a call and write its answer", `A person writing tasks.escalated answers "${thenOnly}"; a visitor starting the authenticated call answers ${signedOut}; a text taskId answers "${badInput}", and none is queued.`);
 
-  // The outbox and Usage.
   const outbox = await owner.call<{ calls: Call[] }>("calls_read", { deploymentId: tasks.deploymentId });
   assert.deepEqual(outbox.calls.map((call) => [call.action, call.state, call.status, call.then?.state, call.then?.message ?? null]), [
     ["desk.count", "delivered", 200, "done", null],
@@ -123,11 +106,9 @@ await probe("calls", 23070, async (kit) => {
   assert.deepEqual([deskTotal("route", "POST /hooks/tickets"), deskTotal("refused", "tickets.open"), deskTotal("route", "GET /api/count")], [1, 1, 1]);
   kit.pass("Outbox and Usage", `calls_read lists the four calls newest first with state, status and what the then did, each sent once. The tasks app counts call ${total("call", "tasks.escalate")} for tasks.escalate and action ${total("action", "tasks.escalated")} for its then; the desk counts its route, its guard refusal and its keyed GET, as for a request from outside.`);
 
-  // A failed call is final at once when no app answers on the installation's host.
   await ana.call("actions_invoke", { name: "nobody.ping", input: {} });
   const nobody = await until(() => owner.call<{ calls: Call[] }>("calls_read", { deploymentId: tasks.deploymentId }), (page) => page.calls[0].state !== "pending", "the call to no app");
   assert.deepEqual([nobody.calls[0].state, nobody.calls[0].error, nobody.calls[0].attempts], ["failed", "app-not-found", 1]);
-  // The per-app limit: 20 queued calls in a minute, then a refusal.
   let queuedCount = 5;
   let limited = "";
   while (!limited) {
@@ -143,7 +124,6 @@ await probe("calls", 23070, async (kit) => {
   assert.equal(limited, "This app reached its limit of calls in the last minute. Try again in a minute.");
   kit.pass("Limits", `A call to a host under the installation's suffix that no app holds fails at once with app-not-found and is not retried. After ${queuedCount} calls in a minute the next answers "${limited}"`);
 
-  // Refusals at both doors, and the Kernel's own.
   const tasksFiles = { "schema.sql": await readFile(path.join(here, "tasks/schema.sql"), "utf8") };
   const program = JSON.parse(tasksSource);
   const withUrl = (target: string) => JSON.stringify({ ...program, actions: { ...program.actions, "tasks.escalate": { ...program.actions["tasks.escalate"], url: target } } });
@@ -163,7 +143,6 @@ await probe("calls", 23070, async (kit) => {
   assert.equal(unsetKernel, "Action tasks.escalate calls with the secret desk_other, which is not set for this project. Set it with secret_set before publishing.");
   kit.pass("Refusals at publish", `Both doors refuse the metadata address ("${metadataKernel}") and the Kernel's admin path; the Kernel alone, which knows the installation and the secrets, refuses http to an outside host ("${plain}") and an unset secret.`);
 
-  // connects: the tasks page may read the desk's public GET route, and nothing else changes.
   const page = await kit.appFetch(tasks.host)(`${url}/`);
   const policy = page.headers.get("content-security-policy") ?? "";
   assert(policy.includes(`connect-src 'self' ${deskOrigin};`), policy);

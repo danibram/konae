@@ -17,10 +17,6 @@ import { actionSentence, actionTitle, deployReadiness } from "./action-readiness
 
 export type AuthView = "rules" | "users" | "integrations";
 
-/**
- * The preview keeps these files in this browser only. A Deployment stores its
- * own uploads, and Export takes those, so nothing here reaches either.
- */
 export const previewUploadsNote =
   "Files the preview uploads stay in this browser. They do not publish, and Export does not take them. A file every page shows, such as a logo, goes under public/ in Files.";
 
@@ -41,13 +37,10 @@ type Props = {
   fileAccess?: "app-users";
   onSetFileAccess?: (shared: boolean) => void;
   projectId?: string;
-  /** The published app, when there is one. Users and API keys need it. */
   deployment?: { id: string; url: string };
   authView?: AuthView;
   onAuthViewChange?: (view: AuthView) => void;
-  /** Changes each time Users should open with the cursor in its invite field. */
   inviteFocus?: number;
-  /** The rules, who can open the app or who can read uploads differ from what the live app runs. */
   accessUndeployed?: boolean;
   onDeploy?: () => void;
 };
@@ -158,7 +151,6 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibilit
         {actions.length > 0 && <ul className="rule-list">
           {actions.map((action) => {
             const title = actionTitle(action.name);
-            // An action whose route is its only door has no access to choose here: its route's callers decide.
             const fixed = Boolean(action.http && routeCallers(action.http, visibility));
             return <li key={action.name}>
               <div className="rule-text">
@@ -193,7 +185,6 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibilit
   );
 }
 
-/** Rules run in the preview at once, and on the live app from the next deploy. */
 const appliesOnDeployRules = "A rule runs in the preview at once and on the live app when you deploy.";
 
 function EmptyState({ text, onUpload, disabled, reason }: { text: string; onUpload: () => void; disabled?: boolean; reason?: string }) {

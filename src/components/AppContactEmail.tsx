@@ -5,16 +5,11 @@ import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Field, Input, LoadingBlock } from "./ui";
 
-/** One sentence for an app whose owner notices have nowhere to go, or null when they do. */
 export function missingContactSentence(state: ContactEmailState | null) {
   if (!state || state.contactEmail || state.ownerNotices.length === 0) return null;
   return `${state.ownerNotices.join(", ")} ${state.ownerNotices.length === 1 ? "sends" : "send"} a notice to the owner, but this app has no contact email, so no notice is sent.`;
 }
 
-/**
- * The app's contact email, where notices to the owner go. A change shows
- * what the Kernel kept, read back from konae.json.
- */
 export function AppContactEmail({ deploymentId, onSignedOut }: { deploymentId: string; onSignedOut: () => void }) {
   const [state, setState] = useState<ContactEmailState | null>(null);
   const [email, setEmail] = useState("");

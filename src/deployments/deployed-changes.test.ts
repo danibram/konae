@@ -33,7 +33,6 @@ describe("changes not deployed", () => {
     expect(accessNotDeployed(project({}, "private"), live)).toBe(true);
     const shared = { ...project(), manifest: { ...project().manifest, fileAccess: "app-users" as const } };
     expect(accessNotDeployed(shared, live)).toBe(true);
-    // Access differs, so the answer needs no digest.
     expect(changesNotDeployed(shared, live, null)).toBe(true);
   });
 
@@ -42,7 +41,6 @@ describe("changes not deployed", () => {
     const edited = project({ "index.html": "<p>two</p>" });
     expect(changesNotDeployed(edited, live, await sourceDigest(edited))).toBe(true);
     expect(accessNotDeployed(edited, live)).toBe(false);
-    // A reverted edit is no change.
     expect(changesNotDeployed(project(), live, await sourceDigest({ files: { ...project().files } }))).toBe(false);
   });
 

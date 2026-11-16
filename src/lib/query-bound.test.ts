@@ -15,7 +15,6 @@ describe("query bound", () => {
     expect(unboundedQueryReason("SELECT id FROM tasks WHERE title = 'LIMIT 5'")).toContain("reads rows");
     expect(unboundedQueryReason("-- LIMIT 10\nSELECT id FROM tasks")).toContain("reads rows");
     expect(unboundedQueryReason("SELECT id FROM (SELECT id FROM tasks LIMIT 1)")).toContain("reads rows");
-    // A named parameter called limit is not the clause.
     expect(unboundedQueryReason("SELECT id FROM tasks WHERE :limit IS NOT NULL")).toContain("reads rows");
     expect(unboundedQueryReason("SELECT id FROM tasks WHERE @limit > 0 OR $limit > 0")).toContain("reads rows");
     expect(unboundedQueryReason("SELECT id FROM tasks LIMIT :limit")).toBeNull();

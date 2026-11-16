@@ -1,15 +1,8 @@
-// What left or ran on a published app, in plain words: the email notices its
-// mutations queued, the calls its call actions sent, its scheduled runs, its
-// HTTP routes and its Signals. Each outcome says who must act and where when
-// it failed. The words for a refusal's fix come from the shared refusal table
-// (kernel-rs/kernel/src/refusal-codes.json) where a code exists.
 import { platformMcp } from "../mcp/client";
 import { hintOf, type RefusalCode } from "../kernel/refusal";
 import { usageRange, type UsageSummary } from "./usage";
 
-/** Who clears a failure. `operator` runs the installation; `service` is the other end of a call. */
 export type Actor = "owner" | "capsule" | "operator" | "service" | "person" | "wait";
-/** Where in the editor the owner acts. `capsule` is an edit to actions.json, through Describe or Files. */
 export type Place = "integrations" | "users" | "capsule";
 export type Tone = "success" | "warning" | "danger" | "neutral";
 export type Fix = { who: Actor; what: string; where?: Place };
@@ -19,11 +12,8 @@ export type Kind = "notice" | "call" | "scheduled" | "route" | "signal";
 export type Entry = {
   id: string;
   kind: Kind;
-  /** Milliseconds. A day count sorts at its last event, or at the end of its day. */
   at: number;
-  /** True for a row that counts events of one UTC day instead of naming one. */
   daily?: boolean;
-  /** The UTC day a counted row covers. */
   day?: string;
   title: string;
   detail?: string;
@@ -44,10 +34,6 @@ const DAY_MS = 86_400_000;
 
 const operatorMail = "Check the mail transport. mail_status shows its state.";
 
-/**
- * A notice the Kernel did not queue. Usage counts it under notify as
- * `<action>: <reason>` (docs/reference/usage-and-signals.md, Notices). `queued` is not here.
- */
 export const noticeReasons: Record<string, Outcome> = {
   "no-transport": { tone: "danger", words: "Not sent: this installation has no mail transport.", fix: { who: "operator", what: "Set KONAE_MAIL_TRANSPORT to resend, smtp or development." } },
   "owner-has-no-email": { tone: "danger", words: "Not sent: this Deployment has no contact email for its owner.", fix: { who: "owner", what: "Publish again from Konae while signed in as an owner with an email address, or send this notice to the actor instead.", where: "capsule" } },
@@ -63,7 +49,6 @@ export const noticeReasons: Record<string, Outcome> = {
   "storage-error": { tone: "danger", words: "Not sent: the mail queue could not be written.", fix: { who: "operator", what: "Read the Kernel log for the cause." } },
 };
 
-/** Why a queued notice failed: the job's failure kind (docs/reference/accounts.md, Account email). */
 export const noticeFailures: Record<string, Outcome> = {
   "provider-unavailable": { tone: "danger", words: "Not sent: the mail provider did not answer after every retry.", fix: { who: "operator", what: operatorMail } },
   rejected: { tone: "danger", words: "Not sent: the mail provider refused this message.", fix: { who: "operator", what: operatorMail } },
@@ -78,7 +63,6 @@ export const noticeFailures: Record<string, Outcome> = {
 
 const actionsJson = "Change the call's url in actions.json.";
 
-/** Why a call ended without a 2xx answer: the Kernel's error kind (docs/reference/routes-and-calls.md, Calls between apps). */
 export const callFailures: Record<string, Outcome> = {
   timeout: { tone: "danger", words: "The service did not answer in time.", fix: { who: "service", what: "The service at that address is slow or down. Check it, then trigger the action again." } },
   network: { tone: "danger", words: "The connection to the service failed.", fix: { who: "service", what: "The service at that address is down or refusing connections. Check it, then trigger the action again." } },
@@ -95,12 +79,10 @@ export const callFailures: Record<string, Outcome> = {
   "invalid-header": { tone: "danger", words: "A header value could not be sent.", fix: { who: "capsule", what: "Check the Idempotency-Key value the action sends.", where: "capsule" } },
 };
 
-/** Words for an unknown kind, so a new one still shows instead of a blank. */
 function unknown(kind: string, tone: Tone = "danger"): Outcome {
   return { tone, words: `Ended with ${kind}. This editor has no words for it yet.` };
 }
 
-/** HH:MM UTC, the clock Usage days and daily schedules use. */
 export function clock(ms: number) {
   return new Date(ms).toISOString().slice(11, 16) + " UTC";
 }
@@ -175,13 +157,11 @@ function endOfDay(day: string, now: number) {
   return Math.min(Date.parse(`${day}T00:00:00Z`) + DAY_MS - 1, now);
 }
 
-/** Every source in one list, newest first. */
 export function whatHappened({ summary, calls, notices, signals }: Sources, now = Date.now()): Entry[] {
   const entries: Entry[] = [];
   for (const notice of notices) {
     entries.push({ id: `notice:${notice.noticeId}`, kind: "notice", at: notice.createdAt, title: `Email from ${notice.action ?? "an action"}`, outcome: noticeOutcome(notice) });
   }
-  // A notice the Kernel stored as failed with sender-not-ready is a job above too, so its day count is left out.
   const jobsCover = new Set(notices.filter((n) => n.errorKind === "sender-not-ready").map((n) => `${n.action}:${new Date(n.createdAt).toISOString().slice(0, 10)}`));
   for (const row of summary.usage.days) {
     if (row.kind !== "notify") continue;
@@ -195,7 +175,6 @@ export function whatHappened({ summary, calls, notices, signals }: Sources, now 
   for (const call of calls) {
     entries.push({ id: `call:${call.callId}`, kind: "call", at: call.createdAt, title: `Call from ${call.action}`, detail: [call.method, call.url].filter(Boolean).join(" ") || undefined, outcome: callOutcome(call) });
   }
-  // usage_summary includes daily counts and retained scheduled runs.
   const scheduled = (summary.usage as { scheduled?: ScheduledRun[] }).scheduled ?? [];
   for (const [index, run] of scheduled.entries()) {
     entries.push({ id: `scheduled:${run.at}:${run.action}:${index}`, kind: "scheduled", at: run.at, title: `Scheduled run of ${run.action}`, outcome: scheduledOutcome(run) });
@@ -216,17 +195,14 @@ export function whatHappened({ summary, calls, notices, signals }: Sources, now 
   return entries.sort((a, b) => dayOf(b).localeCompare(dayOf(a)) || Number(a.daily ?? false) - Number(b.daily ?? false) || b.at - a.at);
 }
 
-/** The UTC day an entry belongs to, YYYY-MM-DD. A day count belongs to its day. */
 export function dayOf(entry: Entry) {
   return entry.day ?? new Date(entry.at).toISOString().slice(0, 10);
 }
 
-/** True when someone must act on the entry: it has a fix and the fix is not waiting. */
 export function needsAction(entry: Entry) {
   return Boolean(entry.outcome.fix && entry.outcome.fix.who !== "wait");
 }
 
-/** The words for who acts, as the view shows them. */
 export const actorWords: Record<Actor, string> = {
   owner: "You need to act.",
   capsule: "The app needs a change.",
@@ -238,7 +214,6 @@ export const actorWords: Record<Actor, string> = {
 
 export type Read = { sources: Sources; days: number };
 
-/** The newest page of each source for the last `days` days. */
 export async function readWhatHappened(deploymentId: string, days: number, signal?: AbortSignal): Promise<Read> {
   const [summary, calls, notices, signals] = await Promise.all([
     platformMcp.call<UsageSummary>("usage_summary", { projectId: deploymentId, ...usageRange(days) }, signal),

@@ -1,10 +1,6 @@
 import type { SchemaChange } from "../deployments/release";
 import { Button, Dialog } from "./ui";
 
-/**
- * Asks the owner before a release whose schema change loses data. It lists
- * what goes, in the Kernel's words, and the statements the Kernel will run.
- */
 export function SchemaChangeDialog({ change, onAnswer }: { change: SchemaChange; onAnswer: (confirmed: boolean) => void }) {
   return <Dialog
     title="This publish deletes data"

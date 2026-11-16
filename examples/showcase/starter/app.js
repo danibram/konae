@@ -1,10 +1,6 @@
-// Starter: a public landing, a private space per member, a team area and an
-// admin area. The page only asks; every rule lives in actions.json, where the
-// Kernel binds the caller's ID and the SQL decides what each role may read or
-// change. Hiding a section here is a courtesy, never the protection.
 
-const UPDATES_PAGE = 10; // the LIMIT in updates.list
-const NOTES_PAGE = 20; // the LIMIT in notes.list
+const UPDATES_PAGE = 10;
+const NOTES_PAGE = 20;
 const RANK = { anonymous: 0, member: 1, admin: 2, owner: 3 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -17,9 +13,7 @@ const state = {
   notes: { before: null, q: null },
 };
 
-// ---------------------------------------------------------------- helpers
 
-/** Builds an element. Text always goes through textContent, never HTML. */
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -36,7 +30,6 @@ const when = (ms) => new Date(ms).toLocaleString("en", { dateStyle: "medium", ti
 const bytes = (size) => size < 1024 ? `${size} B` : size < 1048576 ? `${(size / 1024).toFixed(1)} KiB` : `${(size / 1048576).toFixed(1)} MiB`;
 const nullable = (value) => value.trim() === "" ? null : value.trim();
 
-/** Shows a result or a refusal to the person, in words the Kernel or the app's guard chose. */
 function notify(message, kind = "info") {
   const notice = $("#notice");
   notice.textContent = message;
@@ -44,7 +37,6 @@ function notify(message, kind = "info") {
   notice.hidden = false;
 }
 
-/** Runs one change, reports it, and reloads what it touched. A refusal is shown, not thrown. */
 async function act(task, done, ...reloads) {
   try {
     await task();
@@ -69,12 +61,9 @@ function fill(list, empty, items) {
   empty.hidden = items.length > 0;
 }
 
-// ------------------------------------------------------------ public landing
 
 async function loadStatus() {
   const rows = await call("status.list");
-  // Team admins may tell the team inbox about a component that is not operational.
-  // The Kernel sends the call; this page never holds the inbox's secret.
   const escalates = RANK[state.me?.role ?? "anonymous"] >= RANK.admin;
   fill($("#status-list"), $("#status-empty"), rows.map((row) => el("li", { class: "row" },
     el("span", { class: `dot ${row.state}`, "aria-hidden": "true" }),
@@ -122,7 +111,6 @@ async function loadDownloads() {
   ))));
 }
 
-// ----------------------------------------------------------------- my space
 
 async function loadProfile() {
   [state.me] = await call("me.get");
@@ -155,19 +143,16 @@ async function loadAttachments() {
     el("span", { class: `badge ${file.public ? "operational" : ""}`.trim(), text: file.public ? "public" : "private" }),
     el("span", { class: "grow" }),
     file.public ? null : button("Publish", () => act(async () => {
-      // Two steps: the Kernel makes the bytes public, then the app lists the row.
       await miniapp.files.update(file.file_id, { visibility: "public" });
       await call("attachments.publish", { id: file.id });
     }, `${file.name} is public now.`, loadAttachments, loadDownloads), "", `Publish ${file.name}`),
     button("Delete", () => act(async () => {
-      // The bytes first, so the quota is freed; a file already gone still lets the row go.
       await miniapp.files.delete(file.file_id).catch((error) => { if (error.message !== "File not found.") throw error; });
       await call("attachments.remove", { id: file.id });
     }, `${file.name} deleted.`, loadAttachments, loadDownloads), "danger", `Delete ${file.name}`),
   ))));
 }
 
-// --------------------------------------------------------------------- team
 
 async function loadTeam() {
   const [roster, posts] = await Promise.all([call("team.roster"), call("team.posts", { before: null })]);
@@ -185,7 +170,6 @@ async function loadTeam() {
   )));
 }
 
-// -------------------------------------------------------------------- admin
 
 async function loadAdmin(q = null) {
   const [[stats], members] = await Promise.all([call("admin.stats"), call("members.list", { q })]);
@@ -200,11 +184,9 @@ async function loadAdmin(q = null) {
   ))));
 }
 
-// ------------------------------------------------------------------ session
 
 async function render() {
   const signedIn = state.session.role !== "anonymous";
-  // The Kernel names the owner's account; the profile names admins.
   const role = !signedIn ? "anonymous" : state.session.role === "owner" ? "owner" : state.me?.role ?? "member";
   for (const node of document.querySelectorAll("[data-needs]")) node.hidden = RANK[role] < RANK[node.dataset.needs];
   $("#sign-in").hidden = signedIn;
@@ -229,14 +211,12 @@ async function start() {
   state.session = await miniapp.auth.session();
   state.me = null;
   if (state.session.role !== "anonymous") {
-    // Joining is idempotent: the first visit creates the profile, later ones change nothing.
     await call("me.join", { displayName: state.session.name.split("@")[0].slice(0, 40) });
     await loadProfile();
   }
   await render();
 }
 
-// ------------------------------------------------------------------- events
 
 $("#sign-in").addEventListener("click", () => miniapp.auth.signIn());
 $("#sign-out").addEventListener("click", () => act(() => miniapp.auth.signOut(), "Signed out.", start));
@@ -272,7 +252,6 @@ $("#avatar-file").addEventListener("change", (event) => {
   act(async () => {
     const stored = await miniapp.files.upload(file, { visibility: "public" });
     await call("me.avatar", { fileId: stored.id });
-    // The old picture would keep counting against the app's 20 MiB.
     if (previous) await miniapp.files.delete(previous).catch(() => {});
   }, "Avatar updated.", loadProfile, render);
   event.target.value = "";

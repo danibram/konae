@@ -1,8 +1,3 @@
-// A hostile app user and a hostile program against sign-in, recovery,
-// invitations, creator admission, account email and the Kernel's own pages
-// on the showcase apps. Each test is one attempt from the security review.
-// The minute limit per address is raised so one test can reach the day limit;
-// the minute limit itself has a Kernel test in mail.rs.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -40,7 +35,6 @@ describe("enumeration", () => {
     expect(unknown).toEqual(known);
     await Bun.sleep(1500);
     expect(await mails(member.email)).toHaveLength(1);
-    // Recovery is no relay: an address with no account gets nothing.
     expect(await mails(stranger)).toHaveLength(0);
   });
 
@@ -100,7 +94,6 @@ describe("links and tokens", () => {
       statuses.push(response.status);
       await response.arrayBuffer();
     }
-    // The owner limiter allows 5 attempts a minute per email and 10 per client address, refilling over the minute.
     const firstLimited = statuses.indexOf(429);
     expect(firstLimited).toBeGreaterThan(0);
     expect(firstLimited).toBeLessThanOrEqual(10);
@@ -114,7 +107,6 @@ describe("account email", () => {
     for (const email of ["x<victim@review.test>", "victim@review.test>", "(c)victim@review.test", "a,b@review.test", "a\r\nbcc:b@review.test", "\"a\"@review.test"]) {
       const response = await answer(await post(gallery, "/_konae/auth/signup", { email, password }));
       expect(response, email).toEqual({ status: 400, body: { error: "Enter a valid email address." } });
-      // Recovery answers every input the same way and mails nothing for this one.
       expect((await post(gallery, "/_konae/auth/recover", { email })).status).toBe(202);
     }
     await Bun.sleep(1500);
@@ -124,13 +116,11 @@ describe("account email", () => {
   test("requests on one app cannot use up an address's day on another app", async () => {
     const { gallery, booking } = lab.apps;
     const victim = `victim-${crypto.randomUUID().slice(0, 8)}@review.test`;
-    // Twelve requests at once for an address with no account: the day limit holds under the race.
     const answers = await Promise.all(Array.from({ length: 12 }, () => post(gallery, "/_konae/auth/recover", { email: victim }).then((response) => response.status)));
     expect(answers.filter((status) => status === 202)).toHaveLength(10);
     expect(answers.filter((status) => status === 429)).toHaveLength(2);
     const blocked = await answer(await post(gallery, "/_konae/auth/recover", { email: victim }));
     expect(blocked).toEqual({ status: 429, body: { error: "This address has received the most account emails allowed today. Try again tomorrow." } });
-    // The same person signs up on another app that day.
     expect((await post(booking, "/_konae/auth/signup", { email: victim, password })).status).toBe(200);
   });
 });
@@ -166,9 +156,6 @@ describe("the Kernel's own pages on an app host", () => {
 
 describe("the editor", () => {
   test("no editor view writes HTML from data", () => {
-    // The Users, Invitations, Integrations, secrets and API key views render
-    // emails, names and keys as React text. A view that set HTML from data
-    // would turn an app user's email into script on the editor's origin.
     const offenders: string[] = [];
     const walk = (directory: string) => {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {

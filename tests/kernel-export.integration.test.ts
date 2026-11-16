@@ -10,11 +10,6 @@ import { readTar } from "../src/lib/tar";
 import type { Transfer } from "../src/mcp/client";
 import { account, appFetch, buildKernel, freshClient, password, release, runtime, startKernel, type Kernel } from "./kernel-harness";
 
-// An app exported from Konae with its data (ADR-0008) runs on the
-// kernel binary alone. The Kernel opens the exported folder, which carries
-// no record of the installation, an existing app user signs in with the
-// password they set on Konae, and an operator command run beside the Kernel
-// changes what the running app answers.
 const repo = path.resolve(import.meta.dir, "..");
 const kernelBinary = path.join(repo, "kernel-rs/target/debug/kernel");
 let root: string;
@@ -43,7 +38,6 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
-/** The exported folder as the editor's Export writes it: project_export's folder and data, and the files every app folder carries. */
 async function exportFolder(kernel: Kernel, deploymentId: string): Promise<FolderEntry[]> {
   const exported = await kernel.owner.call<{ manifest: { contents: { name: PackageComponentName }[] }; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: deploymentId });
   try {
@@ -75,7 +69,6 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   await konae.stop();
   konae = undefined;
 
-  // The folder goes to a data directory no Konae ever used.
   const data = path.join(root, "kernel");
   const folder = path.join(data, "apps", id);
   for (const entry of entries) {
@@ -92,7 +85,6 @@ test("an app exported with its data runs on the kernel binary, and an operator c
     KONAE_HOST_SUFFIX: "localhost", KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
   };
   alone = Bun.spawn([kernelBinary], { env, stdout: "pipe", stderr: "inherit" });
-  // The Kernel's log, read for as long as it runs.
   let log = "";
   const served = (async () => {
     let listening: (() => void) | undefined;
@@ -105,12 +97,10 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   })();
   const startup = await Promise.race([served, Bun.sleep(30_000).then(() => { throw Error("The kernel binary did not start."); })]);
   expect(startup).toContain(`Serving Carried at http://carried.localhost:${port}`);
-  // With no KONAE_MAIL_SECRET, the Kernel seals queued links with a key it wrote for itself, readable by its owner alone.
   expect((await stat(path.join(data, "mail-key"))).mode & 0o777).toBe(0o600);
   const hostname = "carried.localhost";
   const app = { url, data } as Kernel;
 
-  // Ana signs in with the password she set on Konae, and reads her row.
   const session = await account(app, hostname, "login", "ana@carried.test");
   const ana2 = runtime(app, hostname, session);
   expect(await ana2.call("actions_invoke", { name: "notes.mine", input: {} })).toEqual([{ body: "written on Konae" }]);
@@ -127,7 +117,6 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   const user = users.users.find((entry) => entry.email === "ana@carried.test")!;
   expect(user.state).toBe("active");
 
-  // An invitation from the machine leaves through the running Kernel's mail worker.
   const invited = await command("invite", "bea@carried.test");
   expect(invited.error).toBe("");
   expect(JSON.parse(invited.output)).toMatchObject({ results: [{ email: "bea@carried.test", status: "invited", delivery: "local-mailbox", acceptUrl: expect.stringContaining("/_konae/invitation#invitation=") }] });
@@ -138,7 +127,6 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   }
   expect(mailed).toBe(true);
 
-  // An API key appears once, is listed without its secret, and stays listed revoked.
   const created = JSON.parse((await command("api-key", "create", "reader", "--files", "public")).output) as { keyId: string; key: string };
   expect(created.key.length).toBeGreaterThan(20);
   const keys = () => command("api-key", "list").then((listed) => JSON.parse(listed.output) as { keys: { keyId: string; revokedAt: number | null }[] });
@@ -147,7 +135,6 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect((await keys()).keys[0].revokedAt).toBeGreaterThan(0);
   expect((await command("api-key", "create", "nothing")).error).toContain("Name at least one action or file visibility for the key.");
 
-  // A suspension from the machine ends the session the running Kernel holds.
   const suspended = await command("suspend", user.userId);
   expect(suspended.error).toBe("");
   expect(suspended.code).toBe(0);
@@ -155,13 +142,11 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   await expect(ana2.call("actions_invoke", { name: "notes.mine", input: {} })).rejects.toThrow();
   const again = await appFetch(app, hostname, "/_konae/auth/login", { method: "POST", body: JSON.stringify({ email: "ana@carried.test", password }) });
   expect(again.status).not.toBe(200);
-  // Konae's tool refuses a second resume with these words; the command does too.
   expect((await command("resume", user.userId)).code).toBe(0);
   const twice = await command("resume", user.userId);
   expect(twice.code).not.toBe(0);
   expect(twice.error).toContain("This account is not suspended.");
 
-  // The Signup Policy lands in konae.json, and the running Kernel follows it.
   expect(JSON.parse((await command("signup-policy", "closed")).output)).toMatchObject({ mode: "closed", previousMode: "open" });
   expect(JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8")).signupPolicy.mode).toBe("closed");
   let refused = 0;
@@ -172,10 +157,8 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect(refused).toBe(403);
   expect((await command("sql", "SELECT body FROM notes ORDER BY id LIMIT 5")).output).toContain("written alone");
 
-  // An entry link from the machine signs a browser in as Ana, and the link works once.
   const issued = await command("enter", "Ana@Carried.test");
   const link = JSON.parse(issued.output) as { userId: string; url: string };
-  // Without Konae there is no audit log, so the command and the Kernel's log say who entered as whom.
   const operator = process.env.USER ? `operator:${process.env.USER}` : "operator";
   expect(issued.error).toContain(`${operator} may enter app ${id} as ana@carried.test`);
   expect(link.userId).toBe(user.userId);
@@ -190,14 +173,12 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   expect(await asAna.call("actions_invoke", { name: "notes.mine", input: {} })).toHaveLength(2);
   expect((await command("enter", "nobody@carried.test")).error).toContain("This app has no account with the email nobody@carried.test.");
 
-  // Maintenance from the machine pauses the running app at once, and off lets it answer again.
   expect(JSON.parse((await command("maintenance", "on")).output)).toMatchObject({ maintenance: true });
   expect((await appFetch(app, hostname, "/")).status).toBe(503);
   await expect(asAna.call("actions_invoke", { name: "notes.mine", input: {} })).rejects.toThrow("maintenance");
   expect(JSON.parse((await command("maintenance", "off")).output)).toMatchObject({ maintenance: false });
   expect((await appFetch(app, hostname, "/")).status).toBe(200);
 
-  // An import from the machine puts the exported data back, after a backup, with the Kernel stopped.
   alone.kill(); await alone.exited;
   const incoming = path.join(root, "incoming");
   for (const entry of entries.filter((entry) => entry.path.startsWith("data/"))) {
@@ -250,7 +231,6 @@ test("a legacy export starts on a fresh Kernel without its record, and distingui
     manifest: { version: 1, visibility: "private" },
   }));
 
-  // The first ordinary operation must capture the old applied schema and artifact before export.
   await konae.owner.call("signup_policy_set", { projectId: id, mode: "closed" });
   const migratedSettings = JSON.parse(await readFile(settingsPath, "utf8"));
   expect(migratedSettings.released.schemaSql).toContain('CREATE TABLE IF NOT EXISTS "live notes"');

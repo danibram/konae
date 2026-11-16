@@ -13,7 +13,6 @@ const root = path.resolve(import.meta.dir, "../..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 const publishedSdk = read("src/mcp/runtime.js");
 
-/** Runs an SDK script against a bare window and lists the calls it puts on window.miniapp. */
 function exposedCalls(source: string): string[] {
   const window: { miniapp?: Record<string, Record<string, unknown>> } = {};
   new Function("window", "location", "addEventListener", "parent", "document", source)(window, { pathname: "/" }, () => {}, undefined, undefined);
@@ -21,7 +20,6 @@ function exposedCalls(source: string): string[] {
     Object.entries(calls).filter(([, value]) => typeof value === "function").map(([call]) => `${module}.${call}`));
 }
 
-/** Calls one side names that the other does not, both ways. Empty when they agree. */
 function drift(named: string[], contract: SdkContract = sdkContract) {
   const listed = contractCalls(contract);
   return {
@@ -30,14 +28,12 @@ function drift(named: string[], contract: SdkContract = sdkContract) {
   };
 }
 
-/** Every miniapp.<module>.<call> a text names. */
 function namedCalls(text: string): string[] {
   return [...text.matchAll(/\bminiapp\.([a-z]+)\.([a-zA-Z]+)\b/g)].map((match) => `${match[1]}.${match[2]}`);
 }
 
 const agreed = { notInContract: [], missing: [] };
 
-/** A contract with one extra call, to prove each check notices a change. */
 function withExtraCall(): SdkContract {
   const contract = structuredClone(sdkContract) as unknown as SdkContract;
   contract.modules[0].calls.push({ ...contract.modules[0].calls[0], name: "refresh", signature: "miniapp.auth.refresh()", examples: [{ code: "await miniapp.auth.refresh();" }] });
@@ -122,17 +118,10 @@ describe("every documented message is one the code returns", () => {
     .join("\n");
   const preview = ["src/runtime/host.ts", "src/runtime/security.ts", "src/kernel/actions.ts", "src/mcp/preview.ts"].map(read).join("\n");
 
-  /**
-   * Matches a message in source: <key>, <name>, <names>, <field> or <kind> stand for a Rust {key}, a JS ${...}
-   * or the same word written out, <limit> stands for a configured size that Rust formats with {}, a number
-   * may be a JS ${...}, and a brace may be doubled, as Rust's
-   * format! escapes it.
-   */
   function inSource(message: string, source: string) {
     const pattern = message
       .split(/(<key>|<names>|<name>|<field>|<kind>|<limit>|\d+)/)
       .map((part) => {
-        // A configured size, which Rust writes with a `{}` argument.
         if (part === "<limit>") return String.raw`(?:\{\w*\}|\$\{[^}]+\})`;
         if (part === "<key>" || part === "<name>" || part === "<names>" || part === "<field>" || part === "<kind>") return String.raw`(?:\{\w+\}|\$\{[^}]+\}|${part})`;
         if (/^\d+$/.test(part)) return String.raw`(?:${part}|\$\{[^}]+\})`;
@@ -185,7 +174,6 @@ describe("the rendered readers", () => {
 
   test("the build agent's prompt carries the rendered section and names no other call", () => {
     const prompt = buildSystemPrompt(cloneStarter());
-    // The generated module escapes the section into a template literal; the value must survive it.
     expect(sdkPromptSection).toBe(renderPromptSection());
     expect(prompt).toContain(sdkPromptSection);
     expect(drift(namedCalls(prompt))).toEqual(agreed);
@@ -193,7 +181,6 @@ describe("the rendered readers", () => {
 
   test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
     const mcp = read("kernel-rs/konae/src/mcp.rs");
-    // platform_guide's topics live in guide.rs; mcp.rs hands the call to it.
     expect(mcp).toContain(`"platform_guide" => super::guide::topic(`);
     expect(read("kernel-rs/konae/src/guide.rs")).toContain(`"sdk" => serde_json::from_str::<Value>(include_str!("sdk-guide.json"))?,`);
     expect(drift(namedCalls(mcp)).notInContract).toEqual([]);
@@ -203,7 +190,6 @@ describe("the rendered readers", () => {
 });
 
 describe("the published SDK prefixes every Kernel URL with the page's base path", () => {
-  /** Runs runtime.js on a page at pathname and records the URLs it asks the Kernel for. */
   async function sdkOn(pathname: string) {
     const requested: string[] = [];
     const assigned: string[] = [];
@@ -246,7 +232,6 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
 });
 
 describe("files.upload sends the file's bytes in one request", () => {
-  /** Runs runtime.js at pathname against a Kernel whose transfer path answers putStatus, and uploads one file. */
   async function uploadOn(pathname: string, putStatus: number, putError = "Use authenticated MCP for platform operations.") {
     const requests: string[] = [];
     const tools: string[] = [];

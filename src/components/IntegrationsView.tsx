@@ -23,7 +23,6 @@ function SignedOut() {
   return <p className="access-note">Sign in with <a href={platformAccessHref(window.location.pathname)}>owner sign-in</a> to manage signing secrets and API keys.</p>;
 }
 
-/** Signing secrets for signed routes and API keys for programs the owner writes. */
 export function IntegrationsView({ projectId, deploymentId, deploymentUrl, actionsSource }: Props) {
   const [ownerSignedOut, setOwnerSignedOut] = useState(false);
   const onSignedOut = useCallback(() => setOwnerSignedOut(true), []);
@@ -52,7 +51,6 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
   const [formError, setFormError] = useState("");
   const [notice, setNotice] = useState("");
   const confirm = useConfirm(onSignedOut);
-  // Route signatures and call auth: release_plan refuses while any of them is unset.
   const usage = namedSecrets(actionsSource);
 
   useEffect(() => {
@@ -105,7 +103,6 @@ function SecretsCard({ projectId, actionsSource, onSignedOut }: { projectId: str
       ))}
       {secrets.map((secret) => {
         const used = usage.get(secret.name);
-        // secrets_list answers each secret's use; a route cannot sign with one set for calls only.
         const callsOnly = secret.use === "call" && used?.route;
         return (
         <li key={secret.name}>
@@ -257,7 +254,6 @@ function ApiKeysCard({ deploymentId, deploymentUrl, routes, onSignedOut }: { dep
   );
 }
 
-/** The curl that calls each route and file visibility the key names, ready to copy. */
 function KeyCommands({ keyValue, apiKey, routes, deploymentUrl }: { keyValue?: string; apiKey: Pick<ApiKey, "actions" | "files">; routes: RouteAction[]; deploymentUrl: string }) {
   const named = apiKey.actions.map((action) => routes.find((route) => route.name === action)).filter((route): route is RouteAction => Boolean(route));
   const gone = apiKey.actions.filter((action) => !routes.some((route) => route.name === action));

@@ -1,24 +1,3 @@
-//! What happens to an app file after its upload: the uploader changes its
-//! visibility or deletes it. The runtime tools `files_update` and
-//! `files_delete` in mcp.rs call these handlers; uploads, listing and reads
-//! stay in main.rs and http.rs.
-//!
-//! Who may do what:
-//!
-//! | Caller                                   | Answer                                      |
-//! | ---------------------------------------- | ------------------------------------------- |
-//! | no session                               | 401 `authentication-required`               |
-//! | a user who may not read the file         | 404 `File not found.`, as for a missing one |
-//! | a user who reads it but did not upload it| 403 [`NOT_UPLOADER`]                        |
-//! | the uploader                             | the change                                  |
-//!
-//! A file stored before files had owners has no uploader, so nobody may change
-//! or delete it from the app; the owner's package export still carries it.
-//! Both handlers hold the Deployment's database lock, the same one
-//! `upload_file` takes, so a delete and an upload never race over the index or
-//! the file quota, which is the sum of the sizes the index lists. The bytes
-//! themselves go through the installation's `FileStore`, after the index
-//! change commits.
 
 use super::*;
 
@@ -146,8 +125,6 @@ mod tests {
     use super::*;
     use crate::tests::{login_test_state, response_json, signed_in};
 
-    /// Runs one test over the local folder and over an S3 store, the
-    /// in-process fake unless `KONAE_TEST_S3_ENDPOINT` names a server.
     macro_rules! on_both_stores {
         ($name:ident) => {
             mod $name {
@@ -311,7 +288,6 @@ mod tests {
         assert_eq!(serve_file(State(state.clone()), AxumPath(draft.clone()), visitor.clone()).await.status(), StatusCode::OK);
         assert_eq!(serve_file(State(state.clone()), AxumPath(draft.clone()), bob.clone()).await.status(), StatusCode::OK);
 
-        // Bob reads the public file but did not upload it.
         assert_eq!(
             status_and_error(update_file(&state, &bob, &draft, Some("private")).await).await,
             (StatusCode::FORBIDDEN, json!(NOT_UPLOADER))
@@ -324,7 +300,6 @@ mod tests {
         let hidden = response_json(update_file(&state, &alice, &draft, Some("private")).await).await;
         assert_eq!(hidden["result"]["visibility"], "private");
         assert_eq!(serve_file(State(state.clone()), AxumPath(draft.clone()), visitor.clone()).await.status(), StatusCode::NOT_FOUND);
-        // Bob may no longer read it, so to him it does not exist.
         assert_eq!(
             status_and_error(update_file(&state, &bob, &draft, Some("public")).await).await,
             (StatusCode::NOT_FOUND, json!("File not found."))
@@ -363,7 +338,6 @@ mod tests {
         let (state, visitor) = login_on(&root, "public", s3).await;
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (alice, _) = signed_in(&state, &deployment.id, &visitor, "alice@example.test");
-        // Control characters, which JSON writes six bytes each, are dropped.
         let named = json!({"name": format!("{}a{}", "\u{1}".repeat(500), "\u{7f}"), "type": "text/plain", "dataUrl": encode_base64(b"x")});
         let stored = response_json(upload_file(State(state.clone()), alice.clone(), Request::builder().body(Body::from(named.to_string())).unwrap()).await).await;
         assert_eq!(stored["result"]["name"], "a");
@@ -412,8 +386,6 @@ mod tests {
     }
 
     on_both_stores!(raised_limits_admit_a_file_the_defaults_refuse);
-    /// The operator's limits replace the defaults: a file the default per-file
-    /// cap refuses is stored, and every refusal names the configured numbers.
     async fn raised_limits_admit_a_file_the_defaults_refuse(s3: bool) {
         let root = std::env::temp_dir().join(format!("konae-file-limits-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;
@@ -440,7 +412,6 @@ mod tests {
     }
 
     on_both_stores!(the_file_path_serves_one_byte_range);
-    /// A range of a file answers 206 with that part, and a range past the end 416.
     async fn the_file_path_serves_one_byte_range(s3: bool) {
         let root = std::env::temp_dir().join(format!("konae-file-range-{}", Uuid::new_v4()));
         let (state, visitor) = login_on(&root, "public", s3).await;

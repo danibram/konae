@@ -169,7 +169,6 @@ describe("edit", () => {
   });
 
   test("reports a Capsule file that is missing from the record instead of crashing on undefined", async () => {
-    // A Project persisted before actions.json existed, or a hand-edited import.
     const partial: Partial<CapsuleFiles> = { ...starterProject.files };
     delete partial["actions.json"];
     const tools = createCapsuleTools(createCapsuleWorkspace(partial as CapsuleFiles), createCapsuleValidator(loadSql));
@@ -302,11 +301,6 @@ describe("release facts", () => {
 });
 
 describe("readLiveDatabase", () => {
-  /**
-   * The bug this pins: a database that could not be read was reported as no
-   * database at all, so the preview-rows stage was silently skipped and the same
-   * capsule flipped from blocked to validated.
-   */
   test("tells a missing database apart from an unreadable one", async () => {
     expect(await readLiveDatabase({})).toEqual({ state: "absent" });
     expect(await readLiveDatabase({ liveDatabase: async () => undefined })).toEqual({ state: "absent" });

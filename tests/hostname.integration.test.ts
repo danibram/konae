@@ -4,9 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
 
-// hostname_set moves a published app to another generated hostname on the
-// konae binary. The old name redirects with a 308, stays the app's, and does
-// so after a restart; project_inspect reads the new url back.
 let root: string;
 let kernel: Kernel;
 
@@ -50,7 +47,6 @@ test("an app moves to a free name, its old name redirects there and stays its ow
   }
   await expect(kernel.owner.call("hostname_set", { projectId: other.id, name: "kamynando2" })).rejects.toThrow("kamynando2.localhost is another app's address on this installation.");
 
-  // A republish keeps the new name, and a restart keeps the redirect.
   await release(kernel.owner, payload("move_app", "kamynando2", "Again"), "move_app");
   await kernel.stop();
   await kernel.start();

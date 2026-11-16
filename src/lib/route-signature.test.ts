@@ -4,7 +4,6 @@ import { canonicalQuery, routeNonce, signRoute } from "./route-signature";
 type Vector = { case: string; secret: string; t: number; n: string; method: "GET" | "POST"; path: string; query: string; body: string; canonicalQuery: string; header: string };
 
 describe("route signatures", () => {
-  // kernel-rs/kernel/src/http.rs checks the same vectors against the Kernel's signer.
   test("sign as the Kernel verifies", async () => {
     const vectors: Vector[] = await Bun.file(new URL("../../kernel-rs/kernel/src/signature-cases.json", import.meta.url)).json();
     expect(vectors.length).toBeGreaterThanOrEqual(3);

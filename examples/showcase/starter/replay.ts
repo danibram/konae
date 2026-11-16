@@ -1,15 +1,3 @@
-// Replays the starter showcase on two Kernels it starts itself. It publishes
-// the Capsule from the CLI and from the editor's path, then proves each rule
-// the README claims: verified open signup, the visitor's public reads, rows
-// bound to each member, a team admin promoted by a guarded mutation, an API
-// key inside and outside its scope, a signed webhook, the file lifecycle and
-// quota, pagination and search under the LIMIT rules, Signals, the Action
-// Contract with conform, and a package export imported on the second Kernel.
-// It removes both Kernels and their data on exit.
-//
-//   KONAE_SHOWCASE_PORT=23450 bun run examples/showcase/starter/replay.ts
-//   KONAE_SHOWCASE_SCREENSHOTS=/tmp/shots   adds light and dark screenshots
-//   KONAE_SHOWCASE_BROWSER=0                skips Chrome
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,8 +21,6 @@ const ownerEmail = "owner@starter.test";
 const passwords = { owner: `owner-${crypto.randomUUID()}`, ana: `ana-${crypto.randomUUID()}`, ben: `ben-${crypto.randomUUID()}`, olga: `olga-${crypto.randomUUID()}` };
 const people = { ana: "ana@starter.test", ben: "ben@starter.test", olga: ownerEmail };
 const webhookSecret = `status-${crypto.randomUUID()}`;
-// The team inbox's route secret. The starter holds the same value to sign its calls,
-// set with "use": "call", since one owner's route secrets must differ.
 const inboxSecret = `inbox-${crypto.randomUUID()}`;
 const inboxPlaceholder = "http://inbox.localhost/hooks/events";
 const editorSecret = `editor-${crypto.randomUUID()}`;
@@ -54,13 +40,11 @@ function check(scenario: string, result: string) {
 function refused(primitive: string, request: string, answer: string) {
   refusals.push({ primitive, request, answer });
 }
-/** The message a promise rejects with; fails when it resolves. */
 async function message(promise: Promise<unknown>) {
   try { await promise; } catch (error) { return error instanceof Error ? error.message : String(error); }
   assert.fail("Expected a refusal.");
 }
 
-// ------------------------------------------------------------------ Kernels
 
 type Kernel = { url: string; data: string; owner: McpClient; ownerCookie: string };
 
@@ -86,7 +70,6 @@ async function startKernel(kernelPort: number, name: string): Promise<Kernel> {
     if (!ready) await Bun.sleep(100);
   }
   assert(ready, `Kernel ${name} did not start on port ${kernelPort}.`);
-  // Required verification covers the creator too: the setup key answers 202 and a link.
   const signup = await post(url, "/_konae/owner/signup", { email: ownerEmail, setupKey });
   assert.equal(signup.status, 202, await signup.clone().text());
   const verify = await post(url, "/_konae/owner/verify", { token: (await mail(data, ownerEmail, "verification")).token, password: passwords.owner });
@@ -106,7 +89,6 @@ const signupHint = "Email or password is incorrect. If you signed up with this e
 const cookieOf = (response: Response) => response.headers.get("set-cookie")?.split(";")[0];
 const tokenOfCookie = (cookie: string) => cookie.split("=").slice(1).join("=");
 
-/** An MCP client whose every request carries these headers and a fresh client address. */
 function client(endpoint: string, headers: Record<string, string>) {
   return new McpClient(endpoint, { fetch: (input, init) => {
     const merged = new Headers(init?.headers);
@@ -122,7 +104,6 @@ async function mailbox(data: string) {
 }
 const mailCount = async (data: string, to: string, purpose: string) => (await mailbox(data)).filter((item) => item.to === to && item.purpose === purpose).length;
 
-/** Waits for a development email of one purpose to one address, beyond the first `after`, and returns its token. */
 async function mail(data: string, to: string, purpose: string, after = 0) {
   for (const deadline = Date.now() + 15_000; Date.now() < deadline; await Bun.sleep(100)) {
     const matches = (await mailbox(data)).filter((item) => item.to === to && item.purpose === purpose);
@@ -134,11 +115,9 @@ async function mail(data: string, to: string, purpose: string, after = 0) {
   assert.fail(`No ${purpose} email reached ${to}.`);
 }
 
-// ---------------------------------------------------------------- one app
 
 type Receipt = { id: string; url: string };
 
-/** Speaks to one Deployment's host as a browser, a program or a sender would. */
 function app(kernel: Kernel, receipt: Receipt) {
   const host = new URL(receipt.url).hostname;
   const origin = new URL(receipt.url).origin;
@@ -151,14 +130,12 @@ function app(kernel: Kernel, receipt: Receipt) {
     if (init.bearer) headers.set("authorization", `Bearer ${init.bearer}`);
     return fetch(kernel.url + route, { method, headers, body: init.body, redirect: "manual" });
   };
-  /** A route's answer as { status, body }. */
   const route = async (method: "GET" | "POST", routePath: string, init: Parameters<typeof http>[2] = {}) => {
     const response = await http(method, routePath, init);
     return { status: response.status, body: await response.json() as any };
   };
   const runtime = (cookie?: string) => client(`${kernel.url}/_konae/mcp`, cookie ? { host, cookie } : { host });
   const auth = (route: string, body: unknown) => post(kernel.url, route, body, { host });
-  /** Open signup under required verification: the email, then the link with the password. */
   const signUp = async (email: string, password: string) => {
     const before = await mailCount(kernel.data, email, "verification");
     const started = await auth("/_konae/auth/signup", { email });
@@ -182,13 +159,11 @@ function app(kernel: Kernel, receipt: Receipt) {
 
 const action = <T = any>(caller: McpClient, name: string, input: object = {}) => caller.call<T>("actions_invoke", { name, input });
 
-/** Publishes the inbox showcase on a Kernel, as the team inbox the starter calls. */
 async function publishInbox(kernel: Kernel): Promise<Receipt> {
   const projectId = "showcase_inbox";
   const manifest = { version: 1, visibility: "private" };
   await kernel.owner.call("project_create", { projectId, name: "Inbox", slug: "inbox", manifest });
   await kernel.owner.call("secret_set", { projectId, name: "events_webhook", value: inboxSecret });
-  // The inbox also takes a code host's and a payment provider's webhooks (ADR-0013); each route needs its own secret before it publishes.
   await kernel.owner.call("secret_set", { projectId, name: "github_webhook", value: `gh_starter_${crypto.randomUUID().replaceAll("-", "")}` });
   await kernel.owner.call("secret_set", { projectId, name: "payments_webhook", value: `whsec_starter_${crypto.randomUUID().replaceAll("-", "")}` });
   const dir = path.join(scratch, "inbox");
@@ -204,7 +179,6 @@ async function publishInbox(kernel: Kernel): Promise<Receipt> {
   } finally { await kernel.owner.cancel(upload.transferId).catch(() => {}); }
 }
 
-/** Reads until `done` holds, for answers the Kernel's call worker writes a moment later. */
 async function until<T>(read: () => Promise<T>, done: (value: T) => boolean, what: string): Promise<T> {
   for (const deadline = Date.now() + 15_000; Date.now() < deadline; await Bun.sleep(100)) {
     const value = await read();
@@ -227,7 +201,6 @@ function cli(args: string[], env: Record<string, string> = {}) {
   return Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
 }
 
-// A real PNG so the avatar renders in Chrome.
 function crc32(bytes: Uint8Array) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
@@ -258,7 +231,6 @@ try {
   const sources = Object.fromEntries(await Promise.all(capsuleFiles.map(async (name) => [name, await readFile(path.join(import.meta.dir, name), "utf8")] as const)));
   const program = JSON.parse(sources["actions.json"]);
 
-  // ------------------------------------------------- the Gate and the LIMIT rule
   const gate = createCapsuleValidator(() => initSqlJs());
   const passed = await gate.validate({ "schema.sql": sources["schema.sql"], "actions.json": sources["actions.json"] } as never);
   assert.equal(passed.ok, true, JSON.stringify(passed.errors));
@@ -272,14 +244,11 @@ try {
   const A = await startKernel(port, "origin");
   const B = await startKernel(port + 1, "destination");
 
-  // The team inbox on the same Kernel. status.escalate names its route; the
-  // checked-in actions.json holds a placeholder the owner replaces with their inbox's URL.
   const inbox = await publishInbox(A);
   const inboxUrl = `${new URL(inbox.url).origin}/hooks/events`;
   sources["actions.json"] = sources["actions.json"].replace(inboxPlaceholder, inboxUrl);
   program.actions["status.escalate"].url = inboxUrl;
 
-  // The Kernel refuses the same statement when a release carries it.
   await A.owner.call("project_create", { projectId: "starter_probe", name: "Starter probe", slug: "starter-probe", manifest: { version: 1, visibility: "public" } });
   const probe = { project: { id: "starter_probe", name: "Starter probe", slug: "starter-probe", manifest: { version: 1, visibility: "public" }, files: { ...sources, "actions.json": JSON.stringify(unbounded) } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>probe</main>" } } };
   const probeUpload = await A.owner.upload(json(probe), "starter_probe");
@@ -289,7 +258,6 @@ try {
   refused("LIMIT rule", "notes.list without its LIMIT, in the Gate and on release_plan", kernelLimitRefusal);
   check("Gate", `The Gate passes the Capsule's 29 actions. notes.list without its LIMIT is refused by the Gate and by the Kernel's release_plan with the same words: "${kernelLimitRefusal}"`);
 
-  // ------------------------------------------------------- the CLI publishes
   const cliDir = path.join(scratch, "cli");
   await mkdir(cliDir);
   const ownerEnv = { KONAE_EMAIL: ownerEmail, KONAE_PASSWORD: passwords.owner };
@@ -300,7 +268,6 @@ try {
   const config = JSON.parse(await readFile(path.join(cliDir, "konae.json"), "utf8"));
   const initPolicy = config.signupPolicy.mode;
   const initVisibility = config.visibility;
-  // Replace the template in app/ with the Capsule and ask for a public app with open signup.
   await rm(appDir(cliDir), { recursive: true });
   await mkdir(appDir(cliDir));
   for (const name of capsuleFiles) await cp(path.join(import.meta.dir, name), path.join(appDir(cliDir), name));
@@ -315,7 +282,6 @@ try {
   assert(unsetErr.includes(unsetSecret), unsetErr);
   refused("Signed route", "konae publish before secret_set", unsetSecret);
   await A.owner.call("secret_set", { projectId, name: "status_webhook", value: webhookSecret });
-  // The inbox's value as a route secret would collide with the inbox project's; for calls only it may repeat it.
   const reusedSecret = await message(A.owner.call("secret_set", { projectId, name: "inbox_events", value: inboxSecret }));
   assert.equal(reusedSecret, "Another of your projects already uses this secret value. A signature does not name the app, so a request signed for one would be accepted by the other. Set a different value.");
   await A.owner.call("secret_set", { projectId, name: "inbox_events", value: inboxSecret, use: "call" });
@@ -330,7 +296,6 @@ try {
   assert.equal(policy.mode, "open");
   check("CLI publish", `konae login, init, build and publish ran against the local Kernel. init wrote a ${initVisibility} app with signup ${initPolicy}; with konae.json set to public and open, publish was refused until secret_set, then served ${receipt.url} with signup ${policy.mode}.`);
 
-  // --------------------------------------------- the editor's path publishes too
   const editorId = "showcase_starter_editor";
   const manifest = {
     version: 1, visibility: "public",
@@ -345,7 +310,6 @@ try {
   const saved = await A.owner.call<{ revision: number }>("project_sources_save", { projectId: editorId, transferId: saveUpload.transferId, expectedRevision: 0 });
   await A.owner.cancel(saveUpload.transferId).catch(() => {});
   assert.deepEqual(saved, { revision: 1 });
-  // One owner's two projects cannot share a signing secret, so the editor's copy gets its own.
   await A.owner.call("secret_set", { projectId: editorId, name: "status_webhook", value: editorSecret });
   await A.owner.call("secret_set", { projectId: editorId, name: "inbox_events", value: inboxSecret, use: "call" });
   const editorRoot = path.join(scratch, "editor");
@@ -357,8 +321,6 @@ try {
   const editorReceipt = await A.owner.call<Receipt>("release_apply", { planId: editorPlan.planId });
   await A.owner.cancel(releaseUpload.transferId).catch(() => {});
   const M = app(A, editorReceipt);
-  // Every file the page loads, from both doors, built from two folders: byte for byte the same,
-  // and no bundler comment names either folder.
   let servedBytes = 0;
   for (const file of ["/", "/app.js", "/styles.css", "/favicon.svg"]) {
     const fromCli = await (await S.http("GET", file)).text();
@@ -369,7 +331,6 @@ try {
   }
   check("Editor publish", `project_sources_save reached revision ${saved.revision} and release_plan/release_apply served ${editorReceipt.url}. Its page, app.js, styles.css and favicon.svg (${servedBytes} bytes) are byte for byte the CLI deployment's, though each was built in its own folder, and no bundler comment names either folder.`);
 
-  // ----------------------------------------------- open signup, verification required
   const anaStart = await S.auth("/_konae/auth/signup", { email: people.ana });
   assert.equal(anaStart.status, 202);
   const anaBrowser = cookieOf(anaStart)!;
@@ -390,20 +351,15 @@ try {
     ben: await ben.call<{ userId: string; role: string }>("auth_session"),
     olga: await olga.call<{ userId: string; name: string; role: string }>("auth_session"),
   };
-  // The Konae owner's own email signs up as an ordinary app account.
   assert.equal(sessions.olga.name, ownerEmail);
   assert.equal(sessions.olga.role, "member");
   check("Verified open signup", `Signup answers 202 with no session cookie, only the signup hint; the pending account's sign-in from Ana's browser answers ${pendingLogin.status} with the hint to open the link first, and from another browser the plain 401; and the emailed link sets the password and opens a session. Ana, Ben and the owner's app account are active, all three members.`);
 
-  // Each person joins the app once; a second join changes nothing.
   for (const [who, caller] of [["ana", ana], ["ben", ben], ["olga", olga]] as const) {
     assert.equal((await action(caller, "me.join", { displayName: who })).changes, 1);
     assert.equal((await action(caller, "me.join", { displayName: `${who} again` })).changes, 0);
   }
 
-  // ------------------------------------------------- a team admin, promoted by the owner
-  // Everyone joins as member. The Konae owner names Olga the app's owner with owner SQL,
-  // as the Data panel does; the Kernel keeps no role.
   assert.equal((await action(olga, "me.get"))[0].role, "member");
   const ownerNamed = await A.owner.call<{ changes: number }>("database_execute", { deploymentId: receipt.id, operation: "sql", input: { sql: `UPDATE profiles SET role = 'owner' WHERE user_id = '${sessions.olga.userId}'` } });
   assert.equal(ownerNamed.changes, 1, JSON.stringify(ownerNamed));
@@ -434,7 +390,6 @@ try {
   assert.equal(stats.admins, 1);
   check("Owner and team admin", `Everyone joins as member and auth_session says member for every account. The Konae owner names Olga the app's owner with database_execute sql on the profiles table, and the owner-only actions check that row against actor.id. Ben's members.promote is refused with "${benPromotes}"; Ana sees an empty roster and is refused a team post until the owner promotes her with members.promote, a guarded mutation. Then team.roster lists ana (admin) and olga (owner), her post lands, and her own members.promote, members.list and admin.stats get the guard or no rows. Ben still reads no team row.`);
 
-  // ------------------------------------------------------- the visitor's view
   const visitor = S.runtime();
   assert.equal((await visitor.call<{ role: string }>("auth_session")).role, "anonymous");
   const visitorNotes = await message(action(visitor, "notes.list", { before: null, q: null }));
@@ -446,13 +401,11 @@ try {
   const visitorWrite = await S.route("POST", "/api/updates", { body: JSON.stringify({ title: "Spam" }) });
   assert.deepEqual(visitorWrite, { status: 401, body: { error: "authentication-required" } });
   refused("Private write API", "A visitor's POST /api/updates with no key", `${visitorWrite.status} ${JSON.stringify(visitorWrite.body)}`);
-  // A member's session from the app's own origin does not open a key-only route either.
   const benOnKeyRoute = await S.route("POST", "/api/updates", { body: JSON.stringify({ title: "From Ben" }), cookie: cookies.ben, headers: { origin: S.origin } });
   assert.deepEqual(benOnKeyRoute, { status: 401, body: { error: "authentication-required" } });
   const visitorAdmin = await message(visitor.call("app_users_list", { deploymentId: receipt.id }));
   refused("Visitor", "app_users_list on the runtime endpoint", visitorAdmin);
 
-  // ------------------------------------------ the private write API with a key
   const bot = await A.owner.call<{ key: string; keyId: string }>("api_keys_create", { deploymentId: receipt.id, name: "Release bot", actions: ["updates.post"] });
   for (let n = 1; n <= 12; n++) {
     const posted = await S.route("POST", "/api/updates", { body: JSON.stringify({ title: `Release 1.${n}`, body: n % 3 === 0 ? "Includes a fix for search." : null }), bearer: bot.key });
@@ -475,11 +428,9 @@ try {
   assert.deepEqual(botRows, [{ author_id: bot.keyId, source: "program" }]);
   check("Private write API", `A key named "Release bot", scoped to updates.post, writes 12 updates over POST /api/updates; each row's author_id is the key's ID ${bot.keyId}. The same key is refused on the webhook with 403 "This API key may not call <action>.", an undeclared field answers 400, the runtime endpoint answers 403, an unknown key 401, and a visitor or Ben's session 401 authentication-required.`);
 
-  // ---------------------------------------- pagination and search, public and private
   const page1 = await S.route("GET", "/api/updates");
   assert.equal(page1.status, 200);
   assert.equal(page1.body.result.length, 10);
-  // Every column the SELECT names arrives, with the keys in alphabetical order rather than the SELECT's.
   const routeKeys = Object.keys(page1.body.result[0]);
   assert.deepEqual([...routeKeys].sort(), ["author", "body", "id", "published_at", "source", "title"]);
   refused("Public read API", "GET /api/updates, whose SELECT lists id, title, body, source, published_at, author", `Each row's keys arrive as ${routeKeys.join(", ")}`);
@@ -495,7 +446,6 @@ try {
   refused("Public read API", "GET /api/updates?before=last", `${mistyped.status} ${mistyped.body.error}`);
   const headRoute = await S.http("HEAD", "/api/updates");
   assert.equal(headRoute.status, 405);
-  // Ana's 25 notes, read 20 at a time; Ben's one note never shows up in hers.
   for (let n = 1; n <= 25; n++) assert.equal((await action(ana, "notes.add", { title: `Note ${n}`, body: n === 7 ? "Ask about the invoice" : null })).changes, 1);
   assert.equal((await action(ben, "notes.add", { title: "Ben's private note", body: "invoice 4471" })).changes, 1);
   const notes1 = await action(ana, "notes.list", { before: null, q: null });
@@ -505,7 +455,6 @@ try {
   assert.deepEqual(anaInvoice.map((row: any) => row.title), ["Note 7"]);
   check("Pagination and search", `GET /api/updates answers 10 of 12 rows with the columns id, title, body, source, published_at and author; ?before=<last id> answers the other 2 and ?q=search the 4 that mention it. A repeated parameter answers 400 "${repeated.body.error}", a word for a number 400 "${mistyped.body.error}", HEAD 405. Ana's 25 notes come back 20 and 5, and her search for "invoice" finds her note and not Ben's.`);
 
-  // ------------------------------------------------------- rows bound to each member
   const benNotes = await action(ben, "notes.list", { before: null, q: null });
   assert.deepEqual(benNotes.map((row: any) => row.title), ["Ben's private note"]);
   const benDeletes = await message(action(ben, "notes.remove", { id: notes1[0].id }));
@@ -518,7 +467,6 @@ try {
   assert.equal((await action(ana, "notes.remove", { id: notes1[0].id })).changes, 1);
   check("Rows bound to each member", `Ben reads only his own note; deleting one of Ana's answers "${benDeletes}"; naming her user ID answers "${benAsks}". Ana deletes her own.`);
 
-  // --------------------------------------------------------- the signed webhook
   const operational = JSON.stringify({ component: "api", state: "operational", detail: "All systems normal" });
   const firstSignature = await S.sign(operational);
   assert.deepEqual(await S.hook(operational, firstSignature), { status: 200, body: { result: { changes: 1, lastInsertId: 1 } } });
@@ -536,7 +484,6 @@ try {
   const degraded = JSON.stringify({ component: "api", state: "degraded", detail: "Slow uploads" });
   const lastSignature = await S.sign(degraded);
   assert.equal((await S.hook(degraded, lastSignature)).body.result.changes, 1);
-  // A retry signed again with a new nonce is a new request, and it changes nothing.
   assert.equal((await S.hook(degraded, await S.sign(degraded))).body.result.changes, 0);
   const badState = JSON.stringify({ component: "api", state: "on fire" });
   const checkFailed = await S.hook(badState, await S.sign(badState));
@@ -545,7 +492,6 @@ try {
   assert.deepEqual(publicStatus.map((row: any) => [row.component, row.state, row.detail]), [["api", "degraded", "Slow uploads"]]);
   check("Signed webhook", `POST /hooks/status signed with status_webhook inserts the api row and a second delivery updates it to degraded, which the visitor reads with status.list. Replayed answers ${replayed.status}, unsigned ${unsigned.status} ${unsigned.body.error}, stale ${stale.status} ${stale.body.error}, another secret ${forged.status}. An identical delivery with a fresh nonce changes 0 rows.`);
 
-  // ------------------------------------------ a call to the team inbox on the status change
   const [apiStatus] = await action(visitor, "status.list");
   const escalation = { component: "api", changedAt: apiStatus.updated_at, eventId: `api-${apiStatus.updated_at}`, severity: "warning", title: `api is ${apiStatus.state}: ${apiStatus.detail}` };
   const visitorEscalates = await message(action(visitor, "status.escalate", escalation));
@@ -560,11 +506,9 @@ try {
   const I0 = app(A, inbox);
   const inboxEvents = async () => (await I0.route("GET", "/api/events", { bearer: inboxKey.key })).body.result.map((row: any) => [row.source, row.external_id, row.severity, row.title]);
   assert.deepEqual(await inboxEvents(), [["starter", escalation.eventId, "warning", "api is degraded: Slow uploads"]]);
-  // The same change again: the inbox keeps one event per source and ID, and the starter records that.
   await action(ana, "status.escalate", escalation);
   const secondAnswer = await until(escalations, (rows) => rows.length === 2, "the inbox's second answer");
   assert.deepEqual(pick(secondAnswer[0]), ["api", apiStatus.updated_at, 200, 0, null]);
-  // A call runs no SQL, so no WHERE checks the caller's role: Ben, a member, is queued too.
   const benQueued = await action(ben, "status.escalate", { ...escalation, eventId: "api-from-ben", title: "Ben says api is down" });
   assert.equal(benQueued.queued, true);
   await until(escalations, (rows) => rows.length === 3, "Ben's call");
@@ -579,7 +523,6 @@ try {
   ]);
   check("Call to the team inbox", `After the webhook marks api degraded, Ana's status.escalate answers { callId, queued: true }. The Kernel signs POST ${inboxUrl} with inbox_events, a secret set for calls only because the inbox project holds the same value as its route secret, and the inbox's signed route files one event with source "starter", a constant the page cannot change. status.escalated stores status 200 and filed 1; the same change again stores filed 0, since the inbox keeps one event per ID. A visitor's call answers ${visitorEscalates}, writing the answer by hand answers "${forgedAnswer}", and calls_read lists the three calls delivered on the first attempt.`);
 
-  // ------------------------------------------------------------------- files
   const avatar = await upload(ana, anaAvatar, "ana.png", "image/png", "public");
   assert.equal((await action(ana, "me.avatar", { fileId: avatar.id })).changes, 1);
   const contract = new TextEncoder().encode("Draft contract: payment in 30 days.");
@@ -592,12 +535,10 @@ try {
   assert.equal((await action(ana, "attachments.add", { fileId: photos.id, name: photos.name, size: photos.size })).changes, 1);
   const [photosRow, brochureRow] = await action(ana, "attachments.list");
 
-  // The avatar is public: a visitor reads it inline.
   const visitorAvatar = await S.fileGet(avatar.id);
   assert.equal(visitorAvatar.status, 200);
   assert.equal(visitorAvatar.headers.get("content-type"), "image/png");
   assert.match(visitorAvatar.headers.get("content-disposition") ?? "", /^inline/);
-  // The attachment is private: a visitor and Ben get the same 404 as for a missing file.
   const visitorDraft = await S.fileGet(draft.id);
   const visitorDraftText = await visitorDraft.text();
   assert.equal(visitorDraft.status, 404);
@@ -615,13 +556,11 @@ try {
   refused("File owner", "Ben's files_update on Ana's private draft", benChangesDraft);
   const benPublishes = await message(action(ben, "attachments.publish", { id: brochureRow.id }));
   assert.equal(benPublishes, program.actions["attachments.publish"].guard);
-  // A key with no file scope reads what a visitor reads: the public avatar, not the private draft.
   const botAvatar = await S.fileGet(avatar.id, { bearer: bot.key });
   assert.equal(botAvatar.status, 200, await botAvatar.clone().text());
   assert.equal(botAvatar.headers.get("content-type"), "image/png");
   assert.equal((await S.fileGet(draft.id, { bearer: bot.key })).status, 404);
 
-  // Publishing is two steps: the bytes become public, then the row is listed.
   await ana.call("files_update", { fileId: brochure.id, visibility: "public" });
   assert.equal((await action(ana, "attachments.publish", { id: brochureRow.id })).changes, 1);
   const publishTwice = await message(action(ana, "attachments.publish", { id: brochureRow.id }));
@@ -635,7 +574,6 @@ try {
   assert.deepEqual(visitorList, [avatar.id, brochure.id].sort());
   assert.deepEqual(await action(visitor, "downloads.opened", { fileId: brochure.id }), { recorded: true });
 
-  // Fill the 20 MiB quota with Ben's 2 MiB files until the Kernel refuses one.
   const filler = new Uint8Array(2 * MiB).fill(1);
   const fillers: string[] = [];
   let quotaRefusal = "";
@@ -646,7 +584,6 @@ try {
   }
   assert.equal(quotaRefusal, "This deployment has reached its 20 MiB file quota.");
   refused("File quota", `Ben's upload of a ${fillers.length + 1}th 2 MiB file once the app holds ${fillers.length * 2} MiB of his and 2 MiB of Ana's`, quotaRefusal);
-  // Deleting Ana's 2 MiB attachment frees the room, and the same upload goes through.
   assert.deepEqual(await ana.call("files_delete", { fileId: photos.id }), { id: photos.id, deleted: true });
   assert.equal((await action(ana, "attachments.remove", { id: photosRow.id })).changes, 1);
   fillers.push((await upload(ben, filler, `filler-${fillers.length}.bin`, "application/octet-stream")).id);
@@ -657,12 +594,10 @@ try {
   assert.deepEqual((await action(ana, "attachments.list")).map((row: any) => [row.name, row.public]), [["brochure.txt", 1], ["contract-draft.txt", 0]]);
   check("Files", `Ana's avatar is public and a visitor reads it inline, as does the Release bot key, which names no file visibility; her draft is private, so a visitor and Ben get 404 "File not found." as for a missing file, and Ben's files_update and files_delete are refused. Publishing the brochure takes files_update and attachments.publish, then downloads.list and a visitor read it. ${fillers.length - 1} of Ben's 2 MiB files plus Ana's 2 MiB attachment fill the quota and the next upload answers "${quotaRefusal}"; Ana deletes her attachment, the file path and files_read answer 404 and "File not found.", and Ben's same upload succeeds.`);
 
-  // --------------------------------------- a guard and its refusal, for the page
   const renameTaken = await message(action(ana, "me.rename", { displayName: "Ben" }));
   assert.equal(renameTaken, program.actions["me.rename"].guard);
   assert.equal((await action(ana, "me.rename", { displayName: "Ana" })).changes, 1);
 
-  // ------------------------------------------------------------ Signals and Usage
   const signals: { name: string; properties: Record<string, unknown> }[] = [];
   for (let cursor: string | null = null; ;) {
     const page = await A.owner.call<{ signals: typeof signals; nextCursor: string | null }>("signals_read", { deploymentId: receipt.id, ...(cursor ? { cursor } : {}) });
@@ -694,7 +629,6 @@ try {
   refused("Signals", "The in-app owner's session calls signals_read on the runtime endpoint", appReadsSignals);
   check("Signals and Usage", `signals_read returns ${signals.length} Signals. member.joined fires once per person although each joined twice; note.added names its writer; the 12 program updates name the key ${bot.keyId}; status.changed fires for the two deliveries that changed the row with actor null, not for the identical retry; role.changed names the owner for Ana's promotion, and none of the four refused role and team calls recorded one. Usage counts refused members.promote ${total("refused", "members.promote")}, refused team.post ${total("refused", "team.post")}, POST /api/updates ${total("route", "POST /api/updates")}, POST /hooks/status ${total("route", "POST /hooks/status")}, signup ${total("signup")}. The app itself cannot read them: "${appReadsSignals}".`);
 
-  // --------------------------------------------- Action Contract and conform
   const contractDir = path.join(scratch, "contract");
   await mkdir(appDir(contractDir), { recursive: true });
   for (const name of capsuleFiles) await writeFile(path.join(appDir(contractDir), name), sources[name]);
@@ -713,7 +647,6 @@ try {
   const unknownColumns = queries.flatMap((item: any) => item.output.columns.filter((column: any) => column.type === "unknown").map((column: any) => `${item.name}.${column.name}`));
   assert.deepEqual(unknownColumns, ["admin.stats.members", "admin.stats.admins", "admin.stats.notes", "admin.stats.attachments", "admin.stats.published", "admin.stats.updates"]);
   refused("Action Contract", "admin.stats returns six COUNT(*) columns, each aliased", `Each is typed "unknown" with nullable null: ${unknownColumns.join(", ")}`);
-  // conform runs every mutation once, so it targets the editor's Deployment, not the one that travels.
   const conformCookie = await M.signUp("conform@starter.test", `conform-${crypto.randomUUID()}`);
   const conformKey = await A.owner.call<{ key: string }>("api_keys_create", { deploymentId: editorReceipt.id, name: "Conformance", actions: ["updates.post", "status.report"] });
   const inputsFile = path.join(scratch, "conform-inputs.json");
@@ -730,16 +663,12 @@ try {
     conformFailures[label] = out.split("\n").filter((line) => line.startsWith("FAIL "));
     assert.match(conformRuns[label], /^\d+ passed, \d+ failed, \d+ skipped/, out + err);
   }
-  // A member holds no role, so every role-guarded mutation answers its guard, and the probe
-  // that omits updates.publish's nullable body passes on the same guard.
   assert.deepEqual(conformFailures["session, key and secret"], []);
-  // conform sends no call, so status.escalate's valid call is the one skip.
   assert.match(conformRuns["session, key and secret"], /^\d+ passed, 0 failed, 1 skipped/);
   assert.deepEqual(conformFailures["key and secret"], []);
   assert.match(conformRuns["key and secret"], /^\d+ passed, 0 failed, \d+ skipped/);
   check("Action Contract and conform", `konae contract writes 29 actions with no warning, and every query names each column it returns. conform against ${editorReceipt.url}: with a session, a key and the secret "${conformRuns["session, key and secret"]}", the member meeting every role's guard; with the key and the secret "${conformRuns["key and secret"]}", the session-only actions skipped.`);
 
-  // ------------------------------------------- package export, import on Kernel B
   const exported = await A.owner.call<{ manifest: any; downloads: Record<string, Transfer> }>("project_export", { deploymentId: receipt.id });
   assert.deepEqual(exported.manifest.signupPolicy, { mode: "open", allowlist: [] });
   assert.equal(exported.manifest.visibility, "public");
@@ -748,7 +677,6 @@ try {
   const projectManifest = { ...config.manifest, version: 1, visibility: config.visibility };
   const project = { id: config.id, name: config.name, slug: config.slug };
   await B.owner.call("project_create", { projectId, name: project.name, slug: project.slug, manifest: projectManifest });
-  // Secrets never travel. The sender keeps its one secret, so the destination's owner sets the same value.
   await B.owner.call("secret_set", { projectId, name: "status_webhook", value: webhookSecret });
   await B.owner.call("secret_set", { projectId, name: "inbox_events", value: inboxSecret, use: "call" });
   const components: Record<string, string> = {};
@@ -762,7 +690,6 @@ try {
   const I = app(B, imported);
   assert.equal((await B.owner.call<{ mode: string }>("signup_policy_read", { deploymentId: imported.id })).mode, "open");
 
-  // Every account signs in with its password; the origin's sessions do not travel.
   const anaWithOriginCookie = I.runtime(cookies.ana);
   assert.equal((await anaWithOriginCookie.call<{ role: string }>("auth_session")).role, "anonymous");
   const originSession = await message(action(anaWithOriginCookie, "notes.list", { before: null, q: null }));
@@ -771,7 +698,6 @@ try {
   const logins = { ana: await I.login(people.ana, passwords.ana), ben: await I.login(people.ben, passwords.ben), olga: await I.login(people.olga, passwords.olga) };
   assert.deepEqual(Object.values(logins).map((login) => login.status), [200, 200, 200]);
   const anaB = I.runtime(logins.ana.cookie), benB = I.runtime(logins.ben.cookie), olgaB = I.runtime(logins.olga.cookie), visitorB = I.runtime();
-  // Rows, roles and guards.
   assert.equal((await action(anaB, "notes.list", { before: null, q: null })).length, 20);
   assert.deepEqual((await action(benB, "notes.list", { before: null, q: null })).map((row: any) => row.title), ["Ben's private note"]);
   assert.equal(await message(action(benB, "notes.remove", { id: notes2[0].id })), program.actions["notes.remove"].guard);
@@ -780,7 +706,6 @@ try {
   assert.equal(await message(action(benB, "team.post", { body: "Still no" })), program.actions["team.post"].guard);
   assert.equal((await action(olgaB, "members.list", { q: null })).length, 3);
   assert.equal(await message(action(anaB, "me.rename", { displayName: "ben" })), program.actions["me.rename"].guard);
-  // Files and their visibility.
   assert.equal((await I.fileGet(avatar.id)).status, 200);
   assert.equal((await I.fileGet(brochure.id)).status, 200);
   assert.equal((await I.fileGet(draft.id)).status, 404);
@@ -789,7 +714,6 @@ try {
   assert.equal((await I.fileGet(photos.id, { cookie: logins.ana.cookie })).status, 404);
   assert.equal(await message(action(visitorB, "notes.list", { before: null, q: null })), "authentication-required");
   assert.equal((await I.route("GET", "/api/updates")).body.result.length, 10);
-  // Keys arrive revoked; the destination's owner issues a new one.
   const oldKey = await I.route("POST", "/api/updates", { body: JSON.stringify({ title: "From the origin key" }), bearer: bot.key });
   assert.deepEqual(oldKey, { status: 401, body: { error: "invalid-api-key" } });
   refused("Import", "The origin's Release bot key on the destination", `${oldKey.status} ${oldKey.body.error}`);
@@ -798,14 +722,11 @@ try {
   const botB = await B.owner.call<{ key: string }>("api_keys_create", { deploymentId: imported.id, name: "Release bot", actions: ["updates.post"] });
   assert.equal((await I.route("POST", "/api/updates", { body: JSON.stringify({ title: "Release 1.13" }), bearer: botB.key })).status, 200);
   assert.deepEqual(await I.route("POST", "/hooks/status", { body: JSON.stringify({ component: "api", state: "down" }), bearer: botB.key }), { status: 403, body: { error: "This API key may not call status.report." } });
-  // The origin's last accepted delivery, captured and replayed at the destination, is refused:
-  // the memory of signatures travels with the accounts. Past 300 seconds it is stale anyway.
   const lastAge = Math.floor(Date.now() / 1000) - Number(lastSignature.match(/^t=(\d+)/)![1]);
   const originSigned = await I.hook(degraded, lastSignature);
   assert.deepEqual(originSigned, lastAge < 290 ? { status: 409, body: { error: "replayed-signature" } } : { status: 401, body: { error: "stale-timestamp" } });
   refused("Import", `The origin's last accepted webhook delivery, ${lastAge} seconds old, replayed on the destination`, `${originSigned.status} ${originSigned.body.error}`);
   assert.equal((await I.hook(operational, await I.sign(operational))).body.result.changes, 1);
-  // Signals and the open, verified signup travel too.
   const signalsB = await B.owner.call<{ signals: unknown[]; nextCursor: string | null }>("signals_read", { deploymentId: imported.id, name: "note.added" });
   assert.equal(signalsB.signals.length, 26);
   const newcomer = await I.auth("/_konae/auth/signup", { email: "dee@starter.test" });
@@ -813,7 +734,6 @@ try {
   assert.match(cookieOf(newcomer) ?? "", /^konae_signup=/, "No session before the link, only the signup hint.");
   check("Package export and import", `project_export carried ${exported.manifest.contents.map((item: any) => `${item.name} (${item.size} B)`).join(", ")}. Kernel B imported it after its own secret_set: Ana, Ben and the owner sign in with their passwords; rows, the admin and owner roles, every guard, the private draft, the public avatar and brochure, the deleted file's 404 and the visitor's limits hold. The origin's Release bot key answers invalid-api-key and appears as revoked at import; a new key works within its scope. The webhook takes the secret the owner set again, the origin's last delivery replayed answers ${originSigned.status} ${originSigned.body.error}, 26 note.added Signals arrived, and a new signup is still open and waits for its link.`);
 
-  // --------------------------------------------- Chrome under the app's policy
   if (process.env.KONAE_SHOWCASE_BROWSER !== "0") {
     if (shots) await mkdir(shots, { recursive: true });
     const browser = await chromium.launch({ channel: "chrome" });
@@ -852,7 +772,6 @@ try {
           }, undefined, { timeout: 10_000 });
         }
         if (who === "ana") {
-          // The guard's sentence reaches the person, in the page.
           await page.getByLabel("Display name").fill("ben");
           await page.getByRole("button", { name: "Save name" }).click();
           await page.locator("#notice[data-kind='error']").filter({ hasText: program.actions["me.rename"].guard }).waitFor({ timeout: 10_000 });

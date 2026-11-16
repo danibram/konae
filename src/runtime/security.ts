@@ -42,7 +42,6 @@ export function validateRuntimeParams(params: unknown): SqlValue[] {
   return params as SqlValue[];
 }
 
-/** The Kernel's refusal for a result past the row or byte cap, kernel-rs/kernel/src/lib.rs `bounded_rows`. */
 export const queryResultTooLarge = "Query result exceeds 2 MiB or 1000 rows.";
 
 export function assertRuntimeResultWithinLimits(rows: Record<string, SqlValue>[]) {
@@ -63,7 +62,6 @@ export function assertRuntimeDatabaseWithinLimits(value: Uint8Array | number) {
   }
 }
 
-/** The keyword a statement starts with, skipping leading comments. Uppercased, "" when there is none. */
 export function firstSqlKeyword(sql: string): string {
   let remaining = sql.trimStart();
   while (remaining.startsWith("--") || remaining.startsWith("/*")) {

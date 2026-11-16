@@ -6,13 +6,6 @@ import { Button, LoadingBlock, Select, Skeleton } from "./ui";
 import "./usage.css";
 import "./project-list.css";
 
-/**
- * What the owner sees from the first paint until the real screen is ready.
- * It draws the same chrome the finished screen draws, with the same boxes, so
- * the session check, the code chunk and the project load all happen inside one
- * stable frame. The page chrome never changes between stages. A skeleton fades
- * in only after the loading delay, counted from the page load.
- */
 export type BootKind = "projects" | "usage" | "design-system" | "editor";
 
 export function bootKindFor(pathname: string): BootKind {
@@ -33,7 +26,6 @@ export function BootShell({ kind = bootKindFor(window.location.pathname), ownerS
 }
 
 function ProjectsBoot({ label, signedIn }: { label: string; signedIn: boolean }) {
-  // Until the session is known nothing is drawn but the frame: a signed-out visit leaves for sign-in without a flash of the list.
   return <section className="account-content project-list">
     {signedIn && <>
       <header className="project-list-head"><h1>Projects</h1><Skeleton width={128} height={36} /></header>
@@ -64,7 +56,6 @@ function UsageBoot({ label }: { label: string }) {
   </section>;
 }
 
-/** The Apps heading and a few table rows, shared by the boot and the first usage read. */
 export function UsageLoadingShapes() {
   return <>
     <Skeleton width={60} height={22} />
@@ -90,7 +81,6 @@ function DesignSystemBoot({ label }: { label: string }) {
   </section>;
 }
 
-/** The editor's top bar and section bar, with the project name and the actions still to come. */
 function EditorBoot({ label }: { label: string }): ReactNode {
   return <div className="workshop" aria-busy="true">
     <header className="topbar">

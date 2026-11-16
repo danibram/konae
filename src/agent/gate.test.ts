@@ -7,7 +7,6 @@ import { createCapsuleValidator } from "./gate";
 import { expectedOutcome } from "../kernel/refusal-cases";
 import { formatValidation } from "./tools";
 
-// sql.js resolves its own wasm under bun; the browser path uses the bundled url loader.
 let sql: Promise<SqlJsStatic> | undefined;
 const loadSql = () => (sql ??= initSqlJs());
 
@@ -21,7 +20,6 @@ function actions(source: unknown): string {
   return JSON.stringify(source);
 }
 
-/** The gate's view of a live database it could read. */
 function loaded(bytes: Uint8Array): LiveDatabase {
   return { state: "loaded", bytes };
 }
@@ -303,7 +301,6 @@ describe("validation gate", () => {
   });
 
   test("stage schema rejects a schema that cannot be re-run, with or without a live database", async () => {
-    // src/runtime/host.ts runs schema.sql on every database open, so one clean run proves nothing.
     const files = capsule({
       "schema.sql": starterProject.files["schema.sql"].replace("CREATE TABLE IF NOT EXISTS", "CREATE TABLE"),
     });
@@ -319,11 +316,6 @@ describe("validation gate", () => {
     expect(live.errors[0].stage).toBe("schema");
   });
 
-  /**
-   * The bug this pins: `DROP TABLE IF EXISTS tasks;` above the new CREATE passed
-   * the gate. The preview-rows stage runs on a copy, so the destruction is invisible
-   * there, and Apply then runs the same script against the owner's real database.
-   */
   test("stage schema refuses a schema.sql that destroys what is already there", async () => {
     const dropped = await validator.validate(
       capsule({ "schema.sql": "DROP TABLE IF EXISTS tasks;\nCREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);" }),
@@ -340,11 +332,6 @@ describe("validation gate", () => {
     expect(deleted.errors[0].message).toContain("DELETE");
   });
 
-  /**
-   * The bug this pins: only the leading keyword was checked, so a trigger that
-   * wiped rows on every seed INSERT passed, and the Kernel's schema authorizer,
-   * which only allows CREATE TABLE and CREATE INDEX, then refused it at deploy.
-   */
   test("refuses triggers and views, which the Kernel will not deploy", async () => {
     const trigger = await validator.validate(capsule({
       "schema.sql": `${starterProject.files["schema.sql"]}
@@ -369,11 +356,6 @@ END;`,
     expect(index.ok).toBe(true);
   });
 
-  /**
-   * The bug this pins: the gate allowed INSERT ... ON CONFLICT DO NOTHING,
-   * PRAGMA and BEGIN/COMMIT in schema.sql, and the Kernel's schema authorizer,
-   * which only allows CREATE TABLE and CREATE INDEX, then refused the deploy.
-   */
   test("refuses every statement the Kernel's schema authorizer refuses", async () => {
     const live = loaded(await exportDatabase(starterProject.files["schema.sql"]));
     for (const [statement, named] of [
@@ -395,11 +377,6 @@ END;`,
     }
   });
 
-  /**
-   * The bug this pins: the gate only looked for AS SELECT, so AS VALUES, AS
-   * WITH and a table named in the temp schema passed and the Kernel refused
-   * the deploy.
-   */
   test("refuses every CREATE TABLE ... AS form and the temp schema", async () => {
     for (const [statement, named] of [
       ["CREATE TABLE IF NOT EXISTS copy AS VALUES (1);", "CREATE TABLE ... AS"],
@@ -415,7 +392,6 @@ END;`,
     }
   });
 
-  /** Kept in step with the Kernel's authorizer, which allows SQL functions in schema except the ones that reach the host. */
   test("allows SQL functions in schema and refuses the dangerous ones", async () => {
     for (const statement of [
       "CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY, name TEXT CHECK (length(name) > 0));",
@@ -447,11 +423,6 @@ END;`,
     expect((await validator.validate(withPrivateNotes(cloneStarter()).files as CapsuleFiles)).ok).toBe(true);
   });
 
-  /**
-   * The bug this pins: an unreadable live database was swallowed into "there is
-   * none", so the same capsule flipped from blocked to a full pass and the panel
-   * still claimed the preview-rows stage held.
-   */
   test("a verdict names the stages that actually ran", async () => {
     const withoutDatabase = await validator.validate(capsule());
     expect(withoutDatabase.ok).toBe(true);
@@ -469,7 +440,6 @@ END;`,
   });
 
   test("stage preview-rows warns when schema.sql does not run on the preview's older table", async () => {
-    // Runs twice on an empty database, but the preview's tasks table predates the index's column.
     const live = await exportDatabase("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);");
     const result = await validator.validate(capsule({
       "schema.sql": "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due_at INTEGER);\nCREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks (due_at);",
@@ -481,8 +451,6 @@ END;`,
 });
 
 describe("the gate and the Kernel refuse the same actions.json", () => {
-  // Every table and column the shared case files name, so a statement the
-  // Kernel accepts also prepares here and only the declaration is judged.
   const caseSchema = [
     "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, external_id TEXT, total REAL, paid INTEGER, user_id TEXT, created_at INTEGER, note TEXT);",
     "CREATE TABLE IF NOT EXISTS members (id TEXT PRIMARY KEY, role TEXT);",
@@ -497,7 +465,6 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
     "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, title TEXT, assignee_id TEXT, due_day TEXT, reminded_at INTEGER, a, b, c, d, e, f, g, h);",
   ].join("\n");
 
-  // kernel-rs/kernel/src/notify.rs runs the same file against a schema in SQLite.
   test("every case in kernel-rs/kernel/src/notify-column-cases.json", async () => {
     const cases: { case: string; schema: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
       await Bun.file(new URL("../../kernel-rs/kernel/src/notify-column-cases.json", import.meta.url)).json();
@@ -509,8 +476,6 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
     }
   });
 
-  // signature-cases.json holds HMAC vectors for a route's sender, not
-  // declarations, so src/lib/route-signature.test.ts runs it instead.
   const files = ["action-cases.json", "sql-rule-cases.json", "http-binding-cases.json", "signal-cases.json", "guard-cases.json", "notify-cases.json", "schedule-cases.json"];
 
   for (const file of files) {
@@ -520,7 +485,6 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
       expect(cases.length).toBeGreaterThan(5);
       for (const item of cases) {
         if (item.schema !== undefined) {
-          // A schema.sql case: the gate's own stage names the refusal.
           const result = await validator.validate(capsule({ "schema.sql": item.schema, "actions.json": actions({ version: 1, actions: {} }) }));
           expect(result.errors.map((error) => ({ code: error.code, message: error.message })), item.case).toEqual(item.error === null ? [] : [expectedOutcome(item)]);
           continue;
@@ -530,7 +494,6 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
           expect(result.errors, item.case).toEqual([]);
         } else {
           expect(result.errors.map((error) => ({ code: error.code, message: error.detail })), item.case).toEqual([expectedOutcome(item)]);
-          // The model reads the formatted result, so the Kernel's words reach it.
           expect(formatValidation(result), item.case).toContain(item.error);
         }
       }

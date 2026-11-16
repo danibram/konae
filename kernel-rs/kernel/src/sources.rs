@@ -1,13 +1,3 @@
-//! The sources the editor saves, kept as files in the app's `app/`.
-//!
-//! The editor sends and receives one JSON document, `{ id, name, slug,
-//! files, encodings, directories, manifest, updatedAt }`. Its files become
-//! the files of `app/`, and its editable settings go to `konae.json`. A file
-//! whose bytes are UTF-8 is its text. Any other file, such as an image, is
-//! base64, and `encodings` names it with the value `base64`, as a Build
-//! Artifact does. A save writes the new files beside `app/` and then puts
-//! them in its place, so a reader sees the old sources or the new ones, never
-//! a mix. Callers hold the project lock.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -279,7 +269,6 @@ fn idempotent_schema_statement(kind: &str, sql: &str) -> Result<String> {
     Ok(format!("{} IF NOT EXISTS{}", &sql[..*end], suffix))
 }
 
-/// Recovers a complete applied-state snapshot from the old Installation record and live files.
 pub(crate) fn capture_released_state(root: &Path, id: &str, settings: &crate::Settings, installed: &crate::Installed) -> Result<crate::ReleasedSettings> {
     let mut snapshot = installed.released.clone().or_else(|| settings.released.clone()).unwrap_or_else(|| {
         let mut manifest = settings.manifest.clone();

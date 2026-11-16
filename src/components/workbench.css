@@ -1,7 +1,3 @@
-/* The workbench inside a project: a top bar, one row of sections, notices, the
-   stage, and on a wide screen the Describe rail beside them. Colours come from
-   the --ds tokens; the top bar stays dark in both themes. These rules load after
-   styles.css and replace its older workbench grid. */
 
 .workshop {
   grid-template-columns: minmax(0, 1fr);
@@ -20,13 +16,11 @@
 .workshop > .stage-notices { grid-area: notices; }
 .workshop > .workbench { grid-area: stage; }
 .workshop > .describe-rail, .workshop > .describe-strip { grid-area: rail; }
-/* Describe folded to a strip: the stage takes the rail's width. */
 .workshop.has-rail-strip {
   grid-template-columns: minmax(0, 1fr) 44px;
   grid-template-areas: "top top" "nav rail" "notices rail" "stage rail";
 }
 
-/* ---- Top bar: where you are, what state the app is in, the one action ---- */
 .workshop .topbar {
   --project-crumb-muted: #b9bcb0;
   --app-status-muted: #b9bcb0;
@@ -42,14 +36,12 @@
 }
 .workshop .topbar .brand { flex: none; height: 100%; background: transparent; color: inherit; border-right: 1px solid #3a3d34; }
 .topbar-place { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 16px; }
-/* The app's name keeps its room; the address gives way first. */
 .topbar-place .project-crumb { flex: 0 0 auto; max-width: 45%; }
 .topbar-place .topbar-changes { flex: none; }
 .topbar-place .topbar-status { flex: 0 1 auto; min-width: 0; color: #f4f2ea; }
 .workshop .top-actions { flex: none; display: flex; align-items: center; gap: 8px; height: auto; margin-left: auto; padding: 0 12px 0 0; }
 .workshop .topbar .deploy-button { height: 36px; padding: 0 14px; border: 1px solid var(--ds-accent); background: var(--ds-accent); color: #171910; box-shadow: none; font: 700 13px/1 var(--ds-font); white-space: nowrap; }
 .workshop .topbar .deploy-button:hover { background: var(--ds-accent-hover); }
-/* While a new app is still its placeholder, Deploy waits beside More and Describe holds the lime call. */
 .workshop .topbar .deploy-button.is-quiet { border-color: #6b6f62; background: transparent; color: #f4f2ea; }
 .workshop .topbar .deploy-button.is-quiet:hover { background: #2c2f25; }
 .workshop .topbar .more-button { height: 36px; min-height: 36px; padding: 0 12px; border: 1px solid #6b6f62; background: transparent; color: #f4f2ea; box-shadow: none; font: 650 13px/1 var(--ds-font); }
@@ -57,7 +49,6 @@
 .workshop .topbar .ui-menu-list { color: var(--ds-text); }
 .workshop .topbar .save-state { flex: none; color: #c7cbbd; font: 12px var(--ds-font); }
 
-/* ---- Sections: one row of tabs, the preview's tools and Usage at its end ---- */
 .section-bar { position: relative; z-index: 3; min-width: 0; padding: 0 12px; background: var(--ds-surface); border-bottom: 1px solid var(--ds-border); }
 .section-bar .ui-tabbar { border-bottom: 0; }
 .section-bar .ui-tablist { gap: 2px; }
@@ -71,12 +62,10 @@
 .usage-link:hover { color: var(--ds-text); background: var(--ds-subtle); }
 .section-bar .tools-button { min-height: 34px; gap: 6px; padding: 0 10px; box-shadow: none; font-size: 13px; }
 
-/* ---- Notices above the stage: refusals and the export warning ---- */
 .stage-notices { display: grid; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); }
 .stage-notices:empty { display: none; }
 .stage-notices .gate-refusal-detail, .code-refusal .gate-refusal-detail { display: block; margin-top: 4px; overflow-wrap: anywhere; font: 12px/1.45 var(--ds-mono); }
 
-/* ---- The stage: Files has its own column, hidden unless Files is chosen ---- */
 .workshop:not(.stage-code):not(.is-compact) .workbench > .split > .split-slot:first-child { display: none; }
 .workshop .workbench { background: var(--ds-border); }
 
@@ -84,14 +73,12 @@
 .link-button { padding: 0; border: 0; background: none; color: var(--ds-text); font: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .link-button:hover { text-decoration-thickness: 2px; }
 
-/* ---- Describe rail ---- */
 .describe-rail { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--ds-border); background: var(--ds-surface); color: var(--ds-text); }
 .describe-rail-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 45px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--ds-border); }
 .describe-rail-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font: 700 13px/1 var(--ds-font); }
 .describe-rail-tools { display: flex; align-items: center; gap: 2px; }
 .describe-strip { min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 4px; border-left: 1px solid var(--ds-border); background: var(--ds-surface); color: var(--ds-muted); }
 
-/* ---- Files: the check above actions.json never clips ---- */
 .workshop .code-panel > .action-readout-block { flex: none; max-height: none; overflow: visible; margin: 0; border: 0; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); color: var(--ds-text); }
 .workshop .code-panel > details.action-readout-block > summary { padding: 8px 12px; color: var(--ds-muted); font: 500 13px/1.45 var(--ds-font); cursor: pointer; }
 .workshop .code-panel > details.action-readout-block .action-readout { margin: 0; padding: 0 12px 10px 28px; list-style: disc; color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
@@ -99,7 +86,6 @@
 .workshop .code-panel > .ui-alert p { overflow-wrap: anywhere; }
 .workshop .code-panel > .code-not-text { align-self: start; margin: 12px; }
 
-/* ---- Deploy dialog ---- */
 .ui-dialog.deploy-dialog { width: min(560px, 100%); }
 .deploy-dialog .publish-body { display: grid; gap: 18px; }
 .publish-facts { display: grid; gap: 14px; margin: 0; }
@@ -132,14 +118,12 @@
 .receipt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .deploy-dialog .deploy-contact-missing { margin: 0; color: var(--ds-text); font: 400 13px/1.5 var(--ds-font); }
 
-/* ---- Data and Access on the design system ---- */
 .workshop .database-studio-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; height: auto; padding: 0 12px; border-bottom: 1px solid var(--ds-border); background: var(--ds-surface); }
 .database-studio-header .ui-tabbar.data-views { flex: 1 1 auto; border-bottom: 0; }
 .database-studio-header .ui-segmented { order: 2; margin: 6px 0; }
 .test-rows-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--ds-border); border-bottom: 1px solid var(--ds-border); background: var(--ds-subtle); color: var(--ds-text); font: 400 13px/1.45 var(--ds-font); }
 .cap-workspace > .ui-tabbar.auth-tabs { padding: 8px 12px 0; }
 
-/* ---- Phone ---- */
 .workshop.is-compact .topbar { gap: 6px; min-height: 52px; }
 .workshop.is-compact .topbar-place { flex-wrap: wrap; gap: 0 8px; padding: 4px 0; }
 .workshop.is-compact .topbar-place .project-crumb { flex: 1 1 100%; max-width: none; }
@@ -155,31 +139,24 @@
 .workshop.is-compact .section-bar .ui-tablist [role="tab"] { padding: 0 10px; }
 @media (max-width: 420px) {
   .workshop .topbar .brand > span:not(.brand-mark) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  /* "Deploy changes" keeps its words on a phone; the rocket gives the app's name the room instead. */
   .workshop.is-compact .topbar .deploy-button svg { display: none; }
   .publish-facts > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
-/* The phone header gives the app name a full line and keeps the publication state readable below it. */
 .workshop.is-compact .topbar-status .app-status-state { gap: 5px; font-size: 11px; }
 
-/* One quiet empty state and plain links inside every section. */
 .workshop .group-page .ui-empty { box-shadow: none; border: 1px solid var(--ds-border); background: var(--ds-surface); }
 .workshop .group-page .ui-empty-icon { box-shadow: none; }
 .workshop .group-page a:not(.ui-button) { color: inherit; text-underline-offset: 3px; }
-/* Toasts keep off the stage's controls. With the Describe rail open they sit inside it, under its heading row. Otherwise they take the bottom right, clear of the code editor, the Data switch and the What happened filters. */
 .workshop .ui-toasts { top: auto; right: 20px; bottom: 20px; left: auto; }
 .workshop.has-rail .ui-toasts { top: 104px; bottom: auto; width: min(340px, calc(100vw - 40px)); }
-/* On a phone they keep the bottom edge, full width. */
 .workshop.is-compact .ui-toasts { top: auto; bottom: 20px; left: 20px; right: 20px; width: auto; }
 
-/* The file toolbar starts at the panel's left edge at every width; the line count gives way first. */
 .workshop .group-tabs:has(.file-switch) .group-tabs-spacer { display: none; }
 .workshop .group-actions:has(.file-switch) { flex: 1 1 auto; min-width: 0; padding: 0 6px 0 8px; }
 .workshop .group-actions .file-switch { flex: 0 1 auto; min-width: 96px; }
 .workshop .group-actions .panel-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workshop .group-actions .file-list-toggle { margin-left: auto; }
 
-/* Between the phone layout and about 1000 px the six tabs, the preview's tools and Usage share one row. */
 @media (max-width: 1000px) {
   .workshop:not(.is-compact) .section-bar { padding: 0 8px; }
   .workshop:not(.is-compact) .section-bar .ui-tablist [role="tab"] { padding: 0 8px; }
@@ -187,7 +164,6 @@
 }
 .action-readout-note { margin: 0; padding: 8px 16px 0; color: var(--ds-muted); font: 400 13px/1.45 var(--ds-font); }
 
-/* Inside the workbench's panels controls sit flat; only dialogs keep an offset shadow. */
 .workshop .group-body, .workshop .describe-rail, .workshop .stage-notices, .workshop .section-bar {
   --ds-shadow-sm: none;
   --ds-shadow: none;
@@ -202,7 +178,6 @@
 .workshop .group-body .files-summary .files-upload:hover { translate: none; }
 .workshop :is(.data-sidebar-label, .database-statusbar, .table-toolbar p, .table-toolbar > div:first-child > span) { font: 400 12px/1.45 var(--ds-font); letter-spacing: normal; }
 
-/* Uploads: the empty state sits at the top, as What happened does, and a disabled Upload says why beside it. */
 .workshop .cap-workspace:has(> .cap-empty) { display: block; min-height: 0; }
 .workshop .file-grid:has(.cap-empty) { align-content: start; align-items: start; }
 .workshop .cap-empty.ui-empty { width: min(460px, 100%); max-width: 100%; margin: 0; padding: var(--ds-space-4); align-items: flex-start; justify-items: start; justify-content: start; text-align: left; }
@@ -210,11 +185,9 @@
 .cap-empty-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .cap-empty .cap-empty-reason { max-width: none; margin: 0; color: var(--ds-text); text-align: left; font: 400 13px/1.45 var(--ds-font); }
 
-/* Sub-tabs inside a section read like the section row: an underline, no folder box. */
 .workshop .group-body .ui-tabbar, .app-settings-tabs.ui-tabbar { border-bottom: 1px solid var(--ds-border); }
 .workshop .group-body .ui-tablist [role="tab"], .app-settings-tabs .ui-tablist [role="tab"] { min-height: 38px; margin-bottom: 0; padding: 0 10px; border: 0; }
 .workshop .group-body .ui-tablist [role="tab"][aria-selected="true"], .app-settings-tabs .ui-tablist [role="tab"][aria-selected="true"] { background: transparent; box-shadow: inset 0 -3px 0 var(--ds-accent); }
-/* On a phone the marker keeps its dot; the words stay for a screen reader and the Rules notice says them. */
 .workshop.is-compact .topbar-changes { justify-content: center; min-width: 24px; gap: 0; font-size: 0; }
 @media (min-width: 901px) and (max-width: 1040px) {
   .workshop .topbar-place { gap: 10px; }

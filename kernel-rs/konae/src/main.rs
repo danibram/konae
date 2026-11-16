@@ -1,6 +1,3 @@
-//! Konae: the Kernel with the owner's side. It links the `kernel` library
-//! and adds the owner's MCP on `/mcp`, OAuth, Clerk, owner accounts and
-//! admission, the guide, and the project list in `mcp.sqlite`.
 
 use std::{
     collections::HashMap,
@@ -70,8 +67,6 @@ async fn main() -> Result<()> {
         mcp_origin,
         owner_verification: auth::Verification::from_env().map_err(anyhow::Error::msg)?,
     };
-    // Apply the verification mode to creator accounts before serving, so a
-    // switch to required revokes unverified sessions at startup.
     owners::creator_store(&konae)?;
     let editor = editor::Editor::from_env(&running.state.public_origin, security::https(&running.state))?;
     let listener = kernel::bind(&startup).await?;
@@ -84,7 +79,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Konae's routes: the owner's MCP, OAuth and owner sign-in.
 fn owner_routes(konae: Konae) -> Router<AppState> {
     Router::<Konae>::new()
         .merge(mcp::routes())
@@ -96,8 +90,6 @@ fn owner_routes(konae: Konae) -> Router<AppState> {
 
 type Stack = tower::util::BoxCloneSyncService<Request, Response, std::convert::Infallible>;
 
-/// The Kernel's stack, with the editor in front of it on the editor host
-/// when `KONAE_EDITOR_DIR` names one.
 fn with_editor(stack: Stack, editor: Option<editor::Editor>) -> Stack {
     match editor {
         Some(editor) => Stack::new(
@@ -109,9 +101,6 @@ fn with_editor(stack: Stack, editor: Option<editor::Editor>) -> Stack {
     }
 }
 
-/// `KONAE_MCP_ORIGIN`, or with `KONAE_DOMAIN` the public origin. `None` keeps
-/// the request host for MCP when no domain is set. MCP may not answer on
-/// `<domain>`, where the home and path addresses answer.
 fn mcp_origin(get: impl Fn(&str) -> Option<String>, hosts: &hosts::Hosts) -> Result<Option<String>> {
     let Some(domain) = hosts.domain.as_deref() else {
         return Ok(get("KONAE_MCP_ORIGIN"));
@@ -121,9 +110,6 @@ fn mcp_origin(get: impl Fn(&str) -> Option<String>, hosts: &hosts::Hosts) -> Res
     Ok(Some(origin))
 }
 
-/// The operator commands that were renamed from `creator-*` to `owner-*`. The
-/// old names answer with the new one and fail, so a script that still calls
-/// one stops instead of doing nothing.
 const RENAMED_COMMANDS: [(&str, &str); 6] = [
     ("creator-code-create", "owner-code-create"),
     ("creator-code-list", "owner-code-list"),
@@ -138,9 +124,6 @@ fn renamed_command(name: Option<&str>) -> Option<String> {
     Some(format!("{old} is now {new}."))
 }
 
-/// The setup key was `KONAE_ADMIN_KEY` before it was `KONAE_SETUP_KEY`. An
-/// installation that still sets the old name would otherwise start on the
-/// development default, so it refuses to start.
 fn refuse_old_setup_key(old: Option<&str>, new: Option<&str>) -> Result<()> {
     let set = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
     if set(old) && !set(new) {
@@ -149,10 +132,6 @@ fn refuse_old_setup_key(old: Option<&str>, new: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Returns the installation setup key. The well-known default only works on a
-/// loopback bind with a local public origin, unless the operator opts in with
-/// KONAE_ALLOW_DEFAULT_KEY=1. A proxy can expose a loopback bind, so the
-/// public origin counts too.
 fn setup_key_for(
     bind: &str,
     public_origin: &str,
@@ -179,7 +158,6 @@ fn setup_key_for(
             "KONAE_PUBLIC_ORIGIN={public_origin} is not a local address. Set KONAE_SETUP_KEY to a secret value before starting the Kernel."
         );
     }
-    // MCP and owner sign-in also answer on this origin's host.
     if let Some(mcp_origin) = mcp_origin {
         let mcp_host = url::Url::parse(mcp_origin)
             .ok()
@@ -230,7 +208,6 @@ mod startup_tests {
         assert!(origin_of(&[("KONAE_DOMAIN", "konae.es"), ("KONAE_MCP_ORIGIN", "https://konae.es")]).is_err());
     }
 
-    /// A code Konae names in its source is a row of the Kernel's table.
     #[test]
     fn every_code_konae_names_is_in_the_kernel_table() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

@@ -3,14 +3,12 @@ import * as esbuild from "esbuild";
 import type { MiniAppProject } from "../lib/types";
 import { decodeBase64, encodeBase64 } from "../mcp/client";
 
-// esbuild-wasm starts only in a browser; the editor's plugins run the same on native esbuild.
 mock.module("esbuild-wasm", () => ({ initialize: async () => {}, build: esbuild.build }));
 const { buildProjectInBrowser, compileProjectInBrowser, packageUrl } = await import("./browser-build");
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
-/** Serves `modules` by URL and records every URL the build asked for. */
 function serve(modules: Record<string, string>) {
   const asked: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request) => {

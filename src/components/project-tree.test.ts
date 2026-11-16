@@ -49,7 +49,6 @@ describe("project tree", () => {
     expect(() => renamePath(tree, "src", "schema.sql")).toThrow("reserved");
   });
 
-  /** The bug this pins: a rename to App.js or to a case variant of a sibling overwrote a file once exported to a case-insensitive filesystem. */
   test("compares reserved paths and collisions without case", () => {
     expect(() => renamePath(tree, "src/label.js", "App.js")).toThrow("app.js is a reserved project file");
     expect(() => renamePath(tree, "src/label.js", "Schema.SQL")).toThrow("schema.sql is a reserved project file");
@@ -59,19 +58,15 @@ describe("project tree", () => {
     expect(() => renamePath(tree, "src/label.js", "APP.JS/x.js")).toThrow("reserved");
     const folders = { files: { "a/x.js": "1", "b/X.JS": "2" }, directories: ["a", "b"] };
     expect(() => renamePath(folders, "a", "B")).toThrow("A folder already exists at b.");
-    // A case-only rename of the same file is allowed.
     expect(renamePath(tree, "src/label.js", "src/Label.js").files["src/Label.js"]).toBe("l");
-    // A user file that only differs in case from a protected one can be moved out of the way.
     const legacy = { files: { "App.js": "old" }, directories: [] };
     expect(renamePath(legacy, "App.js", "legacy.js").files).toEqual({ "legacy.js": "old" });
   });
 
-  /** The bug this pins: a folder only implied by its files did not count as taken, so a move overwrote or merged into it. */
   test("refuses to land on a folder that only exists through its files", () => {
     const implied = { files: { "lib/a.js": "a", "b.js": "b", "old/a.js": "old", "old/c.js": "c" }, directories: ["old"] };
     expect(() => renamePath(implied, "b.js", "lib")).toThrow("A folder already exists at lib.");
     expect(() => renamePath(implied, "old", "lib")).toThrow("A folder already exists at lib.");
-    // Nothing collapses: the source tree is unchanged after a refusal.
     expect(implied.files["lib/a.js"]).toBe("a");
   });
 

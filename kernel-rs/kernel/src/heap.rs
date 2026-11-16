@@ -1,17 +1,8 @@
-//! The ceiling on the memory SQLite may hold across every app.
-//!
-//! One Kernel process serves every app, and a row of `randomblob` values is
-//! built inside SQLite before the Kernel reads a column of it. A hard heap
-//! limit makes a statement that grows past the ceiling fail with SQLite's
-//! out-of-memory error, where the operating system would kill the process.
 
 use anyhow::{Result, bail};
 
-/// The ceiling when the operating system reports no memory size.
 const FALLBACK_BYTES: u64 = 256 * 1024 * 1024;
 
-// The bundled SQLite compiles this function in, but the bindings `rusqlite`
-// ships do not declare it.
 unsafe extern "C" {
     fn sqlite3_hard_heap_limit64(n: i64) -> i64;
 }
@@ -26,7 +17,6 @@ pub fn default_bytes(available_bytes: Option<u64>) -> u64 {
 
 #[cfg(unix)]
 fn physical_memory() -> Option<u64> {
-    // SAFETY: `sysconf` reads a system constant and touches no memory of ours.
     let (pages, size) = unsafe {
         (
             libc::sysconf(libc::_SC_PHYS_PAGES),
@@ -90,8 +80,6 @@ fn cgroup_memory_limit(
         let relative = Path::new(member)
             .strip_prefix(&root)
             .unwrap_or(Path::new(""));
-        // A cgroup namespace can show a membership path outside its visible
-        // mount. The mount root still holds its effective limit.
         let mut directory = if relative
             .components()
             .any(|part| !matches!(part, std::path::Component::Normal(_)))
@@ -161,7 +149,6 @@ pub fn limit_from_env() -> Result<u64> {
         std::env::var("KONAE_SQLITE_HEAP_BYTES").ok().as_deref(),
         available_memory(),
     )?;
-    // SAFETY: the function takes a number and keeps no pointer.
     unsafe { sqlite3_hard_heap_limit64(bytes as i64) };
     Ok(bytes)
 }
@@ -228,8 +215,6 @@ mod tests {
 
     #[test]
     fn a_statement_past_the_ceiling_fails_with_out_of_memory() {
-        // The ceiling is the whole process's, so this runs in a child process
-        // and leaves the other tests' limit alone.
         if std::env::var_os("KONAE_HEAP_TEST_CHILD").is_none() {
             let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([

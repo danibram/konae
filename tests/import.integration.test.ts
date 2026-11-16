@@ -6,8 +6,6 @@ import { encodeBase64, type Transfer } from "../src/mcp/client";
 import type { PackageManifest } from "../src/lib/portable-package";
 import { account, buildKernel, release, runtime, startKernel, type Kernel } from "./kernel-harness";
 
-// project_import replaces an existing app's sources, data or both after a
-// backup that restore-backup brings back (kernel-rs/kernel/src/import.rs).
 let root: string;
 let kernel: Kernel;
 
@@ -32,7 +30,6 @@ beforeAll(async () => {
 
 afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursive: true, force: true }); });
 
-/** Exports the app's data and uploads it again for an import into the same project. */
 async function exportedPackage(deploymentId: string, projectId: string) {
   const exported = await kernel.owner.call<{ manifest: PackageManifest; downloads: Record<string, Transfer>; folder: Transfer }>("project_export", { projectId: projectId });
   const components: Record<string, string> = {};
@@ -64,13 +61,11 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   const emails = async () => (await kernel.owner.call<{ users: { email: string }[] }>("app_users_list", { projectId: id })).users.map((user) => user.email);
   expect(await titles()).toEqual(["first", "second"]);
 
-  // Data only, while the app is in maintenance, as a move does it.
   await kernel.owner.call("maintenance_set", { projectId: id, on: true });
   const data = await kernel.owner.call<{ imported: boolean; backup: { id: string; label: string; holds: string[] } }>("project_import", { projectId: id, replace: "data", package: exported });
   for (const transferId of Object.values(exported.components)) await kernel.owner.cancel(transferId).catch(() => {});
   expect(data).toMatchObject({ imported: true, backup: { label: "Before import", holds: ["data"] } });
   await kernel.owner.call("maintenance_set", { projectId: id, on: false });
-  // Ana is still signed in on the same cookie, and the rows are the export's, not merged.
   expect(await titles()).toEqual(["first"]);
   expect(await emails()).toEqual(["ana@import.test"]);
 
@@ -81,7 +76,6 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   expect(await titles()).toEqual(["first", "second"]);
   expect(await emails()).toEqual(["ana@import.test", "bo@import.test"]);
 
-  // Sources only: a release that drops a column asks first and changes nothing.
   const logo = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
   const plain = payload(id, slimmer, "v2");
   const dropping = { ...plain, project: { ...plain.project, files: { ...plain.project.files, "public/logo.png": encodeBase64(logo) }, encodings: { "public/logo.png": "base64" } } };
@@ -93,16 +87,13 @@ test("an import replaces data, sources or both after a backup, keeps sessions, a
   const sources = await kernel.owner.call<{ imported: boolean; backup: { holds: string[] } }>("project_import", { projectId: id, replace: "sources", transferId: upload.transferId, confirmSchema: asked.schema.confirmation });
   await kernel.owner.cancel(upload.transferId);
   expect(sources).toMatchObject({ imported: true, backup: { holds: ["sources"] } });
-  // The editor opens the imported sources.
   const read = await kernel.owner.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId: id });
   expect(read.revision).toBeGreaterThan(0);
   const saved = JSON.parse(new TextDecoder().decode(await kernel.owner.download(read.transfer))) as { files: Record<string, string>; encodings?: Record<string, string> };
   expect(saved.files["schema.sql"]).toBe(slimmer);
-  // A file that is not text arrives as its bytes and reads back as base64.
   expect(saved.encodings).toEqual({ "public/logo.png": "base64" });
   expect(new Uint8Array(await readFile(path.join(root, "data", "apps", id, "app", "public", "logo.png")))).toEqual(logo);
 
-  // Both: the release's schema applies to the exported data before it serves.
   const again = await exportedPackage(deploymentId, id);
   const both = payload(id, schema, "v3");
   const { artifact: baseArtifact, ...releasePayload } = both;

@@ -1,16 +1,7 @@
-//! A refusal of a Capsule carries a stable code beside its sentence
-//! (docs/adr/0004-the-gate-and-the-kernel-refuse-with-the-same-code-and-words.md).
-//!
-//! The site that refuses names the code, so a reworded sentence keeps its
-//! code and a client branches on the code, never on the text. The codes live
-//! in refusal-codes.json with who fixes each one and a one-line remedy; the
-//! Validation Gate imports the same file (src/kernel/refusal.ts), and every
-//! refusal case in the shape case files names the code both doors must give.
 
 use serde_json::{json, Map, Value};
 use std::sync::OnceLock;
 
-/// A sentence the Kernel refuses a Capsule with, and the code of the rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
     pub code: &'static str,
@@ -87,9 +78,6 @@ pub fn of(error: &anyhow::Error) -> Option<&Refusal> {
     error.downcast_ref::<Refusal>()
 }
 
-/// Checks one case of a shape case file against what a door answered: a
-/// refusal case must name its code, and the door must give that code and the
-/// case's sentence. src/kernel/refusal.ts `expectCase` is the editor's twin.
 #[cfg(any(test, feature = "testing"))]
 pub fn assert_case<T>(case: &Value, outcome: Result<T, Refusal>) {
     let name = &case["case"];
@@ -109,14 +97,11 @@ pub fn assert_case<T>(case: &Value, outcome: Result<T, Refusal>) {
 mod tests {
     use serde_json::Value;
 
-    /// The parts of a Capsule a code may name, and the parts of the
-    /// installation the owner names outside it.
     const GROUPS: &[&str] = &[
         "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
         "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module",
     ];
 
-    /// Every refusal case in every shape case file, as (file, case, code).
     fn refusal_cases() -> Vec<(String, String, Option<String>)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files: Vec<_> = std::fs::read_dir(&dir)
@@ -167,8 +152,6 @@ mod tests {
         assert!(unused.is_empty(), "no refusal case uses {unused:?}");
     }
 
-    /// A code the Kernel names in its source is a row of the table, so a typo
-    /// cannot answer a code no client knows.
     #[test]
     fn every_code_the_kernel_names_is_in_the_table() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

@@ -6,13 +6,8 @@ import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { PROVIDERS, providerConfig } from "./catalog";
 import type { AgentKeyStore, AgentSessionConfig, ProviderConfig, ProviderId } from "./contracts";
 
-/** The curated catalogue lives in ./catalog so the editor can read it without pi-ai. */
 export { PROVIDERS, providerConfig, defaultSessionConfig } from "./catalog";
 
-/**
- * Extra request options the Agent does not forward to `streamFn` (it passes
- * only `apiKey` and `signal`), so they have to be re-applied per request.
- */
 export type AgentRequestAuth = {
   apiKey?: string;
   headers: ProviderHeaders;
@@ -21,7 +16,6 @@ export type AgentRequestAuth = {
 
 export type AgentAuth = {
   provider: ProviderId;
-  /** `AgentOptions.getApiKey`: re-read every turn, so a key entered mid-session takes effect. */
   getApiKey: (provider: string) => string | undefined;
   requestOptions: () => AgentRequestAuth;
 };
@@ -32,11 +26,6 @@ const providerFactories: Record<ProviderId, () => Provider> = {
   openrouter: openrouterProvider,
 };
 
-/**
- * Anthropic direct-from-browser needs `anthropic-dangerous-direct-browser-access`.
- * The Anthropic adapter already sets it; sending it explicitly keeps the browser
- * path from depending on that internal detail.
- */
 const providerHeaders: Record<ProviderId, ProviderHeaders> = {
   anthropic: { "anthropic-dangerous-direct-browser-access": "true" },
   openai: {},
@@ -45,7 +34,6 @@ const providerHeaders: Record<ProviderId, ProviderHeaders> = {
 
 let sharedModels: MutableModels | null = null;
 
-/** The three providers we support, registered once. Never `providers/all`. */
 export function agentModels(): MutableModels {
   if (!sharedModels) sharedModels = createAgentModels();
   return sharedModels;
@@ -61,12 +49,6 @@ export function providerIsConfigured(provider: ProviderId, keyStore: AgentKeySto
   return keyStore.getKey(provider) !== null;
 }
 
-/**
- * Resolves a session config to a pi-ai model. Catalog ids resolve directly;
- * a custom id is sent verbatim as the wire slug (OpenRouter's `vendor/model`
- * form included) on a model derived from the closest catalog entry, so its
- * cost and context-window metadata are an approximation.
- */
 export function buildModel(config: AgentSessionConfig, models: Models = agentModels()): Model<Api> {
   const provider = providerConfig(config.provider);
   const modelId = config.modelId.trim();
@@ -81,10 +63,6 @@ export function buildModel(config: AgentSessionConfig, models: Models = agentMod
   return { ...base, id: modelId, name: modelId };
 }
 
-/**
- * Browser-local BYOK. Passing `apiKey` short-circuits every other credential
- * source in pi-ai, so no key ever reaches a credential store or an env lookup.
- */
 export function buildAuth(
   provider: ProviderId,
   keyStore: AgentKeyStore,
@@ -100,12 +78,6 @@ export function buildAuth(
   };
 }
 
-/**
- * Prompt caching: Anthropic marks the system prompt, the last tool definition
- * and the last conversation block automatically, and OpenRouter gets the same
- * treatment for `anthropic/*` models through `compat.cacheControlFormat`.
- * Direct OpenAI caches implicitly and ignores `cacheRetention` here.
- */
 export function createStreamFn(auth: AgentAuth, models: Models = agentModels()): StreamFn {
   return (model, context, options) => {
     const resolved = auth.requestOptions();

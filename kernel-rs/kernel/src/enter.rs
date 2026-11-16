@@ -1,16 +1,3 @@
-//! Entering an app as one of its users, through a one-time link (ADR-0001).
-//!
-//! Whoever manages the app, an owner in Konae or an operator on the machine,
-//! calls `issue` with the account and a label that says who enters. The link
-//! opens `/_konae/enter` on the app's own origin. The page posts the token
-//! from the fragment, so GET changes nothing, and the POST consumes it and
-//! sets the app session cookie for that account.
-//!
-//! The link lives in the app's `identity.sqlite`, so a command on the machine
-//! can issue one for a running Kernel. The session it starts carries the
-//! label in `app_sessions.entered_by`. Usage and Signals do not count what
-//! such a session does (`entered`), and the caller of `issue` records who
-//! entered as whom in its own audit log, since the Kernel keeps no owners.
 
 use super::*;
 use rusqlite::{OptionalExtension, params};
@@ -18,7 +5,6 @@ use rusqlite::{OptionalExtension, params};
 /// How long a link works. It is shown to the person who asked for it and
 /// opened at once, so it does not need to last.
 pub const ENTRY_TTL_SECONDS: i64 = 120;
-/// Open links one app keeps at once; the oldest goes first.
 const MAX_LINKS: i64 = 100;
 
 pub const NO_ACCOUNT: &str = "This app has no account with that ID.";
@@ -87,8 +73,6 @@ pub async fn issue(state: &AppState, deployment: &Deployment, user_id: &str, ent
     }))
 }
 
-/// Takes the link for `token` and returns the account and who enters. A
-/// link is removed on its first use, valid or not.
 fn take(tx: &rusqlite::Transaction<'_>, token: &str) -> std::result::Result<Option<AuthUser>, AuthError> {
     let hash = auth::hash_token(token);
     let link: Option<(String, String, i64)> = tx
@@ -139,7 +123,6 @@ async fn enter(State(state): State<AppState>, headers: HeaderMap, request: Reque
     match session {
         // An entry is no sign-in of the account, so Usage counts nothing. The
         // Kernel's log keeps who entered as whom, the one record of it on a
-        // Kernel without Konae.
         Ok((session, (entered_by, email))) => {
             println!("{entered_by} entered app {} as {email}.", deployment.id);
             accounts::app_session_response(&cookie_name, session)
@@ -163,8 +146,6 @@ async fn entry_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
         .into_response()
 }
 
-/// The page an entry link opens. It reads the token from the fragment, drops
-/// it from the address bar and posts it; GET does nothing else.
 const ENTRY_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Opening the app</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font:16px system-ui,sans-serif;color:#20232a;background:#f4f5f7}main{max-width:380px}#error{color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}#error{color:#ff8a8a}}</style><link rel="icon" href="data:,">
 <main><h1>Opening the app</h1><p id="error" role="alert"></p></main>
 <script>
@@ -207,7 +188,6 @@ mod tests {
         assert_eq!(signed_in.entered_by.as_deref(), Some("owner:olga"));
         assert!(entered(Some(&signed_in)));
         assert!(auth.transaction(|tx| take(tx, &token)).unwrap().is_none(), "a link opens once");
-        // The account's own sign-in is not marked.
         let own = auth.login("ana@example.test", "ana's password").unwrap();
         assert!(!entered(auth.authenticate(Some(&own.token)).unwrap().as_ref()));
         let _ = std::fs::remove_dir_all(root);

@@ -1,12 +1,3 @@
-// Probe: scheduled work (ADR-0011), for work that has to happen when nobody
-// asks. A reminder app surfaces due notes from a
-// "schedule" on a mutation; the Kernel's timer runs it with no caller.
-//
-// The probe starts its Kernel with KONAE_SCHEDULE_MIN_SECONDS=2, so a
-// schedule declared "every": "5m" runs every 2 seconds and the probe waits
-// for runs instead of minutes.
-//
-//   KONAE_PROBE_PORT=23060 bun run examples/probes/schedule/replay.ts
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -21,7 +12,6 @@ const today = () => new Date().toISOString().slice(0, 10);
 await probe("schedule", 23060, async (kit) => {
   const { owner } = kit;
 
-  // Both doors: the declaration the app uses passes, and each refusal has the same words.
   const schema = await readFile(path.join(here, "schema.sql"), "utf8");
   const program = await readFile(path.join(here, "actions.json"), "utf8");
   const variants: Record<string, [(actions: any) => void, string]> = {
@@ -59,7 +49,6 @@ await probe("schedule", 23060, async (kit) => {
     }
   };
 
-  // A run with nobody asking: a due note surfaces, a future one does not.
   const cookie = await kit.signup(app.host, "rosa@probe.example");
   const person = kit.runtime(app.host, cookie);
   await person.call("actions_invoke", { name: "notes.add", input: { body: "Water the plants", remind_at: Date.now() - 1000 } });
@@ -70,7 +59,6 @@ await probe("schedule", 23060, async (kit) => {
   const ran = first.scheduled.find((run) => run.changes === 1)!;
   kit.pass("A run with nobody asking", `With nobody calling, notes.surface ran at ${new Date(ran.at).toISOString()} and surfaced "Water the plants"; "Renew the passport", due in an hour, stays put.`);
 
-  // Only the timer: a scheduled mutation with no route refuses every caller (ADR-0011).
   await person.call("actions_invoke", { name: "notes.add", input: { body: "Call the plumber", remind_at: Date.now() - 1000 } });
   const byPerson = await kit.errorText(person.call("actions_invoke", { name: "notes.surface", input: {} }));
   assert.equal(byPerson, "Action notes.surface runs only on its schedule.");
@@ -79,7 +67,6 @@ await probe("schedule", 23060, async (kit) => {
   assert.deepEqual(surfaced, ["Call the plumber", "Water the plants"]);
   kit.pass("Only the timer", `Rosa calling notes.surface herself is refused with "${byPerson}", and the statement has no actor clause to keep her out. The next run surfaces "Call the plumber".`);
 
-  // Usage and Signals record each run.
   const seen = await usage();
   const total = seen.totals.find((row) => row.kind === "scheduled" && row.name === "notes.surface")?.count ?? 0;
   assert(total >= seen.scheduled.length && total >= 2, JSON.stringify(seen.totals));
@@ -103,7 +90,6 @@ await probe("schedule", 23060, async (kit) => {
   assert.equal((await notices()).length, 2, "A scheduled run that changes nothing sends no notice.");
   kit.pass("Scheduled owner notice", "The two runs that surfaced a note each emailed the owner through the notice queue. Usage counts two queued notices; runs that change no row send nothing.");
 
-  // A failing run is logged and tried again at the next tick, and runs never pile up.
   await owner.call("database_execute", { deploymentId: app.deploymentId, operation: "sql", input: { sql: "ALTER TABLE notes RENAME TO notes_moved" } });
   const failing = await waitFor("second failed run", (current) => current.scheduled.filter((run) => run.outcome === "failed").length >= 2);
   const failure = failing.scheduled.find((run) => run.outcome === "failed")!;

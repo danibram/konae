@@ -13,13 +13,6 @@ type Props = {
   onSelect: (path: string) => void;
 };
 
-/**
- * The project's files as a nested tree. Each row is a button whose text is only
- * the item's name, so its accessible name stays the name; the full path is in
- * the tooltip. Folders start open, and the folders around a newly opened file
- * or a new selection open again. One click on a folder row selects it and
- * toggles it, whether or not it holds the active file.
- */
 export function ExplorerTree({ files, directories, activeFile, selectedPath, iconFor, noteFor, onOpenFile, onSelect }: Props) {
   const nodes = useMemo(() => buildTree(files, directories), [files, directories]);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -32,10 +25,6 @@ export function ExplorerTree({ files, directories, activeFile, selectedPath, ico
     });
   };
 
-  // Each path reveals its own folders, and only when it changes. Keyed together,
-  // clicking a folder that holds the active file reopened it straight away, so
-  // one click could never collapse it. A selected folder's ancestors never
-  // include the folder itself.
   useEffect(() => reveal(activeFile), [activeFile]);
   useEffect(() => reveal(selectedPath), [selectedPath]);
 

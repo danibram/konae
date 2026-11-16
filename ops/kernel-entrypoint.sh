@@ -1,7 +1,4 @@
 #!/bin/sh
-# Starts the Kernel, or runs one of its commands, as the person who owns the
-# app folder, so every file it writes into the folder stays theirs. A folder
-# that root owns runs as an unprivileged user instead.
 set -eu
 data="${KONAE_DATA_DIR:-/kernel}"
 if [ "$(id -u)" = 0 ]; then

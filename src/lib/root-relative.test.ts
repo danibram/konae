@@ -5,8 +5,6 @@ import { createCapsuleValidator } from "../agent/gate";
 import { starterProject } from "./starter";
 import { assembleStaticArtifact, rootRelativeWarnings } from "./static-artifact.js";
 
-// The Kernel would run the same file from kernel-rs/kernel/src/root-relative-cases.json.
-// No Kernel check exists yet, so only the TypeScript side runs it.
 describe("root-relative URL warnings", () => {
   test("the case file covers the rules", () => {
     expect(cases.cases.length).toBeGreaterThanOrEqual(20);

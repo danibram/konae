@@ -8,9 +8,6 @@ import { INIT_TEMPLATES, buildLocal, configOf, initLocal, localKernel, publishLo
 import { pullLocal, readPulled } from "../scripts/pull";
 import { provideLocalAppDependencies } from "./local-app-deps";
 
-// init, publish, pull and dev --reset: `origin` is a Konae installation an
-// app is published to, and each folder runs locally on the kernel binary, as
-// `konae dev` runs it, with the data pull exported in data/.
 type Kernel = { url: string; process: ReturnType<typeof Bun.spawn>; owner: McpClient; token: string };
 let root: string;
 let origin: Kernel;
@@ -63,7 +60,6 @@ async function stopLocal() {
   served = undefined;
 }
 
-/** Builds the folder and serves it on the kernel binary, as dev does. Answers the local Kernel and the app's address. */
 async function serveLocally(folder: string) {
   await stopLocal();
   const kernel = await localKernel(folder, await readSettings(folder), { port: String(localPort), build: false });
@@ -77,7 +73,6 @@ async function serveLocally(folder: string) {
   return { url, set, kernel, local: { url: `http://127.0.0.1:${localPort}` } as Kernel };
 }
 
-/** Builds the folder and imports the pulled data with the kernel binary's import, as dev --reset does. */
 async function importPulled(folder: string, pulled: Awaited<ReturnType<typeof pullLocal>>) {
   await stopLocal();
   const kernel = await localKernel(folder, await readSettings(folder), { port: String(localPort), build: false });
@@ -85,7 +80,6 @@ async function importPulled(folder: string, pulled: Awaited<ReturnType<typeof pu
   await resetData(folder, kernel, pulled);
 }
 
-/** The app's runtime endpoint for one signed-in account, which `route` creates or signs in. */
 async function member(kernel: Kernel, hostname: string, route: "signup" | "login") {
   const response = await fetch(`${kernel.url}/_konae/auth/${route}`, { method: "POST", headers: { host: hostname, "content-type": "application/json", "x-forwarded-for": freshClient() }, body: JSON.stringify({ email: "ana@pull.test", password }) });
   expect(response.status).toBe(200);
@@ -105,11 +99,9 @@ describe("every template init offers", () => {
       await initLocal(folder, { name: `Template ${template}`, template });
       await provideLocalAppDependencies(folder);
       const { url, set, kernel, local } = await serveLocally(folder);
-      // Only the webhook receiver signs, and a second run finds its secret held.
       expect(set).toHaveLength(template === "webhook" ? 1 : 0);
       expect(await setDevSecrets(folder, kernel)).toEqual([]);
       const page = await fetch(`${local.url}/`, { headers: { host: hostOf({ url }), "x-forwarded-for": freshClient() }, redirect: "manual" });
-      // A public app answers with its page and a private one with the Kernel's sign-in page.
       expect(page.status).toBe(200);
     }, 60_000);
   }
@@ -158,22 +150,18 @@ describe("init, publish, pull, dev --reset", () => {
 
     await importPulled(app, pulled);
     const first = await serveLocally(app);
-    // The account signs in with the password it had on the origin and reads its own row.
     const there = await member(first.local, hostOf(first), "login");
     expect(await there.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
     await there.call("actions_invoke", { name: "notes.create", input: { title: "Written locally" } });
 
-    // A later start without --reset keeps data/ as it is.
     const again = await serveLocally(app);
     const back = await member(again.local, hostOf(again), "login");
     expect(await back.call("actions_invoke", { name: "notes.list" })).toHaveLength(2);
-    // A second reset imports the pulled data again, after a backup of what data/ held, and the local session survives it.
     await importPulled(app, pulled);
     const backups = (await readdir(path.join(app, ".konae/backups"))).filter((name) => name.endsWith(".json"));
     expect(backups).toHaveLength(2);
     await serveLocally(app);
     expect(await back.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
-    // The origin is untouched by any of it.
     expect(await ana.call("actions_invoke", { name: "notes.list" })).toMatchObject([{ title: "Written on the origin" }]);
   }, 120_000);
 
@@ -182,7 +170,6 @@ describe("init, publish, pull, dev --reset", () => {
     await expect(pullLocal(app, new McpClient(`${origin.url}/mcp`, { token }), origin.url, config.project.id)).rejects.toThrow("login with --export-data");
     await origin.owner.call("project_create", { projectId: "pull_unpublished", name: "Unpublished" });
     await expect(pullLocal(app, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, "pull_unpublished")).rejects.toThrow("Publish it first");
-    // The refused pulls left the earlier copy where it was.
     expect((await readPulled(app))?.manifest.projectId).toBe(config.project.id);
   }, 60_000);
 
@@ -210,7 +197,6 @@ describe("init, publish, pull, dev --reset", () => {
   }, 120_000);
 });
 
-/** Every file under `directory` by its path inside it, as bytes. */
 async function filesOf(directory: string): Promise<Map<string, Uint8Array>> {
   const files = new Map<string, Uint8Array>();
   for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {

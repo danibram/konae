@@ -22,7 +22,6 @@ export type StoredFile = {
   ownerId?: string;
 };
 
-/** A table as the studio sidebar knows it: name, shape and size — never contents. */
 export type DatabaseTable = {
   name: string;
   columns: string[];
@@ -58,7 +57,6 @@ export type DatabaseBackup = {
   label: string;
   createdAt: number;
   sizeBytes: number;
-  /** What a published app's backup before an import holds besides its database: "data", "sources" or both. */
   holds?: string[];
 };
 
@@ -105,7 +103,6 @@ const localBackupLimit = 5;
 
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
-/** The tab's single sql.js instance. The Validation Gate borrows it instead of loading a second wasm heap. */
 export function loadSqlJs(): Promise<SqlJsStatic> {
   sqlPromise ??= initSqlJs({ locateFile: () => wasmUrl }).catch((error) => {
     sqlPromise = undefined;
@@ -136,7 +133,6 @@ export type PreviewFailure = {
 
 const previewErrorLimit = 20;
 
-/** Why the preview is not running the files as written. Null when it is. */
 export type RuntimeDiagnostics = {
   actionsError: string | null;
   schemaError: string | null;
@@ -151,9 +147,7 @@ export class MiniAppRuntimeHost {
   private previewFailures: PreviewFailure[] = [];
   private readonly diagnosticListeners = new Set<(diagnostics: RuntimeDiagnostics) => void>();
   private dbPromise: Promise<Database>;
-  /** The schema.sql the editor holds now, whether or not it ran. */
   private requestedSchema: string;
-  /** The last schema.sql that ran without error. Only this one makes setSchema a no-op. */
   private appliedSchema: string | null = null;
   private schemaFailure: string | null = null;
   private actionProgram: ServerActionProgram = emptyActionProgram;
@@ -162,11 +156,6 @@ export class MiniAppRuntimeHost {
   private readonly actorAppId: string;
   private readonly storage: RuntimeStorage;
 
-  /**
-   * Never throws on bad Capsule files: the host is built during render, and a
-   * throw there would take the whole editor down with it, on every reload. A
-   * broken actions.json or schema.sql is reported through `diagnostics()`.
-   */
   constructor(
     private readonly appId: string,
     schema: string,
@@ -185,7 +174,6 @@ export class MiniAppRuntimeHost {
     this.fileAccess = fileAccess;
   }
 
-  /** Resolves once the schema has run or its failure is recorded. Never rejects. */
   setSchema(schema: string): Promise<void> {
     if (schema === this.requestedSchema && schema === this.appliedSchema) return Promise.resolve();
     this.requestedSchema = schema;
@@ -195,10 +183,6 @@ export class MiniAppRuntimeHost {
     );
   }
 
-  /**
-   * Keeps the last program that parsed when the new source does not, so the
-   * preview stays usable while the owner or the agent fixes the file.
-   */
   setActions(actions: string) {
     try {
       this.actionProgram = parseServerActionSource(actions);
@@ -255,16 +239,9 @@ export class MiniAppRuntimeHost {
   }
 
   private recordSchemaFailure(schema: string, error: unknown) {
-    // A newer schema may already be on its way; its own result is the one to show.
     if (schema === this.requestedSchema) this.setDiagnostics({ schemaError: `schema.sql failed: ${describeError(error)}` });
   }
 
-  /**
-   * The methods a Capsule may call. It is the preview half of the SDK a
-   * Deployment gets from the Kernel, and nothing wider: raw SQL is not on it,
-   * because a published app has no way to send any. Server Actions reach the
-   * database through `invokeAction`, which is the only door.
-   */
   async handle(method: string, payload: unknown): Promise<unknown> {
     switch (method) {
       case "actions.invoke":
@@ -275,7 +252,6 @@ export class MiniAppRuntimeHost {
         this.setPreviewActor("alice");
         return this.getRuntimeSession();
       case "auth.signInWithGoogle":
-        // A named divergence: Google sign-in needs a published Deployment.
         throw new Error("The editor preview has no Google sign-in.");
       case "auth.signOut":
         this.setPreviewActor("guest");
@@ -370,11 +346,6 @@ export class MiniAppRuntimeHost {
     return summary;
   }
 
-  /**
-   * Runtime failures reported by the running preview. Deduplicated by message
-   * and bounded, so a capsule erroring in a render loop cannot flood the agent's
-   * context with the same line thousands of times.
-   */
   private recordPreviewError(payload: unknown): { recorded: boolean } {
     const input = (payload ?? {}) as { kind?: unknown; message?: unknown; stack?: unknown };
     const message = typeof input.message === "string" ? input.message.slice(0, 500) : "";
@@ -391,15 +362,9 @@ export class MiniAppRuntimeHost {
     return { recorded: true };
   }
 
-  /**
-   * What the running preview threw, led by the Capsule files the host could not
-   * load. Those come from `diagnostics()`, not the failure list, so a reconnect
-   * clearing the list cannot hide that actions.json or schema.sql is broken.
-   */
   previewErrors(): PreviewFailure[] {
     const fileFailures: PreviewFailure[] = [];
     if (this.actionsFailure) {
-      // After a reload with a broken file there was never a valid program to fall back on.
       const fallback = this.actionProgram === emptyActionProgram
         ? "so the preview has no server actions until it is fixed"
         : "so the preview still runs the last valid one";
@@ -409,7 +374,6 @@ export class MiniAppRuntimeHost {
     return [...fileFailures, ...this.previewFailures.map((failure) => ({ ...failure }))];
   }
 
-  /** Called when a fresh document is about to run, so stale failures never mislead. */
   clearPreviewErrors() {
     this.previewFailures = [];
   }
@@ -584,7 +548,6 @@ export class MiniAppRuntimeHost {
     this.diagnosticListeners.clear();
   }
 
-  /** Resolves with a usable database even when schema.sql fails; the failure goes to `diagnostics()`. */
   private async openDatabase(ignoreStored = false): Promise<Database> {
     const SQL = await loadSqlJs();
     const stored = ignoreStored ? null : this.storage.getItem(this.databaseKey);
@@ -594,11 +557,6 @@ export class MiniAppRuntimeHost {
     return db;
   }
 
-  /**
-   * The signed-out session has the Kernel's shape, so an app that checks it
-   * behaves the same in the preview and once published. The "guest" actor is
-   * the editor's name for that state and never reaches the app.
-   */
   private getRuntimeSession(): RuntimeSession {
     if (this.previewActor === "guest") return { userId: "anonymous", name: "Anonymous", role: "anonymous" };
     return {
@@ -632,7 +590,6 @@ export class MiniAppRuntimeHost {
   private async invokeAction(payload: unknown) {
     if (!payload || typeof payload !== "object" || !("name" in payload)) throw new Error("A server action name is required.");
     const request = payload as { name: unknown; input?: unknown };
-    // The runtime endpoint checks its arguments before it looks up the action.
     if (typeof request.name !== "string") throw new Error("Expected a string.");
     if (request.input !== undefined && (!request.input || typeof request.input !== "object" || Array.isArray(request.input))) {
       throw new Error("Arguments must be an object.");
@@ -641,15 +598,11 @@ export class MiniAppRuntimeHost {
     if (!declaration && this.actionsFailure) {
       throw new Error(`Server action not declared. actions.json is invalid: ${this.actionsFailure}`);
     }
-    // The preview has no visibility, so it refuses what every Deployment refuses:
-    // an action whose signed or callers-limited route is its only door.
     if (declaration?.http && routeCallers(declaration.http, "public")) {
       throw new Error(`Action ${declaration.name} answers only on its HTTP route, ${declaration.http.method} ${declaration.http.path}.`);
     }
-    // A call's then mutation runs only after its call answers, on a Deployment too.
     const call = declaration ? thenOf(this.actionProgram.actions, declaration.name) : null;
     if (call) throw new Error(`Action ${declaration!.name} runs only after the call ${call} answers.`);
-    // A scheduled mutation with no route belongs to the Kernel's timer, on a Deployment too.
     if (declaration?.schedule && !declaration.http) throw new Error(`Action ${declaration.name} runs only on its schedule.`);
     if (declaration && declaration.access !== "anonymous" && this.previewActor === "guest") {
       throw new Error("authentication-required");
@@ -657,14 +610,10 @@ export class MiniAppRuntimeHost {
     const { action, params } = resolveServerAction(this.actionProgram, String(request.name), request.input, {
       actorId: this.previewActor === "guest" ? null : `${this.previewActor}_${this.actorAppId}`,
     });
-    // The preview keeps no Usage store. A signal action runs no SQL and answers
-    // as the Kernel does, which records the Signal on a Deployment.
     if (action.kind === "signal") return { recorded: true };
-    // The preview sends no call: a Deployment's Kernel does, from its own process.
     if (action.kind === "call") return { callId: `preview_${crypto.randomUUID()}`, queued: true };
     if (action.kind === "query") return this.query({ sql: action.statement, params });
     const result = await this.execute({ sql: action.statement, params });
-    // A guarded mutation that changed no row is refused with its guard, as on a Deployment.
     if (action.guard && result.changes === 0) throw new Error(action.guard);
     return result;
   }
@@ -719,13 +668,6 @@ export class MiniAppRuntimeHost {
     return pageCount * pageSize;
   }
 
-  /**
-   * Persist a change already made in memory, or undo it. sql.js can only export
-   * by closing and reopening the database, which ends any open savepoint, so the
-   * write cannot be held open across the save. If the save fails (a full
-   * localStorage quota, say), the in-memory database is replaced by the last
-   * stored copy: a write the app was told failed must not be visible either.
-   */
   private async persistOrRevert(db: Database) {
     try {
       this.persist(db);
@@ -733,7 +675,6 @@ export class MiniAppRuntimeHost {
       const SQL = await loadSqlJs();
       const stored = this.storage.getItem(this.databaseKey);
       const restored = stored ? new SQL.Database(base64ToBytes(stored)) : new SQL.Database();
-      // The stored copy can predate a schema change whose own save failed.
       this.applySchema(restored, this.requestedSchema);
       this.dbPromise = Promise.resolve(restored);
       db.close();
@@ -777,7 +718,6 @@ export class MiniAppRuntimeHost {
     const size = Number(candidate.size ?? 0);
     if (!url.startsWith("data:")) throw new Error("Only local data URLs are supported in this prototype.");
     const visibility = this.checkFileVisibility(candidate.visibility, true);
-    // The words a Kernel with the default per-file limit refuses with.
     if (!(size >= 1 && size <= 2 * 1024 * 1024)) throw new Error("Files must be between 1 byte and 2 MiB.");
     const file: StoredFile = {
       id: crypto.randomUUID(),
@@ -812,7 +752,6 @@ export class MiniAppRuntimeHost {
     });
   }
 
-  /** The preview has no file path to serve, so files.url answers the stored data URL. */
   private fileUrl(payload: unknown): string {
     const id = requireFileId(payload);
     const file = this.visibleFiles().find((candidate) => candidate.id === id);
@@ -820,7 +759,6 @@ export class MiniAppRuntimeHost {
     return file.url;
   }
 
-  /** The uploader alone changes a file, with the Kernel's refusals in its order. */
   private ownedFile(payload: unknown): { files: StoredFile[]; index: number } {
     if (this.previewActor === "guest") throw new Error("authentication-required");
     const id = requireFileId(payload);

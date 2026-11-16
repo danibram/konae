@@ -1,11 +1,3 @@
-// The harness every probe shares. It compiles the Kernel offline, or takes the
-// konae binary KONAE_BIN names, starts it on
-// KONAE_PROBE_PORT with a random setup key, the development mailbox and a
-// data directory under the system temp folder, signs up the owner, and removes
-// the Kernel and its data when the probe ends, whether it passed or not.
-//
-// A probe is small. It publishes one Capsule from its own folder and asserts
-// the answers that prove one kind of app works, or the refusal both doors give.
 import assert from "node:assert/strict";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,24 +17,16 @@ export type Kit = {
   dataDir: string;
   owner: McpClient;
   pass(flow: string, result: string): void;
-  /** Publishes the Capsule in `dir` as a first release and returns its host. */
   publish(dir: string, options: { projectId: string; visibility: "public" | "private"; signup?: { mode: string; allowlist?: string[] }; files?: Record<string, string>; secrets?: Record<string, string>; initialPackage?: unknown; manifest?: Record<string, unknown> }): Promise<Published>;
-  /** The message release_plan answers for a Capsule whose sources are overridden by `files`. */
   planRefusal(dir: string, projectId: string, files: Record<string, string>): Promise<string>;
-  /** The editor's Validation Gate on the same sources: its message and, when it has one, the detail under it. */
   gateRefusal(files: { "schema.sql": string; "actions.json": string }): Promise<{ message: string; detail?: string }>;
-  /** fetch on the app's host, from one client address, with an optional app cookie. */
   appFetch(host: string, options?: { cookie?: string; address?: string }): typeof fetch;
-  /** The app's runtime MCP endpoint, as the SDK calls it. */
   runtime(host: string, cookie?: string): McpClient;
-  /** Signs a person up under Open signup in local verification mode and returns the session cookie. */
   signup(host: string, email: string): Promise<string>;
-  /** A fresh client address, so the anonymous rate limit does not leak between steps. */
   address(): string;
   errorText(promise: Promise<unknown>): Promise<string>;
 };
 
-/** `env` adds to the Kernel's environment, such as KONAE_DNS_RESOLVER for a fake resolver. */
 export async function probe(name: string, defaultPort: number, body: (kit: Kit) => Promise<void>, options: { env?: Record<string, string> } = {}) {
   const port = Number(process.env.KONAE_PROBE_PORT ?? defaultPort);
   assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Set KONAE_PROBE_PORT to a free local port.");
@@ -60,7 +44,6 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
   try {
     try { await fetch(`${url}/_konae/health`); throw Error(`Something already answers on port ${port}. Set KONAE_PROBE_PORT.`); }
     catch (error) { if (error instanceof Error && error.message.startsWith("Something")) throw error; }
-    // KONAE_BIN runs a konae binary already built from these sources instead of compiling one.
     const binary = process.env.KONAE_BIN ?? path.join(repo, "kernel-rs/target/debug/konae");
     if (!process.env.KONAE_BIN) {
       const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
@@ -73,7 +56,6 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
         KONAE_BIND: "127.0.0.1", KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url,
         KONAE_HOST_SUFFIX: "localhost", KONAE_DATA_DIR: dataDir, KONAE_SETUP_KEY: setupKey,
         KONAE_TRUSTED_PROXIES: "127.0.0.1", KONAE_MAIL_TRANSPORT: "development",
-        // The schedule probe sets it to watch a run in seconds instead of minutes.
         ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),
         ...options.env,
       },
@@ -98,7 +80,6 @@ export async function probe(name: string, defaultPort: number, body: (kit: Kit) 
       return fetch(input, { ...init, headers });
     } });
 
-    // The probe's sources go into app/ of a scratch app folder, the layout buildLocal reads.
     const capsule = async (dir: string, files: Record<string, string> = {}) => {
       const copy = await mkdtemp(path.join(scratch, "capsule-"));
       const app = appDir(copy);

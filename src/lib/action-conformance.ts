@@ -1,13 +1,3 @@
-/**
- * The conformance runner: calls every action an Action Contract lists against
- * a backend and checks that it answers with the shapes the contract states and
- * refuses what the contract says it refuses, with the same message.
- *
- * It talks to the backend through a ConformanceTarget, so the same checks run
- * against a Kernel over MCP and HTTP (scripts/conform.ts) and against a fake in
- * the tests. A replacement backend passes when every check passes; a check the
- * caller gave no credential for is reported as skipped, never as passed.
- */
 import { routeSignature, type ActionContract, type ContractAction, type ContractColumn, type ContractError } from "./action-contract";
 import type { RouteCaller } from "../kernel/actions";
 import { bodyFromFields } from "../kernel/route-declaration";
@@ -19,25 +9,17 @@ export type RouteAnswer = { status: number; body: unknown };
 export type RouteRequest = {
   method: "GET" | "HEAD" | "POST";
   path: string;
-  /** GET and HEAD: the query string values. */
   query?: Record<string, string>;
-  /** POST only: the raw body. */
   body?: string;
   headers?: Record<string, string>;
-  /** Sends the app session as a cookie from the app's own origin. */
   session?: boolean;
 };
 
 export interface ConformanceTarget {
-  /** Calls an action on the runtime endpoint, with the session when `as` is "session". */
   invoke(name: string, input: unknown, as: "session" | "visitor"): Promise<RuntimeAnswer>;
-  /** Sends a request to the Deployment host, or is absent when routes are not tested. */
   route?(request: RouteRequest): Promise<RouteAnswer>;
-  /** Whether `invoke(..., "session")` carries a signed-in person, and `route` can send their cookie. */
   hasSession: boolean;
-  /** An API key the backend issued, sent as Authorization: Bearer. */
   key?: string;
-  /** Signing secret values by name, for signed routes. */
   secrets?: Record<string, string>;
 }
 
@@ -53,29 +35,19 @@ export type ConformanceReport = {
   passed: number;
   failed: number;
   skipped: number;
-  /** How many times a call waited out a rate limit and was sent again. */
   rateLimitWaits: number;
 };
 
 export type ConformanceOptions = {
-  /** Makes generated strings unique per run, so a UNIQUE column does not refuse a second run. */
   nonce?: string;
-  /** Waits before a rate-limited call is sent again. Tests pass a no-op. */
   wait?: (ms: number) => Promise<void>;
-  /** Seconds since the epoch, for signatures. */
   now?: () => number;
-  /**
-   * Input values by action that replace the generated ones in valid calls,
-   * for a string the statement reads as more than text, such as JSON for
-   * json_each. The contract types an input; it cannot say what SQL makes of it.
-   */
   inputs?: Record<string, Record<string, unknown>>;
 };
 
 const UNEXPECTED_KEY = "conformProbe";
 const UNDECLARED_ACTION = "conform.undeclared";
 
-/** Runs every check of the contract against the target, one call at a time. */
 export async function runConformance(contract: ActionContract, target: ConformanceTarget, options: ConformanceOptions = {}): Promise<ConformanceReport> {
   const nonce = options.nonce ?? Math.random().toString(36).slice(2, 10);
   const wait = options.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -87,7 +59,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
     results.push({ action, check, outcome, detail });
   };
 
-  /** A runtime call that waits out `rate-limited` up to three times. */
   const invoke = async (name: string, input: unknown, as: "session" | "visitor"): Promise<RuntimeAnswer> => {
     for (let attempt = 0; ; attempt += 1) {
       const answer = await target.invoke(name, input, as);
@@ -114,7 +85,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
     ...options.inputs?.[action.name],
   });
 
-  /** Checks a runtime refusal: the contract lists the message, and the backend answers with it. */
   const expectRefusal = async (action: ContractAction | null, check: string, messages: string[], call: () => Promise<RuntimeAnswer>) => {
     const name = action?.name ?? UNDECLARED_ACTION;
     const listed = messages.filter((message) => listedIn(action ? [...action.errors, ...contract.errors] : contract.errors, message));
@@ -128,7 +98,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
     else record(name, check, "fail", `Refused with "${answer.message}" where the contract says ${quoteAll(listed)}.`);
   };
 
-  /** Checks a route refusal by status and message. */
   const expectRouteRefusal = async (action: ContractAction | null, check: string, message: string, request: RouteRequest, answered?: RouteAnswer) => {
     const name = action?.name ?? "routes";
     const errors = action ? [...action.errors, ...contract.errors] : contract.errors;
@@ -145,13 +114,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
 
   const guardChecked = new Set<string>();
 
-  /**
-   * Probes a guard: a guarded mutation that changes no row must answer its
-   * guard, never { changes: 0 }. The first answer may already be the guard;
-   * otherwise the same input is sent again, which changes no row for most
-   * statements (an UPDATE with a state check, an INSERT ... WHERE NOT EXISTS).
-   * When the second call changes a row too, conform cannot reach the guard.
-   */
   async function checkGuard(action: ContractAction, result: unknown, message: string | undefined, again: () => Promise<{ result?: unknown; message?: string }>) {
     guardChecked.add(action.name);
     const check = "refuses with its guard when no row changes";
@@ -165,20 +127,17 @@ export async function runConformance(contract: ActionContract, target: Conforman
     if (!judge(await again())) record(action.name, check, "skip", "Both calls changed a row, so conform could not make the statement change nothing.");
   }
 
-  // The name no action declares.
   await expectRefusal(null, "refuses an undeclared action", ["Server action not declared.", "Sign in to use Konae MCP."],
     () => invoke(UNDECLARED_ACTION, {}, target.hasSession ? "session" : "visitor"));
 
   for (const action of contract.actions) {
     const name = action.name;
     const valid = minimal(action);
-    // A call's then mutation runs only after its call ends; the runtime endpoint refuses it (ADR-0013).
     if (action.thenOf) {
       await expectRefusal(action, "runs only after its call", [`Action ${name} runs only after the call ${action.thenOf} answers.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       continue;
     }
-    // A scheduled mutation with no route runs only on the Kernel's timer (ADR-0011).
     if (action.schedule && !action.http) {
       await expectRefusal(action, "runs only on its schedule", [`Action ${name} runs only on its schedule.`, "Sign in to use Konae MCP."],
         () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
@@ -186,23 +145,17 @@ export async function runConformance(contract: ActionContract, target: Conforman
     }
     const routeOnly = action.http ? `Action ${name} answers only on its HTTP route, ${action.http.method} ${action.http.path}.` : null;
     if (action.http?.onlyDoor === "always") {
-      // The runtime endpoint refuses the action; its bindings are probed on the route.
-      // A visitor of a private Deployment is stopped before the action, with "Sign in".
       await expectRefusal(action, "answers only on its route", [routeOnly!, "Sign in to use Konae MCP."], () => invoke(name, valid, target.hasSession ? "session" : "visitor"));
       await checkRoute(action, valid);
       continue;
     }
-    // A caller that gets past access and the actor binding.
     const caller: "session" | "visitor" | null = target.hasSession ? "session"
       : action.access === "anonymous" && !action.actorBound ? "visitor" : null;
-    // On a private Deployment an unsigned route is the action's only door too.
     let runtimeClosed = false;
 
-    // The answer for a valid call.
     if (!caller) {
       record(name, "answers a valid call", "skip", "Needs a signed-in person; pass --token.");
     } else if (action.call) {
-      // A valid call would queue a real request to another app or service.
       record(name, "answers a valid call", "skip", `A valid call queues ${action.call.method} ${action.call.url}, so conform does not send one.`);
     } else {
       const answer = await invoke(name, valid, caller);
@@ -210,7 +163,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
         runtimeClosed = true;
         record(name, "answers only on its route on this private Deployment", "pass", `Refused with "${answer.message}".`);
       } else if (!answer.ok && action.guard && answer.message === action.guard) {
-        // The generated input matched no row, and the app's rule refused it as the contract says.
         record(name, "answers a valid call", "pass", "Refused with its guard: the generated input changed no row.");
         await checkGuard(action, undefined, answer.message, async () => ({}));
       } else if (!answer.ok) {
@@ -235,14 +187,12 @@ export async function runConformance(contract: ActionContract, target: Conforman
       }
     }
 
-    // Who may call.
     if (action.access === "authenticated") {
       await expectRefusal(action, "refuses a caller without a session", ["authentication-required", "Sign in to use Konae MCP."], () => invoke(name, valid, "visitor"));
     } else if (action.actorBound) {
       await expectRefusal(action, "refuses a caller without an ID", ["This action requires an authenticated actor.", "Sign in to use Konae MCP."], () => invoke(name, valid, "visitor"));
     }
 
-    // What the bindings refuse.
     if (runtimeClosed) {
       // Probed on the route below.
     } else if (!caller) {
@@ -258,7 +208,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
           await expectRefusal(action, `refuses ${input.key} when it is not a string`, [`${input.key} must be a non-empty string.`], () => invoke(name, { ...valid, [input.key]: 5 }, caller));
           await expectRefusal(action, `refuses an empty ${input.key}`, [`${input.key} must be a non-empty string.`], () => invoke(name, { ...valid, [input.key]: " " }, caller));
           const maxLength = input.maxLength ?? 10_000;
-          // The runtime endpoint reads at most 200 KB per request.
           if (maxLength < 150_000) {
             await expectRefusal(action, `refuses ${input.key} when it is longer than ${maxLength}`, [`${input.key} is too long.`], () => invoke(name, { ...valid, [input.key]: "x".repeat(maxLength + 1) }, caller));
           }
@@ -281,14 +230,11 @@ export async function runConformance(contract: ActionContract, target: Conforman
       return;
     }
     const secret = http.signature ? target.secrets?.[http.signature.secret] : undefined;
-    // Without declared callers, a signed route takes the signature or a key and an unsigned one a key or a session.
     const takes = (caller: RouteCaller) => http.declaredCallers ? http.declaredCallers.includes(caller) : caller !== "session" || !http.signature;
-    // With fields, each input sits at its path, and a key no input names rides along to show the route leaves it out.
     const postBody = (input: Record<string, unknown>) => JSON.stringify(http.fields ? { ...bodyFromFields(http.fields, input), [UNEXPECTED_KEY]: 1 } : input);
     const request = (input: Record<string, unknown>, body?: string): RouteRequest => http.method === "GET"
       ? { method: "GET", path: http.path, query: Object.fromEntries(Object.entries(input).map(([key, value]) => [key, String(value)])) }
       : { method: "POST", path: http.path, body: body ?? postBody(input), headers: { "content-type": "application/json" } };
-    // A body-only MAC is the same for the same bytes, so each signed request gets its own trailing whitespace, which JSON ignores.
     let resends = 0;
     const sign = async (base: RouteRequest, at = now()): Promise<RouteRequest> => {
       const signature = http.signature!;
@@ -300,11 +246,7 @@ export async function runConformance(contract: ActionContract, target: Conforman
       const body = signature.scheme === "hmac-body" ? `${base.body ?? ""}${" ".repeat(resends++)}` : base.body ?? "";
       return { ...base, body, headers: { ...base.headers, ...await signDelivery(routeSignature(signature), secret!, body, { t: at }) } };
     };
-    // The proof the valid call and the input probes carry. An action that binds
-    // the caller needs one with an ID: a key or a session.
     type Proof = "signature" | "key" | "session" | "none";
-    // An unsigned route without callers answers anyone on a public Deployment,
-    // so it is tried with no proof first; a key or a session follows on a private one.
     const usable = (candidate: Proof) => candidate === "signature" ? Boolean(http.signature && secret !== undefined)
       : candidate === "key" ? takes("key") && Boolean(target.key)
       : candidate === "session" ? takes("session") && target.hasSession
@@ -326,7 +268,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
       let sent = await prove(request(valid));
       let answer = await route(sent);
       if (proof === "none" && answer.status === 401 && errorOf(answer.body) === "authentication-required") {
-        // A private Deployment: the unsigned route takes a key or a session.
         await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", sent, answer);
         proof = fallback;
         if (proof) {
@@ -345,7 +286,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
       } else {
         const problem = answer.status !== 200 ? `Answered ${answer.status} ${preview(answer.body)}.` : result === undefined ? `Answered ${preview(answer.body)} without "result".` : checkOutput(action, result);
         record(name, `answers ${http.method} ${http.path}${via}`, problem ? "fail" : "pass", problem ?? describeOutput(action, result));
-        // The same signed request a second time.
         if (proof === "signature" && answer.status === 200) await expectRouteRefusal(action, "refuses a replayed signature", "replayed-signature", sent);
         if (action.guard && !problem && !guardChecked.has(name)) {
           await checkGuard(action, result, undefined, async () => {
@@ -367,7 +307,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
       await expectRouteRefusal(action, "refuses a caller without a key or a session", "authentication-required", request(valid));
     }
     if (http.method === "GET") {
-      // HTTP carries no body on a HEAD answer, so only the status can be checked.
       const head = "A route does not answer HEAD. Send GET.";
       const error = action.errors.find((candidate) => candidate.via !== "runtime" && candidate.message === head);
       if (!error) record(name, "refuses HEAD", "fail", `The contract does not list "${head}" for this route.`);
@@ -382,7 +321,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
       await expectRouteRefusal(action, "refuses an API key it does not take", "This route does not accept API keys.", { ...request(valid), headers: { ...request(valid).headers, authorization: `Bearer ${target.key}` } });
     }
     if (open) {
-      // A route with fields leaves the key out instead; the valid call above carried one.
       if (!http.fields) await expectRouteRefusal(action, "refuses an undeclared input on the route", `Unexpected action input: ${UNEXPECTED_KEY}`, await prove(request({ ...valid, [UNEXPECTED_KEY]: 1 })));
       if (http.method === "POST") {
         await expectRouteRefusal(action, "refuses a body that is not JSON", "The request body must be a JSON object.", await prove(request(valid, "not json")));
@@ -390,7 +328,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
     }
   }
 
-  // Every POST that names no route.
   if (target.route && contract.actions.some((action) => action.http)) {
     await expectRouteRefusal(null, "refuses a POST to a path no action binds", "No route accepts POST on this path.", { method: "POST", path: "/conform-unbound", body: "{}", headers: { "content-type": "application/json" } });
   }
@@ -404,7 +341,6 @@ export async function runConformance(contract: ActionContract, target: Conforman
   };
 }
 
-/** Why `result` does not have the contract's output shape, or null when it does. */
 export function checkOutput(action: ContractAction, result: unknown): string | null {
   const output = action.output;
   if (output.kind === "changes") {
@@ -455,7 +391,6 @@ function describeOutput(action: ContractAction, result: unknown): string {
   return `Answered ${preview(result)}.`;
 }
 
-/** Whether `message` is one of `errors`, reading <key> and <name> as any text. */
 function listedIn(errors: ContractError[], message: string): boolean {
   return errors.some((error) => matches(error.message, message));
 }
@@ -484,7 +419,6 @@ function preview(value: unknown): string {
   return text === undefined ? String(value) : text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
-/** One line per check, then the totals. */
 export function formatConformanceReport(report: ConformanceReport): string {
   const lines = report.results.map((result) => `${result.outcome.toUpperCase().padEnd(4)} ${result.action}: ${result.check}. ${result.detail}`);
   lines.push(`${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped${report.rateLimitWaits ? `, ${report.rateLimitWaits} rate-limit waits` : ""}.`);

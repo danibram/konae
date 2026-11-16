@@ -1,16 +1,3 @@
-//! Moving a Deployment to another generated hostname.
-//!
-//! The first publish names a Deployment `<slug>.<suffix>`, and every later
-//! release keeps that name. `hostname_set` moves it to another free label
-//! under the same suffix. The names the Deployment held before stay with it in
-//! `apps/<id>/.konae/hostname.json`: a request on one of them gets a permanent
-//! redirect to the same path on the current name, so links in email already
-//! sent and bookmarks keep working, and no other app can take the name and
-//! receive them.
-//!
-//! The new name is a new origin. Sessions are host-only, so app users sign in
-//! again there, and an app with Google sign-in needs the new callback in its
-//! Google client. A custom domain and a path address are untouched.
 
 use super::refusal::{refuse, Refusal};
 use super::*;
@@ -20,7 +7,6 @@ use std::sync::OnceLock;
 
 pub const RECORD_FILE: &str = "hostname.json";
 
-/// The generated names a Deployment held before its current one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
@@ -66,11 +52,7 @@ pub fn check_free(hostname: &str, installation_hosts: &[String], taken: bool) ->
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Records and the index of previous names
 
-/// Previous name to the Deployment that held it, per data directory, as
-/// `domain.rs` keeps its aliases.
 type Index = HashMap<String, String>;
 static INDEXES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Index>>> = OnceLock::new();
 
@@ -80,8 +62,6 @@ fn with_index<T>(state: &AppState, f: impl FnOnce(&mut Index) -> T) -> T {
     f(index)
 }
 
-/// Reads every `hostname.json` on the volume. A copy restored into this
-/// directory brings its files along.
 fn load_index(root: &Path) -> Index {
     let mut index = Index::new();
     let Ok(entries) = std::fs::read_dir(crate::layout::apps(root)) else { return index };
@@ -146,13 +126,7 @@ fn is_installation_host(state: &AppState, hostname: &str) -> bool {
     domain::Rules::of(state).installation_hosts.iter().any(|host| host.eq_ignore_ascii_case(hostname.trim_end_matches('.')))
 }
 
-// ---------------------------------------------------------------------------
-// Taking a name
 
-/// Names a first publish or a move is taking right now, per data directory.
-/// A first publish chooses its name before it stages the release and serves
-/// on it only at the end, so without this a move and a first publish, or two
-/// first publishes of one slug, could both take one name.
 static TAKING: OnceLock<std::sync::Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
 
 fn taking_set() -> std::sync::MutexGuard<'static, HashSet<(PathBuf, String)>> {
@@ -179,16 +153,12 @@ fn take(state: &AppState, hostname: &str) -> Option<Taking> {
     if inserted { Some(Taking { key }) } else { None }
 }
 
-/// Whether an app other than `id` answers on `hostname`, held it before, or
-/// claims it as a custom domain.
 async fn held_by_other(state: &AppState, hostname: &str, id: &str) -> bool {
     state.deployments.read().await.get(hostname).is_some_and(|holder| holder.id != id)
         || held_by(state, hostname).is_some_and(|holder| holder != id)
         || domain::claimed(state, hostname)
 }
 
-/// Free for `id`: not the installation's own host or the path host, and not
-/// held by another app.
 async fn free_for(state: &AppState, hostname: &str, id: &str) -> bool {
     let path_host = crate::path::path_host(state);
     !is_installation_host(state, hostname)
@@ -200,9 +170,6 @@ fn stem(slug: &str) -> String {
     Some(safe_slug(slug)).filter(|slug| !slug.is_empty()).unwrap_or_else(|| "app".into())
 }
 
-/// The names a first publish of `slug` tries, in order: `<slug>.<suffix>`,
-/// then `<slug>-<code>.<suffix>` with a code from the app's ID, so
-/// `release_plan` can name the address before the release takes it.
 fn candidates(state: &AppState, slug: &str, id: &str) -> [String; 2] {
     let stem = stem(slug);
     let code = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(id.as_bytes()));
@@ -245,8 +212,6 @@ pub async fn forget(state: &AppState, id: &str) -> Result<()> {
     write_record(state, id, &Record::default()).await
 }
 
-// ---------------------------------------------------------------------------
-// The move
 
 pub async fn admin_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     match name {
@@ -274,8 +239,6 @@ pub async fn set(state: &AppState, id: &str, raw: &str) -> Result<Value> {
 async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&Value>) -> Result<Value> {
     let hostname = check_name(raw, &state.host_suffix)?;
     let found = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
-    // Releases and every settings change hold the project lock, so none of
-    // them can write the old name back over this one.
     let _project = database_lock(state, &format!("project:{}", found.project_id)).await;
     let _names = database_lock(state, "hostnames").await;
     let current = deployment_by_id(state, id).await.ok_or_else(|| anyhow::anyhow!("The app {id} is not published."))?;
@@ -283,7 +246,6 @@ async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&V
     if current.hostname == hostname {
         return Ok(view(state, &current, false));
     }
-    // A first publish that is choosing this name right now counts as another app.
     let taking = take(state, &hostname);
     check_free(&hostname, &domain::Rules::of(state).installation_hosts, taking.is_none() || held_by_other(state, &hostname, &current.id).await)?;
 
@@ -297,7 +259,6 @@ async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&V
     updated.url = deployment_url(&state.public_origin, &hostname);
     updated.hostname = hostname;
     if let Err(error_value) = persist_deployment(state, &updated).await {
-        // The app still answers on its old name, so that name is not a previous one.
         write_record(state, &current.id, &before).await?;
         return Err(error_value);
     }
@@ -309,8 +270,6 @@ async fn set_expected(state: &AppState, id: &str, raw: &str, expected: Option<&V
     Ok(view(state, &updated, true))
 }
 
-// ---------------------------------------------------------------------------
-// The redirect
 
 fn request_host(headers: &HeaderMap) -> Option<String> {
     let host = headers.get(header::HOST)?.to_str().ok()?;
@@ -385,9 +344,6 @@ mod tests {
         }
     }
 
-    /// release_plan's name is the one the first publish takes, a first publish
-    /// never takes the installation's own host, and a move cannot take a name
-    /// a first publish is choosing.
     #[tokio::test]
     async fn a_first_publish_takes_the_planned_name_and_holds_it_against_a_move() {
         let root = std::env::temp_dir().join(format!("konae-hostname-plan-{}", Uuid::new_v4()));
@@ -398,7 +354,6 @@ mod tests {
         let notes = publish(&state, "notes").await;
         assert_eq!(notes.hostname, "notes.apps.example.com");
 
-        // The slug is taken, so the plan names the coded name and the publish takes it.
         let planned_again = planned(&state, "notes", "again").await.unwrap();
         assert!(planned_again.starts_with("notes-"), "{planned_again}");
         let body = json!({
@@ -410,12 +365,10 @@ mod tests {
         assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
         assert_eq!(deployment_by_id(&state, "again").await.unwrap().hostname, planned_again);
 
-        // The editor's host is not a slug's address.
         let (name, taking) = choose(&state, "app", "editor-like").await;
         assert!(name.starts_with("app-") && name != "app.apps.example.com", "{name}");
         drop(taking);
 
-        // While a first publish holds a name, a move to it is refused; then it is free.
         let (held, taking) = choose(&state, "journal", "pending").await;
         assert_eq!(held, "journal.apps.example.com");
         let refused = set(&state, &notes.id, "journal").await.unwrap_err();
@@ -426,9 +379,6 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
-    /// The app answers on the new name, its old name redirects there and
-    /// stays its own, a republish keeps the new name, and the record
-    /// survives a restart.
     #[tokio::test]
     async fn a_moved_app_answers_on_its_new_name_and_its_old_name_redirects() {
         let root = std::env::temp_dir().join(format!("konae-hostname-{}", Uuid::new_v4()));
@@ -438,7 +388,6 @@ mod tests {
         let other = publish(&state, "other").await;
         assert_eq!(notes.hostname, "notes.apps.example.com");
 
-        // Another app's current name, and the installation's own host, are refused.
         let taken = set(&state, &notes.id, "other").await.unwrap_err();
         assert_eq!(crate::refusal::of(&taken).unwrap().code, "hostname.taken");
         assert_eq!(taken.to_string(), "other.apps.example.com is another app's address on this installation. Choose another name.");
@@ -453,10 +402,8 @@ mod tests {
         assert!(deployment_for(&state, &host("notes.apps.example.com")).await.is_none());
         assert_eq!(domain::app_url(&state, &deployment_by_id(&state, &notes.id).await.unwrap()), "https://journal.apps.example.com");
 
-        // Same name again changes nothing.
         assert_eq!(set(&state, &notes.id, "journal.apps.example.com").await.unwrap()["changed"], false);
 
-        // The old name stays with this app: another app cannot take it, nor can a first publish.
         let held = set(&state, &other.id, "notes").await.unwrap_err();
         assert_eq!(crate::refusal::of(&held).unwrap().code, "hostname.taken");
         let body = json!({
@@ -469,7 +416,6 @@ mod tests {
         let again = deployment_by_id(&state, "again").await.unwrap();
         assert!(again.hostname.starts_with("notes-"), "{}", again.hostname);
 
-        // The old name redirects with path, query and method kept.
         let app = stack(state.clone(), Router::new());
         let request = Request::builder()
             .method("POST")
@@ -481,7 +427,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(response.headers()[header::LOCATION], "https://journal.apps.example.com/_konae/invitation?x=1");
 
-        // A republish keeps the new name.
         let body = json!({
             "project": {"id": "notes", "name": "notes", "slug": "notes", "manifest": {},
                 "files": {"actions.json": "{\"version\":1,\"actions\":{}}", "schema.sql": ""}},
@@ -491,17 +436,14 @@ mod tests {
         assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
         assert_eq!(deployment_by_id(&state, &notes.id).await.unwrap().hostname, "journal.apps.example.com");
 
-        // The record and the name come back after a restart.
         let reloaded = load_deployments(&root, &state.public_origin).await.unwrap();
         assert_eq!(reloaded.get("journal.apps.example.com").map(|d| d.id.clone()), Some(notes.id.clone()));
         assert_eq!(load_index(&root).get("notes.apps.example.com"), Some(&notes.id));
 
-        // Moving back to the old name takes it off the redirect list.
         let back = set(&state, &notes.id, "notes").await.unwrap();
         assert_eq!(back["previousHostnames"], json!(["journal.apps.example.com"]));
         assert_eq!(deployment_for(&state, &host("notes.apps.example.com")).await.map(|d| d.id), Some(notes.id.clone()));
 
-        // Deleting the app frees its previous names.
         forget(&state, &notes.id).await.unwrap();
         assert_eq!(held_by(&state, "journal.apps.example.com"), None);
         let _ = tokio::fs::remove_dir_all(root).await;
@@ -521,8 +463,6 @@ mod tests {
         };
         let deployment = publish(&state, "notes").await;
 
-        // Model a legacy deployment whose current generated hostname is the
-        // editor host, then move it through hostname_set.
         let mut legacy = deployment.clone();
         legacy.hostname = "editor.apps.example.com".into();
         legacy.url = "https://editor.apps.example.com".into();
@@ -534,7 +474,6 @@ mod tests {
         let moved = set(&state, &legacy.id, "journal").await.unwrap();
         assert_eq!(moved["previousHostnames"], json!([]));
 
-        // A folder restored from disk can still contain an installation host.
         let restored_root =
             std::env::temp_dir().join(format!("konae-hostname-restored-{}", Uuid::new_v4()));
         let moved_deployment = deployment_by_id(&state, &legacy.id).await.unwrap();

@@ -14,78 +14,41 @@ type ActionBinding =
   | { source: "kernel"; field: "now" }
   | { source: "literal"; value: string | number | null };
 
-/** Who may call a route: a signed sender, a program with an API key, a person with a session. */
 export type RouteCaller = "signature" | "key" | "session";
 
-/** An action's HTTP route on its Deployment host. See docs/reference/routes-and-calls.md, "HTTP routes". */
 export type HttpBinding = {
   method: "GET" | "POST";
   path: string;
-  /** `secret` names a value the owner sets with `secret_set`; it is never in actions.json. See route-declaration.ts for a provider's scheme. */
   signature?: RouteSignature;
-  /**
-   * The route's callers. Without it a signed route takes the signature or a
-   * key, an unsigned route on a private Deployment a key or a session, and an
-   * unsigned route on a public Deployment anyone. See `routeCallers`.
-   */
   callers?: RouteCaller[];
-  /** Input keys and the JSON path each reads from a POST body; other body keys are left out (ADR-0013). */
   fields?: Record<string, string>;
 };
 
 const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
 
-/**
- * The callers a route accepts on a Deployment of the given visibility, or
- * null when it answers anyone. An action whose route does not answer anyone
- * answers only there, never through actions_invoke (ADR-0013).
- * kernel-rs/kernel/src/http.rs `route_callers` is the same rule.
- */
 export function routeCallers(http: HttpBinding, visibility: "public" | "private"): RouteCaller[] | null {
   if (http.callers) return http.callers;
   if (http.signature) return ["signature", "key"];
   return visibility === "private" ? ["key", "session"] : null;
 }
 
-/**
- * A Signal the action records when it succeeds. Its properties name input
- * bindings. See docs/adr/0010-the-kernel-keeps-usage-and-signals.md.
- */
 export type SignalDeclaration = { name: string; properties: string[] };
 
-/**
- * The email a mutation queues when its statement changes a row. It goes to
- * the app's contact email, the calling account or the accounts a changed row
- * names, never to an address from the input. See docs/adr/0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md.
- */
 export type NotifyDeclaration = {
   to: "owner" | "actor" | { column: string };
-  /** Columns of the changed rows that {changes} lists (ADR-0012). */
   changes?: string[];
   subject: string;
   body: string;
 };
 
 export type ServerActionDefinition = RuntimeActionDeclaration & {
-  /** Empty for a `"kind": "signal"` action, which runs no SQL. */
   statement: string;
   bindings: ActionBinding[];
   http?: HttpBinding;
   signal?: SignalDeclaration;
-  /**
-   * The refusal a mutation answers with when its statement changes no row,
-   * instead of { changes: 0 }. See docs/reference/usage-and-signals.md, "Guards".
-   */
   guard?: string;
-  /** The email the mutation queues when it changes a row. See docs/reference/usage-and-signals.md, "Notices". */
   notify?: NotifyDeclaration;
-  /**
-   * When the Kernel's timer runs a mutation that takes no input: every
-   * `<n>m` or `<n>h` from 5 minutes to 24 hours, or daily at `HH:MM` UTC.
-   * See docs/reference/usage-and-signals.md, "Scheduled work".
-   */
   schedule?: ScheduleDeclaration;
-  /** An action of `"kind": "call"`. See docs/reference/routes-and-calls.md, "Calls between apps". */
   call?: CallDeclaration;
 };
 
@@ -109,13 +72,9 @@ export function parseServerActionSource(source: string): ServerActionProgram {
     throw new Error("actions.json must use server action format version 1.");
   }
 
-  // The same checks, in the same order and with the same messages, as
-  // kernel-rs/kernel/src/action_shape.rs `check_program`. Sorted names make both doors
-  // name the same action when two are wrong.
   const declared = record.actions as Record<string, unknown>;
   if (Object.keys(declared).length > MAX_ACTIONS) throw refusal("action.count-over", `A project may declare at most ${MAX_ACTIONS} actions.`);
   const parsed = new Map(Object.keys(declared).sort().map((name) => [name, parseAction(name, declared[name])]));
-  // The program keeps the order actions.json writes them in.
   const actions: Record<string, ServerActionDefinition> = {};
   for (const name of Object.keys(declared)) actions[name] = parsed.get(name)!;
   assertDistinctRoutes(actions);
@@ -123,7 +82,6 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   return { version: 1, actions };
 }
 
-// kernel-rs/kernel/src/action-cases.json holds the shape cases both test suites run.
 export const MAX_ACTIONS = 100;
 const MAX_ACTION_NAME = 100;
 const ACTION_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
@@ -134,7 +92,6 @@ export function actionDeclarations(program: ServerActionProgram): RuntimeActionD
   return Object.values(program.actions).map(({ name, kind, access }) => ({ name, kind, access }));
 }
 
-/** Who calls: a person's or an API key's ID, or null for a visitor. */
 export type ResolveContext = { actorId: string | null; now?: number };
 
 export function resolveServerAction(
@@ -157,12 +114,6 @@ export function resolveServerAction(
   return { action, params };
 }
 
-/**
- * The top-level keys each kind takes. A key outside its kind's list is refused
- * after the action's other checks, so a key that has its own refusal, such as a
- * guard on a query, keeps it. `statement` on a signal action or a call may only
- * be empty. kernel-rs/kernel/src/action_shape.rs `check_keys` holds the same lists.
- */
 const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
   query: ["kind", "access", "statement", "bindings", "http"],
   mutation: ["kind", "access", "statement", "bindings", "http", "signal", "guard", "notify", "schedule"],
@@ -172,7 +123,6 @@ const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
 
 function parseAction(name: string, value: unknown): ServerActionDefinition {
   const action = parseActionBody(name, value);
-  // A key set to null counts as absent, as the Kernel reads it.
   const record = value as Record<string, unknown>;
   const allowed = ACTION_KEYS[action.kind];
   const extra = Object.keys(record).sort().find((key) => record[key] != null && !allowed.includes(key));
@@ -187,7 +137,6 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("action.invalid", `Invalid server action: ${name}`);
   const candidate = value as Record<string, unknown>;
   if (candidate.access === "granted") {
-    // Reserved for per-grant access; the Kernel refuses to deploy it until grants exist.
     throw refusal("action.access-unsupported", `Action ${name} uses "access": "granted", which the Kernel does not support yet. Use "anonymous" or "authenticated".`);
   }
   const access = candidate.access === "anonymous" || candidate.access === "authenticated" ? candidate.access : null;
@@ -199,7 +148,6 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw refusal("action.invalid", `Invalid server action: ${name}`);
   const statementBytes = typeof candidate.statement === "string" ? new TextEncoder().encode(candidate.statement).length : 0;
   if (statementBytes > MAX_STATEMENT_BYTES || bindings.length > MAX_BINDINGS) throw refusal("action.limits-exceeded", `Action ${name} exceeds statement or binding limits.`);
-  // A call runs no SQL; the Kernel's worker sends it (kernel-rs/kernel/src/calls.rs).
   if (kind === "call") return { name, kind, access, statement: "", bindings, call: parseCall(name, bindings, candidate) };
   assertNoCallKeys(name, kind, candidate);
   if (kind === "signal") {
@@ -236,7 +184,6 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   };
 }
 
-/** Refuses app SQL that names the Kernel's private schema transformation journal. */
 function assertNoReservedKernelTable(name: string, statement: string) {
   const tokens = sqlTokens(statement);
   const tableKeywords = new Set(["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "REFERENCES"]);
@@ -258,9 +205,6 @@ function assertNoReservedKernelTable(name: string, statement: string) {
   }
 }
 
-// The same checks, in the same order and with the same messages, as
-// kernel-rs/kernel/src/schedule.rs `check_subscribe` and `declaration`.
-// kernel-rs/kernel/src/schedule-cases.json holds the cases both test suites run.
 const MIN_SCHEDULE_MINUTES = 5;
 const MAX_SCHEDULE_MINUTES = 24 * 60;
 
@@ -296,27 +240,20 @@ function parseSchedule(name: string, kind: "query" | "mutation" | "signal", bind
   throw refusal("schedule.invalid", invalid);
 }
 
-// The same checks and messages as kernel-rs/kernel/src/guard.rs `declaration`.
-// kernel-rs/kernel/src/guard-cases.json holds the cases both test suites run.
 const MAX_GUARD_LENGTH = 200;
 
 function parseGuard(name: string, kind: "query" | "mutation" | "signal", value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (kind !== "mutation") throw refusal("guard.not-mutation", `Action ${name} is a ${kind === "query" ? "query" : "signal action"}, so it cannot declare a guard. Declare it on a mutation.`);
-  // Characters, not bytes or UTF-16 units, so both doors count an accented letter once.
   if (typeof value !== "string" || !value.trim() || [...value].length > MAX_GUARD_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) {
     throw refusal("guard.invalid", `Action ${name} has an invalid guard. Use a message of 1 to ${MAX_GUARD_LENGTH} characters on one line.`);
   }
   return value;
 }
 
-// The same checks, in the same order and with the same messages, as
-// kernel-rs/kernel/src/notify.rs `declaration`. kernel-rs/kernel/src/notify-cases.json holds
-// the cases both test suites run.
 const MAX_NOTIFY_SUBJECT = 120;
 const MAX_NOTIFY_BODY = 2000;
 const MAX_NOTIFY_CHANGES = 8;
-/** A SQL name the Kernel can quote. */
 const NOTIFY_COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 function parseNotify(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): NotifyDeclaration | undefined {
@@ -335,7 +272,6 @@ function parseNotify(name: string, kind: "query" | "mutation" | "signal", bindin
     || changes.some((column, index) => typeof column !== "string" || !NOTIFY_COLUMN.test(column) || changes.indexOf(column) !== index))) {
     throw refusal("notify.changes-invalid", `Action ${name} has an invalid notify changes list. Name 1 to ${MAX_NOTIFY_CHANGES} columns of the changed table, each once, in letters, digits and underscores.`);
   }
-  // Characters, not bytes or UTF-16 units, so both doors count an accented letter once.
   const { subject, body } = record;
   if (!subject.trim() || [...subject].length > MAX_NOTIFY_SUBJECT || /[\u0000-\u001f\u007f]/.test(subject)) {
     throw refusal("notify.subject-invalid", `Action ${name} has an invalid notify subject. Use 1 to ${MAX_NOTIFY_SUBJECT} characters on one line.`);
@@ -364,27 +300,15 @@ function notifyRecipient(value: unknown): NotifyDeclaration["to"] | undefined {
   return { column: record.column };
 }
 
-/**
- * The statement with the Kernel's own RETURNING clause, as
- * kernel-rs/kernel/src/notify.rs `with_returning` writes it: a trailing ";" and what
- * follows are cut, and each column is in brackets, because SQLite reads an
- * unknown "name" in double quotes as a string.
- */
 export function notifyReturningStatement(statement: string, columns: readonly string[]): string {
   const end = sqlTokens(statement).find((token) => token.kind === "symbol" && token.text === ";")?.start ?? statement.length;
   return `${statement.slice(0, end).trimEnd()}\nRETURNING ${columns.map((column) => `[${column}]`).join(", ")}`;
 }
 
-/** The refusal for a notify column the statement cannot return (kernel-rs/kernel/src/notify-column-cases.json). */
 export function notifyColumnRefusal(name: string) {
   return refusal("notify.column-unknown", `Action ${name} names a notify column its statement cannot return. Name columns of the table the statement changes.`);
 }
 
-/**
- * The columns the Kernel appends as RETURNING so a notice can list and
- * address the changed rows: the changes list, then the recipient column.
- * kernel-rs/kernel/src/notify.rs `Declaration::returning` is the twin.
- */
 export function notifyReturning(notify: NotifyDeclaration | undefined): string[] {
   if (!notify) return [];
   const columns = [...(notify.changes ?? [])];
@@ -394,7 +318,6 @@ export function notifyReturning(notify: NotifyDeclaration | undefined): string[]
 
 const NOTIFY_PLACEHOLDERS = new Set(["actor.id", "kernel.now", "changes", "changes.count"]);
 
-/** Every "{" opens a placeholder the next "}" closes; a "}" on its own is text. Returns the placeholders it names. */
 function assertPlaceholders(name: string, field: "subject" | "body", template: string, inputs: Set<string>): Set<string> {
   const named = new Set<string>();
   let rest = template;
@@ -412,12 +335,8 @@ function assertPlaceholders(name: string, field: "subject" | "body", template: s
   return named;
 }
 
-// The same checks, in the same order and with the same messages, as
-// kernel-rs/kernel/src/usage.rs `declaration`. kernel-rs/kernel/src/signal-cases.json holds
-// the cases both test suites run.
 const SIGNAL_NAME = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 const MAX_SIGNAL_PROPERTIES = 8;
-/** The property that records the caller's ID: a user's, a key's, or null for a visitor or a signed request. */
 const SIGNAL_ACTOR = "actor";
 
 function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindings: ActionBinding[], value: unknown): SignalDeclaration | undefined {
@@ -443,7 +362,6 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
   const seen = new Set<string>();
   for (const key of properties as string[]) {
     if (seen.has(key)) throw refusal("signal.property-twice", `Action ${name} names signal property ${key} twice.`);
-    // "actor" records the caller's ID, so it cannot also name an input.
     if (key === SIGNAL_ACTOR && inputs.has(key)) {
       throw refusal("signal.property-actor-input", `Action ${name} names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input.`);
     }
@@ -453,9 +371,6 @@ function parseSignal(name: string, kind: "query" | "mutation" | "signal", bindin
   return { name: record.name, properties: properties as string[] };
 }
 
-// The same checks, in the same order and with the same messages, as
-// kernel-rs/kernel/src/http.rs `binding`. kernel-rs/kernel/src/http-binding-cases.json
-// holds the cases both test suites run.
 const HTTP_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
 const RESERVED_SEGMENTS = new Set(["_konae", "oauth", ".well-known", "mcp"]);
 
@@ -534,7 +449,6 @@ function parseBinding(actionName: string, index: number, value: unknown): Action
   }
   if (binding.source === "actor" && binding.field === "id") return { source: "actor", field: "id" };
   if (binding.source === "kernel" && binding.field === "now") return { source: "kernel", field: "now" };
-  // An absent value and null both bind NULL, as on the Kernel.
   if (binding.source === "literal" && (binding.value === undefined || binding.value === null || typeof binding.value === "string" || typeof binding.value === "number")) {
     return { source: "literal", value: binding.value ?? null };
   }
@@ -550,7 +464,6 @@ function resolveBinding(binding: ActionBinding, input: Record<string, unknown>, 
   }
   const value = input[binding.key];
   if (binding.nullable && (value === undefined || value === null)) return null;
-  // The Kernel's words, kernel-rs/kernel/src/lib.rs `resolve_bindings`, so the preview refuses as a Deployment does.
   if (value === undefined) throw new Error(`Missing action input: ${binding.key}`);
   if (binding.type === "string") {
     if (typeof value !== "string" || !value.trim()) throw new Error(`${binding.key} must be a non-empty string.`);

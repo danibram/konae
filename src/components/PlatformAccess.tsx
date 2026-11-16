@@ -7,19 +7,10 @@ import { Card, LoadingBlock, Skeleton } from "./ui";
 type ClerkBrowser = { load: (options: object) => Promise<void>; session: { getToken: () => Promise<string | null> } | null; mountSignIn: (element: HTMLElement) => void; unmountSignIn: (element: HTMLElement) => void; addListener: (listener: () => void) => () => void; signOut: () => Promise<void> };
 declare global { interface Window { Clerk?: ClerkBrowser; __internal_ClerkUICtor?: unknown } }
 
-/** The owner page the server serves, for sign-in, the account and agent tokens. */
 export function ownerPageHref(returnTo: string | null): string {
   return returnTo ? `/_konae/owner/login?returnTo=${encodeURIComponent(returnTo)}` : "/_konae/owner/login";
 }
 
-/**
- * The editor's door to owner sign-in. The server's owner page at
- * `/_konae/owner/login` does sign-in, account creation, password links and
- * agent tokens for both the editor and an installation without it, so this
- * page sends the owner there. It only keeps the Clerk widget, which signs an
- * owner in on an installation that uses Clerk; once signed in, the owner is
- * sent on as well.
- */
 export function PlatformAccess() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const returnTo = useMemo(() => safeReturnPath(params.get("returnTo")), [params]);
@@ -84,8 +75,6 @@ function ClerkSignIn({ publishableKey, signOut, onError, onComplete }: { publish
       if (!clerk) throw new Error("Could not start Google sign-in.");
       await clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor } });
       if (!active) return;
-      // The owner page signed out of Konae; end the Clerk session too, or the
-      // widget would sign the owner straight back in.
       if (signOut && clerk.session) await clerk.signOut();
       const exchange = async () => {
         if (!active || !clerk.session || exchanging) return;

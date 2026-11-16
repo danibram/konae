@@ -1,11 +1,4 @@
-/**
- * A single-pass SQL tokenizer for the places that need to read a statement
- * without a parser: the Validation Gate and the SQL console. Comments, string
- * literals and quoted identifiers are consumed whole, so a keyword or a `;`
- * inside one never counts.
- */
 export type SqlToken = (
-  /** A bare word as written, e.g. `delete`, `tasks`. */
   | { kind: "word"; text: string; depth: number }
   /** A quoted identifier ("x", `x` or [x]), without its quotes. */
   | { kind: "identifier"; text: string; depth: number }
@@ -14,7 +7,6 @@ export type SqlToken = (
   /** Any other character that is not whitespace: `(`, `=`, `,`, `;` and so on. */
   | { kind: "symbol"; text: string; depth: number }
 ) & {
-  /** Offsets into the statement, so a reader can quote the token as written. */
   start: number;
   end: number;
 };
@@ -59,7 +51,6 @@ export function sqlTokens(sql: string): SqlToken[] {
       tokens.push({ kind: "word", text: match, depth, start: index, end: index + match.length });
       index += match.length;
     } else if (/[0-9]/.test(char)) {
-      // A number, including forms like 1e5 or 0x1F, so its letters never read as a word.
       const match = /^[0-9][0-9A-Za-z_.]*/.exec(sql.slice(index))![0];
       tokens.push({ kind: "symbol", text: match, depth, start: index, end: index + match.length });
       index += match.length;
@@ -75,21 +66,14 @@ export function sqlTokens(sql: string): SqlToken[] {
   return tokens;
 }
 
-/** The bare words among `tokens`, upper-cased. Strings and quoted identifiers are not words. */
 export function sqlWordsOf(tokens: SqlToken[]): string[] {
   return tokens.flatMap((token) => token.kind === "word" ? [token.text.toUpperCase()] : []);
 }
 
-/**
- * The tokens of each statement in a script, split on `;`. A trigger body
- * (`CREATE TRIGGER ... BEGIN ...; END`) stays one statement. Empty statements
- * are dropped.
- */
 export function sqlStatementTokens(sql: string): SqlToken[][] {
   const statements: SqlToken[][] = [];
   let current: SqlToken[] = [];
   let triggerBody = false;
-  // CASE ... END can sit inside a trigger body; its END does not close the body.
   let openCases = 0;
   for (const token of sqlTokens(sql)) {
     if (token.kind === "word") {

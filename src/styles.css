@@ -50,8 +50,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   background: var(--paper);
 }
 
-/* One navigation: every panel is reached from here, whether it is already on
-   screen, buried behind a tab, or closed. */
 .section-nav { position: relative; z-index: 30; display: flex; align-items: stretch; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--ink); background: var(--ink); }
 .section-nav button { display: flex; align-items: center; gap: 6px; padding: 0 11px; border: 0; background: transparent; color: #9b9d94; font: 700 12px "JetBrains Mono Variable", monospace; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
 .section-nav button:hover { color: #f2efe5; }
@@ -60,8 +58,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .section-nav button:hover kbd, .section-nav button:focus-visible kbd { display: inline-block; }
 .section-nav-spacer { flex: 1; }
 
-/* Panel bodies that a workbench group hosts. */
-/* Files: the File list sits to the left of the editor and stays while the person works here. */
 .code-workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .code-workspace.has-file-list { grid-template-columns: minmax(170px, 240px) minmax(0, 1fr); }
 .code-workspace > .explorer-panel { min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--line); }
@@ -115,7 +111,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   font-weight: 750;
   box-shadow: 2px 2px 0 var(--ink);
 }
-/* One acid leave path (Deploy). Export is the quiet twin at the same size. */
 .workshop .export-button {
   background: transparent;
   color: inherit;
@@ -172,7 +167,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 }
 .gate-refusal strong { display: block; font-weight: 750; }
 .gate-refusal-detail { display: block; margin-top: var(--ds-space-1); overflow-wrap: anywhere; font: 12px/1.45 var(--ds-mono); }
-/* A refusal only the owner clears: the change applies, Deploy refuses. */
 .gate-refusal.is-owner { border-bottom-color: var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); }
 .gate-refusal.is-owner strong { color: var(--ds-warning); }
 .gate-refusal.is-owner .gate-refusal-detail { color: var(--ds-muted); }
@@ -238,14 +232,8 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .editor-status .status-light { background: var(--acid); box-shadow: none; }
 
 .capability-loading { height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font: 12px "JetBrains Mono Variable"; }
-/* A column of fixed bands plus one region that takes the rest and scrolls, so a
-   panel can add or drop a band (the error banner) without moving the others.
-   Mounted in a workbench group the frame overrides this root's `overflow` with
-   its own `auto` (see .group-body in workbench-layout.css); the `hidden` here is
-   what applies anywhere else. */
 .cap-workspace { height: 100%; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .cap-workspace > * { flex: 0 0 auto; }
-/* The capability chip: one look, sized by whichever header wears it. */
 .data-table { width: 100%; border-collapse: collapse; font: 12px "JetBrains Mono Variable"; white-space: nowrap; }
 .data-table th { position: sticky; top: 0; z-index: 1; text-align: left; padding: 9px 10px; background: #dcd9ce; color: #66685f; border-right: 1px solid var(--line); border-bottom: 1px solid var(--ink); font-size: 11px; letter-spacing: .04em; }
 .data-table td { max-width: 220px; overflow: hidden; text-overflow: ellipsis; padding: 9px 10px; border-right: 1px solid #ddd9cf; border-bottom: 1px solid #ddd9cf; }
@@ -300,10 +288,7 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .sql-success { border-color: var(--ds-border); background: var(--ds-success-soft); }
 .sql-success span { color: var(--ds-success); font: 11px var(--ds-mono); }
 
-/* Database studio — data-first, full-workspace mode */
 .database-studio { height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-rows: 52px minmax(0, 1fr) 30px; background: #f2efe6; }
-/* Shared by the SQL pages and the document views — the Data title block that
-   also used this selector is gone, the rest is still rendered. */
 .sql-page-heading p, .studio-document-view header p { margin: 0 0 2px; color: var(--muted); font: 10px "JetBrains Mono Variable"; letter-spacing: .13em; }
 .database-studio-header { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-right: 10px; border-bottom: 1px solid var(--ink); background: #f7f4eb; }
 .database-target { min-width: 0; max-width: 150px; margin-left: auto; margin-right: 10px; padding: 7px 24px 7px 8px; border: 1px solid var(--line); background: #ebe8de; color: var(--ink); font: 10px "JetBrains Mono Variable", monospace; text-overflow: ellipsis; }
@@ -656,7 +641,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .published-orbit { right: 25px; top: 45px; }
 }
 
-/* Explorer panel — the project's files, in a panel like any other. */
 .explorer-panel { display: flex; flex-direction: column; padding: 6px 0; background: var(--paper-2); }
 .explorer-group { margin: 8px 14px; color: var(--muted); font: 10px "JetBrains Mono Variable", monospace; letter-spacing: .13em; }
 .explorer-panel button { min-height: 33px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 11px; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--ink); font: 12px "JetBrains Mono Variable", monospace; text-align: left; cursor: pointer; }
@@ -664,14 +648,11 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .explorer-panel button:hover { background: #eae7dd; }
 .explorer-panel button.active { border-left-color: var(--acid); background: #e6e3d9; font-weight: 700; }
 
-/* Panel toggles: the way back for anything closed, next to the sections. */
 .section-toggles { display: flex; align-items: center; gap: 3px; padding-right: 9px; }
 .section-toggles button { display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; border: 1px solid #4a4c44; background: transparent; color: #9b9d94; font: 700 10px "JetBrains Mono Variable", monospace; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
 .section-toggles button:hover { border-color: #d7d5cd; color: #f2efe5; }
 .section-toggles button.on { border-color: var(--acid); background: #33352d; color: var(--acid); }
 
-/* The Files action sits with the numbers, not in a title bar: the tab already
-   names the panel. */
 .files-summary .files-upload { margin-left: auto; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--ink); background: var(--acid); box-shadow: 2px 2px 0 var(--ink); font-size: 12px; font-weight: 750; cursor: pointer; }
 .files-summary .files-upload:hover { translate: -1px -1px; box-shadow: 3px 3px 0 var(--ink); }
 
@@ -884,10 +865,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .start-cards label.selected { border-color: var(--ds-accent); background: var(--ds-accent-soft); color: var(--ds-text); }
 }
 .start-cards input { position: absolute; opacity: 0; }
-/* Workshop hides in-group tabs (section-nav owns navigation). When a panel has
-   no toolbar, group-tabs is display:none and a two-row template parks the body
-   in the auto track with an empty 1fr void — Data/SQL crushed to ~80px at any
-   width. Bind rows to toolbar presence, not to .is-compact. */
 .workshop .group { grid-template-rows: minmax(0, 1fr); }
 .workshop .group:has(.group-actions) { grid-template-rows: auto minmax(0, 1fr); }
 .workshop .group-body,
@@ -936,7 +913,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .sql-result-tabs > small { color: #c7cbbd; }
   .database-tabs button.active { background: #262a34; }
   .data-browser, .data-table-sidebar, .table-toolbar, .editable-table { background: #1c1f28; color: #f4f2ea; border-color: #343846; }
-  /* The data browser's cells, table list and buttons carry their own light surfaces, so each gets a dark one. */
   .editable-grid th { background: #262a34; color: #f4f2ea; border-right-color: #343846; border-bottom-color: #4a5060; }
   .editable-grid th > button { color: inherit; }
   .editable-grid th > button:hover { background: #303542; }
@@ -1003,7 +979,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   text-transform: none;
   box-shadow: none;
 }
-/* Active section: quiet underline. Acid stays on Deploy (and Connect offline). */
 .section-nav .section-door.active,
 .workshop .section-nav > button.section-door.active,
 .workshop .section-nav > button.section-tool.active {
@@ -1087,7 +1062,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .new-project-dialog .ui-field label { display: block; margin: 0 0 10px; line-height: 16px; position: relative; z-index: 1; }
 .start-cards .start-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .start-cards small { display: block; font-size: 13px; font-weight: 450; line-height: 1.4; }
-/* Seven cards outgrow a short screen: the heading and the Create button stay put and the body scrolls. */
 .new-project.ui-dialog { display: flex; flex-direction: column; overflow: hidden; }
 .new-project .ui-dialog-heading, .new-project .ui-dialog-footer { flex: 0 0 auto; }
 .new-project .new-project-dialog { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--ds-space-6); }
@@ -1103,7 +1077,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
   .section-nav { overflow-x: auto; }
 }
 @media (prefers-color-scheme: dark) {
-  /* The visibility cards keep their light background, so their titles keep dark ink. */
   .visibility-options > label strong { color: #171910; }
   .publish-dialog.is-refused-leave .confirm-publish {
     background: #1c1f28;
@@ -1256,7 +1229,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .workshop.is-compact { grid-template-rows: auto auto minmax(0, 1fr); }
 .workshop.is-compact.has-error { grid-template-rows: auto auto auto minmax(0, 1fr); }
 .workshop.is-compact:has(.operation-error):has(.gate-refusal) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
-/* On a phone the button would squeeze the sentence into a narrow column, so it moves under it. */
 .workshop.is-compact .gate-refusal { flex-wrap: wrap; row-gap: var(--ds-space-2); }
 .workshop.is-compact .gate-refusal > div { flex: 1 1 100%; }
 .workshop.is-compact .gate-refusal button { margin-left: 0; }
@@ -1313,7 +1285,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; overflow: hidden; }
 .schema-change summary { cursor: pointer; color: var(--ds-muted); font-size: 13px; }
 .schema-change pre { margin: 8px 0 0; padding: 12px; max-height: 220px; overflow: auto; border: 1px solid var(--ds-line); border-radius: 8px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* The views of one database are a segmented control, a level below the tab that opened the panel, in the editor and on a published app alike. */
 .database-studio .database-studio-header { padding-left: 10px; }
 .database-studio .database-tabs { height: auto; gap: 2px; padding: 3px; border: 1px solid var(--ds-border); background: var(--ds-canvas); }
 .database-studio .database-tabs button, .database-studio .database-tabs button:last-child { height: 30px; padding: 0 12px; border: 0; color: var(--ds-muted); background: transparent; font: 600 12px/1 var(--ds-font); }

@@ -17,7 +17,6 @@ assert(Number.isInteger(port) && port >= 1024 && port <= 65535, "Choose a valid 
 const url = `http://127.0.0.1:${port}`;
 const setupKey = crypto.randomUUID();
 const password = crypto.randomUUID();
-// The feed's monitors sign their pings with this secret; the owner sets it before publishing.
 const pingsSecret = crypto.randomUUID();
 const badgePng = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8ioAAAAASUVORK5CYII="), (c) => c.charCodeAt(0));
 const observations: { scenario: string; result: string }[] = [];
@@ -76,8 +75,6 @@ try {
     } finally { await owner.cancel(upload.transferId); }
   }
   check("Publish eight examples", "All builds pass MCP release planning and apply on an empty Kernel.");
-  // The feed embeds a badge from the file read path. A reporter uploads it as
-  // public and the owner points the page at it, before the browser pass loads it.
   const reporterSignup = await fetch(`${url}/_konae/auth/signup`, {
     method: "POST", headers: { host: receipts.feed.hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ email: "reporter@example.test", password }),
@@ -98,8 +95,6 @@ try {
   await owner.call("database_execute", { deploymentId: receipts.feed.id, operation: "sql", input: { sql: `INSERT INTO badge(file_id) VALUES('${publicBadge.id}')` } });
 
   if (process.env.KONAE_PRODUCT_FIT_BROWSER !== "0") {
-    // Each published page runs in Chrome under the Kernel's Content Security
-    // Policy. A blocked script, style, image or request fails the replay.
     const browser = await chromium.launch({ channel: "chrome" });
     try {
       const pages: [string, string][] = Object.keys(receipts).flatMap(name => name === "docs"
@@ -116,7 +111,6 @@ try {
         assert.equal(response?.status(), 200, `${name}${route} did not load.`);
         assert(response?.headers()["content-security-policy"]?.includes("frame-ancestors 'none'"), `${name}${route} has no policy.`);
         if (name === "board") {
-          // The private sign-in page reports the refusal only if its inline script runs.
           await page.getByLabel("Email").fill("stranger@example.test");
           await page.getByLabel("Password").fill(password);
           await page.getByRole("button", { name: "Sign in" }).click();
@@ -126,7 +120,6 @@ try {
           await page.waitForTimeout(1_500);
         }
         if (name === "feed") {
-          // The image comes from GET /_konae/files/<id> under the app's own policy.
           await page.waitForFunction(() => { const img = document.querySelector<HTMLImageElement>("#badge img"); return !!img && img.complete && img.naturalWidth > 0; }, undefined, { timeout: 10_000 });
         }
         assert.deepEqual(violations, [], `${name}${route} broke under the Content Security Policy.`);
@@ -159,7 +152,6 @@ try {
   const launch = runtime("launch");
   assert.equal((await action(launch, "waitlist.join", { email: "visitor@example.test", name: "Visitor", source: "smoke" })).changes, 1);
   assert.equal((await action(launch, "waitlist.count"))[0].n, 1);
-  // The statement stores the address trimmed and lowercased, and its guard refuses a repeat in any case.
   await assert.rejects(action(launch, "waitlist.join", { email: "visitor@example.test", name: "Visitor", source: "smoke" }), /That address is already on the list\./);
   await assert.rejects(action(launch, "waitlist.join", { email: " Visitor@Example.TEST", name: "Visitor", source: "smoke" }), /That address is already on the list\./);
   assert.equal((await action(launch, "waitlist.count"))[0].n, 1);
@@ -186,14 +178,12 @@ try {
   await sql("board", "UPDATE members SET role='admin' WHERE display='Lead'");
   await action(member, "cards.create", { title: "Only my owner or an admin can move me" });
   const card = (await action(member, "cards.list"))[0];
-  // cards.list names the owner by display name and carries no user ID to the browser.
   assert.deepEqual(Object.keys(card).sort(), ["id", "owner", "status", "title"]);
   const memberRows = await action<Array<{ id: number; display: string }>>(dev, "members.list");
   const idOf = (display: string) => memberRows.find((row) => row.display === display)!.id;
   await assert.rejects(action(dev, "cards.move", { id: card.id, status: "done" }), /Only the card's owner or an admin can move it/);
   await assert.rejects(action(dev, "cards.delete", { id: card.id }), /Only an admin can delete a card\./);
   await assert.rejects(action(dev, "members.promote", { id: idOf("Developer") }), /Only an admin can promote a member/);
-  // A display name is chosen by its member, so promotion names the member's row, not the name.
   const copycat = await signupApp("board", "copycat@team.example");
   await assert.rejects(action(copycat, "cards.create", { title: "Before joining" }), /Join the board before adding a card\./);
   await action(copycat, "me.join", { display: "Member" });
@@ -220,7 +210,6 @@ try {
   const piece = (await action(visitor, "pieces.list"))[0];
   assert.equal(piece.title, "Clay cup");
   assert(piece.image_data.startsWith("data:image/png;base64,"));
-  // A visitor gets no file ID; the potter reads hers from pieces.files and loads it with files.url's path.
   assert.equal("file_id" in piece, false);
   assert.deepEqual(await action(potter, "pieces.files"), [{ id: piece.id, file_id: file.id }]);
   await assert.rejects(action(visitor, "pieces.files"), /authentication-required/);
@@ -235,7 +224,6 @@ try {
   assert.equal(listed[0].visibility, "public");
   assert.equal(listed[0].ownerId, undefined);
   const publicDownload = await visitor.call<any>("files_read", { fileId: published.id });
-  // download() releases the transfer when it finishes, and the Kernel refuses a second cancel.
   assert.deepEqual(await visitor.download(publicDownload), png);
   await assert.rejects(visitor.call("transfer_status", { transferId: publicDownload.transferId }), /Transfer not found or expired/);
   check("Public portfolio", "A private upload stays with the potter, and a visitor's piece list carries no file ID. A public upload can be listed and downloaded by a visitor.");
@@ -251,12 +239,9 @@ try {
   await sql("feed", "INSERT INTO incidents(title,body,started_at) VALUES('Maintenance','Planned work',1700000000000)");
   const feed = runtime("feed");
   assert.equal((await action(feed, "incidents.recent"))[0].title, "Maintenance");
-  // A signed route is its action's only door, so the runtime endpoint refuses it.
   await assert.rejects(action(feed, "pings.receive", { source: "monitor", payload: '{"status":"ok"}' }), /answers only on its HTTP route, POST \/hooks\/pings/);
   const hook = await fetch(url + "/hook", { method: "POST", headers: { host: receipts.feed.hostname, "content-type": "application/json" }, body: '{"status":"ok"}' });
   assert.equal(hook.status, 405);
-  // A monitor posts with curl. The signature is HMAC-SHA256, keyed with the owner's secret,
-  // of t, a nonce, the method, the path, the canonical query and the body.
   const curl = async (body: string, signature?: string) => {
     const args = ["curl", "-s", "-o", "-", "-w", "\n%{http_code}", "-X", "POST", `${url}/hooks/pings`,
       "-H", `Host: ${receipts.feed.hostname}`, "-H", "Content-Type: application/json", "-H", `X-Forwarded-For: ${freshAddress()}`, "--data-binary", body];
@@ -275,7 +260,6 @@ try {
   const incidents = await fetch(`${url}/api/incidents`, { headers: { host: receipts.feed.hostname, "x-forwarded-for": freshAddress() } });
   assert.equal(incidents.headers.get("content-type"), "application/json");
   assert.equal((await incidents.json()).result[0].title, "Maintenance");
-  // A program reads the private badge with a key; a visitor gets nothing.
   const reader = await owner.call<{ key: string }>("api_keys_create", { deploymentId: receipts.feed.id, name: "Badge mirror", files: ["private"] });
   const byKey = await fetch(`${url}/_konae/files/${privateBadge.id}`, { headers: { host: receipts.feed.hostname, authorization: `Bearer ${reader.key}` } });
   assert.equal(byKey.status, 200);
@@ -329,9 +313,6 @@ try {
   assert.equal((await action(probe, "items.optional", { q: "Probe" }))[0].title, "Probe row");
   check("Action edge cases", `RETURNING mutations fail release planning. Nullable search returned ${optional.length} rows with an omitted input; explicit null and filtered input also pass.`);
 
-  // Each example's Action Contract, run against the Kernel that serves it. A
-  // replacement backend would run the same checks. Every request comes from
-  // its own address, so the anonymous rate limit does not slow the run.
   const sessionToken = async (name: string, email: string) => {
     const response = await fetch(`${url}/_konae/auth/login`, {
       method: "POST", headers: { host: receipts[name].hostname, "content-type": "application/json", "x-forwarded-for": freshAddress() },
@@ -362,16 +343,12 @@ try {
       secrets: name === "feed" ? { pings_webhook: pingsSecret } : undefined,
     }), { inputs: { "items.jsonin": { ids: "[1, 2]" } } });
     assert.equal(report.failed, 0, `${name} does not conform to its Action Contract:\n${formatConformanceReport(report)}`);
-    // cards.create guards an INSERT for members only. The session conform uses is a member,
-    // so its second identical call inserts again and the guard cannot be reached. The team
-    // board check above proves it with an account that has not joined.
     const unreachableGuards = name === "board" ? ["cards.create"] : [];
     const skips = report.results.filter((result) => result.outcome === "skip");
     assert.deepEqual(skips.map((result) => `${result.action}: ${result.check}`), unreachableGuards.map((action) => `${action}: refuses with its guard when no row changes`),
       `${name} skipped checks:\n${formatConformanceReport(report)}`);
     conformance[name] = { passed: report.passed, skipped: report.skipped };
   }
-  // The CLI, from a contract file on disk, with no proxy header and no session.
   const contractDir = path.join(scratch, "contract-launch");
   await cp(path.join(import.meta.dir, "launch"), appDir(contractDir), { recursive: true });
   const cli = (args: string[]) => Bun.spawn(["bun", "run", path.join(repo, "scripts/konae.ts"), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });

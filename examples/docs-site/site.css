@@ -1,4 +1,3 @@
-/* The design system comes from styles.css, written by `bun run ui:render`. These are the site's own rules on its tokens. */
 * { box-sizing: border-box; }
 html { scroll-padding-top: 76px; }
 body {
