@@ -52,3 +52,9 @@ test("the owner sets the app's contact email in konae.json, and a later publish 
   await release(kernel.owner, payload(id), id);
   expect((await read()).contactEmail).toBe("owner@contact.test");
 }, 120_000);
+
+test("a first release refuses an invalid contact email", async () => {
+  const id = "invalid_contact_app";
+  await kernel.owner.call("project_create", { projectId: id, name: "Invalid contact" });
+  await expect(release(kernel.owner, payload(id, { contactEmail: "nobody" }), id)).rejects.toThrow("The contact email is not a valid email address.");
+}, 120_000);
