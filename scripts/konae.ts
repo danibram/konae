@@ -700,7 +700,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const { artifact, source } = prepared;
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
-      initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
+      initialSignupPolicy: first ? wanted : undefined, contactEmail: first ? config.contactEmail : undefined,
       initialModules: first ? initialModules : undefined,
     };
   }, confirm, (error) => warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
@@ -736,6 +736,12 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
   }
+  if (!first && config.contactEmail) {
+    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id });
+    if (current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
+      warn(`The app folder asks for contact email ${config.contactEmail}, but this app has ${current.contactEmail ?? "none"}. A publish keeps the app's contact email after its first release. Change it with contact_email_set.`);
+    }
+  }
   return Object.assign(receipt, { first });
 }
 
@@ -749,7 +755,8 @@ export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentI
     const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { projectId: deploymentId });
     return [`This app answers at ${generatedUrl}.`];
   }
-  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set });
+  const current = await client.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: deploymentId });
+  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set, expected: current.deployment.hostname });
   if (!moved.changed) return [`This app already answers at ${moved.url}.`];
   return [
     `This app now answers at ${moved.url}. ${moved.previousHostnames.at(-1)} redirects there with a 308 and stays this app's.`,
@@ -1347,7 +1354,7 @@ export async function domainLocal(client: Pick<McpClient, "call">, deploymentId:
   if (request.set !== undefined) {
     const checked = checkHostname(request.set, current.rules ?? { suffix: "", installationHosts: [] });
     if (!checked.ok) throw Error(checked.message);
-    view = await client.call<DomainView>("domain_set", { projectId: deploymentId, hostname: checked.hostname });
+    view = await client.call<DomainView>("domain_set", { projectId: deploymentId, hostname: checked.hostname, expected: current.hostname });
   }
   if (view.status === "none") return [`This app has no custom domain. It answers at ${view.generatedUrl}.`];
   if (view.status === "active") return [`${view.url} serves this app, next to ${view.generatedUrl}. Your proxy must terminate TLS for ${view.hostname} and forward Host unchanged.`];

@@ -254,7 +254,7 @@ bun run konae -- tool session_inspect --dir ./my-app
 | `name`, `slug`, `manifest` | Every time, as the project's record. | Edit the file and publish. The hostname is not in this file. `hostname_set` moves it. |
 | `visibility` | Every time, with the release plan. | Edit the file and publish. |
 | `signupPolicy` | On the first release only. A later publish that names another policy warns and changes nothing. | `signup_policy_set` |
-| `contactEmail` | Every time it is set. | `contact_email_set`, until the next publish sends the file's value again. |
+| `contactEmail` | On the first release only. Later publishes keep the Deployment's address and warn when the folder names another one. | `contact_email_set` |
 | `signInMethods` | Never. | `sign_in_methods_set` |
 | `kernel` | Never. It is the version of the Kernel that wrote the file. | The Kernel. |
 

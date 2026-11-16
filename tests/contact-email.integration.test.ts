@@ -6,8 +6,7 @@ import { buildKernel, release, startKernel, type Kernel } from "./kernel-harness
 
 // "notify": { "to": "owner" } sends to the app's contact email in konae.json.
 // A publish fills it with the owner's email when the app has none, the owner
-// changes it with contact_email_set, later publishes keep it, and a publish
-// from a folder whose konae.json names an address takes that one.
+// changes it with contact_email_set, and later publishes keep the change.
 let root: string;
 let kernel: Kernel;
 
@@ -33,26 +32,29 @@ afterAll(async () => { await kernel?.stop(); if (root) await rm(root, { recursiv
 test("the owner sets the app's contact email in konae.json, and a later publish keeps it", async () => {
   const id = "contact_app";
   await kernel.owner.call("project_create", { projectId: id, name: "Noticed" });
-  const { receipt } = await release(kernel.owner, payload(id), id);
+  const { receipt } = await release(kernel.owner, payload(id, { contactEmail: "a@example.org" }), id);
   const read = () => kernel.owner.call<{ contactEmail: string | null; ownerNotices: string[] }>("contact_email_read", { projectId: receipt.id });
   const settings = async () => JSON.parse(await readFile(path.join(kernel.data, "apps", id, "konae.json"), "utf8")) as { contactEmail?: string };
-  expect(await read()).toEqual({ deploymentId: receipt.id, contactEmail: "owner@contact.test", ownerNotices: ["notes.add"] });
+  expect(await read()).toEqual({ deploymentId: receipt.id, contactEmail: "a@example.org", ownerNotices: ["notes.add"] });
 
   expect(await kernel.owner.call("contact_email_set", { projectId: receipt.id, email: " Team@Contact.test " })).toMatchObject({ contactEmail: "team@contact.test" });
   expect((await settings()).contactEmail).toBe("team@contact.test");
   await expect(kernel.owner.call("contact_email_set", { projectId: receipt.id, email: "not an address" })).rejects.toThrow("The contact email is not a valid email address.");
-
-  await release(kernel.owner, payload(id), id);
+  await expect(kernel.owner.call("contact_email_set", { projectId: receipt.id, email: "stale@contact.test", expected: "a@example.org" })).rejects.toMatchObject({ refusal: { code: "setting.changed" } });
   expect((await read()).contactEmail).toBe("team@contact.test");
 
-  // A folder's konae.json names its own address, which a publish from it takes.
-  await release(kernel.owner, payload(id, { contactEmail: "Folder@Contact.test" }), id);
-  expect((await read()).contactEmail).toBe("folder@contact.test");
-  await expect(release(kernel.owner, payload(id, { contactEmail: "nobody" }), id)).rejects.toThrow("The contact email is not a valid email address.");
+  await release(kernel.owner, payload(id, { contactEmail: "a@example.org" }), id);
+  expect((await read()).contactEmail).toBe("team@contact.test");
 
   expect(await kernel.owner.call("contact_email_set", { projectId: receipt.id, email: null })).toMatchObject({ contactEmail: null, ownerNotices: ["notes.add"] });
   expect((await settings()).contactEmail).toBeUndefined();
   // An app with no address gets the owner's again from the next publish.
   await release(kernel.owner, payload(id), id);
   expect((await read()).contactEmail).toBe("owner@contact.test");
+}, 120_000);
+
+test("a first release refuses an invalid contact email", async () => {
+  const id = "invalid_contact_app";
+  await kernel.owner.call("project_create", { projectId: id, name: "Invalid contact" });
+  await expect(release(kernel.owner, payload(id, { contactEmail: "nobody" }), id)).rejects.toThrow("The contact email is not a valid email address.");
 }, 120_000);

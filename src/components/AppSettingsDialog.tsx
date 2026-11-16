@@ -5,6 +5,7 @@ import { hostnameLabel, setHostname } from "../deployments/hostnames";
 import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, setPath, type PathChange, type PathView } from "../deployments/paths";
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
+import { isSettingChanged } from "../deployments/client";
 import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
@@ -45,7 +46,6 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [inputError, setInputError] = useState("");
-  const [reloadOffered, setReloadOffered] = useState(false);
   const [notice, setNotice] = useState("");
   const [signedOut, setSignedOut] = useState(false);
   const [reload, setReload] = useState(0);
@@ -81,15 +81,9 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
     if (!deploymentId || busy) return;
     setBusy(true);
     setError("");
-    setReloadOffered(false);
     setNotice("");
     try {
-      const current = await readDomain(deploymentId);
-      if (current.hostname !== view?.hostname) {
-        setReloadOffered(true);
-        throw new Error("The domain changed elsewhere. Reload its settings before changing it.");
-      }
-      const result = operation === "remove" ? await clearDomain(deploymentId) : await setDomain(deploymentId, nextHostname);
+      const result = operation === "remove" ? await clearDomain(deploymentId, view?.hostname ?? null) : await setDomain(deploymentId, nextHostname, view?.hostname ?? null);
       if (!alive.current) return;
       if (operation === "remove") {
         setView({ deploymentId, hostname: null, status: "none", generatedUrl: result.generatedUrl, rules: view?.rules });
@@ -104,6 +98,12 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       setConfirmation(null);
     } catch (cause) {
       if (!alive.current) return;
+      if (isSettingChanged(cause)) {
+        try {
+          const current = await readDomain(deploymentId);
+          if (alive.current) { setView(current); setHostname(current.hostname ?? ""); setConfirmation(null); }
+        } catch { /* Keep the refusal visible if the read-back fails. */ }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }
     } finally { if (alive.current) setBusy(false); }
@@ -135,7 +135,6 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
         {loading && <LoadingBlock label="Reading domain settings" rows={2} />}
         {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
-        {error && view && reloadOffered && !signedOut && <Button disabled={busy} onClick={() => { setConfirmation(null); setReload((value) => value + 1); }}>Reload domain settings</Button>}
         {signedOut && <a href={signInHref}>Sign in again to manage this app</a>}
         {!loading && !view && !signedOut && <Button onClick={() => setReload((value) => value + 1)}>Retry loading</Button>}
         {!loading && view && <>
@@ -226,7 +225,7 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
     setBusy(true);
     setError("");
     try {
-      const moved = await setHostname(deploymentId, wanted);
+      const moved = await setHostname(deploymentId, wanted, new URL(url).hostname);
       const readBack = await readDomain(deploymentId);
       if (!alive.current) return;
       if (readBack.generatedUrl !== moved.url) throw new Error("The address does not show the change yet. Reload the app settings and check it again.");
@@ -236,6 +235,12 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
     } catch (cause) {
       if (!alive.current) return;
       setConfirming(false);
+      if (isSettingChanged(cause)) {
+        try {
+          const readBack = await readDomain(deploymentId);
+          if (alive.current) onMoved(readBack.generatedUrl);
+        } catch { /* Keep the refusal visible if the read-back fails. */ }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) onSignedOut();
     } finally { if (alive.current) setBusy(false); }
@@ -300,7 +305,7 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
   }, [deploymentId, reload, onSignedOut]);
 
   // A change counts only when path_read shows it. A shared-origin refusal asks the owner, and the Kernel's words are the ones shown.
-  const apply = async (next: PathChange, operation: () => Promise<unknown> = () => setPath(deploymentId, next)) => {
+  const apply = async (next: PathChange, operation: () => Promise<unknown> = () => setPath(deploymentId, next, { enabled: view!.enabled, name: view!.name, acceptSharedOrigin: view!.acceptSharedOrigin })) => {
     if (!view || busy) return;
     setBusy(true);
     setError("");
@@ -321,6 +326,12 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
       if (isSharedOriginRefusal(cause)) {
         setConfirmation({ kind: "accept", change: next, message: cause instanceof Error ? cause.message : String(cause) });
       } else {
+        if (isSettingChanged(cause)) {
+          try {
+            const readBack = await readPath(deploymentId);
+            if (alive.current) { setView(readBack); setName(readBack.name ?? ""); setConfirmation(null); }
+          } catch { /* Keep the refusal visible if the read-back fails. */ }
+        }
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }

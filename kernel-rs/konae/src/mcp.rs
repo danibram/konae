@@ -790,15 +790,15 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ));
         tools.push(tool(
             "contact_email_set",
-            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it, unless the folder's konae.json names contactEmail, which konae publish sends. Requires publish. Read back with contact_email_read.",
-            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254}}),
+            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. A later publish keeps it. Pass expected from contact_email_read to refuse a change made since that read. Requires publish. Read back with contact_email_read.",
+            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254},"expected":{"type":["string","null"],"maxLength":254}}),
             &["projectId", "email"],
             false,
         ));
         tools.push(tool(
             "maintenance_set",
-            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
-            json!({"projectId":text,"on":{"type":"boolean"}}),
+            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Pass expected from maintenance_read to refuse a change made since that read. Requires publish. Read back with maintenance_read.",
+            json!({"projectId":text,"on":{"type":"boolean"},"expected":{"type":"boolean"}}),
             &["projectId", "on"],
             false,
         ));
@@ -843,22 +843,22 @@ fn domain_tools() -> Vec<Value> {
     vec![
         tool(
             "domain_set",
-            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
+            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Pass expected from domain_read to refuse a change made since that read. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260},"expected":{"type":["string","null"],"maxLength":260}}),
             &["projectId", "hostname"],
             false,
         ),
         tool(
             "domain_clear",
-            "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1}}),
+            "Stop serving a deployment from its custom domain. Pass expected from domain_read to refuse a change made since that read. The generated hostname keeps answering. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"expected":{"type":["string","null"],"maxLength":260}}),
             &["projectId"],
             false,
         ),
         tool(
             "hostname_set",
-            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260}}),
+            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Pass expected from project_inspect's deployment.hostname to refuse a change made since that read. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260},"expected":{"type":"string","minLength":1,"maxLength":260}}),
             &["projectId", "name"],
             false,
         ),
@@ -957,20 +957,21 @@ fn path_tools() -> Vec<Value> {
     vec![
         tool(
             "path_set",
-            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Read back with path_read. Requires publish.",
+            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Pass expected from path_read as { enabled, name, acceptSharedOrigin } to refuse a change made since that read. Requires publish.",
             json!({
                 "projectId":{"type":"string","minLength":1},
                 "enabled":{"type":"boolean"},
                 "name":{"type":["string","null"],"minLength":1,"maxLength":260},
-                "acceptSharedOrigin":{"type":"boolean"}
+                "acceptSharedOrigin":{"type":"boolean"},
+                "expected":{"type":"object","properties":{"enabled":{"type":"boolean"},"name":{"type":["string","null"]},"acceptSharedOrigin":{"type":"boolean"}},"required":["enabled","name","acceptSharedOrigin"],"additionalProperties":false}
             }),
             &["projectId", "enabled"],
             false,
         ),
         tool(
             "path_clear",
-            "Turn off a deployment's path address and forget its name. The generated hostname and any custom domain keep answering. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1}}),
+            "Turn off a deployment's path address and forget its name. Pass expected from path_read as { enabled, name, acceptSharedOrigin } to refuse a change made since that read. The generated hostname and any custom domain keep answering. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"expected":{"type":"object","properties":{"enabled":{"type":"boolean"},"name":{"type":["string","null"]},"acceptSharedOrigin":{"type":"boolean"}},"required":["enabled","name","acceptSharedOrigin"],"additionalProperties":false}}),
             &["projectId"],
             false,
         ),
@@ -1732,11 +1733,17 @@ async fn admin_call(
             // Releases hold the same lock, so a publish cannot put back the email it read before.
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
+            super::refusal::check_setting_expected(a.get("expected"), json!(current.contact_email))?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let found = owned_deployment(state, owner, id, "publish").await?;
+            let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
+            let deployment = owned_deployment(state, owner, id, "publish").await?;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
+            let current = super::maintenance::read(&state.data_root, &deployment.id)["maintenance"].clone();
+            super::refusal::check_setting_expected(a.get("expected"), current)?;
             super::maintenance::set(&state.data_root, &deployment.id, on)
         }
         "signup_policy_set" => {
@@ -1879,7 +1886,22 @@ async fn admin_call(
         }
         name if name.starts_with("domain_") || name.starts_with("path_") || name.starts_with("hostname_") => {
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), scope).await?;
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let found = owned_deployment(state, owner, id, scope).await?;
+            // hostname_set takes project:{id} inside hostname::set_expected, so taking it here would deadlock.
+            let _guard = if scope == "publish" && !name.starts_with("hostname_") { Some(database_lock(state, &format!("project:{}", found.project_id)).await) } else { None };
+            let deployment = owned_deployment(state, owner, id, scope).await?;
+            if a.get("expected").is_some() && name != "hostname_set" {
+                let current = if name == "domain_set" || name == "domain_clear" {
+                    json!(super::domain::admin_call(state, &deployment, "domain_read", &a).await?["hostname"])
+                } else if name == "path_set" || name == "path_clear" {
+                    let view = super::path::admin_call(state, &deployment, "path_read", &a).await?;
+                    json!({"enabled":view["enabled"],"name":view["name"],"acceptSharedOrigin":view["acceptSharedOrigin"]})
+                } else {
+                    Value::Null
+                };
+                super::refusal::check_setting_expected(a.get("expected"), current)?;
+            }
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
             } else if name.starts_with("hostname_") {
@@ -2016,15 +2038,17 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     db.query_row("SELECT email FROM app_users WHERE id = ?1", [owner_id], |row| row.get(0)).optional().ok().flatten()
 }
 
-/// The contact email a release of `project` carries: the one the payload
-/// names from its folder's konae.json, else the one the published app has,
-/// which the owner may have set in App settings, else the owner's.
+/// The first release may take the folder's contact email. Later releases keep
+/// the Deployment value so a stale app folder cannot replace an owner change.
 async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
-    if let Some(given) = given {
-        let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
-        return Ok(Some(email));
+    let deployment = find_project_deployment(&*state.deployments.read().await, project);
+    if deployment.is_none() {
+        if let Some(given) = given {
+            let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
+            return Ok(Some(email));
+        }
     }
-    let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
+    let kept = deployment.and_then(|deployment| deployment.contact_email);
     Ok(kept.or_else(|| owner_email(state, &owner.id)))
 }
 

@@ -14,8 +14,8 @@ export type DomainView = {
 };
 
 export const readDomain = (deploymentId: string) => platformMcp.call<DomainView>("domain_read", { projectId: deploymentId });
-export const setDomain = (deploymentId: string, hostname: string) => platformMcp.call<DomainView>("domain_set", { projectId: deploymentId, hostname });
-export const clearDomain = (deploymentId: string) => platformMcp.call<{ deploymentId: string; cleared: string | null; status: "none"; generatedUrl: string }>("domain_clear", { projectId: deploymentId });
+export const setDomain = (deploymentId: string, hostname: string, expected: string | null) => platformMcp.call<DomainView>("domain_set", { projectId: deploymentId, hostname, expected });
+export const clearDomain = (deploymentId: string, expected: string | null) => platformMcp.call<{ deploymentId: string; cleared: string | null; status: "none"; generatedUrl: string }>("domain_clear", { projectId: deploymentId, expected });
 
 export function domainTrafficTarget(generatedUrl: string): { local: boolean; hostname: string } {
   const hostname = new URL(generatedUrl).hostname;

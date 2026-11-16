@@ -566,6 +566,44 @@ test("manual action edits leave the running preview unchanged until Run", async 
   await expect(page.locator(".preview-problems")).toContainText("Server action not declared.", { timeout: 30_000 });
 });
 
+test("a stale contact email save shows the current value", async ({ page, context, browser }) => {
+  const email = `owner-${crypto.randomUUID()}@example.test`;
+  const password = "Owner-test-password-2026";
+  const client = `192.0.2.${1 + Math.floor(Math.random() * 254)}`;
+  const signup = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
+  expect(signup.ok()).toBe(true);
+  const projectPath = await createProject(page, `Email conflict ${Date.now()}`);
+  await publish(page);
+  await fromMore(page, "App settings");
+  let settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Contact email" }).click();
+  await expect(settings.getByLabel("Email", { exact: true })).toHaveValue(email);
+
+  const secondContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    const second = await secondContext.newPage();
+    await second.goto(projectPath);
+    const signIn = second.locator("form#auth");
+    await signIn.getByLabel("Email").fill(email);
+    await signIn.getByLabel("Password").fill(password);
+    await second.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(second).toHaveURL(new RegExp(`${projectPath}$`));
+    await fromMore(second, "App settings");
+    const otherSettings = second.getByRole("dialog", { name: "App settings", exact: true });
+    await otherSettings.getByRole("tab", { name: "Contact email" }).click();
+    await otherSettings.getByLabel("Email", { exact: true }).fill("second@example.test");
+    await otherSettings.getByRole("button", { name: "Change email", exact: true }).click();
+    await expect(otherSettings.getByRole("status")).toContainText("Saved.");
+  } finally {
+    await secondContext.close();
+  }
+
+  await settings.getByLabel("Email", { exact: true }).fill("first@example.test");
+  await settings.getByRole("button", { name: "Change email", exact: true }).click();
+  await expect(settings.getByRole("alert")).toContainText("The setting changed since you read it.");
+  await expect(settings.getByLabel("Email", { exact: true })).toHaveValue("second@example.test");
+});
+
 test("mobile domain settings persist claims, explain TXT checks and confirm changes", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 320, height: 740 });

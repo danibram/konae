@@ -3,10 +3,14 @@ import type { DatabaseAdminHost, DatabaseBackup, DatabasePage, DatabaseRunResult
 import type { SqlValue } from "sql.js";
 import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
-import { platformMcp, type Transfer } from "../mcp/client";
+import { McpError, platformMcp, type Transfer } from "../mcp/client";
 import { publishProject, type ConfirmSchema } from "./release";
 
 export type DeploymentReceipt = DeploymentRecord;
+
+export function isSettingChanged(error: unknown): boolean {
+  return error instanceof McpError && error.refusal?.code === "setting.changed";
+}
 
 /**
  * Publishes the project. `confirmSchema` is asked when the schema change loses
@@ -263,8 +267,8 @@ export function readMaintenance(deploymentId: string) {
 }
 
 /** Puts the app in maintenance or takes it out, and answers with the state the Kernel kept. */
-export function setMaintenance(deploymentId: string, on: boolean) {
-  return platformMcp.call<MaintenanceState>("maintenance_set", { projectId: deploymentId, on });
+export function setMaintenance(deploymentId: string, on: boolean, expected: boolean) {
+  return platformMcp.call<MaintenanceState>("maintenance_set", { projectId: deploymentId, on, expected });
 }
 
 /**
@@ -279,6 +283,6 @@ export function readContactEmail(deploymentId: string) {
 }
 
 /** Sets the app's contact email in konae.json, or clears it with null, and answers with what the Kernel kept. */
-export function setContactEmail(deploymentId: string, email: string | null) {
-  return platformMcp.call<ContactEmailState>("contact_email_set", { projectId: deploymentId, email });
+export function setContactEmail(deploymentId: string, email: string | null, expected: string | null) {
+  return platformMcp.call<ContactEmailState>("contact_email_set", { projectId: deploymentId, email, expected });
 }
