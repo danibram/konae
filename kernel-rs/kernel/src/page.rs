@@ -53,11 +53,24 @@ pub fn validate_action(name: &str, action: &ActionDefinition) -> Result<(), crat
 
 pub fn check_program(program: &ActionProgram) -> Result<(), crate::refusal::Refusal> {
     let mut paths = std::collections::HashMap::new();
+    let mut files = std::collections::HashMap::<&str, (&str, usize)>::new();
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
     for name in &names {
         let Some(page) = program.actions[*name].page.as_ref() else { continue };
         let Some(path) = page.get("path").and_then(Value::as_str) else { continue };
+        let Some(file) = page.get("file").and_then(Value::as_str) else { continue };
+        if file == "index.html" {
+            return Err(crate::refusal::refuse("page.file-invalid", format!("Action {name} names index.html as a page file, but index.html is the app entry page.")));
+        }
+        let depth = path.split('/').filter(|segment| !segment.is_empty()).count();
+        if let Some((earlier, earlier_depth)) = files.get(file) {
+            if *earlier_depth != depth {
+                return Err(crate::refusal::refuse("page.file-depth", format!("Actions {earlier} and {name} name the same page file at different path depths.")));
+            }
+        } else {
+            files.insert(file, (name.as_str(), depth));
+        }
         let key = path.split('/').map(|segment| if segment.starts_with(':') { ":" } else { segment }).collect::<Vec<_>>().join("/");
         if let Some(earlier) = paths.get(&key) {
             return Err(crate::refusal::refuse("page.duplicate", format!("Actions {earlier} and {name} both bind page path {path}.")));

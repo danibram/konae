@@ -83,6 +83,8 @@
 
   "page.bindings": { "fix": "capsule", "remedy": "Make the page path parameters match the query's input bindings." },
   "page.duplicate": { "fix": "capsule", "remedy": "Give each page path its own pattern." },
+  "page.file-depth": { "fix": "capsule", "remedy": "Give page paths that name one file the same number of segments." },
+  "page.file-invalid": { "fix": "capsule", "remedy": "Use a page file other than index.html, which is the app entry page." },
   "page.file-missing": { "fix": "capsule", "remedy": "Add the named page file to the Build Artifact." },
   "page.invalid": { "fix": "capsule", "remedy": "Give page a path and a file, with an optional list query." },
   "page.list-columns": { "fix": "capsule", "remedy": "Return each page parameter from the list query, with optional updated." },
