@@ -35,12 +35,16 @@ test("contact_email_set refuses an old read", async () => {
   expect((await kernel.owner.call<{ contactEmail: string | null }>("contact_email_read", { projectId: id })).contactEmail).toBe("second@settings.test");
 }, 120_000);
 
-test("domain_set refuses an old read", async () => {
+test("domain setters refuse an old read", async () => {
   const { id } = await app("expected_domain");
   const first = await kernel.owner.call<{ hostname: string | null }>("domain_read", { projectId: id });
   await kernel.owner.call("domain_set", { projectId: id, hostname: "first.example.org" });
   await expect(kernel.owner.call("domain_set", { projectId: id, hostname: "second.example.org", expected: first.hostname })).rejects.toMatchObject({ refusal: { code: "setting.changed" }, message: expect.stringContaining("first.example.org") });
   expect((await kernel.owner.call<{ hostname: string | null }>("domain_read", { projectId: id })).hostname).toBe("first.example.org");
+  await expect(kernel.owner.call("domain_clear", { projectId: id, expected: first.hostname })).rejects.toMatchObject({ refusal: { code: "setting.changed" }, message: expect.stringContaining("first.example.org") });
+  expect((await kernel.owner.call<{ hostname: string | null }>("domain_read", { projectId: id })).hostname).toBe("first.example.org");
+  await kernel.owner.call("domain_clear", { projectId: id, expected: "first.example.org" });
+  expect((await kernel.owner.call<{ hostname: string | null }>("domain_read", { projectId: id })).hostname).toBeNull();
 }, 120_000);
 
 test("hostname_set refuses an old read", async () => {
@@ -51,12 +55,17 @@ test("hostname_set refuses an old read", async () => {
   expect((await kernel.owner.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: id })).deployment.hostname).toBe("first-name.localhost");
 }, 120_000);
 
-test("path_set refuses an old read", async () => {
+test("path setters refuse an old read", async () => {
   const { id } = await app("expected_path");
   const first = await kernel.owner.call<{ enabled: boolean; name: string | null; acceptSharedOrigin: boolean }>("path_read", { projectId: id });
   await kernel.owner.call("path_set", { projectId: id, enabled: false, name: "first-path" });
   await expect(kernel.owner.call("path_set", { projectId: id, enabled: false, name: "second-path", expected: { enabled: first.enabled, name: first.name, acceptSharedOrigin: first.acceptSharedOrigin } })).rejects.toMatchObject({ refusal: { code: "setting.changed" }, message: expect.stringContaining("first-path") });
   expect((await kernel.owner.call<{ name: string | null }>("path_read", { projectId: id })).name).toBe("first-path");
+  await expect(kernel.owner.call("path_clear", { projectId: id, expected: { enabled: first.enabled, name: first.name, acceptSharedOrigin: first.acceptSharedOrigin } })).rejects.toMatchObject({ refusal: { code: "setting.changed" }, message: expect.stringContaining("first-path") });
+  expect((await kernel.owner.call<{ name: string | null }>("path_read", { projectId: id })).name).toBe("first-path");
+  const current = await kernel.owner.call<{ enabled: boolean; name: string | null; acceptSharedOrigin: boolean }>("path_read", { projectId: id });
+  await kernel.owner.call("path_clear", { projectId: id, expected: { enabled: current.enabled, name: current.name, acceptSharedOrigin: current.acceptSharedOrigin } });
+  expect((await kernel.owner.call<{ name: string | null }>("path_read", { projectId: id })).name).toBeNull();
 }, 120_000);
 
 test("maintenance_set refuses an old read", async () => {

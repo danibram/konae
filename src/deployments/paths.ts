@@ -21,7 +21,7 @@ export type ExpectedPath = Pick<PathView, "enabled" | "name" | "acceptSharedOrig
 
 export const readPath = (deploymentId: string) => platformMcp.call<PathView>("path_read", { projectId: deploymentId });
 export const setPath = (deploymentId: string, change: PathChange, expected: ExpectedPath) => platformMcp.call<PathView>("path_set", { projectId: deploymentId, ...change, expected });
-export const clearPath = (deploymentId: string) => platformMcp.call<PathView>("path_clear", { projectId: deploymentId });
+export const clearPath = (deploymentId: string, expected: ExpectedPath) => platformMcp.call<PathView>("path_clear", { projectId: deploymentId, expected });
 
 /** The installation names no domain, so the editor shows the Kernel's `next` and no switch. */
 export function pathNeedsDomain(view: PathView): boolean {

@@ -857,8 +857,8 @@ fn domain_tools() -> Vec<Value> {
         ),
         tool(
             "domain_clear",
-            "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1}}),
+            "Stop serving a deployment from its custom domain. Pass expected from domain_read to refuse a change made since that read. The generated hostname keeps answering. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"expected":{"type":["string","null"],"maxLength":260}}),
             &["projectId"],
             false,
         ),
@@ -977,8 +977,8 @@ fn path_tools() -> Vec<Value> {
         ),
         tool(
             "path_clear",
-            "Turn off a deployment's path address and forget its name. The generated hostname and any custom domain keep answering. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1}}),
+            "Turn off a deployment's path address and forget its name. Pass expected from path_read as { enabled, name, acceptSharedOrigin } to refuse a change made since that read. The generated hostname and any custom domain keep answering. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"expected":{"type":"object","properties":{"enabled":{"type":"boolean"},"name":{"type":["string","null"]},"acceptSharedOrigin":{"type":"boolean"}},"required":["enabled","name","acceptSharedOrigin"],"additionalProperties":false}}),
             &["projectId"],
             false,
         ),
@@ -1877,12 +1877,13 @@ async fn admin_call(
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
             let id = a["projectId"].as_str().unwrap_or_default();
             let found = owned_deployment(state, owner, id, scope).await?;
+            // hostname_set takes project:{id} inside hostname::set_expected, so taking it here would deadlock.
             let _guard = if scope == "publish" && !name.starts_with("hostname_") { Some(database_lock(state, &format!("project:{}", found.project_id)).await) } else { None };
             let deployment = owned_deployment(state, owner, id, scope).await?;
             if a.get("expected").is_some() && name != "hostname_set" {
-                let current = if name == "domain_set" {
+                let current = if name == "domain_set" || name == "domain_clear" {
                     json!(super::domain::admin_call(state, &deployment, "domain_read", &a).await?["hostname"])
-                } else if name == "path_set" {
+                } else if name == "path_set" || name == "path_clear" {
                     let view = super::path::admin_call(state, &deployment, "path_read", &a).await?;
                     json!({"enabled":view["enabled"],"name":view["name"],"acceptSharedOrigin":view["acceptSharedOrigin"]})
                 } else {

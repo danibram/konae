@@ -82,7 +82,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
     setError("");
     setNotice("");
     try {
-      const result = operation === "remove" ? await clearDomain(deploymentId) : await setDomain(deploymentId, nextHostname, view?.hostname ?? null);
+      const result = operation === "remove" ? await clearDomain(deploymentId, view?.hostname ?? null) : await setDomain(deploymentId, nextHostname, view?.hostname ?? null);
       if (!alive.current) return;
       if (operation === "remove") {
         setView({ deploymentId, hostname: null, status: "none", generatedUrl: result.generatedUrl, rules: view?.rules });
