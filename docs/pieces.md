@@ -20,6 +20,8 @@ This is the table the `pieces` topic of `platform_guide` returns, and the one in
 | Every signed-in user reads every uploaded file | `manifest.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
+| Turn an app capability on or set its options | `modules_read` and `module_set`, then read it back with `modules_read` | A separate tool or a setting in the Capsule |
+| Be listed in search | Turn on `seo` with `module_set`, after `modules_read` | Assume a public app is listed |
 | A short link on the installation's domain | Path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | Export and import of the app folder | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` (an export of the data) + `dev --reset` (its import) | Publishing to find out |

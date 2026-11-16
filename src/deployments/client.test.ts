@@ -137,6 +137,32 @@ describe("first publish signup policy", () => {
   test("sends no policy when none is given, as a republish must", async () => {
     expect(await uploaded()).not.toHaveProperty("initialSignupPolicy");
   });
+
+  test("sends the project's module state with the first release", async () => {
+    const project = { ...starterProject, modules: { seo: { on: true, canonical: "path", image: null } } };
+    let payload: Record<string, unknown> = {};
+    fakeKernel((name, args) => {
+      if (name === "transfer_begin") return { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 };
+      if (name === "transfer_write") payload = JSON.parse(new TextDecoder().decode(decodeBase64(String(args.data))));
+      if (name === "release_plan") return { planId: "p", schema: noChange };
+      return {};
+    });
+    await deployProject(project, "private", artifact, askNever);
+    expect(payload.initialModules).toMatchObject({ seo: { on: true, canonical: "path", image: null } });
+  });
+
+  test("does not send portable module state with a later release", async () => {
+    const project = { ...starterProject, modules: { seo: { on: true, canonical: "path", image: null } } };
+    let payload: Record<string, unknown> = {};
+    fakeKernel((name, args) => {
+      if (name === "transfer_begin") return { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 };
+      if (name === "transfer_write") payload = JSON.parse(new TextDecoder().decode(decodeBase64(String(args.data))));
+      if (name === "release_plan") return { planId: "p", schema: noChange };
+      return {};
+    });
+    await deployProject(project, "private", artifact, askNever, undefined, undefined, false);
+    expect(payload).not.toHaveProperty("initialModules");
+  });
 });
 
 describe("app users and invitations", () => {

@@ -179,6 +179,21 @@ describe("the rendered readers", () => {
     expect(drift(namedCalls(prompt))).toEqual(agreed);
   });
 
+  test("the prompt, guide and docs carry every module and the agent read-back rule", () => {
+    const prompt = buildSystemPrompt(cloneStarter());
+    for (const module of sdkContract.modules) {
+      expect(prompt).toContain(`- ${module.name}: ${module.summary}`);
+      expect(prompt).toContain(`Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`);
+      expect(read("docs/sdk.md")).toContain(`## ${module.calls.length ? `miniapp.${module.name}` : `The ${module.name} module, declared, with no browser call`}`);
+    }
+    expect(prompt).toContain("module_set changes a switchable module or its options; read modules_read after it");
+    expect(read("docs/guides/manage-modules.md")).toContain("read `modules_read` to confirm the new state");
+    expect(read("docs/pieces.md")).toContain("Be listed in search | Turn on `seo` with `module_set`, after `modules_read`");
+    const guide = read("kernel-rs/konae/src/guide.rs");
+    expect(guide).toContain("modules_read answers every module's state");
+    expect(guide).toContain("Be listed in search");
+  });
+
   test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
     const mcp = read("kernel-rs/konae/src/mcp.rs");
     expect(mcp).toContain(`"platform_guide" => super::guide::topic(`);

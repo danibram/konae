@@ -45,11 +45,11 @@ export const DATA_FOLDER = "data";
 export const KERNEL_VERSION: string = version;
 
 export function defaultModuleStates(existing: AppSettings["modules"] = {}): AppSettings["modules"] {
-  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, {
-    on: false,
-    ...Object.fromEntries(module.options.map((option) => [option.key, option.default])),
-    ...existing?.[module.name],
-  }]));
+  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, Object.assign(
+    { on: false },
+    Object.fromEntries(module.options.map((option) => [option.key, option.default])),
+    existing?.[module.name] ?? {},
+  )]));
 }
 
 
@@ -201,6 +201,13 @@ An optional \`schema-transforms.json\` records ordered data changes between sche
 - A query that reads rows names a LIMIT.
 - \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table, column or index on the next publish or start, and a change that drops or retypes one only with the confirmation it names.
 - A page loads no script from another origin, uses no inline event handler, and runs no WebAssembly or \`eval\`. It fetches only from its own origin and the origins \`manifest.connects\` in \`konae.json\` names.
+
+## Module settings
+
+| Need | Use | Not |
+| --- | --- | --- |
+| Turn an app capability on or set its options | \`modules_read\` and \`module_set\`, then read it back with \`modules_read\` | A separate tool or a setting in the Capsule |
+| Be listed in search | Turn on \`seo\` with \`module_set\`, after \`modules_read\` | Assume a public app is listed |
 
 ## Rules nothing checks
 

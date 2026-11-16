@@ -39,6 +39,8 @@ Error messages below are the exact text a published app receives as `error.messa
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
 
+Owner control: on and not switchable yet. Permission: `manage_users`. Build agent: cannot change it.
+
 - Visibility decides who may open the app shell. It never grants data access on its own.
 - An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.
 - The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.
@@ -109,6 +111,8 @@ Editor preview: Switches to the signed-out state and returns the anonymous sessi
 ## miniapp.actions
 
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
 
 - A binding passes who calls: { "source": "actor", "field": "id" } is the signed-in person's ID or the API key's ID, and refuses a caller without one. It cannot come from the input. Roles are rows in the app's own tables, checked in SQL against that ID.
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
@@ -258,6 +262,8 @@ Editor preview: Ignores the Deployment's visibility and rate limits, and keeps i
 
 Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
 
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+
 - By default, only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
 - files.list returns metadata and the same-origin file path without reading file bytes. files.upload sends the file's bytes in one request and returns its path as url. The Kernel checks access on every file request, including conditional requests.
@@ -397,6 +403,8 @@ Limits:
 
 Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.
 
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+
 - The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.
 - http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.
 - Each attempt of a signed call signs again with a new nonce, so a retry is never refused as a replay.
@@ -463,6 +471,8 @@ Limits:
 ## The http module, declared, with no browser call
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
 
 - Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
@@ -537,3 +547,10 @@ Limits:
 ## The seo module, declared, with no browser call
 
 Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `canonical` (Canonical address) | `enum`: `domain`, `hostname`, `path` | Default | Choose the address search engines and link previews should use. |
+| `image` (Card image) | `path` | Default | Choose an image path from the app's published files. |

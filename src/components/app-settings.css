@@ -43,4 +43,11 @@
 .app-settings-tabs { padding: 0 20px; }
 .app-settings-section { display: grid; gap: 16px; min-width: 0; }
 .app-settings-section[hidden] { display: none; }
+.module-settings-card { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--ds-border); border-radius: var(--ds-radius); background: var(--ds-surface); }
+.module-settings-card > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.module-settings-card h3, .module-current h4 { margin: 0; font-size: 15px; }
+.module-settings-card header p { color: var(--ds-muted); }
+.module-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.module-current { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ds-border); overflow-wrap: anywhere; }
+.module-current ul { margin: 0; padding-left: 20px; }
 @media (max-width: 560px) { .app-settings-tabs { padding: 0 16px; } }

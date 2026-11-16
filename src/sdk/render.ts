@@ -168,6 +168,11 @@ export function renderDocs(contract: SdkContract = sdkContract): string {
   ];
   for (const module of contract.modules) {
     lines.push("", `## ${moduleHeading(module)}`, "", module.summary);
+    lines.push("", `Owner control: ${module.switch ? "the owner can change this module with module_set" : "on and not switchable yet"}. Permission: \`${module.permission}\`. Build agent: ${module.agentRule === "after-owner-confirms" ? "waits for owner confirmation" : "cannot change it"}.`);
+    if (module.options.length) {
+      lines.push("", "| Option | Type | Default | Help |", "| --- | --- | --- | --- |");
+      for (const option of module.options) lines.push(`| \`${option.key}\` (${cell(option.label)}) | \`${option.type}\`${option.values ? `: ${option.values.map((value) => `\`${value}\``).join(", ")}` : ""} | ${option.default === null ? "Default" : `\`${String(option.default)}\``} | ${cell(option.help)} |`);
+    }
     if (module.notes.length) lines.push("", ...module.notes.map((note) => `- ${note}`));
     for (const declaration of module.declarations) {
       lines.push("", `Declared with \`${declaration.key}\` in \`${declaration.file}\`. ${declaration.summary}`);

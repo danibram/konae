@@ -19,6 +19,8 @@ The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It
 
 The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
 
+The editor preview does not write canonical addresses, page cards, `robots.txt` or a sitemap. `konae dev` does, using its local host as the address. Check the `seo` module on `konae dev` or a published Deployment.
+
 Saved public assets work in the preview, including images in `public/`, linked stylesheets, imported CSS, media conditions and SVG fragments. Programmatic `fetch()` of local saved assets and runtime-created URLs that point to local saved assets need `konae dev` or a Deployment. The preview's missing Content Security Policy still allows fetches to other origins.
 
 ## Email on konae dev

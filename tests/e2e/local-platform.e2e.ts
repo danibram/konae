@@ -223,6 +223,25 @@ CREATE TABLE IF NOT EXISTS tasks (
   return { setScenario(value: typeof scenario) { scenario = value; } };
 }
 
+async function installModuleSetFixture(page: Page) {
+  let step = 0;
+  await page.route("https://api.anthropic.com/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: { "access-control-allow-origin": route.request().headers().origin ?? "*", "access-control-allow-methods": "POST,OPTIONS", "access-control-allow-headers": "*" } });
+      return;
+    }
+    const response = step++ === 0
+      ? providerReply({ name: "module_set", input: { module: "seo", on: true, options: { canonical: "path" }, expected: { on: false, canonical: null, image: null } } })
+      : providerReply(undefined, "I read the module state after the change.");
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "access-control-allow-origin": route.request().headers().origin ?? "*", "access-control-allow-headers": "*", "access-control-expose-headers": "*", "cache-control": "no-cache" },
+      body: response,
+    });
+  });
+}
+
 async function connectProposalFixture(page: Page) {
   await showSection(page, "Describe");
   await page.getByRole("button", { name: "Connect a model to send" }).click();
@@ -640,6 +659,68 @@ test("mobile domain settings persist claims, explain TXT checks and confirm chan
   await page.emulateMedia({ colorScheme: "light" });
   const bounds = await settings.boundingBox();
   expect(bounds?.width).toBeLessThanOrEqual(390);
+});
+
+test("Modules settings show fixed modules and read back seo after reload", async ({ page }) => {
+  await createProject(page, "Module settings");
+  await fromMore(page, "App settings");
+  let settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
+  await expect(settings.locator(".module-settings-card")).toHaveCount(6);
+  await expect(settings.locator(".module-settings-card").nth(1)).toContainText("On · fixed");
+  await expect(settings.locator(".module-settings-card").nth(5).getByRole("switch")).toHaveCount(0);
+  await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
+  await publish(page);
+  await fromMore(page, "App settings");
+  settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await expect(settings.getByRole("switch", { name: "Turn seo on", exact: true })).toHaveAttribute("aria-checked", "false");
+  await settings.getByRole("switch", { name: "Turn seo on", exact: true }).click();
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "seo" }).getByText("On", { exact: true })).toBeVisible();
+  await expect(settings.getByRole("link", { name: "Open sitemap", exact: true })).toBeVisible();
+  await page.reload();
+  await fromMore(page, "App settings");
+  settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "seo" }).getByText("On", { exact: true })).toBeVisible();
+});
+
+test("the build agent confirms module changes and reads them back", async ({ page }) => {
+  const projectPath = await createProject(page, "Agent module settings");
+  await publish(page);
+  await installModuleSetFixture(page);
+  await connectProposalFixture(page);
+  const calls: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname !== "/mcp") return;
+    try {
+      const body = request.postDataJSON();
+      if (body.method === "tools/call") calls.push(body.params.name);
+    } catch { }
+  });
+  await askFixture(page, "Turn on seo and use the path address.");
+  const confirm = page.getByRole("dialog", { name: "Allow the agent to do this?" });
+  await expect(confirm.getByText("The agent will turn on seo and set Canonical address to path.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await confirm.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(page.getByText("I read the module state after the change.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  expect(calls).toContain("module_set");
+  expect(calls.indexOf("modules_read")).toBeGreaterThan(calls.indexOf("module_set"));
+  const cookie = (await page.context().cookies()).map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+  const readback = await client.call<{ modules: { seo: { state: { on: boolean; canonical: string } } } }>("modules_read", { projectId: projectPath.split("/").at(-1) });
+  expect(readback.modules.seo.state).toMatchObject({ on: true, canonical: "path" });
+
+  const secondPath = await createProject(page, "Declined module change");
+  await publish(page);
+  await installModuleSetFixture(page);
+  await askFixture(page, "Turn on seo and use the path address.");
+  const declined = page.getByRole("dialog", { name: "Allow the agent to do this?" });
+  await expect(declined).toBeVisible({ timeout: 30_000 });
+  await declined.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByText("I read the module state after the change.", { exact: true }).last()).toBeVisible({ timeout: 30_000 });
+  const current = await client.call<{ modules: { seo: { state: { on: boolean } } } }>("modules_read", { projectId: secondPath.split("/").at(-1) });
+  expect(current.modules.seo.state.on).toBe(false);
 });
 
 test("browser builds, republishes, backs up and exports a persistent app", async ({ page, context }, testInfo) => {

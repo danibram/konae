@@ -1054,7 +1054,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const artifact = await buildProjectInBrowser(project);
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
-      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision);
+      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, !activeDeployment);
       const record = published.receipt;
       const releasedProject = { ...project, manifest: record.manifest };
       const releasedSnapshot = JSON.stringify(releasedProject);
@@ -1658,7 +1658,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {appSettingsOpen && <AppSettingsDialog fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>} key={`${project.id}-${domainVersion}`} projectName={project.name} deploymentId={activeDeployment?.id} importTarget={activeDeployment ? { project: { id: project.id, name: project.name, slug: project.slug }, visibility: activeDeployment.manifest.visibility, onImported: () => window.location.reload() } : undefined} onClose={() => setAppSettingsOpen(false)} onSignedOut={refreshOwnerSession} onAddressMoved={(url) => setDeployments((current) => current[project.id] ? { ...current, [project.id]: { ...current[project.id]!, url } } : current)} signInHref={signInHref} onExport={() => { setAppSettingsOpen(false); void exportProject(); }} />}
+      {appSettingsOpen && <AppSettingsDialog fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>} key={`${project.id}-${domainVersion}`} projectName={project.name} modules={project.modules} deploymentId={activeDeployment?.id} importTarget={activeDeployment ? { project: { id: project.id, name: project.name, slug: project.slug }, visibility: activeDeployment.manifest.visibility, onImported: () => window.location.reload() } : undefined} onClose={() => setAppSettingsOpen(false)} onSignedOut={refreshOwnerSession} onAddressMoved={(url) => setDeployments((current) => current[project.id] ? { ...current, [project.id]: { ...current[project.id]!, url } } : current)} signInHref={signInHref} onExport={() => { setAppSettingsOpen(false); void exportProject(); }} />}
 
       {platformConfirmation && <Dialog title="Allow the agent to do this?" description={project.name} onClose={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }} footer={<>
         <Button onClick={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Cancel</Button>

@@ -6,9 +6,11 @@ import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, set
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
 import { isSettingChanged } from "../deployments/client";
+import { sdkContract } from "../sdk/contract";
 import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
+import { ModulesSettings } from "./ModulesSettings";
 import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Dialog, Field, Input, LoadingBlock, Switch, TabBar } from "./ui";
@@ -16,6 +18,7 @@ import "./app-settings.css";
 
 type Props = {
   projectName: string;
+  modules?: Record<string, { on: boolean; [key: string]: unknown }>;
 
   importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
@@ -28,16 +31,18 @@ type Props = {
   onExport?: () => void;
 };
 
-type Section = "addresses" | "email" | "move";
+type Section = "addresses" | "modules" | "email" | "move";
 const sections: { id: Section; label: string }[] = [
   { id: "addresses", label: "Addresses" },
+  { id: "modules", label: "Modules" },
   { id: "email", label: "Contact email" },
   { id: "move", label: "Move this app" },
 ];
 
-export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
+export function AppSettingsDialog({ projectName, modules, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
 
   const [section, setSection] = useState<Section>("addresses");
+  const initialModules = modules ?? Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, { on: false, ...Object.fromEntries(module.options.map((option) => [option.key, option.default])) }]));
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
   const [reading, setLoading] = useState(Boolean(deploymentId));
@@ -125,12 +130,17 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   };
 
   return <Dialog title="App settings" description={projectName} onClose={() => { if (!busy) onClose(); }} className="app-settings-dialog">
-    {deploymentId && <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={setSection}
-      items={sections.map((item) => ({ ...item, tabId: `app-settings-tab-${item.id}`, controls: `app-settings-${item.id}` }))} />}
+    <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={setSection}
+      items={sections.filter((item) => deploymentId || item.id === "addresses" || item.id === "modules").map((item) => ({ ...item, tabId: `app-settings-tab-${item.id}`, controls: `app-settings-${item.id}` }))} />
     <div className="app-settings-body" aria-busy={busy || loading}>
       {!deploymentId ? <>
+        <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
         <header className="domain-heading"><Globe2 size={20} /><h3>Addresses</h3></header>
         <p>Deploy this app first. Then its addresses appear here.</p>
+        </div>
+        <div className="app-settings-section" role="tabpanel" id="app-settings-modules" aria-labelledby="app-settings-tab-modules" hidden={section !== "modules"}>
+          <ModulesSettings projectId={null} initial={initialModules} onSignedOut={onSignedOut} />
+        </div>
       </> : <>
       <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
         {loading && <LoadingBlock label="Reading domain settings" rows={2} />}
@@ -186,6 +196,9 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       </div>
       <div className="app-settings-section" role="tabpanel" id="app-settings-email" aria-labelledby="app-settings-tab-email" hidden={section !== "email"}>
         <AppContactEmail key={`contact-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
+      </div>
+      <div className="app-settings-section" role="tabpanel" id="app-settings-modules" aria-labelledby="app-settings-tab-modules" hidden={section !== "modules"}>
+        <ModulesSettings key={`modules-${deploymentId}`} projectId={deploymentId} initial={initialModules} onSignedOut={onSignedOut} />
       </div>
       <div className="app-settings-section" role="tabpanel" id="app-settings-move" aria-labelledby="app-settings-tab-move" hidden={section !== "move"}>
         <p>To take this app to another machine with its accounts, rows and rules, export its folder here and import it there. Pause it first so nothing changes in between.</p>
