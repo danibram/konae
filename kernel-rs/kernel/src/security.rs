@@ -251,7 +251,7 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let host = visitor[header::HOST].to_str().unwrap().to_owned();
         let client = reqwest::Client::new();
-        let fresh = client.get(format!("http:
+        let fresh = client.get(format!("http://{address}/fresh")).header("host", &host).send().await.unwrap();
         let policy = fresh.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_owned();
         assert!(policy.contains(&sha("window.a=1")), "{policy}");
         let same = client.get(format!("http://{address}/same")).header("host", &host).send().await.unwrap();

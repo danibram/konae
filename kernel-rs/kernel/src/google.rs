@@ -1114,7 +1114,7 @@ mod tests {
             ("unknown key", "someone-else", Box::new(|_| {})),
             ("expired", "local-test", Box::new(|c| c["exp"] = json!(auth::now_seconds() - 1))),
             ("another app's client", "local-test", Box::new(|c| { c["aud"] = json!(OTHER_CLIENT); c["azp"] = json!(OTHER_CLIENT); })),
-            ("wrong issuer", "local-test", Box::new(|c| c["iss"] = json!("https:
+            ("wrong issuer", "local-test", Box::new(|c| c["iss"] = json!("https://issuer.example"))),
             ("wrong nonce", "local-test", Box::new(|c| c["nonce"] = json!("not-the-nonce"))),
             ("unverified email", "local-test", Box::new(|c| c["email_verified"] = json!(false))),
         ];

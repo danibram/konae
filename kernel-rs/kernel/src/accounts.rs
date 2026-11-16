@@ -174,7 +174,7 @@ pub async fn invitation_pending(state: &AppState, deployment: &Deployment, email
 /// that fails before the link is opened can say why. It holds a hash of the
 /// Deployment and the email the person typed, never the email.
 fn signup_hint_name(state: &AppState) -> &'static str {
-    if state.public_origin.starts_with("https:
+    if state.public_origin.starts_with("https://") { "__Host-konae_signup" } else { "konae_signup" }
 }
 
 fn signup_hint_value(deployment: &Deployment, email: &str) -> Option<String> {

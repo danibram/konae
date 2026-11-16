@@ -2614,7 +2614,7 @@ mod tests {
             let root = std::env::temp_dir().join(format!("konae-google-cases-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let state = Konae::for_test(AppState {
-                public_origin: "http:
+                public_origin: "http://localhost:8790".into(),
                 ..AppState::for_test(&root)
             });
             let mut deployment: Deployment = serde_json::from_value(json!({

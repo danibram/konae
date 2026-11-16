@@ -1902,7 +1902,7 @@ mod tests {
         let queue = fixture.queue();
         let auth = accounts::app_store(&fixture.state, &fixture.app).unwrap();
         let scope = auth::deployment_scope(&fixture.app.id);
-        let outbox = queue.outbox(&scope, Some("group-1"), "Tasks", None, "http:
+        let outbox = queue.outbox(&scope, Some("group-1"), "Tasks", None, "http://tasks.localhost/_konae/account");
         let refused = auth.request_signup_with("second@example.test", Some(&outbox), |_, _| Ok(()));
         assert!(matches!(refused, Err(AuthError::MailLimit(_))));
         assert_eq!(fixture.account_state(&fixture.app, "second@example.test"), None);

@@ -3961,7 +3961,7 @@ pub fn sql_json(value: rusqlite::types::ValueRef<'_>) -> Value {
 }
 
 pub fn deployment_url(origin: &str, hostname: &str) -> String {
-    let scheme = origin.split(":
+    let scheme = origin.split("://").next().unwrap_or("http");
     let port = origin
         .split("://")
         .nth(1)

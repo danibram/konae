@@ -2007,7 +2007,7 @@ mod tests {
             "Action hook.send calls editor.example.org, the editor's host. A call reaches an app or an outside service, never the editor."
         );
         assert_eq!(
-            publish(&state, call_action("http:
+            publish(&state, call_action("http://api.example.com/send"), schema).await.err().unwrap(),
             "Action hook.send calls http://api.example.com, which is not an app of this installation. Use https."
         );
         let mut keyed = call_action("https://api.example.com/send");
