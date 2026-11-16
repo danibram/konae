@@ -2219,9 +2219,9 @@ pub(crate) async fn serve_key_with_routes(
     let html_candidate = artifact::candidates(&path, routing).iter().any(|candidate| {
         candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")
     });
-    let spa_fallback = routing == artifact::Routing::Spa
+    let spa_fallback = seo_on && routing == artifact::Routing::Spa
         && (!safe_relative_path(&path) || tokio::fs::metadata(crate::layout::dist(&state.data_root, &deployment.id).join(&path)).await.is_err());
-    let may_be_page = html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml";
+    let may_be_page = seo_on && (html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml");
     if !navigation && etag_matches(&headers, &cache.version_tag()) && (!seo_on || !may_be_page) {
         return cache.not_modified(cache.version_tag());
     }

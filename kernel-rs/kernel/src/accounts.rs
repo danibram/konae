@@ -485,6 +485,7 @@ pub fn link_sent() -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 
@@ -820,6 +821,7 @@ pub mod tests {
 
         let page = app_account_page(State(fixture.state.clone()), host_headers(APP_HOST)).await;
         assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(page.headers()["x-robots-tag"], "noindex");
         assert!(page.headers().get(header::SET_COOKIE).is_none());
         let body = String::from_utf8(axum::body::to_bytes(page.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
         assert!(body.contains("method:'POST'") && !body.contains(&token));
