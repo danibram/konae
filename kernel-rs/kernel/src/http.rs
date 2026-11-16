@@ -892,7 +892,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     };
     let seo_on = modules::is_on(&deployment.modules, "seo");
     let address = seo_on.then(|| seo::address(state, deployment));
-    let canonical = address.as_ref().map(|address| format!("{}{}", address.url.trim_end_matches('/'), path));
+    let canonical = address.as_ref().and_then(|address| page.get("path").and_then(Value::as_str).map(|pattern| seo::page_path_canonical(&address.url, pattern, &params)));
     let description = row.get("description").and_then(Value::as_str).unwrap_or("");
     let image = row.get("image").and_then(Value::as_str).map(|image| {
         if image.starts_with("http://") || image.starts_with("https://") { image.to_owned() }
@@ -941,7 +941,7 @@ fn match_page(pattern: &str, path: &str) -> Option<serde_json::Map<String, Value
     let mut params = serde_json::Map::new();
     for (pattern, value) in pattern.iter().zip(path) {
         if let Some(key) = pattern.strip_prefix(':') {
-            params.insert(key.to_owned(), Value::String(decode_path_segment(value)?));
+            params.insert(key.to_owned(), Value::String((*value).to_owned()));
         } else if *pattern != value {
             return None;
         }
@@ -965,21 +965,14 @@ fn page_query_input(action: &ActionDefinition, params: &serde_json::Map<String, 
     input
 }
 
-fn decode_path_segment(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
+#[cfg(test)]
+mod page_path_tests {
+    use super::*;
+
+    #[test]
+    fn page_path_keeps_axum_decoded_percent_values() {
+        assert_eq!(match_page("/posts/:slug", "/posts/100%"), Some(serde_json::json!({"slug": "100%"}).as_object().unwrap().clone()));
     }
-    String::from_utf8(decoded).ok()
 }
 
 pub async fn post_route(State(state): State<AppState>, request: Request) -> Response {

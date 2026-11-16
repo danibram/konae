@@ -242,6 +242,18 @@ pub fn page_canonical(base: &str, file: &str) -> String {
     )
 }
 
+pub fn page_path_canonical(base: &str, pattern: &str, params: &serde_json::Map<String, serde_json::Value>) -> String {
+    let path = pattern.split('/').skip(1).map(|segment| {
+        if let Some(key) = segment.strip_prefix(':') {
+            params.get(key).map(|value| encode_path_value(&match value {
+                serde_json::Value::String(value) => value.clone(),
+                _ => value.to_string(),
+            })).unwrap_or_default()
+        } else { segment.to_owned() }
+    }).collect::<Vec<_>>().join("/");
+    format!("{}/{}", base.trim_end_matches('/'), path)
+}
+
 pub fn html_response(
     deployment: &Deployment,
     candidate: &str,
@@ -413,7 +425,7 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
     xml.into_bytes()
 }
 
-fn encode_path_value(value: &str) -> String {
+pub(crate) fn encode_path_value(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
@@ -566,6 +578,12 @@ mod tests {
             page_canonical("https://app.example/", "guide/index.html"),
             "https://app.example/guide/"
         );
+    }
+
+    #[test]
+    fn page_path_canonical_uses_the_sitemap_segment_encoder() {
+        let params = serde_json::from_value(serde_json::json!({"slug": "c# 100%"})).unwrap();
+        assert_eq!(page_path_canonical("https://app.example/", "/posts/:slug", &params), "https://app.example/posts/c%23%20100%25");
     }
 
     #[test]
