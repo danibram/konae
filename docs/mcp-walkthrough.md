@@ -183,9 +183,11 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "permissions": {
       "export_data": "project_export and reading its downloads",
       "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+      "module_set": "Changes a module whose registry permission is held by the credential",
+      "modules_read": "Reads module state and options; requires read",
       "none": "platform_describe, platform_guide, session_inspect and mail_status",
       "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter",
-      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
+      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, module_set for modules with publish permission, project_import, and initialSignupPolicy on a first release",
       "read": "projects_list, project_inspect (including deployment.signupPolicy), project_sources_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_summary, signals_read, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
