@@ -690,12 +690,14 @@ test("Modules settings show fixed modules and read back seo after reload", async
   await expect(settings.getByLabel("Who can read every file", { exact: true })).toHaveValue("");
   await expect(settings.getByLabel("Canonical address", { exact: true }).locator("option")).toContainText(["Custom domain", "Generated hostname", "Path address"]);
   await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("");
-  await expect(settings.getByLabel("Card image", { exact: true }).locator("option")).toContainText(["public/retained.png"]);
-  await settings.getByLabel("Card image", { exact: true }).selectOption("public/retained.png");
+  await expect(settings.getByLabel("Card image", { exact: true }).locator("option")).toContainText(["retained.png"]);
+  await settings.getByLabel("Card image", { exact: true }).selectOption("retained.png");
+  const cardImage = await page.request.get(new URL(`/p/${projectId}/retained.png`, page.url()).href);
+  expect(cardImage.ok()).toBe(true);
   const seoCard = settings.locator(".module-settings-card").filter({ hasText: "seo" });
   await seoCard.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(settings.getByText("Search listing settings saved.", { exact: true })).toBeVisible();
-  await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("public/retained.png");
+  await expect(settings.getByLabel("Card image", { exact: true })).toHaveValue("retained.png");
   await expect(settings.getByRole("switch", { name: "Turn Search listing on", exact: true })).toHaveAttribute("aria-checked", "false");
   await settings.getByRole("switch", { name: "Turn Search listing on", exact: true }).click();
   await expect(settings.locator(".module-settings-card").filter({ hasText: "seo" }).getByText("On", { exact: true })).toBeVisible();

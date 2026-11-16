@@ -44,7 +44,7 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
   })), [initial, view]);
   const switchable = entries.filter(({ contract, live }) => live?.switch ?? contract.switch);
   const fixed = entries.filter(({ contract, live }) => !(live?.switch ?? contract.switch));
-  const imageFiles = useMemo(() => files.filter((file) => /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(file)), [files]);
+  const imageFiles = useMemo(() => files.filter((file) => file.startsWith("public/") && /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(file)).map((file) => file.slice("public/".length)), [files]);
 
   const save = async (name: string, on: boolean | undefined, options: Record<string, unknown>) => {
     if (!view || !projectId) return;
