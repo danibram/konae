@@ -21,7 +21,7 @@ export type SchemaTransformation = {
 /**
  * The change `release_plan` derives from the app's live database to the one
  * schema.sql states (kernel-rs/kernel/src/schema_change.rs). `confirmation` is set
- * only when the change loses data, and release_apply then needs it back.
+ * when losses or data transformations require approval; release_apply needs it back.
  */
 export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirmation: string | null; transformations?: SchemaTransformation[] };
 
@@ -33,13 +33,17 @@ export type SchemaChange = { statements: string[]; losses: SchemaLoss[]; confirm
  */
 export type ReleasePlan = { planId: string; projectId: string; expectedRevision: number; expectedSourcesRevision: number; expiresAt: number; schema?: SchemaChange; hostname?: string | null; url?: string | null; firstRelease?: boolean };
 
-/** Asks the owner about a schema change that loses data. False stops the release. */
+/** Asks the owner to approve the planned database changes. False stops the release. */
 export type ConfirmSchema = (change: SchemaChange) => Promise<boolean>;
 
-/** The release stopped because the owner kept the data a schema change would lose. */
+/** The release stopped because the owner declined the database changes. */
 export class SchemaChangeDeclined extends Error {
   constructor(readonly change: SchemaChange) {
-    super(`Nothing was published. ${describeSchemaChange(change).join(" ")} Confirm the plan to apply it.`);
+    const effects = [
+      ...change.losses.map((loss) => loss.sentence),
+      ...(change.transformations ?? []).filter((item) => !item.baselineSkipped).map((item) => `Transition ${item.id} would change ${item.affectedRows} rows, with a limit of ${item.maxRows}.`),
+    ];
+    super(`Nothing was published. ${effects.join(" ")} Confirm the plan to apply it.`);
     this.name = "SchemaChangeDeclined";
   }
 }

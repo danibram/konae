@@ -57,6 +57,14 @@ describe("a schema change that loses data", () => {
     expect(calls.find((call) => call.name === "release_apply")?.args).toEqual({ planId: "p", confirmSchema: "c".repeat(64) });
   });
 
+  test("declining a data transformation reports its rows without applying it", async () => {
+    const change = { statements: [], losses: [], confirmation: "c".repeat(64), transformations: [{ id: "trim-notes", definitionSha256: "d".repeat(64), before: "before", after: "after", statements: ["UPDATE notes SET body=trim(body)"], maxRows: 10, affectedRows: 2, baselineSkipped: false }] };
+    const calls = fakeKernel((name, args) => name === "transfer_begin" ? { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 } : name === "release_plan" ? { planId: "p", schema: change } : {});
+    await expect(deployProject(starterProject, "public", artifact, async () => false)).rejects.toThrow("Nothing was published. Transition trim-notes would change 2 rows, with a limit of 10.");
+    expect(calls.map((call) => call.name)).not.toContain("release_apply");
+    expect(calls.at(-1)?.name).toBe("transfer_cancel");
+  });
+
   test("publishes nothing when the owner keeps the data", async () => {
     const calls = fakeKernel((name, args) => name === "transfer_begin" ? { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 } : name === "release_plan" ? { planId: "p", schema: dropping } : {});
     await expect(deployProject(starterProject, "public", artifact, async () => false)).rejects.toThrow("Nothing was published. Drops table notes and its 2 rows.");
