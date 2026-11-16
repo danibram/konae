@@ -80,10 +80,7 @@ pub fn enrich_html(
     let Ok(mut html) = String::from_utf8(html.to_vec()) else {
         return html.to_vec();
     };
-    let lower_html = html.to_ascii_lowercase();
-    let head_end = lower_html
-        .find("</head>")
-        .unwrap_or_else(|| lower_html.find("<body").unwrap_or(html.len()));
+    let head_end = head_end(&html);
     let head = html[..head_end].to_ascii_lowercase();
     let escaped = |value: &str| escape(value);
     let mut tags = String::new();
@@ -247,30 +244,45 @@ pub fn sitemap_response(
 
 pub fn title(html: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(html);
-    let lower = text.to_ascii_lowercase();
+    let head = head_content(&text);
+    let lower = head.to_ascii_lowercase();
     let start = lower.find("<title")?;
-    let open = text[start..].find('>')? + start + 1;
+    let open = head[start..].find('>')? + start + 1;
     let end = lower[open..].find("</title")? + open;
-    let value = text[open..end].trim();
+    let value = head[open..end].trim();
     (!value.is_empty()).then(|| value.to_owned())
 }
 
 pub fn description(html: &[u8]) -> String {
     let text = String::from_utf8_lossy(html);
-    let lower = text.to_ascii_lowercase();
+    let head = head_content(&text);
+    let lower = head.to_ascii_lowercase();
     let mut cursor = 0;
     while let Some(offset) = lower[cursor..].find("<meta") {
         let start = cursor + offset;
         let Some(end) = lower[start..].find('>').map(|end| start + end) else {
             break;
         };
-        let tag = &text[start..=end];
+        let tag = &head[start..=end];
         if attribute(tag, "name").is_some_and(|value| value.eq_ignore_ascii_case("description")) {
             return attribute(tag, "content").unwrap_or_default();
         }
         cursor = end + 1;
     }
     String::new()
+}
+
+fn head_content(html: &str) -> &str {
+    let start = html.to_ascii_lowercase().find("<head").and_then(|start| {
+        html[start..].find('>').map(|end| start + end + 1)
+    }).unwrap_or(0);
+    let end = head_end(html);
+    if start <= end { &html[start..end] } else { "" }
+}
+
+fn head_end(html: &str) -> usize {
+    let lower = html.to_ascii_lowercase();
+    lower.find("</head>").unwrap_or_else(|| lower.find("<body").unwrap_or(html.len()))
 }
 
 pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {

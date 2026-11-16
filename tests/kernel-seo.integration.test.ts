@@ -24,6 +24,7 @@ beforeAll(async () => {
       "escaped.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title></head><body>Escaped</body></html>",
       "guide/index.html": "<!doctype html><html><head><title>Guide home</title></head><body>Guide</body></html>",
       "untitled.html": "<!doctype html><html><body>No title</body></html>",
+      "svg-title.html": "<!doctype html><html><head></head><body><svg><title>Vector label</title></svg></body></html>",
       "robots.txt": "User-agent: special\nDisallow: /private\n",
       "card.png": "image",
     } },
@@ -59,6 +60,8 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   expect(await escaped.text()).toContain("property=\"og:title\" content=\"A &quot;small&quot; &lt;app&gt; &amp; more\"");
   const untitled = await appFetch(kernel, deployment.hostname, "/untitled");
   expect(untitled.headers.get("x-robots-tag")).toBe("noindex");
+  const svgTitle = await appFetch(kernel, deployment.hostname, "/svg-title");
+  expect(svgTitle.headers.get("x-robots-tag")).toBe("noindex");
 
   const withoutExtension = await appFetch(kernel, deployment.hostname, "/about.html");
   expect(await withoutExtension.text()).toContain(`href="${deployment.url}/about"`);
@@ -78,9 +81,11 @@ test("seo controls listing, cards, discovery files and canonical validators", as
   expect(xml).toContain(`${deployment.url}/about`);
   expect(xml).toContain(`${deployment.url}/guide/`);
   expect(xml).not.toContain("untitled");
+  expect(xml).not.toContain("svg-title");
   const omitted = await kernel.owner.call<any>("modules_read", { projectId: deployment.id });
   expect(JSON.stringify(omitted.modules.seo.current.excluded)).toContain("untitled.html");
   expect(JSON.stringify(omitted.modules.seo.current.excluded)).toContain("no title");
+  expect(JSON.stringify(omitted.modules.seo.current.excluded)).toContain("svg-title.html");
 
   const conditional = await appFetch(kernel, deployment.hostname, "/about", { headers: { "if-none-match": tag } });
   expect(conditional.status).toBe(304);
