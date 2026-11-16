@@ -1023,6 +1023,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let released_schema = input.project.files.get("schema.sql").cloned().unwrap_or_default();
     let released_transforms = input.project.files.get("schema-transforms.json").cloned();
     let mut manifest = input.project.manifest;
+    let legacy_file_access = manifest["fileAccess"] == "app-users";
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
     let deployment = Deployment {
@@ -1051,8 +1052,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         modules: {
             let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
-                || modules::sources_use_files(input.project.files.values().map(String::as_bytes));
+                || modules::sources_use_files(input.project.files.values().map(String::as_bytes))
+                || legacy_file_access;
             let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+            if existing.is_none() && legacy_file_access {
+                modules.get_mut("files").expect("files is switchable")["fileAccess"] = json!("app-users");
+            }
             modules::complete(&mut modules);
             modules
         },
