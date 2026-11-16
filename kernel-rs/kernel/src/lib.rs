@@ -20,7 +20,6 @@ use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value as SqlValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::Digest;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use uuid::Uuid;
 
@@ -2180,51 +2179,23 @@ pub async fn serve_key(state: AppState, headers: HeaderMap, path: String) -> Res
     if !seo_on && !navigation && etag_matches(&headers, &cache.version_tag()) {
         return cache.not_modified(cache.version_tag());
     }
+    if seo_on && path == "robots.txt" {
+        return seo::robots_response(&deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache, navigation).unwrap();
+    }
+    if seo_on && path == "sitemap.xml" {
+        return seo::sitemap_response(&state.data_root, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).unwrap();
+    }
     let routing = artifact::routing(&deployment.manifest);
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
-            if seo_on && candidate == "robots.txt" {
-                let mut body = bytes;
-                if !String::from_utf8_lossy(&body).lines().any(|line| line.trim_start().to_ascii_lowercase().starts_with("sitemap:")) {
-                    if !body.is_empty() && !body.ends_with(b"\n") { body.push(b'\n'); }
-                    body.extend_from_slice(format!("Sitemap: {}/sitemap.xml\n", address.as_ref().unwrap().url.trim_end_matches('/')).as_bytes());
+            if seo_on {
+                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache, navigation) {
+                    return response;
                 }
-                let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(sha2::Sha256::digest([body.as_slice(), address.as_ref().unwrap().url.as_bytes()].concat()))), private: cache.private };
-                if !navigation && etag_matches(&headers, &tagged.version_tag()) { return tagged.not_modified(tagged.version_tag()); }
-                return tagged.respond(&HeaderMap::new(), body, &candidate);
-            }
-            if seo_on && candidate == "sitemap.xml" {
-                return cache.respond(&headers, bytes, &candidate);
-            }
-            if seo_on && (candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
-                let canonical = seo::page_canonical(&address.as_ref().unwrap().url, &candidate);
-                if let Some(title) = seo::title(&bytes) {
-                    let description = seo::description(&bytes);
-                    let image = deployment.modules["seo"]["image"].as_str().map(|image| format!("{}/{}", address.as_ref().unwrap().url.trim_end_matches('/'), image.trim_start_matches('/')));
-                    let body = seo::enrich_html(&bytes, &canonical, &title, &description, image.as_deref());
-                    let option_state = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
-                    let digest = sha2::Sha256::digest([body.as_slice(), address.as_ref().unwrap().url.as_bytes(), option_state.as_bytes()].concat());
-                    let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
-                    if !navigation && etag_matches(&headers, &tagged.version_tag()) { return tagged.not_modified(tagged.version_tag()); }
-                    return tagged.respond(&HeaderMap::new(), body, &candidate);
-                }
-                let mut response = cache.respond(&headers, bytes, &candidate);
-                response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
-                return response;
             }
             return cache.respond(&headers, bytes, &candidate);
         }
-    }
-    if seo_on && path == "robots.txt" {
-        let sitemap = format!("Sitemap: {}/sitemap.xml\n", address.as_ref().unwrap().url.trim_end_matches('/'));
-        return ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], format!("User-agent: *\nAllow: /\n{sitemap}")).into_response();
-    }
-    if seo_on && path == "sitemap.xml" {
-        let body = seo::sitemap(&state.data_root, &deployment, &address.as_ref().unwrap().url);
-        let mut response = artifact_response(body, "sitemap.xml");
-        response.headers_mut().insert(header::CACHE_CONTROL, cache.control());
-        return response;
     }
     // A browser asks for /favicon.ico on every first visit. An app without one answers
     // with nothing instead of a 404 that every visitor's console reports as an error.

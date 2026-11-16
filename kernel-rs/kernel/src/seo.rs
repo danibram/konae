@@ -1,4 +1,6 @@
-use crate::{AppState, Deployment};
+use crate::{AppState, ArtifactCache, Deployment};
+use axum::{http::{HeaderMap, HeaderValue, header}, response::Response};
+use sha2::Digest;
 use std::path::Path;
 
 pub struct Address {
@@ -176,6 +178,71 @@ pub fn page_canonical(base: &str, file: &str) -> String {
             format!("/{path}")
         }
     )
+}
+
+pub fn html_response(
+    deployment: &Deployment,
+    candidate: &str,
+    bytes: &[u8],
+    address: &Address,
+    headers: &HeaderMap,
+    cache: &ArtifactCache,
+    navigation: bool,
+) -> Option<Response> {
+    if !(candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
+        return None;
+    }
+    let canonical = page_canonical(&address.url, candidate);
+    let Some(title) = title(&bytes) else {
+        let mut response = cache.respond(headers, bytes.to_vec(), candidate);
+        response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
+        return Some(response);
+    };
+    let description = description(&bytes);
+    let image = deployment.modules["seo"]["image"].as_str().map(|image| format!("{}/{}", address.url.trim_end_matches('/'), image.trim_start_matches('/')));
+    let body = enrich_html(bytes, &canonical, &title, &description, image.as_deref());
+    let option_state = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
+    let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes(), option_state.as_bytes()].concat());
+    let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
+    if !navigation && crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
+    Some(tagged.respond(&HeaderMap::new(), body, candidate))
+}
+
+pub fn robots_response(
+    deployment: &Deployment,
+    candidate: &str,
+    bytes: Option<Vec<u8>>,
+    address: &Address,
+    headers: &HeaderMap,
+    cache: &ArtifactCache,
+    navigation: bool,
+) -> Option<Response> {
+    if candidate != "robots.txt" { return None; }
+    let mut body = bytes.unwrap_or_else(|| b"User-agent: *\nAllow: /\n".to_vec());
+    if !String::from_utf8_lossy(&body).lines().any(|line| line.trim_start().to_ascii_lowercase().starts_with("sitemap:")) {
+        if !body.is_empty() && !body.ends_with(b"\n") { body.push(b'\n'); }
+        body.extend_from_slice(format!("Sitemap: {}/sitemap.xml\n", address.url.trim_end_matches('/')).as_bytes());
+    }
+    let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes()].concat());
+    let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
+    if !navigation && crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
+    Some(tagged.respond(&HeaderMap::new(), body, candidate))
+}
+
+pub fn sitemap_response(
+    root: &Path,
+    deployment: &Deployment,
+    candidate: &str,
+    bytes: Option<Vec<u8>>,
+    address: &Address,
+    headers: &HeaderMap,
+    cache: &ArtifactCache,
+) -> Option<Response> {
+    if candidate != "sitemap.xml" { return None; }
+    if let Some(bytes) = bytes { return Some(cache.respond(headers, bytes, candidate)); }
+    let mut response = crate::artifact_response(sitemap(root, deployment, &address.url), candidate);
+    response.headers_mut().insert(header::CACHE_CONTROL, cache.control());
+    Some(response)
 }
 
 pub fn title(html: &[u8]) -> Option<String> {
