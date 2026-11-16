@@ -260,8 +260,9 @@ mod auth_module_tests {
             let settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
             assert_eq!(settings["modules"]["auth"]["on"], expected);
             if fixture == "accounts" {
-                assert_eq!(settings["modules"]["auth"]["signupPolicy"]["mode"], "allowlist");
-                assert_eq!(settings["modules"]["auth"]["signupPolicy"]["allowlist"][0], "person@example.test");
+                assert_eq!(settings["signupPolicy"]["mode"], "allowlist");
+                assert_eq!(settings["signupPolicy"]["allowlist"][0], "person@example.test");
+                assert!(settings["modules"]["auth"].get("signupPolicy").is_none());
                 let count: i64 = Connection::open(layout::data(&root, id).join("identity.sqlite")).unwrap().query_row("SELECT COUNT(*) FROM app_users", [], |row| row.get(0)).unwrap();
                 assert_eq!(count, 1);
             }

@@ -46,7 +46,7 @@ Build the compiled CLI with `bun run scripts/build-konae-binary.ts`, then copy `
 
 ## Visibility and signup
 
-`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `modules.auth.signupPolicy` names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Both operations below are owner tools that need `manage_users`, so log in with `--manage-users`. `projectId` is the `id` in `konae.json`. `mode` is `open`, `invitation`, `closed` or `allowlist`, and `allowlist` takes exact emails or `@domain` entries.
+`publish` deploys the app as private unless `konae.json` sets `visibility` to `"public"`. `signupPolicy` names who may create an app account on the first release. A later publish that names another policy warns and changes nothing. Both operations below are owner tools that need `manage_users`, so log in with `--manage-users`. `projectId` is the `id` in `konae.json`. `mode` is `open`, `invitation`, `closed` or `allowlist`, and `allowlist` takes exact emails or `@domain` entries.
 
 ```sh
 bun run konae -- tool modules_read '{"projectId":"app_..."}' --dir /tmp/my-app

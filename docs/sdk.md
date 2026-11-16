@@ -39,7 +39,7 @@ Error messages below are the exact text a published app receives as `error.messa
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
 
-Owner control: the owner can change this module with module_set. Permission: `manage_users`. Build agent: cannot change it.
+Owner control: the owner can change this module with module_set. Permission: `manage_users`. Build agent: waits for owner confirmation.
 
 | Option | Type | Default | Help |
 | --- | --- | --- | --- |

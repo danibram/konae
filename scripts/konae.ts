@@ -31,7 +31,7 @@ import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
-import { defaultModuleStates } from "../src/lib/app-folder";
+import { defaultModuleStates, settingsForFolder } from "../src/lib/app-folder";
 import { sourcesUseAuth } from "../src/lib/module-use";
 import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
@@ -479,11 +479,12 @@ export async function readSettings(root: string): Promise<AppSettings> {
   }
 }
 
-/** The project a release names, from konae.json. The Signup Policy rides in the manifest until the release reads it. */
 export function configOf(settings: AppSettings, url?: string): Config {
   const modules = defaultModuleStates(settings.modules);
-  if (modules?.auth && !modules.auth.signupPolicy && settings.signupPolicy) modules.auth.signupPolicy = settings.signupPolicy;
-  if (modules?.auth && !modules.auth.signInMethods && settings.signInMethods) modules.auth.signInMethods = settings.signInMethods;
+  if (modules?.auth) {
+    modules.auth.signupPolicy = settings.signupPolicy ?? modules.auth.signupPolicy;
+    modules.auth.signInMethods = settings.signInMethods ?? modules.auth.signInMethods;
+  }
   return {
     ...(url ? { url } : {}),
     ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
@@ -975,10 +976,10 @@ export async function initLocal(root: string, options: { name?: string; template
   modules.auth.on = born.visibility === "private" || sourcesUseAuth(Object.values(born.files));
   modules.auth.signupPolicy = { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] };
   modules.auth.signInMethods = ["password"];
-  const settings: AppSettings = {
+  const settings = settingsForFolder({
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
     kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
-  };
+  });
   await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
   await writeEntries(root, await folderFiles(root, settings));
   await ignoreInGit(root, gitignore.trim().split("\n"));

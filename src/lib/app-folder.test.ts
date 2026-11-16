@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { defaultModuleStates } from "./app-folder";
+import { defaultModuleStates, settingsForFolder } from "./app-folder";
 
 test("module defaults include only modules whose switch is available", () => {
   expect(defaultModuleStates()).toEqual({ auth: { on: false, signupPolicy: null, signInMethods: ["password"] }, files: { on: false, fileAccess: null }, seo: { on: false, canonical: null, image: null } });
@@ -8,6 +8,16 @@ test("module defaults include only modules whose switch is available", () => {
     seo: { on: true, canonical: "path", image: "social.png" },
     files: { on: false, fileAccess: null },
   });
+});
+
+test("folder settings store auth options beside the module switch only once", () => {
+  const settings = settingsForFolder({
+    id: "app_1", name: "Notes", slug: "notes", visibility: "public", kernel: "0.9.0", manifest: {},
+    modules: { auth: { on: true, signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] }, signInMethods: ["password", "google"] } },
+  });
+  expect(settings.signupPolicy).toEqual({ mode: "allowlist", allowlist: ["@example.test"] });
+  expect(settings.signInMethods).toEqual(["password", "google"]);
+  expect(settings.modules?.auth).toEqual({ on: true });
 });
 import { generatedFiles, type AppSettings } from "./app-folder";
 

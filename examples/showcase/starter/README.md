@@ -23,7 +23,7 @@ Every rule lives in `actions.json`. The Kernel binds the caller's ID and the SQL
 | --- | --- | --- |
 | Public landing | Public Deployment, actions declared `anonymous` | `status.list`, `updates.list`, `downloads.list` |
 | Public read API | An unsigned `GET` route on a public app, with pagination and search under a `LIMIT` | `updates.list` at `GET /api/updates?before=&q=` |
-| Accounts | Signup Policy Open, `KONAE_ACCOUNT_VERIFICATION=required` | `konae.json` `modules.auth.signupPolicy`, the Kernel's sign-in page |
+| Accounts | Signup Policy Open, `KONAE_ACCOUNT_VERIFICATION=required` | `konae.json` `signupPolicy`, the Kernel's sign-in page |
 | Member area | `actor` bindings on `authenticated` actions | `me.*`, `notes.*`, `attachments.*` |
 | Team area with roles | A role column and guarded mutations whose `WHERE` checks the caller's role | `team.*`, `updates.publish` |
 | Admin area for the owner | Guards that find the caller's `profiles` row with role `'owner'` through `{ "source": "actor", "field": "id" }` | `members.list`, `members.promote`, `members.demote`, `updates.remove`, `admin.stats` |
@@ -56,7 +56,7 @@ rm -rf /tmp/starter/app && mkdir /tmp/starter/app
 cp examples/showcase/starter/{index.html,styles.css,app.js,favicon.svg,schema.sql,actions.json} /tmp/starter/app/
 ```
 
-1. In `/tmp/starter/konae.json` set `"visibility": "public"` and `"modules": { "auth": { "on": true, "signupPolicy": { "mode": "open", "allowlist": [] } } }`.
+1. In `/tmp/starter/konae.json` set `"visibility": "public"`, `"signupPolicy": { "mode": "open", "allowlist": [] }` and `"modules": { "auth": { "on": true } }`.
 2. `status.escalate` calls a team inbox. Publish the [inbox](../inbox/README.md) first, and put its URL with `/hooks/events` in place of `http://inbox.localhost/hooks/events` in `actions.json`.
 3. Run `bun run konae -- publish --dir /tmp/starter`. The first run registers the project and is refused, naming an unset signing secret, `status_webhook` or the call's `inbox_events`.
 4. Over MCP, with the `id` from `konae.json` as `projectId`, set `secret_set { "projectId": "<id>", "name": "status_webhook", "value": "<16 to 512 printable characters>" }` and `secret_set { "projectId": "<id>", "name": "inbox_events", "value": "<the inbox's events_webhook value>", "use": "call" }`.

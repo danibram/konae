@@ -69,7 +69,7 @@ sequenceDiagram
 
 A published app runs under the Kernel's Content Security Policy ([the architecture](../architecture.md#isolation-of-hosted-code)). The inline scripts of each HTML page run because the Kernel allows each by its hash. Inline event handler attributes, scripts from other origins and requests to other origins do not.
 
-`modules.auth.signupPolicy` in `konae.json` names who may create an app account on the first release. `init` writes it under auth, and private templates turn auth on. Public apps default to Open and private apps default to Closed when they have no policy. Later releases keep the installed policy. The CLI warns when the folder's policy differs, then publishes without changing it. Change the policy in the editor's Users view or call `module_set` on auth with a credential that holds `manage_users`.
+`signupPolicy` in `konae.json` names who may create an app account on the first release. `init` writes it beside the module state, and private templates turn auth on. Public apps default to Open and private apps default to Closed when they have no policy. Later releases keep the installed policy. The CLI warns when the folder's policy differs, then publishes without changing it. Change the policy in the editor's Users view or call `module_set` on auth with a credential that holds `manage_users`.
 
 ### The schema change
 

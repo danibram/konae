@@ -52,6 +52,20 @@ export function defaultModuleStates(existing: AppSettings["modules"] = {}): AppS
   )]));
 }
 
+export function settingsForFolder(settings: AppSettings): AppSettings {
+  const modules = defaultModuleStates(settings.modules);
+  const auth = modules?.auth;
+  if (auth) {
+    settings = {
+      ...settings,
+      signupPolicy: settings.signupPolicy ?? auth.signupPolicy as SignupPolicy | undefined ?? { mode: settings.visibility === "public" ? "open" : "closed", allowlist: [] },
+      signInMethods: settings.signInMethods ?? auth.signInMethods as AppSettings["signInMethods"] ?? ["password"],
+    };
+    modules!.auth = { on: auth.on };
+  }
+  return { ...settings, modules };
+}
+
 
 export const dataPaths: Record<PackageComponentName, string> = {
   database: "data/database.sqlite",

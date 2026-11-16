@@ -48,7 +48,7 @@ rm -rf /tmp/gallery/app && mkdir /tmp/gallery/app
 cp examples/showcase/gallery/{index.html,about.html,404.html,app.js,styles.css,schema.sql,actions.json} /tmp/gallery/app/
 ```
 
-Set `"visibility": "public"` and `"modules": { "auth": { "on": true, "signupPolicy": { "mode": "closed", "allowlist": [] } } }` in `/tmp/gallery/konae.json`, then run `bun run konae -- publish --dir /tmp/gallery`. Invite the curator over MCP with `app_invitations_create`, and once they accept, add their account ID, which `app_users_list` shows, to the studio:
+Set `"visibility": "public"`, `"signupPolicy": { "mode": "closed", "allowlist": [] }` and `"modules": { "auth": { "on": true } }` in `/tmp/gallery/konae.json`, then run `bun run konae -- publish --dir /tmp/gallery`. Invite the curator over MCP with `app_invitations_create`, and once they accept, add their account ID, which `app_users_list` shows, to the studio:
 
 ```sh
 bun run konae -- sql --dir /tmp/gallery --prod "INSERT INTO studio (user_id) VALUES ('<account id>')"

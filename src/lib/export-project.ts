@@ -7,7 +7,7 @@ import type { MiniAppProject } from "./types";
 import { sourceContents } from "./source-files";
 import type { PackageComponentName } from "./portable-package";
 import {
-  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, defaultModuleStates, generatedFiles,
+  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, defaultModuleStates, generatedFiles, settingsForFolder,
   type AppSettings, type FolderEntry,
 } from "./app-folder";
 
@@ -36,10 +36,10 @@ export async function createProjectExport(
     const { visibility, ...manifest } = project.manifest;
     const modules = defaultModuleStates(project.modules);
     if (modules?.auth) modules.auth.signupPolicy = { mode: visibility === "public" ? "open" : "closed", allowlist: [] };
-    settings = {
+    settings = settingsForFolder({
       id: project.id, name: project.name, slug: project.slug, visibility,
       kernel: KERNEL_VERSION, modules, manifest,
-    };
+    });
     entries = [
       { path: SETTINGS_FILE, contents: `${JSON.stringify(settings, null, 2)}\n` },
       ...Object.keys(project.files).map((file) => ({ path: `${SOURCES_FOLDER}/${file}`, contents: sourceContents(project, file) })),

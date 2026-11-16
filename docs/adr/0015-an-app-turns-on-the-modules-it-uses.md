@@ -16,7 +16,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 - `konae.json` holds state only for modules whose switch is available: `"modules": { "<name>": { "on": true, "<option>": <value> } }`. An export carries it. A secret never goes there.
 - A switchable module is off until someone turns it on. `konae init` and the editor's templates turn on what the template uses.
-- The first release carries auth options in `modules.auth` beside the module switch. Signup Policy keeps its structured mode and allowlist there. A public app defaults to Open and a private app to Closed. A private first release turns auth on. Later changes apply at once and have no draft.
+- `modules_read` and `module_set` expose auth options beside the module switch. In `konae.json`, Signup Policy and sign-in methods stay in the existing top-level `signupPolicy` and `signInMethods` fields, and the `auth` entry stores only `on`. A public app defaults to Open and a private app to Closed. A private first release turns auth on. Later changes apply at once and have no draft. This keeps an export readable by the release that predates module settings.
 - A module that `konae.json` does not name has never been decided for that app. Only an app made before the module existed is in that state.
 
 ### The published app never uses a module that is off

@@ -13,7 +13,7 @@ Club is a members-only book club. The owner invites people by email. Members pro
 
 ## Platform parts it uses
 
-- A Private Deployment, published by `publishLocal` in `scripts/konae.ts`, the function behind `konae publish`, as Invitation only from `konae.json`'s `modules.auth.signupPolicy`, then a republish that names another policy.
+- A Private Deployment, published by `publishLocal` in `scripts/konae.ts`, the function behind `konae publish`, as Invitation only from `konae.json`'s `signupPolicy`, then a republish that names another policy.
 - `app_invitations_create`, the development mailbox and `POST /_konae/auth/accept`.
 - `miniapp.files.upload` with and without `visibility: "public"`, and `GET /_konae/files/<id>` with the app session cookie, as an `<img>` source for covers and a `fetch` for notes, under the app's Content Security Policy.
 - `api_keys_create` with `files: ["public"]`, used with `Authorization: Bearer`.
@@ -43,7 +43,7 @@ rm -rf /tmp/club/app && mkdir /tmp/club/app
 cp examples/showcase/club/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/club/app/
 ```
 
-Before the first publish, set `"visibility": "private"` and `"modules": { "auth": { "on": true, "signupPolicy": { "mode": "invitation", "allowlist": [] } } }` in `/tmp/club/konae.json`, then run `bun run konae -- publish --dir /tmp/club`. A project published from a folder does not open in the editor, so invite people over MCP with `app_invitations_create`, which needs the `manage_users` that `--manage-users` adds. To make someone an organizer, join the club as them, then run `bun run konae -- sql --dir /tmp/club --prod "UPDATE members SET role = 'organizer' WHERE user_id = '<their account ID>'"`. `app_users_list` shows the account ID.
+Before the first publish, set `"visibility": "private"`, `"signupPolicy": { "mode": "invitation", "allowlist": [] }` and `"modules": { "auth": { "on": true } }` in `/tmp/club/konae.json`, then run `bun run konae -- publish --dir /tmp/club`. A project published from a folder does not open in the editor, so invite people over MCP with `app_invitations_create`, which needs the `manage_users` that `--manage-users` adds. To make someone an organizer, join the club as them, then run `bun run konae -- sql --dir /tmp/club --prod "UPDATE members SET role = 'organizer' WHERE user_id = '<their account ID>'"`. `app_users_list` shows the account ID.
 
 ## What worked
 

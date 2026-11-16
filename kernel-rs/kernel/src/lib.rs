@@ -310,19 +310,19 @@ impl Settings {
         let raw: Value = serde_json::from_slice(&bytes)?;
         let mut settings: Self = serde_json::from_slice(&bytes)?;
         modules::complete(&mut settings.modules);
-        let auth = settings.modules.get_mut("auth").expect("auth is switchable");
-        settings.signup_policy = if !auth["signupPolicy"].is_null() {
-            serde_json::from_value(auth["signupPolicy"].clone())?
-        } else if raw.get("signupPolicy").is_some() {
-            settings.signup_policy.clone()
-        } else {
-            SignupPolicy::initial(&settings.visibility)
+        let nested_policy = settings.modules["auth"]["signupPolicy"].clone();
+        let nested_methods = settings.modules["auth"]["signInMethods"].clone();
+        settings.signup_policy = match raw.get("signupPolicy").filter(|value| !value.is_null()) {
+            Some(value) => serde_json::from_value(value.clone())?,
+            None if !nested_policy.is_null() => serde_json::from_value(nested_policy)?,
+            None => SignupPolicy::initial(&settings.visibility),
         };
-        auth["signupPolicy"] = serde_json::to_value(&settings.signup_policy)?;
-        if auth["signInMethods"].is_array() {
-            settings.sign_in_methods = serde_json::from_value(auth["signInMethods"].clone())?;
-        }
-        auth["signInMethods"] = serde_json::to_value(&settings.sign_in_methods)?;
+        settings.sign_in_methods = match raw.get("signInMethods").filter(|value| value.is_array()) {
+            Some(value) => serde_json::from_value(value.clone())?,
+            None if nested_methods.is_array() => serde_json::from_value(nested_methods)?,
+            None => default_sign_in_methods(),
+        };
+        settings.sync_auth_options();
         let old_file_access = raw["manifest"]["fileAccess"] == "app-users" || raw["released"]["manifest"]["fileAccess"] == "app-users";
         if raw["modules"]["files"].is_null() && old_file_access {
             let files = settings.modules.get_mut("files").expect("files is switchable");
@@ -343,9 +343,9 @@ impl Settings {
         let mut settings = self.clone();
         settings.sync_auth_options();
         let mut value = serde_json::to_value(settings)?;
-        if let Some(object) = value.as_object_mut() {
-            object.remove("signupPolicy");
-            object.remove("signInMethods");
+        if let Some(auth) = value.get_mut("modules").and_then(|modules| modules.get_mut("auth")).and_then(Value::as_object_mut) {
+            auth.remove("signupPolicy");
+            auth.remove("signInMethods");
         }
         Ok(serde_json::to_vec_pretty(&value)?)
     }
@@ -4649,6 +4649,9 @@ pub mod tests {
         tokio::fs::write(crate::layout::dist(&root, &current.id).join("index.html"), "<main>deployed</main>").await.unwrap();
 
         set_signup_policy(&state, &current.id, SignupMode::Closed, None).await.unwrap();
+        let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, &current.id)).unwrap()).unwrap();
+        assert_eq!(folder_settings["signupPolicy"]["mode"], "closed");
+        assert!(folder_settings["modules"]["auth"].get("signupPolicy").is_none());
         let saved = crate::sources::read(&root, &current.id).await.unwrap().unwrap();
         assert_eq!(saved["name"], "Unpublished draft name");
         assert_eq!(saved["manifest"]["visibility"], "private");
@@ -4661,7 +4664,29 @@ pub mod tests {
         assert_eq!(serving.modules["files"]["on"], true);
         assert!(serving.manifest.get("fileAccess").is_none());
         assert_eq!(serving.signup_policy.mode, SignupMode::Closed);
+        assert_eq!(modules::read(&restarted, &serving)["modules"]["auth"]["state"]["signupPolicy"]["mode"], "closed");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn top_level_auth_settings_override_a_module_only_export() {
+        let root = std::env::temp_dir().join(format!("konae-auth-settings-source-{}", Uuid::new_v4()));
+        let settings = Settings::new("app_auth_settings", "Auth settings", "auth-settings", &json!({"visibility":"public"}));
+        settings.write(&root).await.unwrap();
+        let path = layout::settings(&root, "app_auth_settings");
+        let mut stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        stored["signupPolicy"] = json!({"mode":"allowlist","allowlist":["owner@example.test"]});
+        stored["signInMethods"] = json!(["password", "google"]);
+        stored["modules"]["auth"]["signupPolicy"] = json!({"mode":"closed","allowlist":[]});
+        stored["modules"]["auth"]["signInMethods"] = json!(["password"]);
+        std::fs::write(&path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
+        let read = Settings::read(&root, "app_auth_settings").unwrap();
+        assert_eq!(read.signup_policy.mode, SignupMode::Allowlist);
+        assert_eq!(read.signup_policy.allowlist, ["owner@example.test"]);
+        assert_eq!(read.sign_in_methods, [SignInMethod::Password, SignInMethod::Google]);
+        assert_eq!(read.modules["auth"]["signupPolicy"]["mode"], "allowlist");
+        assert_eq!(read.modules["auth"]["signInMethods"], json!(["password", "google"]));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5454,15 +5479,19 @@ pub mod tests {
             assert_eq!(first["signupPolicy"]["mode"], json!(expected), "visibility={visibility}");
             let id = first["id"].as_str().unwrap();
             let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
-            assert_eq!(folder_settings["modules"]["auth"]["signupPolicy"]["mode"], json!(expected));
-            assert!(folder_settings.get("signupPolicy").is_none());
-            assert!(folder_settings.get("signInMethods").is_none());
+            assert_eq!(folder_settings["signupPolicy"]["mode"], json!(expected));
+            assert_eq!(folder_settings["signInMethods"], json!(default_sign_in_methods()));
+            assert!(folder_settings["modules"]["auth"].get("signupPolicy").is_none());
+            assert!(folder_settings["modules"]["auth"].get("signInMethods").is_none());
 
             set_policy(&state, SignupMode::Allowlist, &["@example.test"]).await;
             let second = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), visibility).await;
             assert_eq!(second["signupPolicy"], json!({"mode": "allowlist", "allowlist": ["@example.test"]}));
             let stored = Settings::read(&root, id).unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
+            let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
+            assert_eq!(folder_settings["signupPolicy"], json!({"mode":"allowlist","allowlist":["@example.test"]}));
+            assert!(folder_settings["modules"]["auth"].get("signupPolicy").is_none());
             let mut legacy = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
             legacy.manifest["runtime"] = json!({"database":{"mode":"declared-actions"}});
             assert!(released_settings(&legacy).manifest.get("runtime").is_none());

@@ -200,7 +200,11 @@ pub fn read(state: &crate::AppState, deployment: &crate::Deployment) -> Value {
     let descriptions = registry();
     let modules = descriptions["modules"].as_object().into_iter().flatten().map(|(name, description)| {
         let switch = description["switch"] == true;
-        let module_state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
+        let mut module_state = if switch { deployment.modules.get(name).cloned().unwrap_or_else(|| defaults()[name].clone()) } else { json!({"on":true}) };
+        if name == "auth" {
+            module_state["signupPolicy"] = serde_json::to_value(&deployment.signup_policy).unwrap_or(Value::Null);
+            module_state["signInMethods"] = serde_json::to_value(&deployment.sign_in_methods).unwrap_or(Value::Null);
+        }
         let mut module = json!({
             "state": module_state,
             "switch": switch,

@@ -10,7 +10,7 @@ A room booking board for a small office. Anyone with the link sees which rooms a
 | --- | --- |
 | Public Deployment with anonymous queries | `rooms.list` and `availability.day` answer a signed-out visitor with `{ room, hour }` only, no titles and no names |
 | Authenticated mutations | `bookings.create`, `bookings.cancel` and `staff.name` bind the caller with `{ "source": "actor", "field": "id" }` |
-| Allowlist signup by `@domain` | `konae.json` names `modules.auth.signupPolicy` with mode `allowlist` and an address list, and `konae publish` installs it on the first release |
+| Allowlist signup by `@domain` | `konae.json` names `signupPolicy` with mode `allowlist` and an address list, and `konae publish` installs it on the first release |
 | One SQL statement per action | `bookings.create` is one `INSERT ... WITH RECURSIVE ... SELECT` that writes every hour of the span or none |
 | CHECK constraints and a partial unique index | `schema.sql` refuses a fractional hour, an hour outside 08 to 17, an invalid date and a second holder of an hour |
 | HTTP route, unsigned | `GET /api/availability?day=YYYY-MM-DD` for a lobby screen |
@@ -44,7 +44,7 @@ rm -rf /tmp/booking/app && mkdir /tmp/booking/app
 cp examples/showcase/booking/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/booking/app/
 ```
 
-1. In `/tmp/booking/konae.json` set `"visibility": "public"` and `"modules": { "auth": { "on": true, "signupPolicy": { "mode": "allowlist", "allowlist": ["@office.example"] } } }`, with your office's domain.
+1. In `/tmp/booking/konae.json` set `"visibility": "public"`, `"signupPolicy": { "mode": "allowlist", "allowlist": ["@office.example"] }` and `"modules": { "auth": { "on": true } }`, with your office's domain.
 2. Run `bun run konae -- publish --dir /tmp/booking`. The first run registers the project and is refused, naming the unset signing secret `panel_hook`.
 3. Over MCP, set it with `secret_set`, with the `id` from `konae.json` as `projectId`, and publish again.
 4. Add the rooms:
@@ -58,7 +58,7 @@ cp examples/showcase/booking/{index.html,styles.css,app.js,schema.sql,actions.js
 ## What worked
 
 - **Allowlist by domain.** `ana@office.example` signs up. `pat@elsewhere.example` and `sam@sub.office.example` get exactly the answer a listed address gets under Closed: status 403 and `{"error":"This app is not accepting new accounts for this email address."}`. The replay compares the two bodies with `deepEqual`, so the refusal does not tell a stranger whether the domain or the policy stopped them. A domain entry does not match its subdomains. Closing signup does not sign out existing staff.
-- **The policy is in place before the first request.** `konae publish` sends konae.json's `modules.auth.signupPolicy` as `initialSignupPolicy`, so the public app never runs Open.
+- **The policy is in place before the first request.** `konae publish` sends konae.json's `signupPolicy` as `initialSignupPolicy`, so the public app never runs Open.
 - **Public reads stay narrow.** The anonymous query projects `room` and `hour` and nothing else; titles and names come only from `bookings.day`, which needs a session. A visitor calling `bookings.day`, `bookings.create` or `bookings.recent` gets `authentication-required`.
 - **A span of hours in one statement.** `bookings.create` generates the hours with a recursive CTE inside the `INSERT`'s `SELECT`, guards them with `WHERE`, and writes every hour or none. Cancelling is one `UPDATE ... WHERE booking_ref = ? AND user_id = ?` over all the rows of a booking. Another member's cancel changes 0 rows and is refused with the cancel guard.
 - **No double booking.** Twenty rounds of two overlapping requests sent at once, and one round of ten requests for the same hour, each end with exactly one holder. The loser always gets the create guard, never SQLite's text.
@@ -132,7 +132,7 @@ Messages are quoted exactly as the replay receives them. The replay also runs th
 | Telling other staff about a booking | none | No notice reaches everyone in the office, and the app declares no call action | See [Notifying staff](#notifying-staff) |
 | A confirmation email to the booker | Kernel | `"notify": { "to": "actor" }` on `bookings.create`. A booker who signed up in local mode has proved no address, so the booking succeeds and Usage counts `bookings.create: unverified-email` | Cara, invited, gets the email; Ana and Ben do not until they answer a link |
 | Seeding rooms from `schema.sql` | Kernel | `schema.sql` may only create tables and indexes (not run by the replay) | The owner inserts rooms with `database_execute` after the first publish |
-| `bun run konae -- publish` with an Allowlist | CLI | No refusal. `konae.json`'s `modules.auth.signupPolicy` goes as `initialSignupPolicy` on the first release | The replay publishes with `publishLocal` on a token without `manage_users`, and the Allowlist is in place before the first request |
+| `bun run konae -- publish` with an Allowlist | CLI | No refusal. `konae.json`'s `signupPolicy` goes as `initialSignupPolicy` on the first release | The replay publishes with `publishLocal` on a token without `manage_users`, and the Allowlist is in place before the first request |
 | A whole-hour input | Kernel | No integer input type; `"type": "number"` accepts `13.5` | The statement checks `?4 = CAST(?4 AS INTEGER)`, and a CHECK on `typeof(slot)` backs it |
 | "Not in the past" in the office's time | Kernel | The `now` binding is UTC milliseconds; there is no time zone | The check accepts the UTC day before today, so at 21:00 in New York, when the UTC date is already tomorrow, the person can still book their own today. The replay books it. The cost is the other side: east of UTC, just after midnight, yesterday is still accepted for a few hours. The page offers no past day and sends the browser's local date for its own lists |
 | The booker's name | Kernel | The `actor` binding has only `id` | The app keeps a `staff` table of display names each person sets for themselves. A name is not verified |

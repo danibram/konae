@@ -46,9 +46,9 @@ test("a draft export writes the full module state into konae.json", async () => 
   const entry = readTar(new Uint8Array(await result.blob.arrayBuffer())).find((item) => item.path === `notes/${SETTINGS_FILE}`)!;
   const exported = JSON.parse(new TextDecoder().decode(entry.contents));
   expect(Object.keys(exported.modules).sort()).toEqual(["auth", "files", "seo"]);
-  expect(exported.modules.auth).toEqual({ on: false, signupPolicy: { mode: "closed", allowlist: [] }, signInMethods: ["password"] });
-  expect(exported).not.toHaveProperty("signupPolicy");
-  expect(exported).not.toHaveProperty("signInMethods");
+  expect(exported.modules.auth).toEqual({ on: false });
+  expect(exported.signupPolicy).toEqual({ mode: "closed", allowlist: [] });
+  expect(exported.signInMethods).toEqual(["password"]);
   expect(exported.modules.seo).toEqual({ on: true, canonical: "path", image: "social.png" });
 });
 

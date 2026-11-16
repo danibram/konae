@@ -1060,7 +1060,7 @@ setInterval(() => {}, 1000);
     const run = cli("init", "--dir", directory);
     expect(await run.exited).toBe(0);
     const written = JSON.parse(await readFile(path.join(directory, "konae.json"), "utf8"));
-    expect(written).toMatchObject({ visibility: "private", modules: { auth: { on: true, signupPolicy: { mode: "invitation" }, signInMethods: ["password"] } } });
+    expect(written).toMatchObject({ visibility: "private", signupPolicy: { mode: "invitation", allowlist: [] }, signInMethods: ["password"], modules: { auth: { on: true } } });
   });
 
   test("init writes the app folder and needs no Kernel and no credential", async () => {

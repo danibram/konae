@@ -337,17 +337,17 @@ cat /tmp/orders/konae.json
   "name": "Orders",
   "slug": "orders",
   "visibility": "private",
+  "signupPolicy": {
+    "mode": "invitation",
+    "allowlist": []
+  },
+  "signInMethods": [
+    "password"
+  ],
   "kernel": "<Kernel version>",
   "modules": {
     "auth": {
-      "on": true,
-      "signupPolicy": {
-        "mode": "invitation",
-        "allowlist": []
-      },
-      "signInMethods": [
-        "password"
-      ]
+      "on": true
     },
     "files": {
       "on": false,
@@ -632,7 +632,7 @@ A signing secret belongs to the project. The Kernel keeps it in the app folder's
 ```
 <!-- /walkthrough:secret -->
 
-`publish` builds the folder, uploads the release and applies it. On the first release it sends `modules.auth.signupPolicy` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
+`publish` builds the folder, uploads the release and applies it. On the first release it sends `signupPolicy` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
 
 <!-- walkthrough:publish -->
 ```sh
