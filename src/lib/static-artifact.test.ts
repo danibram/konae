@@ -62,6 +62,19 @@ describe("page path assets", () => {
     expect(artifact.files["post.html"]).toContain("url('../cover.png')");
   });
 
+  test("the builder resolves page assets from the named file's directory", async () => {
+    const artifact = await assemble({
+      "index.html": page("Home"),
+      "pages/blog/post.html": page("Post", '<link rel="stylesheet" href="post.css"><img src="cover.png">'),
+      "public/blog/post.css": "body { color: red }",
+      "public/blog/cover.png": "image",
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/blog/post", file: "pages/blog/post.html" } } } }),
+    });
+    expect(artifact.files["blog/post.html"]).toContain('href="../blog/post.css"');
+    expect(artifact.files["blog/post.html"]).toContain('src="../blog/cover.png"');
+    expect(artifact.files["blog/post.css"]).toContain("color: red");
+  });
+
   test("the builder rewrites URL attributes and CSS without changing text or other attribute values", async () => {
     const artifact = await assemble({
       "index.html": "<main></main>",
