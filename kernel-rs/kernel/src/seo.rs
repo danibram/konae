@@ -185,7 +185,7 @@ pub fn title(html: &[u8]) -> Option<String> {
     let open = text[start..].find('>')? + start + 1;
     let end = lower[open..].find("</title")? + open;
     let value = text[open..end].trim();
-    (!value.is_empty()).then(|| decode_entities(value))
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 pub fn description(html: &[u8]) -> String {
@@ -199,9 +199,7 @@ pub fn description(html: &[u8]) -> String {
         };
         let tag = &text[start..=end];
         if attribute(tag, "name").is_some_and(|value| value.eq_ignore_ascii_case("description")) {
-            return attribute(tag, "content")
-                .map(|value| decode_entities(&value))
-                .unwrap_or_default();
+            return attribute(tag, "content").unwrap_or_default();
         }
         cursor = end + 1;
     }
@@ -263,20 +261,41 @@ fn collect_html(root: &Path, dir: &Path, out: &mut Vec<String>) {
 }
 
 fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\'', "&#39;")
-}
-fn decode_entities(value: &str) -> String {
-    value
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    let mut output = String::new();
+    let mut cursor = 0;
+    while cursor < value.len() {
+        let rest = &value[cursor..];
+        let character = rest.chars().next().unwrap();
+        if character == '&' {
+            let entity_end = rest.find(';').filter(|end| {
+                *end > 1
+                    && rest[1..*end]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'#')
+            });
+            if let Some(end) = entity_end {
+                output.push_str(&rest[..=end]);
+                cursor += end + 1;
+            } else {
+                output.push_str("&amp;");
+                cursor += 1;
+            }
+        } else {
+            output.push_str(match character {
+                '"' => "&quot;",
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '\'' => "&#39;",
+                _ => {
+                    output.push(character);
+                    cursor += character.len_utf8();
+                    continue;
+                }
+            });
+            cursor += character.len_utf8();
+        }
+    }
+    output
 }
 fn attribute(tag: &str, name: &str) -> Option<String> {
     let lower = tag.to_ascii_lowercase();
@@ -366,5 +385,15 @@ mod tests {
     fn description_skips_other_metadata_and_reads_an_escaped_value() {
         let html = br#"<head><meta charset="utf-8"><meta content="Tea &amp; toast" name="description"></head>"#;
         assert_eq!(description(html), "Tea & toast");
+    }
+
+    #[test]
+    fn card_text_preserves_entities_and_escapes_bare_ampersands_and_quotes() {
+        let html = br#"<html><head><title>Notes &mdash; Caf&#233; &nbsp; fish & chips "today"</title><meta name="description" content="Notes &mdash; Caf&#233; &nbsp; fish &amp; chips &quot;today&quot;"></head><body></body></html>"#;
+        let title = title(html).unwrap();
+        let description = description(html);
+        let output = String::from_utf8(enrich_html(html, "https://app.example/", &title, &description, None)).unwrap();
+        assert!(output.contains("property=\"og:title\" content=\"Notes &mdash; Caf&#233; &nbsp; fish &amp; chips &quot;today&quot;\""));
+        assert!(output.contains("property=\"og:description\" content=\"Notes &mdash; Caf&#233; &nbsp; fish &amp; chips &quot;today&quot;\""));
     }
 }
