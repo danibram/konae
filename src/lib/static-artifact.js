@@ -299,19 +299,30 @@ function pageUrl(value, depth) {
 }
 
 function rewriteCssUrls(value, depth) {
-  return value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth)}${after}`);
+  return value.replace(/(url\(\s*)(["']?)([^)"']+)(["']?\s*\))/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth)}${after}`)
+    .replace(/(@import\s+)(["'])([^"']+)(\2)/gi, (_, before, quote, target, after) => `${before}${quote}${pageUrl(target, depth)}${after}`);
 }
 
 function rewritePageUrls(html, depth) {
   if (depth < 2) return html;
-  const scripts = [];
-  const source = html.replace(/(<script\b[^>]*>)([\s\S]*?<\/script\s*>)/gi, (_, start, body) => `${start}\u0000${scripts.push(body) - 1}\u0000`);
+  const protectedBlocks = [];
+  let source = html.replace(/<(pre|code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, (block) => `\u0001${protectedBlocks.push(block) - 1}\u0001`);
+  const scriptBodies = [];
+  source = source.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi, (_, start, body, end) => `${start}\u0002${scriptBodies.push(body) - 1}\u0002${end}`);
   const styles = source.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_, start, body, end) => `${start}${rewriteCssUrls(body, depth)}${end}`);
   const inline = styles.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, body) => `${before}${quote}${rewriteCssUrls(body, depth)}${quote}`);
-  const srcset = (value) => value.split(",").map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${pageUrl(target, depth)}`)).join(",");
-  return inline.replace(/(\b(?:href|src|action|formaction|poster|data)\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${pageUrl(value, depth)}${quote}`)
-    .replace(/(\bsrcset\s*=\s*)(["'])(.*?)\2/gi, (_, before, quote, value) => `${before}${quote}${srcset(value)}${quote}`)
-    .replace(/\u0000(\d+)\u0000/g, (_, index) => scripts[Number(index)]);
+  const srcset = (value) => value.split(/,(?=\s*[^\n])/).map((candidate) => candidate.replace(/^(\s*)(\S+)/, (_, whitespace, target) => `${whitespace}${pageUrl(target, depth)}`)).join(",");
+  const attributes = inline.replace(/<([a-z][\w:-]*)(\s[^<>]*?)?(\/?)>/gi, (tag, name, raw = "", close = "") => {
+    const rewritten = raw.replace(/(^|\s)(href|src|action|formaction|poster|data|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi, (attribute, space, key, double, single, bare) => {
+      const value = double ?? single ?? bare;
+      const next = key.toLowerCase() === "srcset" ? srcset(value) : pageUrl(value, depth);
+      const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
+      return `${space}${key}=${quote}${next}${quote}`;
+    });
+    return `<${name}${rewritten}${close}>`;
+  });
+  return attributes.replace(/\u0001(\d+)\u0001/g, (_, index) => protectedBlocks[Number(index)])
+    .replace(/\u0002(\d+)\u0002/g, (_, index) => scriptBodies[Number(index)]);
 }
 
 /**

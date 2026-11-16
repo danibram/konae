@@ -62,6 +62,21 @@ describe("page path assets", () => {
     expect(artifact.files["post.html"]).toContain("url('../cover.png')");
   });
 
+  test("the builder rewrites URL attributes and CSS without changing text or other attribute values", async () => {
+    const artifact = await assemble({
+      "index.html": "<main></main>",
+      "post.html": '<a href=plain.css data-action="click->gallery#next" title="href=docs.html">href="docs.html"</a><pre><code>href="docs.html"</code></pre><img srcset="one.png 1x,\n two.png 2x"><style>@import "more.css";</style>',
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+      "plain.css": "", "docs.html": "", "one.png": "", "two.png": "", "more.css": "",
+    });
+    const html = artifact.files["post.html"];
+    expect(html).toContain("href=../plain.css");
+    expect(html).toContain('data-action="click->gallery#next" title="href=docs.html"');
+    expect(html).toContain('<code>href="docs.html"</code>');
+    expect(html).toContain("../one.png 1x,\n ../two.png 2x");
+    expect(html).toContain('@import "../more.css";');
+  });
+
 });
 
 describe("which Capsule files become pages", () => {
