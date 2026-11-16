@@ -349,6 +349,7 @@ pub fn sitemap_response(
             let names = program.actions.values().filter_map(|action| action.page.as_ref()?.get("list")?.as_str()).collect::<std::collections::BTreeSet<_>>();
             for name in names {
                 let Some(list) = program.actions.get(name).cloned() else { continue };
+                if !sitemap_list_cacheable(&list) { cacheable = false; }
                 let Ok(bindings) = crate::resolve_bindings(&list, &serde_json::Value::Object(serde_json::Map::new()), None) else { cacheable = false; continue };
                 let _database = crate::action_lock(state, &deployment.id, &list.kind).await;
                 let permit = match state.guards.statement_permit(&deployment.id).await { Ok(permit) => permit, Err(_) => { cacheable = false; continue } };
@@ -389,6 +390,10 @@ async fn metadata_version(path: &Path) -> String {
 fn sitemap_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, Vec<u8>)>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, Vec<u8>)>>> = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
+}
+
+fn sitemap_list_cacheable(action: &crate::ActionDefinition) -> bool {
+    !action.bindings.iter().any(|binding| binding.source == "kernel")
 }
 
 pub fn title(html: &[u8]) -> Option<String> {
@@ -735,6 +740,13 @@ mod tests {
     fn page_path_canonical_uses_the_sitemap_segment_encoder() {
         let params = serde_json::from_value(serde_json::json!({"slug": "c# 100%"})).unwrap();
         assert_eq!(page_path_canonical("https://app.example/", "/posts/:slug", &params), "https://app.example/posts/c%23%20100%25");
+    }
+
+    #[test]
+    fn sitemap_lists_bound_to_kernel_time_are_not_cached() {
+        let program = crate::action_shape::read(r#"{"version":1,"actions":{"posts.page":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE publish_at <= ?1 LIMIT 1","bindings":[{"source":"kernel","field":"now"}],"page":{"path":"/posts","file":"post.html","list":"posts.published"}},"posts.published":{"kind":"query","access":"anonymous","statement":"SELECT updated FROM posts WHERE publish_at <= ?1 LIMIT 1000","bindings":[{"source":"kernel","field":"now"}]}}}"#).unwrap();
+        let list = &program.actions["posts.published"];
+        assert!(!sitemap_list_cacheable(list));
     }
 
     #[test]
