@@ -370,9 +370,9 @@ export const sdkContract = {
     },
     {
       name: "files",
-      summary: "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
-      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["manifest.fileAccess", "miniapp.files"],
-      declarations: [{ key: "fileAccess", file: "manifest", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.' }],
+      summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], default: null, label: "File access", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: [], uses: ["miniapp.files"],
+      declarations: [{ key: "fileAccess", file: "module", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.' }],
       notes: [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",

@@ -15,7 +15,7 @@ describe("SQL rules", () => {
     const gate = createCapsuleValidator(() => initSqlJs());
     for (const item of cases) {
       if (item.schema !== undefined) {
-        const result = await gate.validate({ ...starterProject.files, "schema.sql": item.schema, "actions.json": JSON.stringify({ version: 1, actions: {} }) });
+        const result = await gate.validate({ ...starterProject.files, "schema.sql": item.schema, "actions.json": JSON.stringify({ version: 1, actions: {} }) }, undefined, { modules: { files: { on: true } } });
         if (item.error === null) expect(result.errors, item.case).toEqual([]);
         else expect({ code: result.errors[0]?.code, message: result.errors[0]?.message }, item.case).toEqual(expectedOutcome(item));
         continue;

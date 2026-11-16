@@ -49,7 +49,7 @@ beforeAll(async () => {
   await client.call("project_create", { projectId: project.id, name: project.name });
   const transfer = await client.upload(new TextEncoder().encode(JSON.stringify({
     project: { ...project, files: { "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY);", "actions.json": '{"version":1,"actions":{}}' } },
-    visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Public shell</main>" } },
+    visibility: "public", initialModules: { files: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Public shell</main>" } },
   })), project.id);
   try {
     const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId: project.id });

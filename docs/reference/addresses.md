@@ -59,7 +59,7 @@ The names live in `apps/<id>/.konae/hostname.json`, which copies carry and an ex
 A Deployment can answer at `<domain>/p/<id>`, and at `<domain>/p/<name>` once named, with no DNS of its own. `KONAE_DOMAIN` names the domain.
 
 1. `path_set { projectId, enabled: true, name?, acceptSharedOrigin? }` turns the path on and needs `publish`. A name is 3 to 40 letters, digits and hyphens, does not start or end with a hyphen, is not a word Konae uses such as `app` or `mcp`, and does not look like an ID. No other Deployment may hold it while its path is on.
-2. An app with accounts needs `acceptSharedOrigin: true`, or the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, when it declares `fileAccess: "app-users"`, or when an action is not `anonymous`. Every path address shares the origin `<domain>`, so any other app there can use the sessions of this app's users.
+2. An app with accounts needs `acceptSharedOrigin: true`, or the call refuses with `path.shared-origin`. An app has accounts when it is private, when its signup is not Closed, when the `files` module option `fileAccess` is `"app-users"`, or when an action is not `anonymous`. Every path address shares the origin `<domain>`, so any other app there can use the sessions of this app's users.
 3. `path_read { projectId }` returns `enabled`, `name`, `acceptSharedOrigin` and the `addresses`. Read it back after each change.
 4. `path_set` with `enabled: false` turns the path off and frees the name. `path_clear` also removes the name and the acceptance.
 

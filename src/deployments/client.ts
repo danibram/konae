@@ -17,8 +17,8 @@ export function isSettingChanged(error: unknown): boolean {
  * data. `initialSignupPolicy` goes only with a first release: the Kernel
  * installs it before the app serves, and refuses it on a republish.
  */
-export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
-  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy }), confirmSchema, () => {}, undefined, observedSourcesRevision);
+export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number, initialModules?: MiniAppProject["modules"]): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
+  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, initialModules }), confirmSchema, () => {}, undefined, observedSourcesRevision);
   return { receipt, sourcesRevision: plan.expectedSourcesRevision + 1 };
 }
 

@@ -20,7 +20,7 @@ app/
 └── actions.json
 ```
 
-`konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email and its manifest, which sets the routing, the origins a page may fetch (`connects`) and who reads uploaded files (`fileAccess`).
+`konae.json` sits beside `app/` in the app folder. It holds the app's ID, name, visibility, Signup Policy, sign-in methods, contact email, module state and manifest. The manifest sets routing and the origins a page may fetch (`connects`).
 
 ## What each file does
 

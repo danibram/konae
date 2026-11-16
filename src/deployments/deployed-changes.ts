@@ -22,14 +22,13 @@ export function ownerStorage(ownerId: string, storage: Storage = localStorage) {
 /**
  * True when the release runs other access rules than the editor holds:
  * actions.json against the actions the release runs, which is what Export
- * reports as `sourcesAhead`, and who can open the app or read uploaded files
- * against the Deployment's manifest.
+ * reports as `sourcesAhead`, and who can open the app.
  */
 export function accessNotDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined): boolean {
   if (!deployment) return false;
   if (deployment.actions !== undefined && (project.files["actions.json"] ?? "") !== deployment.actions) return true;
   if (project.manifest.visibility !== deployment.manifest.visibility) return true;
-  return (project.manifest.fileAccess ?? null) !== (deployment.manifest.fileAccess ?? null);
+  return false;
 }
 
 /**

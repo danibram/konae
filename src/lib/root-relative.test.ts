@@ -40,7 +40,7 @@ describe("root-relative URL warnings in the build and the Gate", () => {
     const result = await validator.validate({
       ...starterProject.files,
       "pages/menu.html": "<a href=\"/about\">About</a>",
-    });
+    }, undefined, { modules: { files: { on: true } } });
     expect(result.ok).toBe(true);
     expect(result.warnings).toContainEqual({
       stage: "actions",

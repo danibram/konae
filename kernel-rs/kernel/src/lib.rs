@@ -262,6 +262,7 @@ impl Settings {
         if let Some(object) = manifest.as_object_mut() {
             object.remove("visibility");
             object.remove("runtime");
+            object.remove("fileAccess");
         }
         Self {
             id: id.into(),
@@ -285,6 +286,7 @@ impl Settings {
             signup_policy: deployment.signup_policy.clone(),
             sign_in_methods: deployment.sign_in_methods.clone(),
             contact_email: deployment.contact_email.clone(),
+            modules: deployment.modules.clone(),
             ..Self::new(&deployment.id, &deployment.project_name, &deployment.slug, &deployment.manifest)
         };
         settings.released = Some(released_settings(deployment));
@@ -292,9 +294,18 @@ impl Settings {
     }
 
     pub fn read(root: &Path, id: &str) -> Result<Self> {
-        let mut settings: Self = serde_json::from_slice(&std::fs::read(layout::settings(root, id))?)?;
+        let bytes = std::fs::read(layout::settings(root, id))?;
+        let raw: Value = serde_json::from_slice(&bytes)?;
+        let mut settings: Self = serde_json::from_slice(&bytes)?;
         modules::complete(&mut settings.modules);
-        artifact::check_file_access(&settings.manifest).map_err(anyhow::Error::msg)?;
+        let old_file_access = raw["manifest"]["fileAccess"] == "app-users" || raw["released"]["manifest"]["fileAccess"] == "app-users";
+        if raw["modules"]["files"].is_null() && old_file_access {
+            let files = settings.modules.get_mut("files").expect("files is switchable");
+            files["on"] = json!(true);
+            files["fileAccess"] = json!("app-users");
+        }
+        if let Some(manifest) = settings.manifest.as_object_mut() { manifest.remove("fileAccess"); }
+        if let Some(manifest) = settings.released.as_mut().and_then(|released| released.manifest.as_object_mut()) { manifest.remove("fileAccess"); }
         Ok(settings)
     }
 
@@ -879,7 +890,10 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
 /// none of them does.
 pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
-        return error(StatusCode::BAD_REQUEST, &error_value.to_string());
+        return match refusal::of(&error_value) {
+            Some(refused) => refusal_error(refused),
+            None => error(StatusCode::BAD_REQUEST, &error_value.to_string()),
+        };
     }
     if input.artifact.version != 1
         || input.artifact.entrypoint != "index.html"
@@ -1014,7 +1028,9 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
         },
         modules: {
-            let mut modules = existing.as_ref().map(|item| item.modules.clone()).or_else(|| input.initial_modules.clone()).unwrap_or_else(modules::defaults);
+            let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
+                || modules::sources_use_files(input.project.files.values().map(String::as_bytes));
+            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
             modules::complete(&mut modules);
             modules
         },
@@ -1720,6 +1736,7 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Re
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
     let actor = match authenticate_deployment(&state, &deployment, &headers) {
         Ok(actor) => actor,
         Err(response) => return response,
@@ -1761,6 +1778,7 @@ pub async fn upload_file(
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
     if let Err(response) = upload_actor(&state, &deployment, &headers) {
         return response;
     }
@@ -1868,6 +1886,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
     let Some(deployment) = deployment_for(state, headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
     let actor = match upload_actor(state, &deployment, headers) {
         Ok(actor) => actor,
         Err(response) => return response,
@@ -1971,6 +1990,7 @@ pub async fn serve_file(
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
     let actor = match authenticate_deployment(&state, &deployment, &headers) {
         Ok(actor) => actor,
         Err(response) => return response,
@@ -3409,9 +3429,8 @@ pub fn accepted_owner_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-/// A manifest policy applies to earlier uploads without rewriting the index.
 pub fn app_user_files(deployment: &Deployment) -> bool {
-    deployment.manifest.get("fileAccess").and_then(Value::as_str) == Some("app-users")
+    deployment.modules.get("files").is_some_and(|state| state["fileAccess"] == "app-users")
 }
 
 pub fn file_readable(deployment: &Deployment, file: &Value, actor_id: Option<&str>) -> bool {
@@ -4317,7 +4336,11 @@ pub mod tests {
             signup_policy: SignupPolicy::default(),
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
-            modules: modules::defaults(),
+            modules: {
+                let mut modules = modules::defaults();
+                modules.get_mut("files").unwrap()["on"] = json!(true);
+                modules
+            },
             released_schema: String::new(),
         };
         tokio::fs::create_dir_all(crate::layout::data(&root, &deployment.id))
@@ -4550,12 +4573,13 @@ pub mod tests {
         let saved = crate::sources::read(&root, &current.id).await.unwrap().unwrap();
         assert_eq!(saved["name"], "Unpublished draft name");
         assert_eq!(saved["manifest"]["visibility"], "private");
-        assert_eq!(saved["manifest"]["fileAccess"], "app-users");
+        assert!(saved["manifest"].get("fileAccess").is_none());
 
         let restarted = AppState::for_test(&root);
         let serving = folder::open(&restarted, &current.id, None).await.unwrap();
         assert_eq!(serving.project_name, current.project_name);
         assert_eq!(serving.manifest["visibility"], "public");
+        assert_eq!(serving.modules["files"]["on"], true);
         assert!(serving.manifest.get("fileAccess").is_none());
         assert_eq!(serving.signup_policy.mode, SignupMode::Closed);
         std::fs::remove_dir_all(root).unwrap();
@@ -5710,6 +5734,44 @@ pub mod tests {
             .count();
         assert_eq!(leftovers, 0);
         let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn files_off_refuses_upload_listing_and_read_with_the_module_sentence() {
+        let root = std::env::temp_dir().join(format!("konae-files-off-{}", Uuid::new_v4()));
+        let (state, headers) = login_test_state(&root, "public").await;
+        let mut deployments = state.deployments.write().await;
+        deployments.values_mut().next().unwrap().modules.get_mut("files").unwrap()["on"] = json!(false);
+        drop(deployments);
+        let deployment = state.deployments.read().await.values().next().cloned().unwrap();
+        let (headers, _) = signed_in(&state, &deployment.id, &headers, "owner@example.test");
+        let expected = "Module files is off. Turn it on with module_set.";
+        let upload = Request::builder().body(Body::from(json!({"name":"a.txt","type":"text/plain","dataUrl":"data:text/plain;base64,aGk="}).to_string())).unwrap();
+        for response in [
+            upload_file(State(state.clone()), headers.clone(), upload).await,
+            list_files(State(state.clone()), headers.clone()).await,
+            serve_file(State(state.clone()), AxumPath("missing".into()), headers.clone()).await,
+        ] {
+            let body = response_json(response).await;
+            assert_eq!(body["error"], expected);
+            assert_eq!(body["code"], "module.off");
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn release_refuses_a_capsule_that_uses_files_while_the_module_is_off() {
+        let state = AppState::for_test(&std::env::temp_dir().join(format!("konae-files-release-off-{}", Uuid::new_v4())));
+        let body = json!({
+            "project": {"id":"files_off","name":"Files off","slug":"files-off","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+            "visibility":"public",
+            "artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>app</main>","app.js":"miniapp.files.upload(file)"}},
+            "initialModules":{"files":{"on":false}}
+        });
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let refused = response_json(response).await;
+        assert_eq!(refused["error"], "Module files is off. Turn it on with module_set.");
+        assert_eq!(refused["code"], "module.off");
     }
 
     #[tokio::test]

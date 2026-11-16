@@ -26,12 +26,111 @@ pub fn defaults() -> BTreeMap<String, Value> {
     modules
 }
 
+pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files: bool) -> BTreeMap<String, Value> {
+    let mut modules = initial.cloned().unwrap_or_else(defaults);
+    if initial.is_none() && uses_files {
+        modules.get_mut("files").expect("files is switchable")["on"] = json!(true);
+    }
+    modules
+}
+
+pub fn artifact_uses_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
+    files.into_iter().any(|bytes| contains(bytes, b"miniapp.files"))
+}
+
+pub fn sources_use_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
+    files.into_iter().any(|bytes| contains(bytes, b"/_konae/files/"))
+}
+
+fn contains(bytes: &[u8], marker: &[u8]) -> bool {
+    bytes.windows(marker.len()).any(|window| window == marker)
+}
+
 pub fn complete(modules: &mut BTreeMap<String, Value>) {
     let switches = registry()["modules"].as_object().cloned().unwrap_or_default();
     modules.retain(|name, _| switches.get(name).is_some_and(|description| description["switch"] == true));
     for (name, state) in defaults() {
         modules.entry(name).or_insert(state);
     }
+}
+
+pub fn uses_files(root: &std::path::Path, id: &str, options: &Value) -> bool {
+    if options["fileAccess"] == "app-users" {
+        return true;
+    }
+    let index = crate::layout::files(root, id).join("index.json");
+    match std::fs::read(&index) {
+        Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
+            Ok(files) if !files.is_empty() => return true,
+            Ok(_) => {}
+            Err(_) => return true,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return true,
+    }
+    let dist = crate::layout::dist(root, id);
+    let mut entries = match std::fs::read_dir(&dist) {
+        Ok(entries) => entries,
+        Err(_) => return true,
+    };
+    while let Some(entry) = entries.next() {
+        let Ok(entry) = entry else { return true };
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else { return true };
+        if kind.is_symlink() { return true; }
+        if kind.is_dir() {
+            if uses_files_in_dir(&path) { return true; }
+        } else {
+            match std::fs::read(path) {
+                Ok(bytes) if artifact_uses_files([bytes.as_slice()]) => return true,
+                Ok(_) => {}
+                Err(_) => return true,
+            }
+        }
+    }
+    let sources = crate::layout::sources(root, id);
+    if sources.is_dir() && sources_use_files_in_dir(&sources) { return true; }
+    false
+}
+
+fn uses_files_in_dir(directory: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(directory) else { return true };
+    for entry in entries {
+        let Ok(entry) = entry else { return true };
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else { return true };
+        if kind.is_symlink() { return true; }
+        if kind.is_dir() {
+            if uses_files_in_dir(&path) { return true; }
+        } else {
+            match std::fs::read(path) {
+                Ok(bytes) if artifact_uses_files([bytes.as_slice()]) => return true,
+                Ok(_) => {}
+                Err(_) => return true,
+            }
+        }
+    }
+    false
+}
+
+fn sources_use_files_in_dir(directory: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(directory) else { return true };
+    for entry in entries {
+        let Ok(entry) = entry else { return true };
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else { return true };
+        if kind.is_symlink() { return true; }
+        if kind.is_dir() {
+            if sources_use_files_in_dir(&path) { return true; }
+        } else {
+            match std::fs::read(path) {
+                Ok(bytes) if sources_use_files([bytes.as_slice()]) => return true,
+                Ok(_) => {}
+                Err(_) => return true,
+            }
+        }
+    }
+    false
 }
 
 pub fn check_expected(module: &str, current: &Value, expected: Option<&Value>) -> std::result::Result<(), crate::refusal::Refusal> {
@@ -88,7 +187,7 @@ fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> 
     let Some(option) = description["options"].as_array().into_iter().flatten().find(|item| item["key"].as_str() == Some(key)) else {
         return Err(crate::refusal::refuse("module.option-unknown", format!("Unknown option {key} for module {module}.")));
     };
-    let valid = match option["type"].as_str() {
+    let valid = (value.is_null() && option.get("default").is_some_and(Value::is_null)) || match option["type"].as_str() {
         Some("boolean") => value.is_boolean(),
         Some("string") => value.is_string(),
         Some("number") => value.is_number(),
@@ -179,7 +278,8 @@ pub async fn set(
                 }
             }
         } else {
-            require_not_in_use(module, false)?;
+            let used = module == "files" && used_files(root, id, &current)?;
+            require_not_in_use(module, used)?;
         }
         current["on"] = json!(on);
     }
@@ -195,6 +295,21 @@ pub async fn set(
     settings.modules.insert(module.to_owned(), current.clone());
     settings.write(root).await?;
     Ok(json!({"projectId":id,"module":module,"state":current}))
+}
+
+fn used_files(root: &std::path::Path, id: &str, state: &Value) -> Result<bool> {
+    let index = crate::layout::files(root, id).join("index.json");
+    match std::fs::read(index) {
+        Ok(bytes) => match serde_json::from_slice::<Vec<Value>>(&bytes) {
+            Ok(files) if !files.is_empty() => return Ok(true),
+            Ok(_) => {}
+            Err(_) => return Ok(true),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if state["fileAccess"] == "app-users" { return Ok(true); }
+    Ok(uses_files(root, id, state))
 }
 
 #[cfg(test)]
@@ -224,7 +339,7 @@ mod tests {
     #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["files", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);
@@ -233,6 +348,19 @@ mod tests {
         assert!(is_on(&partial, "actions"));
         assert!(is_on(&partial, "seo"));
         assert!(!is_on(&modules, "seo"));
+    }
+
+    #[test]
+    fn a_first_release_turns_on_files_when_its_artifact_uses_the_sdk() {
+        let inferred = initial_for_release(None, true);
+        assert_eq!(inferred["files"]["on"], true);
+        let explicit = BTreeMap::from([("files".to_owned(), json!({"on":false,"fileAccess":null}))]);
+        assert_eq!(initial_for_release(Some(&explicit), true)["files"]["on"], false);
+        assert_eq!(initial_for_release(None, false)["files"]["on"], false);
+        assert!(artifact_uses_files([b"miniapp.files.upload".as_slice()]));
+        assert!(!artifact_uses_files([b"/_konae/files/id".as_slice()]));
+        assert!(sources_use_files([b"/_konae/files/id".as_slice()]));
+        assert!(!artifact_uses_files([b"no file API".as_slice()]));
     }
 
     #[tokio::test]
@@ -317,5 +445,19 @@ mod tests {
         assert_eq!(refusal.code, "module.option-invalid");
         assert!(refusal.message.contains("domain, hostname, path"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn module_set_refuses_turning_files_off_while_the_index_has_a_file() {
+        let root = std::env::temp_dir().join(format!("konae-files-in-use-{}", uuid::Uuid::new_v4()));
+        let mut settings = Settings::new("app", "App", "app", &json!({"visibility":"public"}));
+        settings.modules.get_mut("files").unwrap()["on"] = json!(true);
+        settings.write(&root).await.unwrap();
+        let index = crate::layout::files(&root, "app");
+        std::fs::create_dir_all(&index).unwrap();
+        std::fs::write(index.join("index.json"), r#"[{"id":"file-1"}]"#).unwrap();
+        let error = set(&root, "app", "files", Some(false), None, None).await.unwrap_err();
+        assert!(error.to_string().contains("Module files is in use by the published app. Remove its use before turning it off."));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

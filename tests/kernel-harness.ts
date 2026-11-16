@@ -90,7 +90,13 @@ export async function account(kernel: Kernel, hostname: string, route: "signup" 
 }
 
 export async function release(client: McpClient, payload: object, projectId: string) {
-  const upload = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), projectId);
+  const request = payload as { project?: { files?: Record<string, string> }; artifact?: { files?: Record<string, string> } };
+  const files = [...Object.values(request.project?.files ?? {}), ...Object.values(request.artifact?.files ?? {})];
+  const initialModules = files.some((source) => /miniapp\s*\.\s*files/.test(source))
+    ? { files: { on: true } }
+    : undefined;
+  const body = initialModules ? { ...(payload as object), initialModules } : payload;
+  const upload = await client.upload(new TextEncoder().encode(JSON.stringify(body)), projectId);
   try {
     const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
     const plan = await client.call<{ planId: string; applied?: boolean; receipt?: Deployment }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });

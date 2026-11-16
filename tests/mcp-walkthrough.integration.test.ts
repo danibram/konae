@@ -394,6 +394,9 @@ describe("the MCP walkthrough", () => {
     expect(again.refused).toBe("This order is already claimed.");
 
     r.step("file");
+    const beforeFiles = await tool("modules_read", { projectId: s.deploymentId }, { pick: (value) => ({ files: value.modules.files }) });
+    await tool("module_set", { projectId: s.deploymentId, module: "files", on: true, expected: (beforeFiles.result as any).modules.files.state });
+    await tool("modules_read", { projectId: s.deploymentId }, { pick: (value) => ({ files: value.modules.files }) });
     const bytes = new TextEncoder().encode("Invoice A-1: 12.00\n");
     const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     const begun = await runtimeTool(s.hostname, s.cookie, "transfer_begin", { size: bytes.length, sha256 });

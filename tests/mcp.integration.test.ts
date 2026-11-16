@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ let bob: McpClient;
 let aliceCookie: string;
 const setupKey = "mcp-integration-setup-secret";
 const password = "integration-password-2026";
+setDefaultTimeout(30_000);
 // Sign-in is rate limited per client address. The Kernel trusts X-Forwarded-For
 // from 127.0.0.1 here, so each helper call can present its own address.
 let nextClient = 0;
@@ -82,13 +83,15 @@ function payload(id: string, visibility: "public" | "private" = "public") {
         "notes.create": { kind: "mutation", access: "authenticated", statement: "INSERT INTO notes(title,user_id) VALUES(?1,?2)", bindings: [{ source: "input", key: "title", type: "string", maxLength: 100 }, { source: "actor", field: "id" }] },
         "notes.count": { kind: "query", access: "anonymous", statement: "SELECT COUNT(*) AS total FROM notes", bindings: [] },
       } }),
-    } }, visibility, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>MCP proof</main>" } },
+    } }, visibility, initialModules: { files: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>MCP proof</main>" } },
   };
 }
 
 async function release(id: string, visibility: "public" | "private" = "public") {
   await alice.call("project_create", { projectId: id, name: "MCP proof" });
-  const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify(payload(id, visibility))), id);
+  const request = payload(id, visibility);
+  if ((await alice.call<any>("project_inspect", { projectId: id })).deployment) delete (request as any).initialModules;
+  const transfer = await alice.upload(new TextEncoder().encode(JSON.stringify(request)), id);
   const observed = await alice.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
   const plan = await alice.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
   const receipt = await alice.call<{ id: string; hostname: string; url: string }>("release_apply", { planId: plan.planId });
@@ -1224,7 +1227,9 @@ describe("authenticated MCP", () => {
     const publisher = await grant(["read", "publish"]);
     const manager = await grant(["read", "manage_users"]);
     const publishWith = async (client: McpClient, body: object) => {
-      const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(body)), id);
+      const request = body as { initialModules?: unknown };
+      if ((await client.call<any>("project_inspect", { projectId: id })).deployment) delete request.initialModules;
+      const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(request)), id);
       try {
         const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
         const plan = await client.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });

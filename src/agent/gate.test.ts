@@ -11,7 +11,11 @@ import { formatValidation } from "./tools";
 let sql: Promise<SqlJsStatic> | undefined;
 const loadSql = () => (sql ??= initSqlJs());
 
-const validator = createCapsuleValidator(loadSql);
+const gate = createCapsuleValidator(loadSql);
+const validator = {
+  validate: (files: CapsuleFiles, live?: LiveDatabase, facts: Parameters<typeof gate.validate>[2] = {}) =>
+    gate.validate(files, live, { modules: { files: { on: true } }, ...facts }),
+};
 
 function capsule(overrides: Partial<CapsuleFiles> = {}): CapsuleFiles {
   return { ...starterProject.files, ...overrides };
@@ -36,12 +40,10 @@ async function exportDatabase(schema: string): Promise<Uint8Array> {
 }
 
 describe("validation gate", () => {
-  test("refuses invalid manifest file access", async () => {
-    for (const fileAccess of [null, "private", "", 1]) {
-      const result = await validator.validate(capsule(), { state: "absent" }, { fileAccess });
-      expect(result.errors[0].message).toBe('manifest.fileAccess must be "app-users" when set.');
-    }
-    expect((await validator.validate(capsule(), { state: "absent" }, { fileAccess: "app-users" })).ok).toBe(true);
+  test("refuses a files call while the module is off", async () => {
+    const result = await validator.validate(capsule({ "app.js": "await miniapp.files.upload(file);" }), { state: "absent" }, { modules: { files: { on: false } } });
+    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set." });
+    expect((await validator.validate(capsule({ "app.js": "await miniapp.files.upload(file);" }), { state: "absent" }, { modules: { files: { on: true } } })).ok).toBe(true);
   });
   test("passes the starter capsule", async () => {
     const result = await validator.validate(capsule());

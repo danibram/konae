@@ -130,6 +130,7 @@ function agentFor(turns: Turn[], options: Partial<KonaeAgentOptions> = {}) {
   const agent = createKonaeAgent(starterProject, sessionConfig, emptyAgentKeyStore(), {
     models: harness.models,
     loadSql,
+    releaseFacts: async () => ({ modules: { files: { on: true } } }),
     ...options,
   });
   agent.subscribe((event) => events.push(event));

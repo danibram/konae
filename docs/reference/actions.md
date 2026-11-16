@@ -10,7 +10,7 @@ On a public app a visitor may call actions declared `anonymous` and read files u
 
 A signed-out visitor may call `actions_invoke` 30 times per 10 seconds per client address and Deployment, and each app user 120 times per 10 seconds. Past that the call answers `rate-limited` with `Retry-After`, and so does a call that finds four statements of its Deployment already running and no slot free within 2 seconds. The Kernel counts the socket's peer address and reads `X-Forwarded-For` only from peers in `KONAE_TRUSTED_PROXIES`.
 
-Set `manifest.fileAccess` to `"app-users"` to require an app session for every file, including existing uploads. The uploader keeps deletion rights. Removing the policy restores each original file visibility. Files uploaded under the policy then become private to the uploader.
+Set the `files` module option `fileAccess` to `"app-users"` to let every signed-in app user read every file, including existing uploads. The option applies at once. The uploader keeps deletion rights. New uploads under the option use app-user access.
 
 By default, a file is private to the app user who uploaded it unless the upload set `visibility` to `public`. `files_update { fileId, visibility }` and `files_delete { fileId }` work only for the uploader. A user who may not read the file gets `File not found.`, as for a missing one, and a user who reads it but did not upload it gets `Only the person who uploaded this file may change or delete it.` A deleted file stops counting against the quota. A row that still names it keeps the ID, and the app removes that row with its own action.
 

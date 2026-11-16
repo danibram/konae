@@ -1,6 +1,7 @@
 import { withVisibility } from "../../deployments/manifest";
 import { withPrivateNotes } from "../private-notes";
 import type { MiniAppProject } from "../types";
+import { defaultModuleStates } from "../app-folder";
 import { digestTemplate } from "./digest";
 import { formTemplate } from "./form";
 import { galleryTemplate } from "./gallery";
@@ -37,11 +38,13 @@ export function templateSource(id: TemplateId): TemplateSource | undefined {
  * parser both doors share, so the preview admits exactly the template's actions.
  */
 export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProject {
+  const modules = defaultModuleStates(base.modules);
+  const applyModules = (files: Record<string, string>) => ({ ...modules, files: { ...modules.files, on: Object.values(files).some((source) => /miniapp\s*\.\s*files/.test(source)) } });
   // The shared list is for anyone with the link, so it is born public; private notes are not.
-  if (id === "tasks") return { ...base, manifest: withVisibility(base.manifest, "public") };
+  if (id === "tasks") return { ...base, modules: applyModules(base.files), manifest: withVisibility(base.manifest, "public") };
   if (id === "notes") {
     const notes = withPrivateNotes(base);
-    return { ...notes, manifest: withVisibility(notes.manifest, "private") };
+    return { ...notes, modules: applyModules(notes.files), manifest: withVisibility(notes.manifest, "private") };
   }
   const source = templateSource(id);
   if (!source) return base;
@@ -49,6 +52,7 @@ export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProj
     ...base,
     directories: [],
     files: { ...source.files },
+    modules: applyModules(source.files),
     manifest: withVisibility(base.manifest, source.visibility),
     updatedAt: Date.now(),
   };

@@ -506,8 +506,8 @@
     },
     {
       "name": "files",
-      "summary": "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
-      "switch": false,
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
       "notes": [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
@@ -519,8 +519,8 @@
       "declarations": [
         {
           "key": "fileAccess",
-          "file": "manifest",
-          "summary": "Set \"fileAccess\": \"app-users\" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights."
+          "file": "module",
+          "summary": "Set \"fileAccess\": \"app-users\" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it."
         }
       ],
       "calls": [

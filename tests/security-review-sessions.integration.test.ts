@@ -81,6 +81,9 @@ describe("cross-user", () => {
     const user = await appUser(lab, habits);
     const client = runtimeClient(lab, habits.hostname, user.cookie);
     await invoke(client, "habits.create", { name: "Before" });
+    const state = await lab.kernel.owner.call<any>("modules_read", { projectId: habits.id });
+    await lab.kernel.owner.call("module_set", { projectId: habits.id, module: "files", on: true, expected: state.modules.files.state });
+    await lab.kernel.owner.call("modules_read", { projectId: habits.id });
     const transfer = await client.upload(new TextEncoder().encode("mine"));
     const file = await client.call<{ id: string }>("files_upload", { transferId: transfer.transferId, name: "a.txt", type: "text/plain" });
     const { users } = await lab.kernel.owner.call<{ users: { userId: string; email: string }[] }>("app_users_list", { projectId: habits.id });

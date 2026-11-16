@@ -551,7 +551,7 @@ mod tests {
         assert!(!has_accounts(&closed), "public, signup Closed and only anonymous actions");
 
         let mut shared_files = closed.clone();
-        shared_files.manifest["fileAccess"] = json!("app-users");
+        shared_files.modules.get_mut("files").unwrap()["fileAccess"] = json!("app-users");
         assert!(has_accounts(&shared_files));
 
         let mut invitation = closed.clone();

@@ -56,6 +56,12 @@ describe("a project born from a template", () => {
     for (const choice of templateChoices) expect(choice.visibility, choice.id).toBe(born(choice.id).manifest.visibility);
   });
 
+  test("only templates whose app code calls miniapp.files turn on the files module", () => {
+    for (const { id } of templateChoices) {
+      expect(born(id).modules?.files?.on, id).toBe(Object.values(born(id).files).some((source) => /miniapp\s*\.\s*files/.test(source)));
+    }
+  });
+
   test("a project described from scratch starts private", () => {
     expect(cloneStarter().manifest.visibility).toBe("private");
   });
@@ -71,10 +77,11 @@ describe("a project born from a template", () => {
     test(`${id} passes the Gate, empty and against a database built from its schema`, async () => {
       const project = born(id);
       const files = project.files as CapsuleFiles;
-      const fresh = await validator.validate(files);
+      const facts = { modules: project.modules };
+      const fresh = await validator.validate(files, { state: "absent" }, facts);
       expect(fresh.errors).toEqual([]);
       expect(fresh.ok).toBe(true);
-      const live = await validator.validate(files, { state: "loaded", bytes: await exportDatabase(files["schema.sql"]) });
+      const live = await validator.validate(files, { state: "loaded", bytes: await exportDatabase(files["schema.sql"]) }, facts);
       expect(live.errors).toEqual([]);
       expect(live.checked).toEqual(["sources", "schema", "actions", "preview-rows"]);
     });

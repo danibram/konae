@@ -215,7 +215,14 @@ pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &P
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&stage).await;
-    result
+    let change = result?;
+    if let Some(on) = crate::folder::decide_files_module(&state.data_root, &deployment.id).await? {
+        let mut deployments = state.deployments.write().await;
+        if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+            current.modules.get_mut("files").expect("files is switchable")["on"] = serde_json::json!(on);
+        }
+    }
+    Ok(change)
 }
 
 async fn import_incoming(

@@ -12,7 +12,6 @@ import { hintOf, type Refusal, type RefusalCode } from "../kernel/refusal";
  */
 export type ReleaseFacts = {
   /** The Capsule manifest's file policy, if present. */
-  fileAccess?: unknown;
   /**
    * Names, use and whether the value decodes as a svix key, from
    * `secrets_list`. Never a value.

@@ -456,7 +456,6 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
     anyhow::ensure!(directories.len() <= super::sources::MAX_FILES && directories.iter().all(|entry| entry.as_str().is_some_and(super::sources::holds)), "Invalid project directories.");
     let manifest = &source["manifest"];
-    artifact::check_file_access(manifest).map_err(anyhow::Error::msg)?;
     anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or("")), "Invalid project manifest. Send version 1 and visibility \"public\" or \"private\".");
     Ok(())
 }
@@ -1056,10 +1055,15 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 let hint = super::guide::missing_permission(name, &owner);
                 return rpc_error(id, -32602, &hint.map_or("Unknown tool or insufficient permission.".to_owned(), |hint| format!("Unknown tool or insufficient permission. {hint}")));
             };
-            let arguments = call["params"]
+            let mut arguments = call["params"]
                 .get("arguments")
                 .cloned()
                 .unwrap_or(json!({}));
+            if arguments["projectId"].is_null() {
+                if let Some(deployment_id) = arguments.as_object_mut().and_then(|args| args.remove("deploymentId")) {
+                    arguments["projectId"] = deployment_id;
+                }
+            }
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
             }
@@ -1366,7 +1370,6 @@ async fn admin_call(
                 .unwrap_or_else(|| format!("app_{}", Uuid::new_v4()));
             owner.require("write", Some(&id))?;
             anyhow::ensure!(valid_app_id(&id), "Invalid project ID. Use lowercase letters, digits, \"_\" and \"-\".");
-            artifact::check_file_access(&a["manifest"]).map_err(anyhow::Error::msg)?;
             let initial_sources = if let Some(transfer_id) = a["sourcesTransferId"].as_str() {
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
@@ -2568,6 +2571,12 @@ mod tests {
         let publisher = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
         let reader = Owner { scopes:vec!["read".into()], ..publisher.clone() };
         let before = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        let file_state = before["modules"]["files"]["state"].clone();
+        admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"files","on":true,"options":{"fileAccess":"app-users"},"expected":file_state})).await.unwrap();
+        let files_after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        assert_eq!(files_after["modules"]["files"]["state"]["on"], true);
+        assert_eq!(files_after["modules"]["files"]["state"]["fileAccess"], "app-users");
+        assert_eq!(state.deployments.read().await.values().find(|item| item.id == "app_modules").unwrap().modules["files"]["fileAccess"], "app-users");
         let expected = before["modules"]["seo"]["state"].clone();
         admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":true,"options":{"canonical":"path"},"expected":expected})).await.unwrap();
         let after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
@@ -2916,7 +2925,9 @@ mod tests {
         let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"manifest":manifest,"updatedAt":1});
         assert!(validate_sources(&base, "app_a").is_ok());
         let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
-        assert_eq!(refusal(&|s| s["manifest"]["fileAccess"] = json!("public")), artifact::FILE_ACCESS_MESSAGE);
+        let mut old_file_option = base.clone();
+        old_file_option["manifest"]["fileAccess"] = json!("public");
+        assert!(validate_sources(&old_file_option, "app_a").is_ok());
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
         assert!(refusal(&|s| s["manifest"] = json!({"version":1})).starts_with("Invalid project manifest. Send version 1 and visibility"));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
@@ -2997,7 +3008,7 @@ mod tests {
         assert_eq!(tokio::fs::read(legacy_path).await.unwrap(), before_legacy);
         let source = crate::sources::read(&state.data_root, id).await.unwrap().unwrap();
         assert_eq!(source["name"], "Legacy saved draft");
-        assert_eq!(source["manifest"]["fileAccess"], "app-users");
+        assert!(source["manifest"].get("fileAccess").is_none());
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

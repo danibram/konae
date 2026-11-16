@@ -12,7 +12,7 @@ type ModuleCase = {
   used?: boolean;
   option?: string;
   value?: unknown;
-  options?: Array<{ key: string; type: string; values?: string[] }>;
+  options?: Array<{ key: string; type: string; values?: string[]; default?: unknown }>;
 };
 
 function stable(value: unknown): unknown {
@@ -43,12 +43,12 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
   if (input.rule === "option-unknown" || input.rule === "option-invalid") {
     const option = input.options?.find((candidate) => candidate.key === input.option);
     if (!option) return { code: "module.option-unknown", message: `Unknown option ${input.option} for module ${input.module}.` };
-    const valid = option.type === "boolean" ? typeof input.value === "boolean"
+    const valid = (input.value === null && option.default === null) || (option.type === "boolean" ? typeof input.value === "boolean"
       : option.type === "string" ? typeof input.value === "string"
       : option.type === "number" ? typeof input.value === "number"
       : option.type === "enum" ? option.values?.includes(String(input.value)) === true
       : option.type === "path" ? input.value === null || (typeof input.value === "string" && input.value.length > 0 && !input.value.startsWith("/") && !input.value.includes("\\") && input.value.split("/").every((part) => part !== "" && part !== "." && part !== ".."))
-      : false;
+      : false);
     if (!valid) {
       const message = option.type === "enum"
         ? `Module ${input.module} option ${input.option} must be one of ${option.values?.join(", ") ?? ""}.`

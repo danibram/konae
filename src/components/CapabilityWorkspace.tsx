@@ -38,8 +38,6 @@ type Props = {
   onSetAccess?: (name: string, access: "anonymous" | "authenticated") => void;
   visibility?: "public" | "private";
   onSetVisibility?: (visibility: "public" | "private") => void;
-  fileAccess?: "app-users";
-  onSetFileAccess?: (shared: boolean) => void;
   projectId?: string;
   /** The published app, when there is one. Users and API keys need it. */
   deployment?: { id: string; url: string };
@@ -139,7 +137,7 @@ function AuthPanel(props: Props) {
   );
 }
 
-function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibility = "private", onSetVisibility, fileAccess, onSetFileAccess, deployment, accessUndeployed }: Props) {
+function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibility = "private", onSetVisibility, deployment, accessUndeployed }: Props) {
   const [actor, setActor] = useState(host.getPreviewActor());
   const refusal = actionsSource ? deployReadiness({ files: { "actions.json": actionsSource } }).refusal : null;
   const previewName = actor === "alice" ? "a signed-in person" : actor === "bob" ? "another signed-in person" : "someone who has not signed in";
@@ -149,7 +147,7 @@ function RulesView({ host, onFilesChanged, actionsSource, onSetAccess, visibilit
       {/* The top bar's marker and Deploy button ask for the deploy; this line only states the fact. */}
       {deployment && accessUndeployed && <p className="access-note access-saved" role="status">Saved. It applies to the live app when you deploy.</p>}
       <Card className="access-card" role="group" aria-label="Who can open the app">
-        <OpenAccessFields visibility={visibility} onSetVisibility={onSetVisibility} fileAccess={fileAccess} onSetFileAccess={onSetFileAccess} />
+        <OpenAccessFields visibility={visibility} onSetVisibility={onSetVisibility} />
       </Card>
       <Card className="access-card" role="group" aria-label="Who can run each action">
         <h3>Who can run each action</h3>

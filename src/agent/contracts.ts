@@ -76,6 +76,7 @@ export type ValidationStage = "sources" | "schema" | "preview-rows" | "actions";
 export type ValidationFacts = ReleaseFacts & {
   /** The complete saved files let the Gate count binary assets the workspace cannot read. */
   sourceFiles?: SourceFiles;
+  modules?: Record<string, { on: boolean; [option: string]: unknown }>;
 };
 
 export type ValidationError = {

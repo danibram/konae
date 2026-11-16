@@ -234,7 +234,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       lifecycle: new ProposalHostLifecycle(project.id, {
         schema: project.files["schema.sql"],
         actions: project.files["actions.json"],
-        fileAccess: project.manifest.fileAccess,
+        fileAccess: project.modules?.files?.fileAccess as "app-users" | undefined,
       }),
     };
   }
@@ -244,9 +244,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     void hostLifecycle.updateAppliedSource({
       schema: previewProject.files["schema.sql"],
       actions: previewProject.files["actions.json"],
-      fileAccess: previewProject.manifest.fileAccess,
+      fileAccess: previewProject.modules?.files?.fileAccess as "app-users" | undefined,
     });
-  }, [hostLifecycle, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.manifest.fileAccess]);
+  }, [hostLifecycle, previewProject.files["schema.sql"], previewProject.files["actions.json"], previewProject.modules?.files?.fileAccess]);
   const workspaceRef = useRef({ projects, project, deployments });
   const synchronized = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
   const serverSnapshots = useRef(new Map(loaded.projects.map((item) => [item.id, JSON.stringify(item)])));
@@ -836,7 +836,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               const current = projectRef.current;
               const deploymentId = deploymentsRef.current[current.id]?.id;
               const facts = await readReleaseFacts(current.id, deploymentId);
-              return { ...facts, ...(Object.hasOwn(current.manifest, "fileAccess") ? { fileAccess: current.manifest.fileAccess } : {}) };
+              if (!deploymentId) return { ...facts, modules: current.modules };
+              const read = await platformMcp.call<{ modules: Record<string, { state: { on: boolean; [option: string]: unknown } }> }>("modules_read", { projectId: deploymentId });
+              return { ...facts, modules: Object.fromEntries(Object.entries(read.modules).map(([name, module]) => [name, module.state])) };
             },
             // ADR-0007: the owner's own MCP session, pinned to the open project.
             platform: {
@@ -965,7 +967,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const hostApplied = await hostLifecycle.applyProposal(approvedPreview.id, {
       schema: next.files["schema.sql"],
       actions: next.files["actions.json"],
-      fileAccess: next.manifest.fileAccess,
+      fileAccess: next.modules?.files?.fileAccess as "app-users" | undefined,
     });
     if (!hostApplied) return false;
     setProposalPreview(null);
@@ -1027,7 +1029,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         const host = await hostLifecycle.prepareProposal(id, {
           schema: candidate.files["schema.sql"],
           actions: candidate.files["actions.json"],
-          fileAccess: candidate.manifest.fileAccess,
+          fileAccess: candidate.modules?.files?.fileAccess as "app-users" | undefined,
         });
         if (!host || !current) {
           await hostLifecycle.discardProposal(id);
@@ -1125,7 +1127,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       // The signup policy goes only with a first release; the Kernel keeps it on a republish.
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
-      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision);
+      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules);
       const record = published.receipt;
       // Taking the release's manifest is not an edit of the person's, so "Edited" keeps its time.
       const releasedProject = { ...project, manifest: record.manifest };
@@ -1271,13 +1273,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const setVisibility = (visibility: "public" | "private") => {
     const next = { ...project, manifest: { ...project.manifest, visibility }, updatedAt: Date.now() };
-    setProject(next);
-    setPreviewProject(next);
-  };
-
-  const setFileAccess = (shared: boolean) => {
-    const { fileAccess: _fileAccess, ...manifest } = project.manifest;
-    const next = { ...project, manifest: { ...manifest, ...(shared ? { fileAccess: "app-users" as const } : {}) }, updatedAt: Date.now() };
     setProject(next);
     setPreviewProject(next);
   };
@@ -1543,8 +1538,6 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           onSetAccess={setActionAccess}
           visibility={project.manifest.visibility}
           onSetVisibility={setVisibility}
-          fileAccess={project.manifest.fileAccess}
-          onSetFileAccess={setFileAccess}
           projectId={project.id}
           deployment={activeDeployment ? { id: activeDeployment.id, url: activeDeployment.url } : undefined}
           authView={authView}

@@ -187,7 +187,7 @@ _Avoid_: vanity URL, CNAME, domain mapping
 _Avoid_: short link, vanity path, app URL
 
 **File Store**:
-Where an installation keeps the bytes of uploaded files: each app folder's `data/files/`, or an S3 bucket. The index in the app folder decides which files exist and who may read them (ADR-0009).
+Where an installation keeps the bytes of uploaded files: each app folder's `data/files/`, or an S3 bucket. The index in the app folder decides which files exist. The `files` module's `fileAccess` option decides whether every signed-in app user may read them (ADR-0009, ADR-0015).
 _Avoid_: bucket (one kind of store), storage
 
 ### Taking the app elsewhere

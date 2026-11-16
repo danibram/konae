@@ -83,7 +83,7 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
   try {
     const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_konae/owner/signup", { email: "owner@copy.test", password, setupKey }) });
     await owner.call("project_create", { projectId: "copy_proof", name: "Copy proof" });
-    const payload = { project: { id: "copy_proof", name: "Copy proof", slug: "copy-proof", manifest: { version: 1, visibility: "public" }, files: project }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Copied app</main>" } } };
+    const payload = { project: { id: "copy_proof", name: "Copy proof", slug: "copy-proof", manifest: { version: 1, visibility: "public" }, files: project }, visibility: "public", initialModules: { files: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Copied app</main>" } } };
     const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify(payload)), "copy_proof");
     const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: "copy_proof" });
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });

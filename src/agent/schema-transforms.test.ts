@@ -16,18 +16,19 @@ const schemaTransformCases = JSON.parse(readFileSync(new URL("../../kernel-rs/ke
 
 test("a missing transform file remains optional and a valid definition passes the static Gate", async () => {
   const validator = createCapsuleValidator(() => initSqlJs());
-  const withoutTransforms = await validator.validate(starterProject.files);
+  const facts = { modules: { files: { on: true } } };
+  const withoutTransforms = await validator.validate(starterProject.files, undefined, facts);
   expect(withoutTransforms.ok).toBe(true);
   expect(withoutTransforms.warnings).toBeUndefined();
   expect(schemaTransformsRefusal(validEmpty)).toBeNull();
   expect(schemaTransformsRefusal(validTransition)).toBeNull();
-  const withTransforms = await validator.validate({ ...starterProject.files, "schema-transforms.json": validTransition });
+  const withTransforms = await validator.validate({ ...starterProject.files, "schema-transforms.json": validTransition }, undefined, facts);
   expect(withTransforms.ok).toBe(true);
   expect(withTransforms.warnings).toContainEqual(expect.objectContaining({
     stage: "schema",
     message: expect.stringContaining("applied history, verify the database schema fingerprint, measure affected row counts, or enforce runtime constraints"),
   }));
-  const emptyTransforms = await validator.validate({ ...starterProject.files, "schema-transforms.json": validEmpty });
+  const emptyTransforms = await validator.validate({ ...starterProject.files, "schema-transforms.json": validEmpty }, undefined, facts);
   expect(emptyTransforms.ok).toBe(true);
   expect(emptyTransforms.warnings).toBeUndefined();
 });
@@ -40,7 +41,7 @@ test("the Gate matches every shared static schema-transform case and skips runti
     const result = schemaTransformsRefusal(item.source);
     if (item.error === null) expect(result, item.case).toBeNull();
     else expect(result, item.case).toMatchObject({ message: item.error, code: item.code });
-    const validation = await validator.validate({ ...starterProject.files, "schema-transforms.json": item.source });
+    const validation = await validator.validate({ ...starterProject.files, "schema-transforms.json": item.source }, undefined, { modules: { files: { on: true } } });
     if (item.error === null) expect(validation, item.case).toMatchObject({ ok: true });
     else expect(validation, item.case).toMatchObject({ ok: false, errors: [{ stage: "schema", message: item.error, code: item.code }] });
   }
