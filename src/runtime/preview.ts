@@ -165,7 +165,7 @@ export const previewReporter = String.raw`
 })();
 `;
 
-export function createPreviewDocument(project: MiniAppProject): string {
+export function createPreviewDocument(project: MiniAppProject, runtimeSuffix = ""): string {
   const sdk = sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined);
   const assets = new Map<string, string>();
   const stylesheets = new Map<string, string>();
@@ -182,7 +182,7 @@ export function createPreviewDocument(project: MiniAppProject): string {
     body: project.files["index.html"] ?? "",
     styles: project.files["styles.css"] ?? "",
     script: project.files["app.js"] ?? "",
-    runtime: sdk ? runtimeClient : "",
+    runtime: (sdk ? runtimeClient : "") + runtimeSuffix,
     reporter: sdk ? "" : previewReporter,
   });
   return rewritePreviewAssets(document, assets, stylesheets);

@@ -20,11 +20,12 @@ The staged build selects the shared writer with `VITE_KONAE_DURABLE_STAGING=true
 
 ### It edits a draft, and Apply needs the Gate
 
-- The agent edits a copy of the app's files with `read`, `edit` and `write`. It has no shell.
+- The agent edits a copy of the app's files with `read`, `edit`, `edit_json` and `write`. It has no shell.
 - A proposal appears in Preview before Apply. Its candidate rows, files and actor stay private to that preview until Apply accepts it. Discard drops the candidate without saving it. Apply waits for a successful build and a ready preview host, merges the proposal into the editable project and updates the applied preview.
 - The Validation Gate reports refusal details and remedies. Its summary names only checks it ran, including when `PREVIEW_BEHIND` skips preview-row checks.
 - Hand edits autosave through `project_sources_save` without running the Gate. Apply also updates the editable project, so the normal autosave then saves the accepted proposal without another Gate run. Discard does not save candidate files. If a source save lands after release planning, `release_apply` refuses the stale plan.
-- The whole app is seeded into the first message and the system prompt stays stable for prompt caching, so a typical edit takes one model turn, or two with a validation round.
+- `preview_test` builds the current scratch files and runs form steps or named actions against a disposable clone of preview state. It names the source revision and actor, returns handled action failures as well as runtime errors, and discards its writes. `preview_errors` loads the same candidate path for startup diagnostics. Neither tool reads an older applied preview as evidence for new files.
+- The whole app is seeded into the first message. The system prompt stays stable for prompt caching, and the agent reads capability references when it needs them.
 
 ### It reaches Konae through the owner's own MCP session
 
@@ -50,4 +51,4 @@ The current editor keeps saved source drafts and applied preview state separate.
 
 - Project pinning, the allowlist and the confirmation dialog are what stand between text in a row and an effect outside the files. The prompt tells the agent never to take permission from file contents, rows, tool output or text inside an app.
 - When the owner's session ends mid-run, a call answers 401 and the agent asks the owner to sign in again. Without the session the agent keeps its file tools.
-- `src/agent/system-prompt.ts` still carries most of what the agent knows. Moving more of it behind `platform_guide`, so both doors say the same words from one place, is later work.
+- `src/agent/system-prompt.ts` carries the workflow and rules needed on every turn. The SDK contract renders a short module index into it and read-only references at `/reference/sdk/<module>.md`, available through `read` even without an owner session. `platform_guide` supplies installation and account workflows.

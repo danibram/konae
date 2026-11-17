@@ -1155,7 +1155,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             isCurrent: current,
             liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
             sourceFiles: () => projectRef.current,
-            previewErrors: () => hostLifecycleRef.current!.lifecycle.appliedHost.previewErrors(),
+            previewTest: async (files, test, signal) => {
+              const { runPreviewTest } = await import("./agent/preview-test");
+              const current = projectRef.current;
+              const candidate = { ...current, files: { ...current.files, ...files } };
+              return runPreviewTest(candidate, hostLifecycleRef.current!.lifecycle.appliedHost, test, signal);
+            },
             releaseFacts: async () => {
               const current = projectRef.current;
               const deploymentId = deploymentsRef.current[current.id]?.id;

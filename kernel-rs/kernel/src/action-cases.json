@@ -2457,5 +2457,106 @@
   },
   "error": "Action audit.write cannot read or write a reserved Kernel table.",
   "code": "schema-transform.statement-refused"
+ },
+ {
+  "case": "wrapped sum",
+  "actions": {
+   "payments.total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT COALESCE(SUM(amount), 0) AS total FROM payments",
+    "bindings": []
+   }
+  },
+  "error": null,
+  "schema": "CREATE TABLE IF NOT EXISTS payments(amount REAL);"
+ },
+ {
+  "case": "nested wrapped sum",
+  "actions": {
+   "payments.total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT IFNULL(COALESCE(SUM(amount), NULL), 0) AS total FROM payments",
+    "bindings": []
+   }
+  },
+  "error": null,
+  "schema": "CREATE TABLE IF NOT EXISTS payments(amount REAL);"
+ },
+ {
+  "case": "wrapped row",
+  "actions": {
+   "payments.total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT COALESCE(amount, 0) FROM payments",
+    "bindings": []
+   }
+  },
+  "error": "Action payments.total reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing",
+  "schema": "CREATE TABLE IF NOT EXISTS payments(amount REAL);"
+ },
+ {
+  "case": "wrapped sum and row",
+  "actions": {
+   "payments.total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT COALESCE(SUM(amount), amount) FROM payments",
+    "bindings": []
+   }
+  },
+  "error": "Action payments.total reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing",
+  "schema": "CREATE TABLE IF NOT EXISTS payments(amount REAL);"
+ },
+ {
+  "case": "scalar min",
+  "actions": {
+   "payments.total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT MIN(amount, 0) FROM payments",
+    "bindings": []
+   }
+  },
+  "error": "Action payments.total reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing",
+  "schema": "CREATE TABLE IF NOT EXISTS payments(amount REAL);"
+ },
+ {
+  "case": "row after total",
+  "actions": {
+   "payments.total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT SUM(amount) + (amount) FROM payments",
+    "bindings": []
+   }
+  },
+  "error": "Action payments.total reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.",
+  "code": "query.limit-missing",
+  "schema": "CREATE TABLE IF NOT EXISTS payments(amount REAL);"
+ },
+ {
+  "case": "all invalid names in one refusal",
+  "actions": {
+   "clients.set_phase": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1",
+    "bindings": []
+   },
+   "clients.open_total": {
+    "kind": "query",
+    "access": "anonymous",
+    "statement": "SELECT 1",
+    "bindings": []
+   }
+  },
+  "error": "Invalid server action names: clients.open_total, clients.set_phase",
+  "code": "action.name-invalid"
  }
 ]

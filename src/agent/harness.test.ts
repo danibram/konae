@@ -614,7 +614,17 @@ describe("agent platform binding", () => {
       },
     });
     await agent.send("hola");
-    expect(harness.requests[0].tools).toEqual(["read", "edit", "write", "validate_capsule", "preview_errors"]);
+    expect(harness.requests[0].tools).toEqual(["read", "edit", "edit_json", "write", "validate_capsule", "preview_test", "preview_errors"]);
     agent.dispose();
   });
+});
+
+test("a failed candidate check reaches the chat as a failed tool result with its evidence", async () => {
+  const {agent,events,harness}=agentFor([call({name:"preview_test",arguments:{steps:[{op:"action",name:"tasks.list"}]}}),say("El guardado sigue fallando.")],{
+    previewTest:async()=>({revision:"candidate",scope:"isolated-candidate",ok:false,actor:"alice",steps:[],actions:[{name:"tasks.create",input:{},ok:false,error:"email must be a non-empty string."}],errors:[],text:"email must be a non-empty string.",viewport:{width:320,scrollWidth:320}}),
+  });
+  await agent.send("comprueba el guardado");
+  expect(events.find(event=>event.type==="tool-end"&&event.name==="preview_test")).toMatchObject({ok:false});
+  expect(harness.requests[1].lastMessage).toContain("email must be a non-empty string.");
+  agent.dispose();
 });

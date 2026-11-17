@@ -39,46 +39,50 @@ export function unboundedQueryReason(sql: string): string | null {
   }
 
   const select = indexOfWord(top, "SELECT");
-  if (select === -1 || !aggregateSelectList(top.slice(select + 1, from))) {
+  if (select === -1 || !aggregateSelectList(tokens.slice(tokens.indexOf(top[select]) + 1, tokens.indexOf(top[from])))) {
     return "reads rows and has no LIMIT.";
   }
   return null;
 }
 
 function aggregateSelectList(list: SqlToken[]): boolean {
-  let index = 0;
-  if (list[0]?.kind === "word" && ["ALL", "DISTINCT"].includes(list[0].text.toUpperCase())) index = 1;
-  if (index >= list.length) return false;
+  if (list[0]?.kind === "word" && ["ALL", "DISTINCT"].includes(list[0].text.toUpperCase())) list = list.slice(1);
+  return list.length > 0 && splitExpressions(list, 0).every((expression) => {
+    const alias = expression.findIndex((token) => token.depth === 0 && token.kind === "word" && token.text.toUpperCase() === "AS");
+    const beforeAlias = expression.at(-2);
+    if (alias !== -1) expression = expression.slice(0, alias);
+    else if (["word", "identifier"].includes(expression.at(-1)?.kind ?? "") && beforeAlias?.kind === "symbol" && beforeAlias.text === ")") expression = expression.slice(0, -1);
+    return totalExpression(expression);
+  });
+}
 
-  let expressions = 0;
-  while (index < list.length) {
-    const current = list[index];
-    if (current.kind === "symbol" && current.text === ",") {
-      index += 1;
-      continue;
-    }
-    const name = list[index];
-    const open = list[index + 1];
-    if (name?.kind !== "word" || !aggregates.has(name.text.toUpperCase()) || open?.kind !== "symbol" || open.text !== "(") {
-      return false;
-    }
-    index += 2;
-    const close = list.findIndex((token, at) => at >= index && token.kind === "symbol" && token.text === ")");
-    if (close === -1) return false;
-    index = close + 1;
-    const after = list[index];
-    if (after?.kind === "word" && after.text.toUpperCase() === "AS") {
-      const alias = list[index + 1];
-      if (alias?.kind !== "word" && alias?.kind !== "identifier") return false;
-      index += 2;
-    } else if (after?.kind === "word" || after?.kind === "identifier") {
-      index += 1;
-    }
-    expressions += 1;
-    const next = list[index];
-    if (index < list.length && !(next.kind === "symbol" && next.text === ",")) return false;
+function splitExpressions(list: SqlToken[], depth: number): SqlToken[][] {
+  const parts: SqlToken[][] = [[]];
+  for (const token of list) {
+    if (token.depth === depth && token.kind === "symbol" && token.text === ",") parts.push([]);
+    else parts.at(-1)!.push(token);
   }
-  return expressions > 0;
+  return parts;
+}
+
+function totalExpression(list: SqlToken[]): boolean {
+  const [name, open] = list;
+  const close = list.at(-1);
+  if (name?.kind !== "word" || open?.kind !== "symbol" || open.text !== "(" || close?.kind !== "symbol" || close.text !== ")" || close.depth !== name.depth) return false;
+  if (list.findIndex((token, index) => index > 1 && token.kind === "symbol" && token.text === ")" && token.depth === name.depth) !== list.length - 1) return false;
+  const args = splitExpressions(list.slice(2, -1), name.depth + 1);
+  const word = name.text.toUpperCase();
+  if (aggregates.has(word)) {
+    return args.every((arg) => arg.length > 0) && (args.length === 1 || word === "GROUP_CONCAT" && args.length === 2);
+  }
+  if (!["COALESCE", "IFNULL"].includes(word) || args.length < 2 || word === "IFNULL" && args.length !== 2) return false;
+  return args.some(totalExpression) && args.every((arg) => totalExpression(arg) || constantExpression(arg));
+}
+
+function constantExpression(list: SqlToken[]): boolean {
+  if (list.length === 2 && list[0].kind === "symbol" && ["+", "-"].includes(list[0].text)) list = list.slice(1);
+  const token = list[0];
+  return list.length === 1 && (token.kind === "string" || token.kind === "word" && token.text.toUpperCase() === "NULL" || token.kind === "symbol" && /^\d+(?:\.\d+)?$/.test(token.text));
 }
 
 function indexOfWord(tokens: SqlToken[], word: string): number {

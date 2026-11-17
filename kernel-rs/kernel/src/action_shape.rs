@@ -22,6 +22,7 @@ pub fn read(source: &str) -> anyhow::Result<ActionProgram> {
         if let Some(actions) = value["actions"].as_object().filter(|actions| actions.len() <= MAX_ACTIONS) {
             let mut names = actions.keys().collect::<Vec<_>>();
             names.sort();
+            check_names(&names)?;
             for (at, name) in names.iter().enumerate() {
                 if let Err(refused) = check_types(name, &actions[*name]) {
                     for earlier in &names[..at] {
@@ -37,6 +38,12 @@ pub fn read(source: &str) -> anyhow::Result<ActionProgram> {
     anyhow::ensure!(program.version == 1, "Unsupported actions.json version.");
     check_program(&program)?;
     Ok(program)
+}
+
+fn check_names(names: &[&String]) -> Result<(), Refusal> {
+    let invalid = names.iter().filter(|name| !valid_name(name)).map(|name| name.as_str()).collect::<Vec<_>>();
+    if invalid.len() > 1 { return Err(refuse("action.name-invalid", format!("Invalid server action names: {}", invalid.join(", ")))); }
+    Ok(())
 }
 
 fn check_types(name: &str, action: &Value) -> Result<(), Refusal> {
@@ -112,6 +119,7 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
     }
     let mut names = program.actions.keys().collect::<Vec<_>>();
     names.sort();
+    check_names(&names)?;
     for name in names {
         super::validate_action(name, &program.actions[name])?;
     }

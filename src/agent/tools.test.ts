@@ -31,13 +31,15 @@ function textOf(result: { content: Array<{ type: string }> }): string {
 }
 
 describe("capsule tool set", () => {
-  test("offers exactly read, edit, write, validate_capsule and preview_errors", () => {
+  test("offers file edits, validation and candidate browser checks", () => {
     const { tools } = setup();
     expect(tools.map((candidate) => candidate.name)).toEqual([
       "read",
       "edit",
+      "edit_json",
       "write",
       "validate_capsule",
+      "preview_test",
       "preview_errors",
     ]);
     expect(tools.every((candidate) => candidate.label.length > 0)).toBe(true);
@@ -45,7 +47,7 @@ describe("capsule tool set", () => {
 
   test("preview_errors reports what the running preview threw, and says so when it threw nothing", async () => {
     const quiet = createCapsuleTools(createCapsuleWorkspace(starterProject.files), createCapsuleValidator(loadSql));
-    expect(textOf(await call(quiet, "preview_errors", {}))).toContain("No runtime errors");
+    expect(textOf(await call(quiet, "preview_errors", {}))).toContain("unavailable");
 
     const failing = createCapsuleTools(createCapsuleWorkspace(starterProject.files), createCapsuleValidator(loadSql), {
       previewErrors: () => [
@@ -315,3 +317,22 @@ describe("readLiveDatabase", () => {
 
 const _typecheck: (workspace: CapsuleWorkspace, validator: CapsuleValidator) => AgentTool<any>[] = createCapsuleTools;
 void _typecheck;
+
+describe("edit_json", () => {
+  test("changes repeated bindings by pointer and refuses stale edits atomically", async () => {
+    const {workspace,tools}=setup({"actions.json":JSON.stringify({actions:{"clients.create":{bindings:[{key:"email",type:"string"}]},"clients.update":{bindings:[{key:"email",type:"string"}]}}})});
+    await call(tools,"edit_json",{path:"/workspace/actions.json",changes:[{op:"add",pointer:"/actions/clients.create/bindings/0/nullable",value:true},{op:"add",pointer:"/actions/clients.update/bindings/0/nullable",value:true}]});
+    const saved=workspace.files["actions.json"];
+    expect(JSON.parse(saved).actions["clients.create"].bindings[0].nullable).toBe(true);
+    await expect(call(tools,"edit_json",{path:"actions.json",changes:[{op:"replace",pointer:"/actions/clients.create/bindings/0/type",expected:"string",value:"number"},{op:"replace",pointer:"/actions/clients.update/bindings/0/type",expected:"boolean",value:"number"}]})).rejects.toThrow("expected");
+    expect(workspace.files["actions.json"]).toBe(saved);
+  });
+});
+
+
+test("SDK references are readable without a platform session and remain outside the Capsule", async () => {
+  const {tools}=setup();
+  const reference=textOf(await call(tools,"read",{path:"/reference/sdk/files.md"}));
+  expect(reference).toContain("miniapp.files.upload");
+  await expect(call(tools,"write",{path:"/reference/sdk/files.md",content:"changed"})).rejects.toThrow();
+});

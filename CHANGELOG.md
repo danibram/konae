@@ -6,6 +6,11 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- The build agent can run `preview_test` against its current scratch files. It fills fields, clicks buttons, checks text and calls named actions as a preview actor on copied test rows. Results identify the source revision, action inputs and outputs, handled failures and viewport overflow. The test discards its writes and does not replace checks on a Kernel.
+- The agent's `edit_json` tool changes JSON Pointer paths together. It requires matching prior values for replacements and removals, and writes nothing when a change fails.
+
 ## [0.11.0] - 2026-11-18
 
 This release adds per-app modules, shareable pages backed by app data, and a browser-local editor. It also adds staged Pi Durable conversations and a new optional installation backup format.
@@ -43,6 +48,14 @@ This release adds per-app modules, shareable pages backed by app data, and a bro
 
 - Installation copies are incremental. A directory copy hard-links each file that did not change since the previous copy, so every copy folder stays complete while unchanged bytes take disk space once. An S3 copy uploads only changed files, and its version 2 manifest names the earlier copy that holds each unchanged object. Pruning keeps every object a retained manifest names. A copy skips reading a file blob from the file store when its size and modification time match the previous copy. Restore reads version 1 and version 2 copies. An installation that holds version 2 copies needs 0.10.0 or later to restore and prune them.
 - The installation home is redesigned. The hero shows the editor building an example app, then the page covers how an app is made, what every app has, the move to another server, the example apps, the developer paths and the questions people ask before asking for an invitation. Layouts name their columns at each width, and the Spanish and English texts are written together.
+- The agent loads SDK references by module instead of carrying the full reference in every prompt. Its workflow checks optional inputs through the form, action bindings and SQL, and asks for interaction tests before reporting a flow as verified. A schema transformation reference documents how to preserve values through a rename.
+- App administrator changes resolve the exact email through `app_users_list`, use the stable account ID and read the role back after confirmation. Editable display names do not identify accounts, and the owner can request the change in chat without writing SQL.
+
+### Fixed
+
+- `preview_errors` builds and loads the current scratch files instead of reporting errors from the previously applied preview. Failed candidate checks reach the model and chat as failed tool results with their evidence.
+- The Validation Gate and Kernel accept totals wrapped in `COALESCE` or `IFNULL` with constant fallbacks while continuing to require a LIMIT for row queries. They report multiple invalid action names together.
+- Older identity databases gain the missing `app_sessions.entered_by` column without losing accounts or sessions. Older Konae stores gain the missing project source metadata so the editor can open saved projects.
 
 ## [0.9.0] - 2026-11-16
 

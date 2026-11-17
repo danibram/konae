@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { cloneStarter, starterProject } from "../lib/starter";
 import { assembleStaticArtifact, runtimeFile, servedPath } from "../lib/static-artifact.js";
+import { sdkReferences } from "./sdk-section.generated";
 import { buildInitialUserMessage, buildSystemPrompt } from "./system-prompt";
 
 describe("system prompt", () => {
@@ -87,9 +88,9 @@ describe("what the prompt leaves to the Validation Gate", () => {
   test("carries no table of declaration refusals; validate_capsule returns each with its code and remedy", () => {
     expect(prompt).not.toContain("has an invalid notify subject");
     expect(prompt).not.toContain("has an invalid signature window");
-    expect(prompt).toContain("validate_capsule returns its sentence, a code and the remedy");
-    expect(prompt).toContain('"Server action not declared."');
-    expect(prompt).toContain('"invalid-signature"');
+    expect(prompt).toContain("validate_capsule returns the sentence, a code and the remedy");
+    expect(sdkReferences["/reference/sdk/actions.md"]).toContain('"Server action not declared."');
+    expect(sdkReferences["/reference/sdk/http.md"]).toContain('"invalid-signature"');
   });
 
   test("tells the agent to escape text from rows, uploads and users, in attributes too", () => {
@@ -97,7 +98,7 @@ describe("what the prompt leaves to the Validation Gate", () => {
   });
 
   test("stays well under the 66,000 characters it had before declaration refusals left it", () => {
-    expect(prompt.length).toBeLessThan(66_000);
+    expect(prompt.length).toBeLessThan(27_000);
   });
 });
 
@@ -143,4 +144,11 @@ test("the pieces the prompt offers are rows of the table in AGENTS.md", () => {
   const rows = prompt.split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| Need") && !line.startsWith("| ---"));
   expect(rows.length).toBeGreaterThan(8);
   for (const row of rows) expect(table).toContain(row);
+});
+
+
+test("the agent verifies changed flows and resolves account identity before app roles", () => {
+  const prompt = buildSystemPrompt(cloneStarter());
+  for (const fragment of ["preview_test", "read the changed row back", "empty and filled", "app_users_list", "stable account ID", "Display names are editable", "session_inspect.can", "edit_json", "/reference/sdk/"]) expect(prompt).toContain(fragment);
+  expect(prompt).not.toContain("Tell the owner to name the first administrator with SQL in Data");
 });

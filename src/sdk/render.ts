@@ -45,7 +45,7 @@ const gateRefuses =
  * The SDK section of the build agent's system prompt. It is part of the cached
  * prefix, so it depends on the contract alone.
  */
-export function renderPromptSection(contract: SdkContract = sdkContract): string {
+function renderSdkReference(contract: SdkContract): string {
   const lines = [
     "# The miniapp SDK, the only host surface",
     "",
@@ -82,10 +82,22 @@ export function renderPromptSection(contract: SdkContract = sdkContract): string
   return lines.join("\n");
 }
 
-/** The generated TypeScript module that holds the prompt section. */
+export function renderPromptSection(contract: SdkContract = sdkContract): string {
+  const lines = ["# The miniapp SDK", "", absentSentence(contract), "", "Before using an SDK module or a declaration, read its reference with read. References are available without an owner session."];
+  for (const module of contract.modules) {
+    lines.push("", `/reference/sdk/${module.name}.md: ${module.summary}`);
+    for (const call of module.calls) lines.push(`${call.signature}: ${call.summary} Returns ${call.returns}.`);
+  }
+  return lines.join("\n");
+}
+
+export function renderSdkReferences(contract: SdkContract = sdkContract): Record<string, string> {
+  return Object.fromEntries(contract.modules.map((module) => [`/reference/sdk/${module.name}.md`, renderSdkReference({ ...contract, modules: [module] })]));
+}
+
+/** The generated prompt and references share the SDK contract. */
 export function renderPromptModule(contract: SdkContract = sdkContract): string {
-  const escaped = renderPromptSection(contract).replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
-  return `export const sdkPromptSection = \`${escaped}\`;\n`;
+  return `// ${generatedNotice}\n\nexport const sdkPromptSection = ${JSON.stringify(renderPromptSection(contract))};\n\nexport const sdkReferences: Record<string, string> = ${JSON.stringify(renderSdkReferences(contract), null, 2)};\n`;
 }
 
 function guideError({ message, when, source }: SdkError) {

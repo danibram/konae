@@ -1,3 +1,7 @@
+import schemaTransformsGuide from "../../docs/guides/schema-transformations.md?raw";
+import { sdkReferences } from "./sdk-section.generated";
+import type { PreviewTest, PreviewTestReport } from "./preview-test";
+import { editJson, type JsonChange } from "./json-edit";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import type { FileError } from "@earendil-works/pi-agent-core";
 import type { ProjectFile } from "../lib/types";
@@ -17,6 +21,8 @@ import type { ReleaseFacts } from "./release-check";
 import type { ValidationFacts } from "./contracts";
 import type { SourceFiles } from "../lib/source-files";
 
+const references: Record<string, string> = { ...sdkReferences, "/reference/schema-transforms.md": schemaTransformsGuide };
+
 export type PreviewFailureReport = {
   kind: string;
   message: string;
@@ -28,6 +34,7 @@ export type CapsuleToolHooks = {
   onValidated?: (files: CapsuleFiles, result: ValidationResult) => void;
   liveDatabase?: LiveDatabaseExport;
   previewErrors?: () => PreviewFailureReport[];
+  previewTest?: (files: CapsuleFiles, test: PreviewTest, signal?: AbortSignal) => Promise<PreviewTestReport>;
   releaseFacts?: () => Promise<ReleaseFacts>;
   sourceFiles?: () => SourceFiles;
 };
@@ -41,9 +48,11 @@ export function createCapsuleTools(
   return [
     readTool(workspace),
     editTool(workspace, queue),
+    editJsonTool(workspace, queue),
     writeTool(workspace, queue),
     validateTool(workspace, validator, queue, hooks),
-    previewErrorsTool(hooks),
+    previewTestTool(workspace, queue, hooks),
+    previewErrorsTool(workspace, queue, hooks),
   ];
 }
 
@@ -52,7 +61,7 @@ function readTool(workspace: CapsuleWorkspace): AgentTool<any> {
     name: "read",
     label: "Read file",
     description:
-      "Read one existing Capsule file. Every current file was already included in the first message, " +
+      "Read a Capsule file, /reference/sdk/<module>.md, /reference/schema-transforms.md, or a template. Current files were included in the first message, " +
       "so read only to re-check a file after several edits, or to fetch a line range of a long file. " +
       "Use offset/limit to read part of a file; omit both to read all of it. " +
       "The seven templates are read-only under /templates/<id>/ (tasks, notes, members, form, webhook, digest, gallery), " +
@@ -64,9 +73,10 @@ function readTool(workspace: CapsuleWorkspace): AgentTool<any> {
       limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines to return." })),
     }),
     async execute(_toolCallId, params: { path: string; offset?: number; limit?: number }, signal?: AbortSignal) {
+      const reference = Object.hasOwn(references, params.path);
       const template = isTemplatePath(params.path);
-      const file = template ? params.path : requireCapsuleFile(params.path);
-      const content = template ? unwrap(readTemplateFile(params.path)) : unwrap(await workspace.env.readTextFile(capsulePathFor(file), signal));
+      const file = template || reference ? params.path : requireCapsuleFile(params.path);
+      const content = reference ? references[params.path] : template ? unwrap(readTemplateFile(params.path)) : unwrap(await workspace.env.readTextFile(capsulePathFor(file), signal));
       const lines = content.split("\n");
       const start = Math.max((params.offset ?? 1) - 1, 0);
       const end = params.limit === undefined ? lines.length : Math.min(start + params.limit, lines.length);
@@ -74,7 +84,7 @@ function readTool(workspace: CapsuleWorkspace): AgentTool<any> {
       const partial = start > 0 || end < lines.length;
       const header = partial ? `${file} lines ${start + 1}-${end} of ${lines.length}\n` : "";
       return result(header + slice.join("\n"), {
-        path: template ? file : capsulePathFor(file),
+        path: template || reference ? file : capsulePathFor(file),
         startLine: start + 1,
         endLine: end,
         totalLines: lines.length,
@@ -127,6 +137,30 @@ function editTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
   });
 }
 
+function editJsonTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
+  return defineTool({
+    name: "edit_json", label: "Edit JSON", executionMode: "sequential",
+    description: "Change JSON by exact JSON Pointer, such as /actions/clients.create/bindings/2/nullable. Use this for repeated bindings in actions.json. All changes succeed together or nothing is written. add requires a missing key; replace and remove require the current expected value. Call validate_capsule after changing actions.json.",
+    parameters: Type.Object({
+      path: Type.String(),
+      changes: Type.Array(Type.Object({
+        op: Type.Union([Type.Literal("add"), Type.Literal("replace"), Type.Literal("remove")]),
+        pointer: Type.String(), value: Type.Optional(Type.Unknown()), expected: Type.Optional(Type.Unknown()),
+      }), { minItems: 1, maxItems: 50 }),
+    }),
+    async execute(_id, params: {path: string; changes: JsonChange[]}, signal?: AbortSignal) {
+      const file = requireCapsuleFile(params.path);
+      if (!file.endsWith(".json")) throw new Error("edit_json edits .json files only.");
+      return queue(async () => {
+        const source = unwrap(await workspace.env.readTextFile(capsulePathFor(file), signal));
+        const next = editJson(source, params.changes);
+        unwrap(await workspace.env.writeFile(capsulePathFor(file), next, signal));
+        return result(`Edited ${file} at ${params.changes.length} JSON paths.${validationReminder(file)}`, { path: capsulePathFor(file), pointers: params.changes.map((change) => change.pointer) });
+      });
+    },
+  });
+}
+
 function writeTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
   return defineTool({
     name: "write",
@@ -154,29 +188,63 @@ function writeTool(workspace: CapsuleWorkspace, queue: Queue): AgentTool<any> {
   });
 }
 
-function previewErrorsTool(hooks: CapsuleToolHooks): AgentTool<any> {
+function previewTestTool(workspace: CapsuleWorkspace, queue: Queue, hooks: CapsuleToolHooks): AgentTool<any> {
   return defineTool({
-    name: "preview_errors",
-    label: "Preview errors",
-    description:
-      "Read the runtime errors the live preview reported while running the current files — the failures the Validation Gate " +
-      "cannot see, such as a missing element id that app.js queries, or a call that throws. " +
-      "Call it after editing index.html or app.js to confirm the app still runs. " +
-      "An empty report means the preview raised nothing since it last loaded, not that the app is correct.",
-    parameters: Type.Object({}),
-    async execute() {
-      const failures = hooks.previewErrors?.() ?? [];
-      if (failures.length === 0) {
-        return result("No runtime errors reported by the preview since it last loaded.", { failures });
+    name: "preview_test", label: "Test candidate", executionMode: "sequential",
+    description: "Build and run the current scratch files in an isolated browser preview with copied test rows. Fill fields, click buttons, assert text and call named actions as guest, alice or bob. Writes are discarded. Returns the candidate revision, each step, actual action inputs/results, handled action errors, runtime errors, page text and viewport overflow. Use a form submission and a read-back action to verify a changed save flow. It does not test a published Kernel, email, routes, schedules, Google or the published CSP. Network fetches and form navigation are blocked; downloads are not verified; confirm dialogs are accepted in this test only.",
+    parameters: Type.Object({
+      actor: Type.Optional(Type.Union([Type.Literal("guest"), Type.Literal("alice"), Type.Literal("bob")])),
+      width: Type.Optional(Type.Integer({ minimum: 320, maximum: 1920 })),
+      steps: Type.Array(Type.Union([
+        Type.Object({ op: Type.Literal("fill"), selector: Type.String(), value: Type.String() }),
+        Type.Object({ op: Type.Literal("click"), selector: Type.String() }),
+        Type.Object({ op: Type.Literal("text"), selector: Type.String(), contains: Type.String() }),
+        Type.Object({ op: Type.Literal("action"), name: Type.String(), input: Type.Optional(Type.Record(Type.String(), Type.Unknown())), expectedError: Type.Optional(Type.String()) }),
+      ]), {minItems:1,maxItems:20}),
+    }),
+    async execute(_id, test: PreviewTest, signal?: AbortSignal) {
+      if (!hooks.previewTest) throw new Error("Candidate browser tests are unavailable in this session. Tell the owner the flow is untested.");
+      if (!test.steps.length || test.steps.length > 20) throw new Error("Provide between 1 and 20 test steps.");
+      for (const step of test.steps) {
+        if (step.op === "action" ? !step.name : !step.selector) throw new Error("An action step needs name; a UI step needs selector.");
+        if (step.op === "fill" && step.value === undefined || step.op === "text" && step.contains === undefined) throw new Error("A fill step needs value; a text step needs contains.");
       }
-      const lines = failures.map((failure) => {
-        const repeats = failure.count > 1 ? ` (x${failure.count})` : "";
-        const stack = failure.stack ? `\n${failure.stack.split("\n").slice(0, 4).join("\n")}` : "";
-        return `- ${failure.kind}: ${failure.message}${repeats}${stack}`;
+      return queue(async () => {
+        const report = await hooks.previewTest!(workspace.serialize().files, test, signal);
+        return result(formatPreviewReport(report), report);
       });
-      return result(`The preview reported ${failures.length} runtime failure(s):\n${lines.join("\n")}`, { failures });
     },
   });
+}
+
+function previewErrorsTool(workspace: CapsuleWorkspace, queue: Queue, hooks: CapsuleToolHooks): AgentTool<any> {
+  return defineTool({
+    name: "preview_errors", label: "Preview errors", executionMode: "sequential",
+    description: "Build and load the current scratch files in an isolated candidate preview and read its startup errors. Returns the tested revision. An empty error list tests startup only. Use preview_test to exercise a save and read it back; handled form errors require that interaction.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, signal?: AbortSignal) {
+      return queue(async () => {
+        if (hooks.previewTest) {
+          const report = await hooks.previewTest(workspace.serialize().files, { actor: "alice", steps: [] }, signal);
+          return result(formatPreviewReport(report), report);
+        }
+        const failures = hooks.previewErrors?.();
+        if (!failures) return result("Candidate preview unavailable. No current files were executed. The flow is untested.", { scope: "unavailable" });
+        return result("Applied preview only; the scratch files were not executed.\n" + (failures.length ? failures.map((failure) => `${failure.kind}: ${failure.message} (x${failure.count})\n${failure.stack}`).join("\n") : "No runtime errors reported by the applied preview."), { scope: "applied", failures });
+      });
+    },
+  });
+}
+
+function formatPreviewReport(report: PreviewTestReport): string {
+  const summary = `Candidate ${report.revision.slice(0, 12)} ${report.ok ? "passed" : "failed"}: ${report.steps.length} steps as ${report.actor}, ${report.errors.length} runtime errors.`;
+  const json = JSON.stringify(report);
+  if (json.length <= 18_000) return summary + "\n" + json;
+  const bounded = (value: unknown) => {
+    const text = JSON.stringify(value);
+    return text && text.length > 1000 ? { truncated: true, excerpt: text.slice(0, 1000) } : value;
+  };
+  return summary + "\n" + JSON.stringify({ ...report, text: report.text.slice(0, 2000), actions: report.actions.slice(-30).map((action) => ({ ...action, result: bounded(action.result), input: bounded(action.input) })), steps: report.steps.map((step) => ({ ...step, result: bounded(step.result) })), truncated: true });
 }
 
 function validateTool(

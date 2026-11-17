@@ -3,13 +3,14 @@ import { createPreviewDocument } from "./preview";
 import { cloneStarter } from "../lib/starter";
 
 const source = createPreviewDocument(cloneStarter());
-const bridge = await Bun.file(new URL("./useRuntimeBridge.ts", import.meta.url)).text();
+const hook = await Bun.file(new URL("./useRuntimeBridge.ts", import.meta.url)).text();
+const bridge = await Bun.file(new URL("./frame-bridge.ts", import.meta.url)).text();
 
 describe("runtime handshake", () => {
   test("the host takes the iframe element, not a ref object", () => {
-    expect(bridge).toContain("iframe: HTMLIFrameElement | null");
+    expect(hook).toContain("iframe: HTMLIFrameElement | null");
     expect(bridge).not.toContain("iframeRef: RefObject");
-    expect(bridge).toContain("}, [host, iframe]);");
+    expect(hook).toContain("}, [host, iframe]);");
   });
 
   test("the host offers three ways to complete the handshake", () => {

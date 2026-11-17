@@ -23,3 +23,11 @@ describe("query bound", () => {
     expect(unboundedQueryReason("SELECT count(*) FROM tasks UNION ALL SELECT count(*) FROM notes")).toContain("combines");
   });
 });
+
+test("recognizes totals inside COALESCE without exempting row expressions", () => {
+  expect(unboundedQueryReason("SELECT COALESCE(SUM(amount), 0) AS total FROM payments")).toBeNull();
+  expect(unboundedQueryReason("SELECT IFNULL(COALESCE(SUM(amount), NULL), 0) AS total FROM payments")).toBeNull();
+  for (const sql of ["SELECT COALESCE(amount, 0) FROM payments", "SELECT COALESCE(SUM(amount), amount) FROM payments", "SELECT COALESCE((SELECT SUM(amount) FROM payments), 0) FROM payments", "SELECT MIN(amount, 0) FROM payments"]) {
+    expect(unboundedQueryReason(sql)).toContain("reads rows");
+  }
+});

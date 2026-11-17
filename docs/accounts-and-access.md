@@ -33,7 +33,7 @@ Server Actions decide what a Runtime Actor may do, and no Runtime Actor is ever 
 The app decides, in the statement and its bindings. A Server Action binds the caller with `{ "source": "actor", "field": "id" }`.
 
 - `id` is the app user's ID or the API key's ID. It is null for a visitor and for a schedule's run.
-- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner names the first one with SQL in Data, such as `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';` with the ID from Access > Users or `app_users_list`. From the CLI, `bun run konae -- sql --dir <folder> --prod "<statement>"` runs it.
+- Roles are rows in the app's own tables. An app that needs an administrator keeps a table such as `profiles(user_id, role)` and checks it in SQL against that ID. The owner can ask the editor's agent to name the first one. The agent resolves the exact email with `app_users_list`, uses the account ID, asks for confirmation of the role change and reads the role back. An editable display name does not identify an account. The owner can also run SQL in Data, such as `UPDATE profiles SET role = 'owner' WHERE user_id = '<account id>';` with the ID from Access > Users or `app_users_list`. From the CLI, `bun run konae -- sql --dir <folder> --prod "<statement>"` runs it.
 
 ```json
 "items.list": {

@@ -51,6 +51,7 @@ export type KonaeAgentOptions = {
   riskyThinkingLevel?: ThinkingLevel;
   liveDatabase?: LiveDatabaseExport;
   previewErrors?: () => PreviewFailureReport[];
+  previewTest?: import("./tools").CapsuleToolHooks["previewTest"];
   releaseFacts?: () => Promise<ReleaseFacts>;
   sourceFiles?: () => MiniAppProject;
 };
@@ -111,6 +112,10 @@ class KonaeAgentSession implements KonaeAgentHandle {
         model,
         thinkingLevel: clampThinkingLevel(model, this.thinkingLevel) as ThinkingLevel,
         tools: this.capsuleTools(),
+      },
+      afterToolCall: async ({ toolCall, result }) => {
+        if (["preview_test", "preview_errors"].includes(toolCall.name) && result.details?.scope === "isolated-candidate" && result.details.ok === false) return { isError: true };
+        return undefined;
       },
       prepareNextTurn: () => (this.risky ? { thinkingLevel: this.escalated() } : undefined),
     });
@@ -234,6 +239,7 @@ class KonaeAgentSession implements KonaeAgentHandle {
       onValidated: (files, result) => this.recordValidation(files, result),
       liveDatabase: this.options.liveDatabase,
       previewErrors: this.options.previewErrors,
+      previewTest: this.options.previewTest,
       releaseFacts: this.options.releaseFacts,
       sourceFiles: this.options.sourceFiles,
     });
@@ -475,7 +481,10 @@ function sameFiles(left: CapsuleFiles, right: CapsuleFiles): boolean {
 
 function describeArgs(args: unknown): string {
   const path = (args as { path?: unknown } | undefined)?.path;
-  if (typeof path !== "string") return "";
+  if (typeof path !== "string") {
+    const test = args as { steps?: unknown[]; actor?: string; width?: number } | undefined;
+    return Array.isArray(test?.steps) ? `${test.steps.length} steps as ${test.actor ?? "alice"} at ${test.width ?? 375}px` : "";
+  }
   return capsuleFileFor(path) ?? path;
 }
 

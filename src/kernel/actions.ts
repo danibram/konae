@@ -77,6 +77,8 @@ export function parseServerActionSource(source: string): ServerActionProgram {
 
   const declared = record.actions as Record<string, unknown>;
   if (Object.keys(declared).length > MAX_ACTIONS) throw refusal("action.count-over", `A project may declare at most ${MAX_ACTIONS} actions.`);
+  const invalidNames = Object.keys(declared).filter((name) => !ACTION_NAME.test(name) || name.length > MAX_ACTION_NAME).sort();
+  if (invalidNames.length > 1) throw refusal("action.name-invalid", `Invalid server action names: ${invalidNames.join(", ")}`);
   const parsed = new Map(Object.keys(declared).sort().map((name) => [name, parseAction(name, declared[name])]));
   const actions: Record<string, ServerActionDefinition> = {};
   for (const name of Object.keys(declared)) actions[name] = parsed.get(name)!;

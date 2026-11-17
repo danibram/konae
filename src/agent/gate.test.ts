@@ -552,12 +552,12 @@ describe("the gate and the Kernel refuse the same actions.json", () => {
         await Bun.file(new URL(`../../kernel-rs/kernel/src/${file}`, import.meta.url)).json();
       expect(cases.length).toBeGreaterThan(5);
       for (const item of cases) {
-        if (item.schema !== undefined) {
+        if (item.schema !== undefined && item.actions === undefined) {
           const result = await validator.validate(capsule({ "schema.sql": item.schema, "actions.json": actions({ version: 1, actions: {} }) }));
           expect(result.errors.map((error) => ({ code: error.code, message: error.message })), item.case).toEqual(item.error === null ? [] : [expectedOutcome(item)]);
           continue;
         }
-        const result = await validator.validate(capsule({ "schema.sql": caseSchema, "actions.json": actions({ version: 1, actions: item.actions }) }));
+        const result = await validator.validate(capsule({ "schema.sql": item.schema ?? caseSchema, "actions.json": actions({ version: 1, actions: item.actions }) }));
         if (item.error === null) {
           expect(result.errors, item.case).toEqual([]);
         } else {

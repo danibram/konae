@@ -3395,7 +3395,7 @@ pub fn unbounded_query_reason(sql: &str) -> Option<&'static str> {
     let Some(select) = top.iter().position(|token| token.is_word("SELECT")) else {
         return Some("reads rows and has no LIMIT.");
     };
-    if select >= from || !aggregate_select_list(&top[select + 1..from]) {
+    if select >= from || !aggregate_select_list(&tokens.iter().filter(|token| token.start > top[select].start && token.start < top[from].start).collect::<Vec<_>>()) {
         return Some("reads rows and has no LIMIT.");
     }
     None
@@ -3411,44 +3411,51 @@ pub fn limit_index(top: &[&SqlTok]) -> Option<usize> {
     })
 }
 
-pub fn aggregate_select_list(list: &[&SqlTok]) -> bool {
-    let mut index = 0;
-    if list.first().is_some_and(|token| token.is_any(&["ALL", "DISTINCT"])) {
-        index = 1;
+pub fn aggregate_select_list(mut list: &[&SqlTok]) -> bool {
+    if list.first().is_some_and(|token| token.is_any(&["ALL", "DISTINCT"])) { list = &list[1..]; }
+    !list.is_empty() && split_expressions(list, 0).iter().all(|expression| {
+        let mut expression = *expression;
+        if let Some(alias) = expression.iter().position(|token| token.depth == 0 && token.is_word("AS")) {
+            expression = &expression[..alias];
+        } else if expression.last().is_some_and(|token| matches!(token.kind, SqlTokKind::Word | SqlTokKind::Ident))
+            && expression.len() > 1 && expression[expression.len() - 2].is_symbol(")") {
+            expression = &expression[..expression.len() - 1];
+        }
+        total_expression(expression)
+    })
+}
+
+fn split_expressions<'a>(list: &'a [&'a SqlTok], depth: i32) -> Vec<&'a [&'a SqlTok]> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (index, token) in list.iter().enumerate() {
+        if token.depth == depth && token.is_symbol(",") { parts.push(&list[start..index]); start = index + 1; }
     }
-    if index >= list.len() {
-        return false;
+    parts.push(&list[start..]);
+    parts
+}
+
+fn total_expression(list: &[&SqlTok]) -> bool {
+    if list.len() < 3 { return false; }
+    let name = list[0];
+    if name.kind != SqlTokKind::Word || !list[1].is_symbol("(") || !list[list.len()-1].is_symbol(")") || list[list.len()-1].depth != name.depth { return false; }
+    if list.iter().enumerate().position(|(index, token)| index > 1 && token.is_symbol(")") && token.depth == name.depth) != Some(list.len()-1) { return false; }
+    let args = split_expressions(&list[2..list.len()-1], name.depth + 1);
+    if name.is_any(&["AVG", "COUNT", "GROUP_CONCAT", "MAX", "MIN", "SUM", "TOTAL"]) {
+        return args.iter().all(|arg| !arg.is_empty()) && (args.len() == 1 || name.is_word("GROUP_CONCAT") && args.len() == 2);
     }
-    let mut expressions = 0;
-    while index < list.len() {
-        if list[index].is_symbol(",") {
-            index += 1;
-            continue;
-        }
-        let Some(name) = list.get(index) else { return false; };
-        let Some(open) = list.get(index + 1) else { return false; };
-        if !name.is_any(&["AVG", "COUNT", "GROUP_CONCAT", "MAX", "MIN", "SUM", "TOTAL"]) || !open.is_symbol("(") {
-            return false;
-        }
-        index += 2;
-        let Some(close) = list.iter().skip(index).position(|token| token.is_symbol(")")) else {
-            return false;
-        };
-        index += close + 1;
-        if list.get(index).is_some_and(|token| token.is_word("AS")) {
-            if !list.get(index + 1).is_some_and(|token| token.kind == SqlTokKind::Word || token.kind == SqlTokKind::Ident) {
-                return false;
-            }
-            index += 2;
-        } else if list.get(index).is_some_and(|token| token.kind == SqlTokKind::Word || token.kind == SqlTokKind::Ident) {
-            index += 1;
-        }
-        expressions += 1;
-        if index < list.len() && !list[index].is_symbol(",") {
-            return false;
-        }
+    if !name.is_any(&["COALESCE", "IFNULL"]) || args.len() < 2 || name.is_word("IFNULL") && args.len() != 2 { return false; }
+    args.iter().any(|arg| total_expression(arg)) && args.iter().all(|arg| total_expression(arg) || constant_expression(arg))
+}
+
+fn constant_expression(mut list: &[&SqlTok]) -> bool {
+    if list.len() == 2 && (list[0].is_symbol("+") || list[0].is_symbol("-")) { list = &list[1..]; }
+    if list.len() != 1 { return false; }
+    let token = list[0];
+    token.kind == SqlTokKind::String || token.is_word("NULL") || token.kind == SqlTokKind::Symbol && {
+        let parts = token.text.split('.').collect::<Vec<_>>();
+        parts.len() <= 2 && parts.iter().all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
     }
-    expressions > 0
 }
 
 #[derive(Clone, Copy, PartialEq)]

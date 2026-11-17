@@ -1730,3 +1730,50 @@ test("usage counts signed-in accounts as people, never a visitor, and shows what
     await storage.screenshot({ path: testInfo.outputPath(`usage-storage-${scheme}.png`), animations: "disabled" });
   }
 });
+
+test("candidate tests catch handled save failures, run current files and discard their rows", async ({page}) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const testModule = "/src/agent/preview-test.ts";
+    const hostModule = "/src/runtime/host.ts";
+    const starterModule = "/src/lib/starter.ts";
+    const [{runPreviewTest}, {MiniAppRuntimeHost}, {cloneStarter}] = await Promise.all([import(testModule), import(hostModule), import(starterModule)]);
+    const project = cloneStarter();
+    project.id = `candidate-test-${crypto.randomUUID()}`;
+    project.files = {
+      "index.html": '<form id="form"><input id="name"><input id="email"><button id="save">Guardar</button></form><p id="status"></p>',
+      "styles.css": "body{margin:0}*{box-sizing:border-box}",
+      "app.js": `document.querySelector('#form').addEventListener('submit',async e=>{e.preventDefault();try{await miniapp.actions.call('clients.create',{name:document.querySelector('#name').value,email:document.querySelector('#email').value||null});document.querySelector('#status').textContent='Guardado';}catch(error){document.querySelector('#status').textContent=error.message;}});`,
+      "schema.sql": "CREATE TABLE IF NOT EXISTS clients(id INTEGER PRIMARY KEY,owner_id TEXT,name TEXT,email TEXT NOT NULL);",
+      "actions.json": JSON.stringify({version:1,actions:{
+        "clients.create": {kind:"mutation",access:"authenticated",statement:"INSERT INTO clients(owner_id,name,email) VALUES(?1,?2,COALESCE(?3,''))",bindings:[{source:"actor",field:"id"},{source:"input",key:"name",type:"string"},{source:"input",key:"email",type:"string"}]},
+        "clients.list": {kind:"query",access:"authenticated",statement:"SELECT id,name,email FROM clients WHERE owner_id=?1 LIMIT 10",bindings:[{source:"actor",field:"id"}]},
+      }}),
+    };
+    const host = new MiniAppRuntimeHost(project.id,project.files["schema.sql"],project.files["actions.json"]);
+    const test = {actor:"alice",width:320,steps:[{op:"fill",selector:"#name",value:"Solo nombre"},{op:"fill",selector:"#email",value:""},{op:"click",selector:"#save"},{op:"text",selector:"#status",contains:"Guardado"},{op:"action",name:"clients.list"}]};
+    try {
+      const broken = await runPreviewTest(project,host,test);
+      const actions = JSON.parse(project.files["actions.json"]);
+      actions.actions["clients.create"].bindings[2].nullable = true;
+      project.files["actions.json"] = JSON.stringify(actions);
+      const fixed = await runPreviewTest(project,host,test);
+      const startup = await runPreviewTest({...project,files:{...project.files,"app.js":'throw new Error("candidate startup failure")'}},host,{steps:[]});
+      const guest = await runPreviewTest(project,host,{actor:"guest",steps:[{op:"action",name:"clients.list",expectedError:"authentication-required"}]});
+      host.setPreviewActor("alice");
+      const unchanged = await host.handle("actions.invoke",{name:"clients.list"});
+      return {broken,fixed,startup,guest,unchanged,appliedErrors:host.previewErrors(),frames:document.querySelectorAll('iframe[aria-hidden="true"]').length};
+    } finally { await host.dispose(true); }
+  });
+  expect(result.broken.ok).toBe(false);
+  expect(result.broken.actions[0].error).toContain("email");
+  expect(result.fixed.ok).toBe(true);
+  expect(result.fixed.steps.at(-1).result).toEqual([{id:1,name:"Solo nombre",email:""}]);
+  expect(result.fixed.revision).not.toBe(result.broken.revision);
+  expect(result.startup.errors[0].message).toContain("candidate startup failure");
+  expect(result.startup.ok).toBe(false);
+  expect(result.guest.ok).toBe(true);
+  expect(result.unchanged).toEqual([]);
+  expect(result.appliedErrors).toEqual([]);
+  expect(result.frames).toBe(0);
+});
