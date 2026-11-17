@@ -142,16 +142,16 @@ impl FileStore for LocalFolder {
                 Err(error) => return Err(error.into()),
             };
             while let Some(entry) = entries.next_entry().await? {
-                if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob"))
-                    && crate::valid_file_id(id)
-                {
-                    let metadata = entry.metadata().await?;
-                    let modified_ms = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|elapsed| elapsed.as_millis() as u64);
-                    objects.push(StoredObject { id: id.to_owned(), size: metadata.len(), modified_ms });
+                if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob")) {
+                    if crate::valid_file_id(id) {
+                        let metadata = entry.metadata().await?;
+                        let modified_ms = metadata
+                            .modified()
+                            .ok()
+                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|elapsed| elapsed.as_millis() as u64);
+                        objects.push(StoredObject { id: id.to_owned(), size: metadata.len(), modified_ms });
+                    }
                 }
             }
             objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -168,10 +168,10 @@ impl FileStore for LocalFolder {
                 Err(error) => return Err(error.into()),
             };
             while let Some(entry) = entries.next_entry().await? {
-                if entry.file_type().await?.is_dir()
-                    && let Some(name) = entry.file_name().to_str()
-                {
-                    ids.push(name.to_owned());
+                if entry.file_type().await?.is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        ids.push(name.to_owned());
+                    }
                 }
             }
             ids.sort();
@@ -365,7 +365,7 @@ impl FileStore for S3Store {
     fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>> {
         Box::pin(async move {
             let folder = format!("{}{deployment}/", self.settings.prefix);
-        let (keys, _) = self.keys(&folder, false).await?;
+            let (keys, _) = self.keys(&folder, false).await?;
             let mut objects: Vec<StoredObject> = keys
                 .into_iter()
                 .filter_map(|(key, modified_ms, size)| {
@@ -460,11 +460,11 @@ impl FileLimits {
 /// `20 MiB`, `64 KiB` or `1500 bytes`: the unit that writes the number exactly.
 pub fn human_bytes(bytes: u64) -> String {
     const GIB: u64 = 1024 * MIB;
-    if bytes >= GIB && bytes.is_multiple_of(GIB) {
+    if bytes >= GIB && bytes % GIB == 0 {
         format!("{} GiB", bytes / GIB)
-    } else if bytes >= MIB && bytes.is_multiple_of(MIB) {
+    } else if bytes >= MIB && bytes % MIB == 0 {
         format!("{} MiB", bytes / MIB)
-    } else if bytes >= 1024 && bytes.is_multiple_of(1024) {
+    } else if bytes >= 1024 && bytes % 1024 == 0 {
         format!("{} KiB", bytes / 1024)
     } else if bytes == 1 {
         "1 byte".into()
@@ -616,7 +616,7 @@ impl Files {
 
 /// The IDs and sizes a Deployment's index names, or none without an index.
 pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<Vec<(String, u64)>>> {
-    let path = crate::layout::files(data_root, deployment).join("index.json");
+    let path = crate::layout::files(&data_root, &deployment).join("index.json");
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -904,6 +904,23 @@ pub async fn read_all(store: &dyn FileStore, deployment: &str, file: &str) -> Re
 pub mod tests {
     use super::*;
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct FakeS3Request {
+        pub method: &'static str,
+        pub key: String,
+        pub request_bytes: u64,
+        pub response_bytes: u64,
+    }
+
+    #[derive(Clone, Default)]
+    pub struct FakeS3Metrics(Arc<std::sync::Mutex<Vec<FakeS3Request>>>);
+
+    impl FakeS3Metrics {
+        pub fn snapshot(&self) -> Vec<FakeS3Request> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
     fn table<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |name| pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
     }
@@ -985,6 +1002,14 @@ pub mod tests {
     /// `KONAE_TEST_S3_ENDPOINT` (and `KONAE_TEST_S3_BUCKET`) to run the
     /// same tests against a real S3-compatible server instead.
     pub async fn fake_s3() -> String {
+        fake_s3_server(2).await.0
+    }
+
+    pub async fn fake_s3_with_metrics() -> (String, FakeS3Metrics) {
+        fake_s3_server(1000).await
+    }
+
+    async fn fake_s3_server(page_size: usize) -> (String, FakeS3Metrics) {
         use axum::{
             Router,
             body::{Body, Bytes},
@@ -995,19 +1020,26 @@ pub mod tests {
         };
         use std::collections::{BTreeMap, HashMap};
         type Objects = Arc<std::sync::Mutex<BTreeMap<String, (Vec<u8>, u64)>>>;
+        type StateData = (Objects, FakeS3Metrics, usize);
         fn xml(text: &str) -> String {
             text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
         }
         fn missing() -> Response {
             (StatusCode::NOT_FOUND, "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>").into_response()
         }
-        async fn put(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>, body: Bytes) -> Response {
+        async fn put(State((objects, metrics, _)): State<StateData>, UrlPath((bucket, key)): UrlPath<(String, String)>, body: Bytes) -> Response {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-            objects.lock().unwrap().insert(format!("{bucket}/{key}"), (body.to_vec(), now));
+            let full_key = format!("{bucket}/{key}");
+            metrics.0.lock().unwrap().push(FakeS3Request { method: "PUT", key: full_key.clone(), request_bytes: body.len() as u64, response_bytes: 0 });
+            objects.lock().unwrap().insert(full_key, (body.to_vec(), now));
             (StatusCode::OK, [(header::ETAG, "\"fake\"")]).into_response()
         }
-        async fn read(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>, headers: HeaderMap) -> Response {
-            let Some((bytes, _)) = objects.lock().unwrap().get(&format!("{bucket}/{key}")).cloned() else { return missing() };
+        async fn read(State((objects, metrics, _)): State<StateData>, UrlPath((bucket, key)): UrlPath<(String, String)>, headers: HeaderMap) -> Response {
+            let full_key = format!("{bucket}/{key}");
+            let Some((bytes, _)) = objects.lock().unwrap().get(&full_key).cloned() else {
+                metrics.0.lock().unwrap().push(FakeS3Request { method: "GET", key: full_key, request_bytes: 0, response_bytes: 0 });
+                return missing();
+            };
             let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok()).and_then(|value| {
                 let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
                 Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
@@ -1017,16 +1049,22 @@ pub mod tests {
                     let end = end.min(bytes.len() - 1);
                     let part = bytes[start..=end].to_vec();
                     let content_range = format!("bytes {start}-{end}/{}", bytes.len());
+                    metrics.0.lock().unwrap().push(FakeS3Request { method: "GET", key: full_key, request_bytes: 0, response_bytes: part.len() as u64 });
                     (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, content_range)], part).into_response()
                 }
-                None => (StatusCode::OK, bytes).into_response(),
+                None => {
+                    metrics.0.lock().unwrap().push(FakeS3Request { method: "GET", key: full_key, request_bytes: 0, response_bytes: bytes.len() as u64 });
+                    (StatusCode::OK, bytes).into_response()
+                }
             }
         }
-        async fn remove(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>) -> Response {
-            objects.lock().unwrap().remove(&format!("{bucket}/{key}"));
+        async fn remove(State((objects, metrics, _)): State<StateData>, UrlPath((bucket, key)): UrlPath<(String, String)>) -> Response {
+            let full_key = format!("{bucket}/{key}");
+            metrics.0.lock().unwrap().push(FakeS3Request { method: "DELETE", key: full_key.clone(), request_bytes: 0, response_bytes: 0 });
+            objects.lock().unwrap().remove(&full_key);
             StatusCode::NO_CONTENT.into_response()
         }
-        async fn list(State(objects): State<Objects>, UrlPath(bucket): UrlPath<String>, Query(query): Query<HashMap<String, String>>) -> Response {
+        async fn list(State((objects, metrics, page_size)): State<StateData>, UrlPath(bucket): UrlPath<String>, Query(query): Query<HashMap<String, String>>) -> Response {
             let prefix = query.get("prefix").cloned().unwrap_or_default();
             let delimiter = query.get("delimiter").cloned();
             let after = query.get("continuation-token").cloned().unwrap_or_default();
@@ -1045,8 +1083,8 @@ pub mod tests {
                 }
             }
             let page: Vec<_> = entries.into_iter().filter(|(name, _, _)| name.as_str() > after.as_str()).collect();
-            let truncated = page.len() > 2;
-            let page = &page[..page.len().min(2)];
+            let truncated = page.len() > page_size;
+            let page = &page[..page.len().min(page_size)];
             let mut body = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>{bucket}</Name><Prefix>{}</Prefix><KeyCount>{}</KeyCount><IsTruncated>{truncated}</IsTruncated>", xml(&prefix), page.len());
             if truncated {
                 body.push_str(&format!("<NextContinuationToken>{}</NextContinuationToken>", xml(&page[page.len() - 1].0)));
@@ -1067,19 +1105,21 @@ pub mod tests {
                 }
             }
             body.push_str("</ListBucketResult>");
+            metrics.0.lock().unwrap().push(FakeS3Request { method: "LIST", key: format!("{bucket}/{prefix}"), request_bytes: 0, response_bytes: body.len() as u64 });
             ([(header::CONTENT_TYPE, "application/xml")], Body::from(body)).into_response()
         }
         let objects: Objects = Arc::default();
+        let metrics = FakeS3Metrics::default();
         let app = Router::new()
             .route("/{bucket}", get(list))
             .route("/{bucket}/", get(list))
             .route("/{bucket}/{*key}", get(read).put(put).delete(remove))
             .layer(axum::extract::DefaultBodyLimit::disable())
-            .with_state(objects);
+            .with_state((objects, metrics.clone(), page_size));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        format!("http://{address}")
+        (format!("http://{address}"), metrics)
     }
 
     /// An `S3Store` on `KONAE_TEST_S3_ENDPOINT` when it is set, on the
@@ -1125,7 +1165,7 @@ pub mod tests {
     }
 
     fn index(root: &Path, deployment: &str, files: &[(&str, u64)]) {
-        let directory = crate::layout::files(root, deployment);
+        let directory = crate::layout::files(&root, &deployment);
         std::fs::create_dir_all(&directory).unwrap();
         let entries: Vec<_> = files.iter().map(|(id, size)| serde_json::json!({"id": id, "size": size, "visibility": "private"})).collect();
         std::fs::write(directory.join("index.json"), serde_json::to_vec(&entries).unwrap()).unwrap();
