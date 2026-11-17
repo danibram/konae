@@ -63,6 +63,8 @@ pub trait FileStore: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredObject {
     pub id: String,
+    /// The number of bytes the store lists for this object.
+    pub size: u64,
     /// Milliseconds since the epoch when the bytes were written, when the store says.
     pub modified_ms: Option<u64>,
 }
@@ -140,17 +142,16 @@ impl FileStore for LocalFolder {
                 Err(error) => return Err(error.into()),
             };
             while let Some(entry) = entries.next_entry().await? {
-                if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob")) {
-                    if crate::valid_file_id(id) {
-                        let modified_ms = entry
-                            .metadata()
-                            .await?
-                            .modified()
-                            .ok()
-                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|elapsed| elapsed.as_millis() as u64);
-                        objects.push(StoredObject { id: id.to_owned(), modified_ms });
-                    }
+                if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob"))
+                    && crate::valid_file_id(id)
+                {
+                    let metadata = entry.metadata().await?;
+                    let modified_ms = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|elapsed| elapsed.as_millis() as u64);
+                    objects.push(StoredObject { id: id.to_owned(), size: metadata.len(), modified_ms });
                 }
             }
             objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -167,10 +168,10 @@ impl FileStore for LocalFolder {
                 Err(error) => return Err(error.into()),
             };
             while let Some(entry) = entries.next_entry().await? {
-                if entry.file_type().await?.is_dir() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        ids.push(name.to_owned());
-                    }
+                if entry.file_type().await?.is_dir()
+                    && let Some(name) = entry.file_name().to_str()
+                {
+                    ids.push(name.to_owned());
                 }
             }
             ids.sort();
@@ -258,7 +259,7 @@ impl S3Store {
     }
 
     /// Every key under `prefix`, with its modification time, page by page.
-    async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>)>, Vec<String>)> {
+    async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>, u64)>, Vec<String>)> {
         let mut keys = Vec::new();
         let mut folders = Vec::new();
         let mut continuation: Option<String> = None;
@@ -270,7 +271,7 @@ impl S3Store {
             for object in page.contents() {
                 if let Some(key) = object.key() {
                     let modified = object.last_modified().and_then(|time| u64::try_from(time.to_millis().ok()?).ok());
-                    keys.push((key.to_owned(), modified));
+                    keys.push((key.to_owned(), modified, object.size().and_then(|size| u64::try_from(size).ok()).unwrap_or_default()));
                 }
             }
             folders.extend(page.common_prefixes().iter().filter_map(|folder| folder.prefix().map(str::to_owned)));
@@ -364,12 +365,12 @@ impl FileStore for S3Store {
     fn objects<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<StoredObject>>> {
         Box::pin(async move {
             let folder = format!("{}{deployment}/", self.settings.prefix);
-            let (keys, _) = self.keys(&folder, false).await?;
+        let (keys, _) = self.keys(&folder, false).await?;
             let mut objects: Vec<StoredObject> = keys
                 .into_iter()
-                .filter_map(|(key, modified_ms)| {
+                .filter_map(|(key, modified_ms, size)| {
                     let id = key.strip_prefix(&folder)?;
-                    crate::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), modified_ms })
+                    crate::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), size, modified_ms })
                 })
                 .collect();
             objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -459,11 +460,11 @@ impl FileLimits {
 /// `20 MiB`, `64 KiB` or `1500 bytes`: the unit that writes the number exactly.
 pub fn human_bytes(bytes: u64) -> String {
     const GIB: u64 = 1024 * MIB;
-    if bytes >= GIB && bytes % GIB == 0 {
+    if bytes >= GIB && bytes.is_multiple_of(GIB) {
         format!("{} GiB", bytes / GIB)
-    } else if bytes >= MIB && bytes % MIB == 0 {
+    } else if bytes >= MIB && bytes.is_multiple_of(MIB) {
         format!("{} MiB", bytes / MIB)
-    } else if bytes >= 1024 && bytes % 1024 == 0 {
+    } else if bytes >= 1024 && bytes.is_multiple_of(1024) {
         format!("{} KiB", bytes / 1024)
     } else if bytes == 1 {
         "1 byte".into()
@@ -615,7 +616,7 @@ impl Files {
 
 /// The IDs and sizes a Deployment's index names, or none without an index.
 pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<Vec<(String, u64)>>> {
-    let path = crate::layout::files(&data_root, &deployment).join("index.json");
+    let path = crate::layout::files(data_root, deployment).join("index.json");
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1029,36 +1030,37 @@ pub mod tests {
             let prefix = query.get("prefix").cloned().unwrap_or_default();
             let delimiter = query.get("delimiter").cloned();
             let after = query.get("continuation-token").cloned().unwrap_or_default();
-            let mut entries: Vec<(String, Option<u64>)> = Vec::new();
-            for (stored, (_, modified)) in objects.lock().unwrap().iter() {
+            let mut entries: Vec<(String, Option<u64>, u64)> = Vec::new();
+            for (stored, (bytes, modified)) in objects.lock().unwrap().iter() {
                 let Some(key) = stored.strip_prefix(&format!("{bucket}/")) else { continue };
                 let Some(rest) = key.strip_prefix(&prefix) else { continue };
                 match delimiter.as_deref().and_then(|delimiter| rest.find(delimiter)) {
                     Some(end) => {
                         let folder = format!("{prefix}{}/", &rest[..end]);
-                        if !entries.iter().any(|(name, kind)| name == &folder && kind.is_none()) {
-                            entries.push((folder, None));
+                        if !entries.iter().any(|(name, kind, _)| name == &folder && kind.is_none()) {
+                            entries.push((folder, None, 0));
                         }
                     }
-                    None => entries.push((key.to_owned(), Some(*modified))),
+                    None => entries.push((key.to_owned(), Some(*modified), bytes.len() as u64)),
                 }
             }
-            let page: Vec<_> = entries.into_iter().filter(|(name, _)| name.as_str() > after.as_str()).collect();
+            let page: Vec<_> = entries.into_iter().filter(|(name, _, _)| name.as_str() > after.as_str()).collect();
             let truncated = page.len() > 2;
             let page = &page[..page.len().min(2)];
             let mut body = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>{bucket}</Name><Prefix>{}</Prefix><KeyCount>{}</KeyCount><IsTruncated>{truncated}</IsTruncated>", xml(&prefix), page.len());
             if truncated {
                 body.push_str(&format!("<NextContinuationToken>{}</NextContinuationToken>", xml(&page[page.len() - 1].0)));
             }
-            for (name, modified) in page {
+            for (name, modified, size) in page {
                 match modified {
                     Some(modified) => {
                         let seconds = modified / 1000;
+                        let millis = modified % 1000;
                         let (year, month, day) = crate::copies::civil_from_days((seconds / 86_400) as i64);
                         let time = seconds % 86_400;
                         body.push_str(&format!(
-                            "<Contents><Key>{}</Key><LastModified>{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z</LastModified><Size>0</Size></Contents>",
-                            xml(name), time / 3600, time / 60 % 60, time % 60
+                            "<Contents><Key>{}</Key><LastModified>{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z</LastModified><Size>{size}</Size></Contents>",
+                            xml(name), time / 3600, time / 60 % 60, time % 60, size = size
                         ));
                     }
                     None => body.push_str(&format!("<CommonPrefixes><Prefix>{}</Prefix></CommonPrefixes>", xml(name))),
@@ -1117,12 +1119,13 @@ pub mod tests {
         expected.sort();
         let objects = store.objects(&expected[0]).await.unwrap();
         assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].size, 1);
         assert!(objects[0].modified_ms.is_some_and(|at| at > 1_700_000_000_000));
         let _ = std::fs::remove_dir_all(root);
     }
 
     fn index(root: &Path, deployment: &str, files: &[(&str, u64)]) {
-        let directory = crate::layout::files(&root, &deployment);
+        let directory = crate::layout::files(root, deployment);
         std::fs::create_dir_all(&directory).unwrap();
         let entries: Vec<_> = files.iter().map(|(id, size)| serde_json::json!({"id": id, "size": size, "visibility": "private"})).collect();
         std::fs::write(directory.join("index.json"), serde_json::to_vec(&entries).unwrap()).unwrap();
