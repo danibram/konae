@@ -47,6 +47,7 @@ import { switcherProjects } from "./components/project-list";
 import { suggestedChanges } from "./components/agent-suggestions";
 import "./components/workbench.css";
 import { AgentPanel } from "./components/AgentPanel";
+import type { AppSettingsSection } from "./components/AppSettingsDialog";
 import { proposalPreviewProject, type ProposalPreview } from "./components/proposal-preview";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { describeDraftKey, useAgentThread } from "./components/useAgentThread";
@@ -204,6 +205,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [operationError, setOperationError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
+  const [appSettingsSection, setAppSettingsSection] = useState<AppSettingsSection>("addresses");
   const [domainVersion, setDomainVersion] = useState(0);
   const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
   const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
@@ -1543,7 +1545,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const moreItems: MenuItem[] = [
     ...(compact && activeDeployment ? [{ label: "Open the app", icon: <ExternalLink size={14} />, onSelect: () => { window.open(activeDeployment.url, "_blank", "noopener,noreferrer"); } }] : []),
     { label: exporting ? "Exporting…" : "Export", icon: <Download size={14} />, disabled: exporting, onSelect: () => void exportProject() },
-    { label: "App settings", icon: <Settings2 size={14} />, onSelect: () => setAppSettingsOpen(true) },
+    { label: "App settings", icon: <Settings2 size={14} />, onSelect: () => { setAppSettingsSection("addresses"); setAppSettingsOpen(true); } },
     { label: ownerSession.state === "signed-in" ? "Owner account" : "Owner sign-in", icon: <UserRound size={14} />, onSelect: () => { window.location.href = signInHref; } },
     { label: "Start over…", icon: <RotateCcw size={14} />, danger: true, onSelect: () => setResetOpen(true) },
   ];
@@ -1655,14 +1657,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         providers={PROVIDERS}
       />
 
-      {appSettingsOpen && <AppSettingsDialog fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>} key={`${project.id}-${domainVersion}`} projectName={project.name} modules={project.modules} files={Object.keys(project.files)} deploymentId={activeDeployment?.id} importTarget={activeDeployment ? { project: { id: project.id, name: project.name, slug: project.slug }, visibility: activeDeployment.manifest.visibility, onImported: () => window.location.reload() } : undefined} onClose={() => setAppSettingsOpen(false)} onSignedOut={refreshOwnerSession} onAddressMoved={(url) => setDeployments((current) => current[project.id] ? { ...current, [project.id]: { ...current[project.id]!, url } } : current)} signInHref={signInHref} onExport={() => { setAppSettingsOpen(false); void exportProject(); }} />}
+      {appSettingsOpen && <AppSettingsDialog fallback={<Dialog title="App settings" onClose={() => setAppSettingsOpen(false)}><div className="ui-dialog-body"><LoadingBlock label="Loading app settings" rows={3} /></div></Dialog>} key={`${project.id}-${domainVersion}`} projectName={project.name} section={appSettingsSection} onSectionChange={setAppSettingsSection} modules={project.modules} files={Object.keys(project.files)} deploymentId={activeDeployment?.id} importTarget={activeDeployment ? { project: { id: project.id, name: project.name, slug: project.slug }, visibility: activeDeployment.manifest.visibility, onImported: () => window.location.reload() } : undefined} onClose={() => { setAppSettingsSection("addresses"); setAppSettingsOpen(false); }} onSignedOut={refreshOwnerSession} onAddressMoved={(url) => setDeployments((current) => current[project.id] ? { ...current, [project.id]: { ...current[project.id]!, url } } : current)} signInHref={signInHref} onExport={() => { setAppSettingsSection("addresses"); setAppSettingsOpen(false); void exportProject(); }} />}
 
       {platformConfirmation && <Dialog title="Allow the agent to do this?" description={project.name} onClose={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }} footer={<>
         <Button onClick={() => { resolvePlatformConfirmation.current?.(false); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Cancel</Button>
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
       {/* After the Deploy dialog, so it paints over it. */}
       {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 

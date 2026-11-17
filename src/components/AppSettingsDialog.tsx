@@ -18,6 +18,8 @@ import "./app-settings.css";
 
 type Props = {
   projectName: string;
+  section: Section;
+  onSectionChange: (section: Section) => void;
   modules?: Record<string, { on: boolean; [key: string]: unknown }>;
   files?: string[];
 
@@ -40,9 +42,9 @@ const sections: { id: Section; label: string }[] = [
   { id: "move", label: "Move this app" },
 ];
 
-export function AppSettingsDialog({ projectName, modules, files, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
+export type AppSettingsSection = Section;
 
-  const [section, setSection] = useState<Section>("addresses");
+export function AppSettingsDialog({ projectName, section, onSectionChange, modules, files, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
   const initialModules = modules ?? Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, { on: false, ...Object.fromEntries(module.options.map((option) => [option.key, option.default])) }]));
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
@@ -131,7 +133,7 @@ export function AppSettingsDialog({ projectName, modules, files, importTarget, d
   };
 
   return <Dialog title="App settings" description={projectName} onClose={() => { if (!busy) onClose(); }} className="app-settings-dialog">
-    <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={setSection}
+    <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={onSectionChange}
       items={sections.filter((item) => deploymentId || item.id === "addresses" || item.id === "modules").map((item) => ({ ...item, tabId: `app-settings-tab-${item.id}`, controls: `app-settings-${item.id}` }))} />
     <div className="app-settings-body" aria-busy={busy || loading}>
       {!deploymentId ? <>
