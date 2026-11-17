@@ -212,9 +212,7 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
             Ok(bytes) => (inline_script_hashes(&bytes), Body::from(bytes)),
             Err(_) => {
                 let mut response = error(StatusCode::INTERNAL_SERVER_ERROR, "Page is too large to serve.");
-                if private {
-                    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
-                }
+                response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
                 return response;
             }
         };
@@ -228,7 +226,7 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
     };
     parts.headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     parts.headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    if private || (app && seo_off) {
+    if !app || private || (app && seo_off) {
         parts.headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     }
     if let Some(hsts) = hsts {
@@ -240,6 +238,21 @@ pub async fn headers(State(state): State<AppState>, mut request: Request, next: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_oversized_html_error_is_not_indexed_for_a_public_response() {
+        let root = std::env::temp_dir().join(format!("konae-security-large-{}", uuid::Uuid::new_v4()));
+        let state = AppState::for_test(&root);
+        let app = axum::Router::new().route("/large", axum::routing::get(|| async {
+            ([(header::CONTENT_TYPE, "text/html")], Body::from(vec![b'x'; MAX_HASHED_HTML + 1]))
+        })).layer(axum::middleware::from_fn_with_state(state.clone(), headers)).with_state(state);
+        use tower::ServiceExt;
+        let request = Request::builder().uri("/large").header(header::HOST, "public.example").body(Body::empty()).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()["x-robots-tag"], "noindex");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
 
     fn sha(text: &str) -> String {
         format!("'sha256-{}'", encode_base64(&Sha256::digest(text.as_bytes())))

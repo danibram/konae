@@ -183,10 +183,12 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "permissions": {
       "export_data": "project_export and reading its downloads",
       "manage_users": "module_set for auth, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+      "module_set": "Changes a module whose registry permission is held by the credential",
+      "modules_read": "Reads module state and options; requires read",
       "none": "platform_describe, platform_guide, session_inspect and mail_status",
       "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter",
-      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
-      "read": "projects_list, project_inspect, project_sources_read, modules_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_summary, signals_read, usage_overview, calls_read, notices_read and database_execute reads",
+      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, module_set for modules with publish permission, project_import, and initialSignupPolicy on a first release",
+      "read": "projects_list, project_inspect (including deployment.signupPolicy), project_sources_read, modules_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_summary, signals_read, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
     "projectScope": "A project-scoped credential can act only on the existing project IDs it names, within the permissions it holds. It cannot create a project. Create projects from the owner's browser session or publish a folder with konae.",
@@ -316,7 +318,7 @@ content-type: application/json
 
 ## 4. Create the project
 
-`init` writes an app folder, with a template in `app/` and `konae.json`, into an empty folder. It makes the project ID itself and calls no installation, so it needs no credential. The first `publish` registers the project on the installation. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The private project starts with `modules.auth` on and a Signup Policy that admits only people the owner invites.
+`init` writes an app folder, with a template in `app/` and `konae.json`, into an empty folder. It makes the project ID itself and calls no installation, so it needs no credential. The first `publish` registers the project on the installation. Dotfiles, such as the `.konae` folder `login` wrote, do not count. The project starts private, and its `signupPolicy` admits only people the owner invites.
 
 <!-- walkthrough:init -->
 ```sh
@@ -337,31 +339,18 @@ cat /tmp/orders/konae.json
   "name": "Orders",
   "slug": "orders",
   "visibility": "private",
-  "kernel": "<Kernel version>",
-  "modules": {
-    "auth": {
-      "on": true
-    },
-    "files": {
-      "on": false,
-      "fileAccess": null
-    },
-    "seo": {
-      "on": false,
-      "canonical": null,
-      "image": null
-    }
-  },
-  "manifest": {
-    "version": 1
-  },
   "signupPolicy": {
     "mode": "invitation",
     "allowlist": []
   },
   "signInMethods": [
     "password"
-  ]
+  ],
+  "kernel": "<Kernel version>",
+  "modules": {},
+  "manifest": {
+    "version": 1
+  }
 }
 ```
 
@@ -632,7 +621,7 @@ A signing secret belongs to the project. The Kernel keeps it in the app folder's
 ```
 <!-- /walkthrough:secret -->
 
-`publish` builds the folder, uploads the release and applies it. On the first release it sends `signupPolicy` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
+`publish` builds the folder, uploads the release and applies it. On the first release it sends `signupPolicy` from `konae.json` as `initialSignupPolicy`, so the app starts as Invitation only. A visitor without a session gets the sign-in page on every path of a private app.
 
 <!-- walkthrough:publish -->
 ```sh
@@ -1463,7 +1452,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "chunkBytes": 4194304,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
-      "size": 29696,
+      "size": 30720,
       "transferId": "<folder download>"
     },
     "manifest": {

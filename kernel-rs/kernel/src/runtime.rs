@@ -618,6 +618,9 @@ pub fn tool_error(error: &anyhow::Error) -> Value {
 /// database an import puts in place first; without it the change is planned
 /// against the live database, or a package's or an empty one for a first release.
 pub async fn validate_release(state: &AppState, input: &DeployInput, against: Option<&Path>) -> Result<super::schema_change::Change> {
+    if let Some(initial_modules) = input.initial_modules.as_ref() {
+        crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
+    }
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"
@@ -644,10 +647,18 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     }
     let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
     let uses_files = super::modules::artifact_uses_files(artifact.values().map(Vec::as_slice))
-        || super::modules::sources_use_files(input.project.files.values().map(String::as_bytes));
+        || super::modules::sources_use_files(input.project.files.values().map(String::as_bytes))
+        || input.project.manifest["fileAccess"] == "app-users";
+    let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
+        || super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
     if uses_files {
         let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-        let modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
+        let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
+        if input.project.manifest["fileAccess"] == "app-users" {
+            let files = modules.get_mut("files").expect("files is switchable");
+            files["on"] = serde_json::json!(true);
+            files["fileAccess"] = serde_json::json!("app-users");
+        }
         if let Err(refused) = super::modules::require_on(&modules, "files") { return Err(anyhow::Error::new(refused)); }
     }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
@@ -655,7 +666,6 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
     let sizes = artifact.iter().map(|(path, bytes)| (path.as_str(), bytes.len()));
     anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= super::size::ARTIFACT_BYTES, "{}", super::size::artifact_refused(sizes));
-    let artifact_uses_auth = super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
     drop(artifact);
     super::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
     let program = super::action_shape::read(
@@ -666,8 +676,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
             .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
     )?;
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-    let mut candidate_modules = existing_modules.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
-    let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes)) || artifact_uses_auth;
+    let mut candidate_modules = existing_modules.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
     if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
         && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
         && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {

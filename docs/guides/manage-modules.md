@@ -6,7 +6,7 @@ Modules hold the options and capabilities an app uses. The editor's App settings
 
 Call `modules_read` to see every module, its state, switch availability, options, permission and current behavior. Call `module_set` with the module name, the change and the state you read as `expected`. The tool refuses a stale state with `module.changed`. Read `modules_read` again before retrying. After a successful change, read `modules_read` to confirm the new state.
 
-The contract in `src/sdk/contract.ts` describes each module and its options. `auth`, `actions`, `files`, `calls` and `http` are on and cannot be switched yet. `seo` has a switch and can be configured.
+The contract in `src/sdk/contract.ts` describes each module and its options. `files` and `seo` have switches. The build agent may change `seo` after the owner confirms, but it may never change `files`. Other modules remain on and cannot be switched yet.
 
 ## Configure search listing
 

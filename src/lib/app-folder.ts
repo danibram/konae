@@ -45,10 +45,10 @@ export const DATA_FOLDER = "data";
 export const KERNEL_VERSION: string = version;
 
 export function defaultModuleStates(existing: AppSettings["modules"] = {}): AppSettings["modules"] {
-  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, Object.assign(
+  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch && existing?.[module.name] !== undefined).map((module) => [module.name, Object.assign(
     { on: false },
     Object.fromEntries(module.options.map((option) => [option.key, option.default])),
-    existing?.[module.name] ?? {},
+    existing[module.name] ?? {},
   )]));
 }
 

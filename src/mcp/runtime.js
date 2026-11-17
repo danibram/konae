@@ -84,10 +84,13 @@
       get params() {
         const value = typeof document === 'undefined' ? undefined : document.querySelector?.('meta[name="konae-page-params"]')?.getAttribute("content");
         if (!value) return {};
-        try { return JSON.parse(value); } catch { return {}; }
+        try {
+          const parsed = JSON.parse(value);
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch { return {}; }
       },
       url: path => {
-        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) throw Error('An app page path must start with one slash.');
+        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || /[\\\u0000-\u001f\u007f]/.test(path)) throw Error('An app page path must start with one slash.');
         return base + path;
       }
     },

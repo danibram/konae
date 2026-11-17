@@ -175,9 +175,7 @@ pub struct Settings {
     pub name: String,
     pub slug: String,
     pub visibility: String,
-    #[serde(default)]
     pub signup_policy: SignupPolicy,
-    #[serde(default = "default_sign_in_methods")]
     pub sign_in_methods: Vec<SignInMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_email: Option<String>,
@@ -310,6 +308,13 @@ impl Settings {
         let bytes = std::fs::read(layout::settings(root, id))?;
         let raw: Value = serde_json::from_slice(&bytes)?;
         let mut settings: Self = serde_json::from_slice(&bytes)?;
+        if let Some(raw_modules) = raw["modules"].as_object() {
+            let raw_modules = raw_modules.iter().map(|(name, state)| (name.clone(), state.clone())).collect();
+            if let Err(refusal) = modules::validate_state(&raw_modules) {
+                eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
+                anyhow::bail!("{}", refusal.message);
+            }
+        }
         modules::complete(&mut settings.modules);
         let nested_policy = settings.modules["auth"]["signupPolicy"].clone();
         let nested_methods = settings.modules["auth"]["signInMethods"].clone();
@@ -324,6 +329,10 @@ impl Settings {
             None => default_sign_in_methods(),
         };
         settings.sync_auth_options();
+        if let Err(refusal) = modules::validate_state(&settings.modules) {
+            eprintln!("konae: ignoring invalid module state in apps/{id}/konae.json: {}", refusal.message);
+            anyhow::bail!("{}", refusal.message);
+        }
         let old_file_access = raw["manifest"]["fileAccess"] == "app-users" || raw["released"]["manifest"]["fileAccess"] == "app-users";
         if raw["modules"]["files"].is_null() && old_file_access {
             let files = settings.modules.get_mut("files").expect("files is switchable");
@@ -1017,7 +1026,6 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         },
         None => None,
     };
-    let has_initial_signup_policy = initial_signup_policy.is_some();
 
 
 
@@ -1048,42 +1056,9 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let released_schema = input.project.files.get("schema.sql").cloned().unwrap_or_default();
     let released_transforms = input.project.files.get("schema-transforms.json").cloned();
     let mut manifest = input.project.manifest;
+    let legacy_file_access = manifest["fileAccess"] == "app-users";
     manifest["visibility"] = Value::String(input.visibility.clone());
     let artifact_version = format!("v{}", Uuid::new_v4().simple());
-    let signup_policy = match existing.as_ref() {
-        Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
-        None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
-    };
-    let sign_in_methods = match existing.as_ref() {
-        Some(item) => item.sign_in_methods.clone(),
-        None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
-    };
-    let mut module_states = {
-        let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
-            || modules::sources_use_files(input.project.files.values().map(String::as_bytes));
-        let mut states = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files));
-        modules::complete(&mut states);
-        if existing.is_none() && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
-            && (modules::sources_use_auth(input.project.files.values().map(String::as_bytes)) || modules::artifact_uses_auth(artifact_files.values().map(Vec::as_slice))) {
-            states.get_mut("auth").expect("auth is switchable")["on"] = Value::Bool(true);
-        }
-        states
-    };
-    if existing.is_none() {
-        let auth = module_states.get_mut("auth").expect("auth is switchable");
-        auth["signupPolicy"] = serde_json::to_value(&signup_policy).unwrap_or(Value::Null);
-        auth["signInMethods"] = serde_json::to_value(&sign_in_methods).unwrap_or(Value::Null);
-        if (input.visibility != "public" || has_initial_signup_policy || package_policy.is_some())
-            && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth")) { auth["on"] = Value::Bool(true); }
-    }
-    if input.visibility != "public" {
-        if let Err(refused) = modules::check_private_auth(modules::is_on(&module_states, "auth")) {
-            return refusal_error(&refused);
-        }
-    }
-    if let Err(refused) = modules::check_requirements(&module_states) {
-        return refusal_error(&refused);
-    }
     let deployment = Deployment {
         id: id.clone(),
         project_id: input.project.id,
@@ -1100,9 +1075,29 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         hostname: hostname.clone(),
         actions,
         artifact_version: artifact_version.clone(),
-        signup_policy,
-        sign_in_methods,
-        modules: module_states,
+        signup_policy: match existing.as_ref() {
+            Some(item) => item.signup_policy.for_republish(is_private(item), &input.visibility),
+            None => initial_signup_policy.unwrap_or_else(|| SignupPolicy::initial(&input.visibility)),
+        },
+        sign_in_methods: match existing.as_ref() {
+            Some(item) => item.sign_in_methods.clone(),
+            None => initial_sign_in_methods.unwrap_or_else(default_sign_in_methods),
+        },
+        modules: {
+            let uses_files = modules::artifact_uses_files(artifact_files.values().map(Vec::as_slice))
+                || modules::sources_use_files(input.project.files.values().map(String::as_bytes))
+                || legacy_file_access;
+            let uses_auth = modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
+                || modules::artifact_uses_auth(artifact_files.values().map(Vec::as_slice));
+            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
+            if legacy_file_access {
+                let files = modules.get_mut("files").expect("files is switchable");
+                files["on"] = json!(true);
+                files["fileAccess"] = json!("app-users");
+            }
+            modules::complete(&mut modules);
+            modules
+        },
         contact_email: input.contact_email.clone(),
         released_schema,
     };
@@ -1159,7 +1154,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         }
     }
     let identity_path = layout::identity(&state.data_root, &id);
-    let identity = if identity_path.exists() || !modules::is_on(&deployment.modules, "auth") {
+    let identity = if identity_path.exists() {
         Ok(())
     } else {
         open_auth(&state, &deployment).map(drop).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))
@@ -1351,6 +1346,10 @@ fn remove_database_files(path: &Path) {
 
 
 fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result<()> {
+    swap_database_with(live, staged, replaced, || {})
+}
+
+fn swap_database_with(live: &Path, staged: &Path, replaced: &Path, between_renames: impl FnOnce()) -> std::io::Result<()> {
     std::fs::rename(live, replaced)?;
     for suffix in ["-wal", "-shm"] {
         let from = database_sidecar(live, suffix);
@@ -1361,6 +1360,7 @@ fn swap_database(live: &Path, staged: &Path, replaced: &Path) -> std::io::Result
             }
         }
     }
+    between_renames();
     if let Err(error_value) = std::fs::rename(staged, live) {
         let _ = restore_database(live, replaced);
         return Err(error_value);
@@ -1582,6 +1582,9 @@ pub async fn session(State(state): State<AppState>, headers: HeaderMap) -> Respo
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if !modules::is_on(&deployment.modules, "auth") {
+        return error(StatusCode::NOT_FOUND, "Authentication is not enabled for this app.");
+    }
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(user)) => Json(json!({"result": user})).into_response(),
         Ok(None) => Json(
@@ -1621,7 +1624,9 @@ pub async fn auth_request(
     let Some(deployment) = deployment_for(state, headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    if !modules::is_on(&deployment.modules, "auth") { return error(StatusCode::NOT_FOUND, "Not found."); }
+    if !modules::is_on(&deployment.modules, "auth") {
+        return error(StatusCode::NOT_FOUND, "Authentication is not enabled for this app.");
+    }
     let peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -1771,7 +1776,6 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    if !modules::is_on(&deployment.modules, "auth") { return error(StatusCode::NOT_FOUND, "Not found."); }
     let token = headers.get(header::AUTHORIZATION).and_then(|v|v.to_str().ok()).and_then(|v|v.strip_prefix("Bearer ")).map(str::to_owned)
         .or_else(|| cookie_value(&headers, &app_cookie_name(&state, &deployment.id, &headers)));
     let _identity_guard = database_lock(&state, &format!("identity:{}", deployment.id)).await;
@@ -2213,7 +2217,9 @@ pub async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Re
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Konae deployment not found.");
     };
-    if !modules::is_on(&deployment.modules, "auth") { return error(StatusCode::NOT_FOUND, "Not found."); }
+    if !modules::is_on(&deployment.modules, "auth") {
+        return error(StatusCode::NOT_FOUND, "Authentication is not enabled for this app.");
+    }
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
         Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
@@ -2280,9 +2286,9 @@ pub(crate) async fn serve_key_with_routes(
     let html_candidate = artifact::candidates(&path, routing).iter().any(|candidate| {
         candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")
     });
-    let spa_fallback = routing == artifact::Routing::Spa
+    let spa_fallback = seo_on && routing == artifact::Routing::Spa
         && (!safe_relative_path(&path) || tokio::fs::metadata(crate::layout::dist(&state.data_root, &deployment.id).join(&path)).await.is_err());
-    let may_be_page = html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml";
+    let may_be_page = seo_on && (html_candidate || spa_fallback || path == "robots.txt" || path == "sitemap.xml");
     if !navigation && etag_matches(&headers, &cache.version_tag()) && (!seo_on || !may_be_page) {
         return cache.not_modified(cache.version_tag());
     }
@@ -2290,13 +2296,13 @@ pub(crate) async fn serve_key_with_routes(
         return seo::robots_response(&deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache, navigation).unwrap();
     }
     if seo_on && path == "sitemap.xml" {
-        return seo::sitemap_response(&state.data_root, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).unwrap();
+        return seo::sitemap_response(&state, &deployment, &path, read_artifact(&state, &deployment, &path).await.ok(), address.as_ref().unwrap(), &headers, &cache).await.unwrap();
     }
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
             count_page_view(&state, &deployment, &headers, &candidate);
             if seo_on {
-                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache, navigation) {
+                if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache) {
                     return response;
                 }
             }
@@ -3665,7 +3671,6 @@ async fn persist_applied(state: &AppState, deployment: &Deployment, artifact_dig
     settings.signup_policy = deployment.signup_policy.clone();
     settings.sign_in_methods = deployment.sign_in_methods.clone();
     settings.contact_email = deployment.contact_email.clone();
-    settings.sync_auth_options();
     settings.manifest = crate::sources::manifest_without_runtime(&settings.manifest);
     let mut released = released_settings(deployment);
     if released.schema_sql.trim().is_empty() { released.schema_sql = recovered.schema_sql; }
@@ -3763,8 +3768,7 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
         let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
-        folder::decide_files_module(root, &id).await?;
-        folder::decide_auth_module(root, &id).await?;
+        crate::folder::decide_app_modules(root, &id).await?;
         let settings = Settings::read(root, &id).with_context(|| format!("{} is not readable.", layout::settings(root, &id).display()))?;
         let deployment = settings.deployment(installed, public_origin);
         result.insert(deployment.hostname.clone(), deployment);
@@ -3854,7 +3858,7 @@ pub fn signup_policy_value(deployment: &Deployment) -> Value {
 }
 
 /// Sets who may create an account in the app `id`, as Konae's
-/// `module_set` on `auth` and the `kernel` binary's `signup-policy` both do.
+/// `module_set` on auth and the `kernel` binary's `signup-policy` both do.
 /// The entries stay as they are when `entries` is `None`. The change lands
 /// in `konae.json`, which a running `kernel` binary follows, and the answer
 /// is `signup_policy_value` with `previousMode`.
@@ -3899,7 +3903,6 @@ pub fn authenticate_deployment(
     deployment: &Deployment,
     headers: &HeaderMap,
 ) -> std::result::Result<Option<AuthUser>, Response> {
-    if !modules::is_on(&deployment.modules, "auth") { return Ok(None); }
     let auth = open_auth(state, deployment)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer ")).map(str::to_owned)
@@ -4409,6 +4412,33 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn a_release_with_a_missing_page_template_uses_the_shared_case() {
+        let cases: Value = serde_json::from_str(include_str!("page-release-cases.json")).unwrap();
+        let case = &cases[0];
+        let root = std::env::temp_dir().join(format!("konae-release-page-file-{}", Uuid::new_v4()));
+        let state = test_state(&root);
+        let body = release_body(
+            "app_missing_page_file",
+            "CREATE TABLE IF NOT EXISTS posts(id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+            json!({
+                "posts.head": {
+                    "kind": "query", "access": "anonymous",
+                    "statement": "SELECT title FROM posts LIMIT 10", "bindings": [],
+                    "page": {"path": "/posts", "file": "post.html"}
+                }
+            }),
+            "<main>posts</main>",
+            None,
+        );
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let text = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains(case["error"].as_str().unwrap()), "{text}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn a_stored_deployment_on_the_editor_host_does_not_capture_the_owner_door() {
         let root = std::env::temp_dir().join(format!("konae-editor-host-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
@@ -4451,9 +4481,8 @@ pub mod tests {
             sign_in_methods: default_sign_in_methods(),
             contact_email: None,
             modules: {
-                let mut modules = modules::defaults();
+                let mut modules = modules::auth_enabled_defaults();
                 modules.get_mut("files").unwrap()["on"] = json!(true);
-                modules.get_mut("auth").unwrap()["on"] = json!(true);
                 modules
             },
             released_schema: String::new(),
@@ -4605,7 +4634,6 @@ pub mod tests {
         let entries = allowlist.iter().map(|e| e.to_string()).collect::<Vec<_>>();
         for deployment in state.deployments.write().await.values_mut() {
             deployment.signup_policy = SignupPolicy::from_input(mode, &entries).unwrap();
-            deployment.modules.get_mut("auth").unwrap()["signupPolicy"] = serde_json::to_value(&deployment.signup_policy).unwrap();
         }
     }
 
@@ -4678,6 +4706,8 @@ pub mod tests {
         let root = std::env::temp_dir().join(format!("konae-policy-preserves-draft-{}", Uuid::new_v4()));
         let (state, _) = login_test_state(&root, "public").await;
         let mut current = state.deployments.read().await.values().next().unwrap().clone();
+        current.modules.get_mut("auth").unwrap()["on"] = json!(true);
+        current.modules.get_mut("files").unwrap()["on"] = json!(true);
         current.actions = "{\"version\":1,\"actions\":{}}".into();
         state.deployments.write().await.insert(current.hostname.clone(), current.clone());
         Settings::of(&current).write(&root).await.unwrap();
@@ -4687,9 +4717,6 @@ pub mod tests {
         tokio::fs::write(crate::layout::dist(&root, &current.id).join("index.html"), "<main>deployed</main>").await.unwrap();
 
         set_signup_policy(&state, &current.id, SignupMode::Closed, None).await.unwrap();
-        let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, &current.id)).unwrap()).unwrap();
-        assert_eq!(folder_settings["signupPolicy"]["mode"], "closed");
-        assert!(folder_settings["modules"]["auth"].get("signupPolicy").is_none());
         let saved = crate::sources::read(&root, &current.id).await.unwrap().unwrap();
         assert_eq!(saved["name"], "Unpublished draft name");
         assert_eq!(saved["manifest"]["visibility"], "private");
@@ -4702,29 +4729,7 @@ pub mod tests {
         assert_eq!(serving.modules["files"]["on"], true);
         assert!(serving.manifest.get("fileAccess").is_none());
         assert_eq!(serving.signup_policy.mode, SignupMode::Closed);
-        assert_eq!(modules::read(&restarted, &serving)["modules"]["auth"]["state"]["signupPolicy"]["mode"], "closed");
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn top_level_auth_settings_override_a_module_only_export() {
-        let root = std::env::temp_dir().join(format!("konae-auth-settings-source-{}", Uuid::new_v4()));
-        let settings = Settings::new("app_auth_settings", "Auth settings", "auth-settings", &json!({"visibility":"public"}));
-        settings.write(&root).await.unwrap();
-        let path = layout::settings(&root, "app_auth_settings");
-        let mut stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        stored["signupPolicy"] = json!({"mode":"allowlist","allowlist":["owner@example.test"]});
-        stored["signInMethods"] = json!(["password", "google"]);
-        stored["modules"]["auth"]["signupPolicy"] = json!({"mode":"closed","allowlist":[]});
-        stored["modules"]["auth"]["signInMethods"] = json!(["password"]);
-        std::fs::write(&path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
-        let read = Settings::read(&root, "app_auth_settings").unwrap();
-        assert_eq!(read.signup_policy.mode, SignupMode::Allowlist);
-        assert_eq!(read.signup_policy.allowlist, ["owner@example.test"]);
-        assert_eq!(read.sign_in_methods, [SignInMethod::Password, SignInMethod::Google]);
-        assert_eq!(read.modules["auth"]["signupPolicy"]["mode"], "allowlist");
-        assert_eq!(read.modules["auth"]["signInMethods"], json!(["password", "google"]));
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5238,7 +5243,6 @@ pub mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
         let first = deploy_files(&state, json!({"index.html": "<p>one</p>"})).await;
-        assert!(!crate::layout::identity(&root, first["id"].as_str().unwrap()).exists());
         assert_eq!(first["hostname"], "republish.localhost");
         assert_eq!(first["url"], "http://republish.localhost");
         let again = deploy_files(&state, json!({"index.html": "<p>two</p>"})).await;
@@ -5315,14 +5319,22 @@ pub mod tests {
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let mut state = test_state(&root);
         state.public_origin = "https://konae.example.test".into();
+        state.guards = Arc::new(Guards::new(Vec::new()).with_statement_wait(std::time::Duration::from_millis(5)));
         deploy_files(&state, json!({
             "index.html": "<!doctype html><html><head><title>Home</title><meta name=\"description\" content=\"Start here\"></head><body>Home</body></html>",
             "about.html": "<!doctype html><html><head><title>A \"small\" <app> &amp; more</title><meta property=\"og:title\" content=\"Owner title\"></head><body>About</body></html>",
+            "post.html": "<!doctype html><html><head><title>Post template</title></head><body>Post</body></html>",
             "untitled.html": "<html><body>Missing title</body></html>",
             "robots.txt": "User-agent: special\nDisallow: /private\n",
             "card.png": "image"
         })).await;
-        let (host, deployment) = state.deployments.read().await.iter().next().map(|(host, deployment)| (host.clone(), deployment.clone())).unwrap();
+        let (host, deployment) = {
+            let mut deployments = state.deployments.write().await;
+            let (host, deployment) = deployments.iter_mut().next().unwrap();
+            deployment.actions = r#"{"version":1,"actions":{"posts.by":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html","list":"posts.list"}},"posts.list":{"kind":"query","access":"anonymous","statement":"SELECT 'listed' AS slug, ?1 AS updated LIMIT 1","bindings":[{"source":"kernel","field":"now"}]}}}"#.into();
+            (host.clone(), deployment.clone())
+        };
+        if let Err(error_value) = action_shape::read(&deployment.actions) { panic!("{error_value}"); }
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_str(&host).unwrap());
         let _off = serve_key(state.clone(), headers.clone(), "index.html".into()).await;
@@ -5343,13 +5355,33 @@ pub mod tests {
         let about_html = String::from_utf8(about_body.to_vec()).unwrap();
         assert!(about_html.contains("<title>A \"small\" <app> &amp; more</title>"));
         assert!(about_html.contains("content=\"Owner title\""));
-        assert!(about_html.contains("href=\"https://republish.localhost/about\""));
+        assert!(about_html.contains("href=\"https://republish.localhost/about\""), "{about_html}");
+        let mut navigation_headers = headers.clone();
+        navigation_headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&old_etag).unwrap());
+        navigation_headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+        let navigation_revalidation = serve_key(state.clone(), navigation_headers, "about".into()).await;
+        assert_eq!(navigation_revalidation.status(), StatusCode::NOT_MODIFIED);
         let robots = serve_key(state.clone(), headers.clone(), "robots.txt".into()).await;
         assert!(String::from_utf8(axum::body::to_bytes(robots.into_body(), 100_000).await.unwrap().to_vec()).unwrap().contains("Disallow: /private"));
+        let mut held = Vec::new();
+        for _ in 0..4 { held.push(state.guards.statement_permit(&deployment.id).await.unwrap()); }
+        let blocked_sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let blocked_sitemap = String::from_utf8(axum::body::to_bytes(blocked_sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(!blocked_sitemap.contains("/posts/listed"));
+        drop(held);
         let sitemap = serve_key(state.clone(), headers.clone(), "sitemap.xml".into()).await;
+        let sitemap_etag = sitemap.headers()[header::ETAG].to_str().unwrap().to_owned();
         let sitemap = String::from_utf8(axum::body::to_bytes(sitemap.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
         assert!(sitemap.contains("/about"));
+        assert!(sitemap.contains("/posts/listed"));
+        assert!(!sitemap.contains("/post</loc>"));
         assert!(!sitemap.contains("untitled"));
+        let mut sitemap_headers = headers.clone();
+        sitemap_headers.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&sitemap_etag).unwrap());
+        let sitemap_revalidation = serve_key(state.clone(), sitemap_headers, "sitemap.xml".into()).await;
+        assert_eq!(sitemap_revalidation.status(), StatusCode::NOT_MODIFIED);
+        let template = serve_key(state.clone(), headers.clone(), "post.html".into()).await;
+        assert_eq!(template.headers()["x-robots-tag"], "noindex");
         let listed = modules::read(&state, &deployment);
         assert_eq!(listed["modules"]["seo"]["current"]["canonical"]["reason"], "Generated hostname is the default.");
         assert!(listed["modules"]["seo"]["current"]["excluded"].to_string().contains("untitled.html"));
@@ -5364,6 +5396,69 @@ pub mod tests {
         state.deployments.write().await.get_mut(&host).unwrap().manifest["routing"] = json!("spa");
         let fallback = serve_key(state.clone(), HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]), "deep/page".into()).await;
         assert_eq!(fallback.headers()["x-robots-tag"], "noindex");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn page_queries_wait_through_database_swap_and_keep_the_new_wal() {
+        let root = std::env::temp_dir().join(format!("konae-page-swap-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html":"<title>Home</title>","post.html":"<html><head><title>Template</title></head><body></body></html>"})).await;
+        let (host, deployment) = {
+            let mut deployments = state.deployments.write().await;
+            let (host, deployment) = deployments.iter_mut().next().unwrap();
+            deployment.actions = r#"{"version":1,"actions":{"posts.head":{"kind":"query","access":"anonymous","statement":"SELECT title FROM posts WHERE slug = ?1 LIMIT 1","bindings":[{"source":"input","key":"slug","type":"string"}],"page":{"path":"/posts/:slug","file":"post.html"}}}}"#.into();
+            deployment.artifact_version = format!("{}-page-swap", deployment.artifact_version);
+            (host.clone(), deployment.clone())
+        };
+        let routes = http::route_table(&deployment);
+        assert!(routes.has_pages());
+        let live = crate::layout::database(&root, &deployment.id);
+        let staged = crate::layout::private(&root, &deployment.id).join("page-swap-staged.sqlite");
+        let replaced = crate::layout::private(&root, &deployment.id).join("page-swap-replaced.sqlite");
+        for path in [&live, &staged] {
+            let connection = Connection::open(path).unwrap();
+            connection.execute_batch("CREATE TABLE posts(slug TEXT PRIMARY KEY, title TEXT);").unwrap();
+            connection.execute("INSERT INTO posts VALUES('hello', ?1)", [if path == &live { "Old" } else { "New" }]).unwrap();
+        }
+        let lock = database_lock(&state, &deployment.id).await;
+        let (at_gap_tx, at_gap_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let swap = tokio::task::spawn_blocking(move || swap_database_with(&live, &staged, &replaced, || {
+            at_gap_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+        }));
+        tokio::task::spawn_blocking(move || at_gap_rx.recv().unwrap()).await.unwrap();
+        let headers = HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]);
+        let request = tokio::spawn(serve_key_with_routes(state.clone(), headers, "posts/hello".into(), Some(routes)));
+        let blocked = tokio::time::timeout(std::time::Duration::from_millis(20), async { while !request.is_finished() { tokio::task::yield_now().await; } }).await.is_err();
+        continue_tx.send(()).unwrap();
+        swap.await.unwrap().unwrap();
+        assert!(blocked, "the page request completed inside the database swap");
+        let writer = Connection::open(&crate::layout::database(&root, &deployment.id)).unwrap();
+        writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        writer.execute("INSERT INTO posts VALUES('later', 'WAL row')", []).unwrap();
+        assert!(crate::layout::database(&root, &deployment.id).with_extension("sqlite-wal").exists() || {
+            let mut sidecar = crate::layout::database(&root, &deployment.id).as_os_str().to_owned();
+            sidecar.push("-wal");
+            std::path::PathBuf::from(sidecar).exists()
+        });
+        drop(lock);
+        let response = request.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(body.contains("New"), "{body}");
+        writer.execute("UPDATE posts SET title=NULL WHERE slug='hello'", []).unwrap();
+        let headers = HeaderMap::from_iter([(header::HOST, HeaderValue::from_str(&host).unwrap())]);
+        let untitled = serve_key_with_routes(state.clone(), headers, "posts/hello".into(), Some(http::route_table(&deployment))).await;
+        assert_eq!(untitled.headers()["x-robots-tag"], "noindex");
+        let untitled = String::from_utf8(axum::body::to_bytes(untitled.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert!(untitled.contains("name=\"konae-page-params\""));
+        assert!(untitled.contains("&quot;slug&quot;:&quot;hello&quot;"));
+        let reopened = Connection::open(crate::layout::database(&root, &deployment.id)).unwrap();
+        assert_eq!(reopened.query_row("SELECT title FROM posts WHERE slug='later'", [], |row| row.get::<_, String>(0)).unwrap(), "WAL row");
+        drop(writer);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -5454,6 +5549,23 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn deployment_loading_recovers_legacy_files_after_an_operator_settings_write() {
+        let root = std::env::temp_dir().join(format!("konae-load-legacy-files-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        deploy_files(&state, json!({"index.html":"<script>miniapp.files.list()</script>"})).await;
+        let id = state.deployments.read().await.values().next().unwrap().id.clone();
+        let path = layout::settings(&root, &id);
+        let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw.as_object_mut().unwrap().remove("modules");
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        Settings::read(&root, &id).unwrap().write(&root).await.unwrap();
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert!(loaded.values().next().unwrap().modules["files"]["on"] == true);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn konae_load_decides_legacy_auth_before_existing_accounts_sign_in() {
         let root = std::env::temp_dir().join(format!("konae-legacy-auth-load-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
@@ -5461,8 +5573,7 @@ pub mod tests {
         let released = deploy_files(&state, json!({"index.html": "<p>Members</p>"})).await;
         let id = released["id"].as_str().unwrap();
         let original = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
-        let auth = accounts::app_store(&state, &original).unwrap();
-        auth.signup("member@example.test", "correct horse battery").unwrap();
+        accounts::app_store(&state, &original).unwrap().signup("member@example.test", "correct horse battery").unwrap();
         let settings_path = layout::settings(&root, id);
         let mut old: Value = serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
         old["modules"].as_object_mut().unwrap().remove("auth");
@@ -5471,8 +5582,9 @@ pub mod tests {
         let loaded = load_deployments(&root, "http://localhost").await.unwrap();
         let deployment = loaded.values().find(|deployment| deployment.id == id).unwrap();
         assert_eq!(deployment.modules["auth"]["on"], true);
-        let session = accounts::app_store(&state, deployment).unwrap().login("member@example.test", "correct horse battery").unwrap();
-        assert!(accounts::app_store(&state, deployment).unwrap().authenticate(Some(&session.token)).unwrap().is_some());
+        let auth = accounts::app_store(&state, deployment).unwrap();
+        let session = auth.login("member@example.test", "correct horse battery").unwrap();
+        assert!(auth.authenticate(Some(&session.token)).unwrap().is_some());
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -5538,21 +5650,13 @@ pub mod tests {
             let state = test_state(&root);
             let first = deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), visibility).await;
             assert_eq!(first["signupPolicy"]["mode"], json!(expected), "visibility={visibility}");
-            let id = first["id"].as_str().unwrap();
-            let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
-            assert_eq!(folder_settings["signupPolicy"]["mode"], json!(expected));
-            assert_eq!(folder_settings["signInMethods"], json!(default_sign_in_methods()));
-            assert!(folder_settings["modules"]["auth"].get("signupPolicy").is_none());
-            assert!(folder_settings["modules"]["auth"].get("signInMethods").is_none());
 
             set_policy(&state, SignupMode::Allowlist, &["@example.test"]).await;
             let second = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), visibility).await;
             assert_eq!(second["signupPolicy"], json!({"mode": "allowlist", "allowlist": ["@example.test"]}));
+            let id = second["id"].as_str().unwrap();
             let stored = Settings::read(&root, id).unwrap();
             assert_eq!(stored.signup_policy.mode, SignupMode::Allowlist);
-            let folder_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
-            assert_eq!(folder_settings["signupPolicy"], json!({"mode":"allowlist","allowlist":["@example.test"]}));
-            assert!(folder_settings["modules"]["auth"].get("signupPolicy").is_none());
             let mut legacy = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
             legacy.manifest["runtime"] = json!({"database":{"mode":"declared-actions"}});
             assert!(released_settings(&legacy).manifest.get("runtime").is_none());
@@ -5615,14 +5719,15 @@ pub mod tests {
             tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);
             deploy_with_visibility(&state, json!({"index.html": "<p>one</p>"}), first).await;
+            if second == "private" {
+                let mut deployment = state.deployments.read().await.values().next().unwrap().clone();
+                deployment.modules.get_mut("auth").unwrap()["on"] = json!(true);
+                Settings::of(&deployment).write(&root).await.unwrap();
+                state.deployments.write().await.insert(deployment.hostname.clone(), deployment);
+            }
             if let Some((mode, entry)) = chosen {
                 let entries: Vec<&str> = if entry.is_empty() { vec![] } else { vec![entry] };
                 set_policy(&state, mode, &entries).await;
-            }
-            if second == "private" {
-                let deployment = state.deployments.read().await.values().find(|item| item.project_id == "app_republish").unwrap().clone();
-                let changed = modules::set(&root, &deployment.id, "auth", Some(true), None, None).await.unwrap();
-                *state.deployments.write().await.values_mut().find(|item| item.project_id == "app_republish").unwrap().modules.get_mut("auth").unwrap() = changed["state"].clone();
             }
             let republished = deploy_with_visibility(&state, json!({"index.html": "<p>two</p>"}), second).await;
             assert_eq!(republished["signupPolicy"], expected, "{first} {chosen:?} -> {second}");

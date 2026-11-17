@@ -31,8 +31,7 @@ import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
-import { defaultModuleStates, settingsForFolder } from "../src/lib/app-folder";
-import { sourcesUseAuth } from "../src/lib/module-use";
+import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
@@ -57,16 +56,16 @@ const MODE_LABELS: Record<SignupMode, string> = { open: "Open", invitation: "Inv
 export const INIT_SIGNUP_POLICY = { mode: "invitation" } as const;
 
 
-export function policyInModules(modules?: AppSettings["modules"], legacy?: AppSettings["signupPolicy"]): SignupPolicy | undefined {
-  const value = modules?.auth?.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
-  if (value) return parseSignupPolicy(value);
-  return legacy ? parseSignupPolicy(legacy) : undefined;
-}
-
-function parseSignupPolicy(value: { mode?: unknown; allowlist?: unknown }): SignupPolicy {
-  if (!SIGNUP_MODES.includes(value.mode as SignupMode)) throw Error('konae.json modules.auth.signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
+export function manifestSignupPolicy(manifest: Record<string, unknown>): SignupPolicy | undefined {
+  const value = manifest.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || !SIGNUP_MODES.includes(value.mode as SignupMode)) {
+    throw Error('konae.json signupPolicy.mode must be "open", "invitation", "closed" or "allowlist".');
+  }
   const allowlist = value.allowlist ?? [];
-  if (!Array.isArray(allowlist) || !allowlist.every((entry) => typeof entry === "string")) throw Error("konae.json modules.auth.signupPolicy.allowlist must be a list of emails and @domains.");
+  if (!Array.isArray(allowlist) || !allowlist.every((entry) => typeof entry === "string")) {
+    throw Error("konae.json signupPolicy.allowlist must be a list of emails and @domains.");
+  }
   return { mode: value.mode as SignupMode, allowlist };
 }
 
@@ -82,7 +81,7 @@ function describePolicy(policy: SignupPolicy) {
 export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy): string | undefined {
   const entries = (policy: SignupPolicy) => policy.allowlist.map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join("\n");
   if (wanted.mode === current.mode && (wanted.mode !== "allowlist" || entries(wanted) === entries(current))) return undefined;
-  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Users view, or call module_set on auth with a credential that holds manage_users.`;
+  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or use module_set on auth with a credential that holds manage_users.`;
 }
 
 
@@ -479,17 +478,13 @@ export async function readSettings(root: string): Promise<AppSettings> {
   }
 }
 
+/** The project a release names, from konae.json. The Signup Policy rides in the manifest until the release reads it. */
 export function configOf(settings: AppSettings, url?: string): Config {
-  const modules = defaultModuleStates(settings.modules);
-  if (modules?.auth) {
-    modules.auth.signupPolicy = settings.signupPolicy ?? modules.auth.signupPolicy;
-    modules.auth.signInMethods = settings.signInMethods ?? modules.auth.signInMethods;
-  }
   return {
     ...(url ? { url } : {}),
     ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
-    modules,
-    project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility } },
+    modules: defaultModuleStates(settings.modules),
+    project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
   };
 }
 
@@ -509,6 +504,25 @@ async function hasPackageBuild(root: string) {
     throw error;
   }
   return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
+}
+
+async function refreshPageBuilder(root: string, actionsSource: string) {
+  let actions: unknown;
+  try { actions = JSON.parse(actionsSource)?.actions; } catch { return; }
+  if (!actions || typeof actions !== "object" || Array.isArray(actions) || !Object.values(actions).some((action) => {
+    const page = (action as { page?: { path?: unknown; file?: unknown } } | null)?.page;
+    return typeof page?.path === "string" && typeof page.file === "string";
+  })) return;
+  const resources = [
+    ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
+    ["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")],
+  ] as const;
+  for (const [relative, contents] of resources) {
+    const target = path.join(root, relative);
+    if (await readFile(target, "utf8").catch(() => undefined) === contents) continue;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
 }
 
 /** Packs an existing dist/ into the artifact shape a release uploads. */
@@ -564,6 +578,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
+    await refreshPageBuilder(root, files["actions.json"] ?? "");
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
     const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
     if (neverRuns) throw Error(neverRuns);
@@ -627,6 +642,11 @@ function typecheckApp(root: string) {
   }
 }
 
+/**
+ * Builds and publishes. On a first release `project.manifest.signupPolicy`
+ * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
+ * policy and `warn` gets one line when konae.json names another.
+ */
 async function productionRequirements(root: string, confirmation?: string | null) {
   const requirements = confirmation ? [`Pass --confirm-schema ${confirmation} when applying this database change.`] : [];
   try {
@@ -645,11 +665,11 @@ export async function publishLocal(root: string, config: Config, token: string, 
   if (!config.url) throw Error(NO_INSTALLATION);
   const initialModules = config.modules ?? defaultModuleStates();
   const client = new McpClient(endpoint(config.url), { token });
-  const wanted = policyInModules(initialModules);
-  const { runtime: _runtime, ...manifest } = config.project.manifest;
+  const wanted = manifestSignupPolicy(config.project.manifest);
+  // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
+  const { signupPolicy: _, runtime: _runtime, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
   const prepared = await buildLocal(root);
-  if (initialModules.auth && (manifest.visibility === "private" || wanted || sourcesUseAuth(Object.values(prepared.source.files)))) initialModules.auth.on = true;
   const sourcePayload = {
     files: prepared.source.files,
     ...(prepared.source.encodings && Object.keys(prepared.source.encodings).length ? { encodings: prepared.source.encodings } : {}),
@@ -717,16 +737,22 @@ export async function publishLocal(root: string, config: Config, token: string, 
   await writeFile(path.join(root, ".konae/source-revision.json"), JSON.stringify({ ...sourceRevisionScope(config.url, project.id), sourcesRevision: plan.expectedSourcesRevision + 1, sourceDigest: publishedSourceDigest, settingsDigest: settingsDigest(publishedSettings) }, null, 2), { mode: 0o600 });
   await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
+  if (!first && Object.keys(config.modules ?? {}).length > 0) {
+    warn("konae.json modules apply only to the first publish. This release keeps the Deployment's module state. Read it with modules_read and change it with module_set.");
+  }
   if (!first && wanted) {
     // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
-    const inspected = await client.call<{ modules: { auth: { state: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } } } }>("modules_read", { projectId: project.id }).catch(() => undefined);
-    const current = inspected?.modules.auth.state.signupPolicy;
+    const inspected = await client.call<{ deployment?: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId: project.id }).catch(() => undefined);
+    const current = inspected?.deployment?.signupPolicy;
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
   }
   if (!first && config.contactEmail) {
-    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id });
-    if (current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
+    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id }).catch((error) => {
+      warn(`Publish succeeded, but contact_email_read failed: ${error instanceof Error ? error.message : error}`);
+      return undefined;
+    });
+    if (current && current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
       warn(`The app folder asks for contact email ${config.contactEmail}, but this app has ${current.contactEmail ?? "none"}. A publish keeps the app's contact email after its first release. Change it with contact_email_set.`);
     }
   }
@@ -743,8 +769,8 @@ export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentI
     const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { projectId: deploymentId });
     return [`This app answers at ${generatedUrl}.`];
   }
-  const current = await client.call<{ deployment: { hostname: string } }>("project_inspect", { projectId: deploymentId });
-  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set, expected: current.deployment.hostname });
+  const current = await client.call<{ deployment?: { hostname: string } | null }>("project_inspect", { projectId: deploymentId });
+  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set, expected: current.deployment?.hostname });
   if (!moved.changed) return [`This app already answers at ${moved.url}.`];
   return [
     `This app now answers at ${moved.url}. ${moved.previousHostnames.at(-1)} redirects there with a 308 and stays this app's.`,
@@ -972,14 +998,11 @@ export async function initLocal(root: string, options: { name?: string; template
   }
   // The template says who may open the app. Only people the owner invites can create an account.
   const modules = defaultModuleStates();
-  modules.files.on = Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source));
-  modules.auth.on = born.visibility === "private" || sourcesUseAuth(Object.values(born.files));
-  modules.auth.signupPolicy = { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] };
-  modules.auth.signInMethods = ["password"];
-  const settings = settingsForFolder({
+  if (Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source))) modules.files = { on: true, fileAccess: null };
+  const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
-    kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
-  });
+    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
+  };
   await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
   await writeEntries(root, await folderFiles(root, settings));
   await ignoreInGit(root, gitignore.trim().split("\n"));
@@ -1713,7 +1736,7 @@ export async function main() {
       if (shuttingDown) return;
       if (feed) await writeFile(devSession, JSON.stringify({ events: feed.url }), { mode: 0o600 });
       if (shuttingDown) return;
-      const policy = String(settings.modules?.auth?.signupPolicy && (settings.modules.auth.signupPolicy as { mode?: unknown }).mode || settings.signupPolicy?.mode || "closed");
+      const policy = settings.signupPolicy.mode;
       if (policy !== "open") {
         // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
         const envFile = path.join(root, ".konae/kernel.env");

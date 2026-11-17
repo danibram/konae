@@ -158,5 +158,66 @@
     },
     "code": "page.duplicate",
     "error": "Actions posts.byname and posts.head both bind page path /posts/:slug."
+  },
+  {
+    "case": "page paths reserve Kernel prefixes",
+    "actions": {
+      "posts.head": {
+        "kind": "query", "access": "anonymous", "statement": "SELECT title FROM posts LIMIT 1", "bindings": [],
+        "page": { "path": "/oauth/callback", "file": "post.html" }
+      }
+    },
+    "code": "page.path-reserved",
+    "error": "Action posts.head binds the reserved path /oauth/callback. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel."
+  },
+  {
+    "case": "page paths that can match the same address are refused",
+    "actions": {
+      "pages.first": {
+        "kind": "query", "access": "anonymous", "statement": "SELECT title FROM posts LIMIT 1", "bindings": [{ "source": "input", "key": "x", "type": "string" }],
+        "page": { "path": "/a/:x/c", "file": "post.html" }
+      },
+      "pages.second": {
+        "kind": "query", "access": "anonymous", "statement": "SELECT title FROM posts LIMIT 1", "bindings": [{ "source": "input", "key": "y", "type": "string" }],
+        "page": { "path": "/a/b/:y", "file": "post.html" }
+      }
+    },
+    "code": "page.duplicate",
+    "error": "Actions pages.first and pages.second both bind page path /a/b/:y."
+  },
+  {
+    "case": "a page cannot use the app entry file",
+    "actions": {
+      "home.page": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/home", "file": "index.html" }
+      }
+    },
+    "code": "page.file-invalid",
+    "error": "Action home.page names index.html as a page file, but index.html is the app entry page."
+  },
+  {
+    "case": "a page file cannot have different route depths",
+    "actions": {
+      "posts.page": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/posts", "file": "post.html" }
+      },
+      "archive.page": {
+        "kind": "query",
+        "access": "anonymous",
+        "statement": "SELECT title FROM posts LIMIT 1",
+        "bindings": [],
+        "page": { "path": "/archive/2026/posts", "file": "post.html" }
+      }
+    },
+    "code": "page.file-depth",
+    "error": "Actions archive.page and posts.page name the same page file at different path depths."
   }
 ]

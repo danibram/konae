@@ -23,6 +23,8 @@ The editor preview opens one `srcDoc` document in an iframe. It has no app URL o
 
 The editor preview does not write canonical addresses, page cards, `robots.txt` or a sitemap. `konae dev` does, using its local host as the address. Check the `seo` module on `konae dev` or a published Deployment.
 
+The editor preview uses the project's saved `files.fileAccess` option. It does not read a published Deployment's module state, so an owner change to `fileAccess` takes effect in the Deployment and `konae dev` after pulling its settings, but may not affect the preview until the project state is refreshed.
+
 Saved public assets work in the preview, including images in `public/`, linked stylesheets, imported CSS, media conditions and SVG fragments. Programmatic `fetch()` of local saved assets and runtime-created URLs that point to local saved assets need `konae dev` or a Deployment. The preview's missing Content Security Policy still allows fetches to other origins.
 
 ## Email on konae dev

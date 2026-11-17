@@ -764,7 +764,7 @@ impl RouteTable {
         })
     }
 
-    fn has_pages(&self) -> bool {
+    pub(crate) fn has_pages(&self) -> bool {
         !self.pages.is_empty()
     }
 
@@ -801,7 +801,7 @@ fn cache_table(deployment: &Deployment) -> Arc<RouteTable> {
     table
 }
 
-fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
+pub(crate) fn route_table(deployment: &Deployment) -> Arc<RouteTable> {
     {
         let cache = route_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cached) = cache.get(&deployment.id).filter(|cached| cached.revision.as_deref() == Some(deployment.artifact_version.as_str())) {
@@ -864,6 +864,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
         Ok(bindings) => bindings,
         Err(_) => return Some(page_not_found(state, deployment).await),
     };
+    let _database = crate::action_lock(state, &deployment.id, &definition.kind).await;
     let permit = match state.guards.statement_permit(&deployment.id).await {
         Ok(permit) => permit,
         Err(wait) => return Some(rate_limited(wait)),
@@ -892,7 +893,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     };
     let seo_on = modules::is_on(&deployment.modules, "seo");
     let address = seo_on.then(|| seo::address(state, deployment));
-    let canonical = address.as_ref().map(|address| format!("{}{}", address.url.trim_end_matches('/'), path));
+    let canonical = address.as_ref().and_then(|address| page.get("path").and_then(Value::as_str).map(|pattern| seo::page_path_canonical(&address.url, pattern, &params)));
     let description = row.get("description").and_then(Value::as_str).unwrap_or("");
     let image = row.get("image").and_then(Value::as_str).map(|image| {
         if image.starts_with("http://") || image.starts_with("https://") { image.to_owned() }
@@ -902,19 +903,20 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     let html = if let Some(title) = title {
         seo::page_html(&bytes, &Value::Object(params), title, description, image.as_deref(), canonical.as_deref())
     } else {
-        bytes
+        seo::page_params_html(&bytes, &Value::Object(params))
     };
     let row_bytes = serde_json::to_vec(row).unwrap_or_default();
     let seo_state = serde_json::to_vec(&deployment.modules["seo"]).unwrap_or_default();
     let digest = sha2::Sha256::digest([deployment.artifact_version.as_bytes(), row_bytes.as_slice(), canonical.as_deref().unwrap_or("").as_bytes(), seo_state.as_slice()].concat());
     let etag = format!("\"{}-{}\"", deployment.artifact_version, hex::encode(digest));
+    count_page_view(state, deployment, headers, file);
     if crate::etag_matches(headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
         response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));
+        if !seo_on || title.is_none() { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
         return Some(response);
     }
-    count_page_view(state, deployment, headers, file);
     let mut response = artifact_response(html, file);
     response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if is_private(deployment) { "private, no-cache" } else { "no-cache" }));
@@ -941,7 +943,7 @@ fn match_page(pattern: &str, path: &str) -> Option<serde_json::Map<String, Value
     let mut params = serde_json::Map::new();
     for (pattern, value) in pattern.iter().zip(path) {
         if let Some(key) = pattern.strip_prefix(':') {
-            params.insert(key.to_owned(), Value::String(decode_path_segment(value)?));
+            params.insert(key.to_owned(), Value::String((*value).to_owned()));
         } else if *pattern != value {
             return None;
         }
@@ -965,21 +967,14 @@ fn page_query_input(action: &ActionDefinition, params: &serde_json::Map<String, 
     input
 }
 
-fn decode_path_segment(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
+#[cfg(test)]
+mod page_path_tests {
+    use super::*;
+
+    #[test]
+    fn page_path_keeps_axum_decoded_percent_values() {
+        assert_eq!(match_page("/posts/:slug", "/posts/100%"), Some(serde_json::json!({"slug": "100%"}).as_object().unwrap().clone()));
     }
-    String::from_utf8(decoded).ok()
 }
 
 pub async fn post_route(State(state): State<AppState>, request: Request) -> Response {
@@ -1270,6 +1265,7 @@ fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
 
 async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str, headers: &HeaderMap) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "files") { return error(StatusCode::FORBIDDEN, &refused.message); }
     if app_user_files(deployment) || !valid_file_id(id) {
         return not_found();
     }
@@ -1524,6 +1520,24 @@ mod tests {
         assert!(!key_reads(&key(&["public"]), "private", true));
         assert!(key_reads(&key(&["private"]), "private", true));
         assert!(!key_reads(&key(&["private"]), "public", true));
+    }
+
+    #[tokio::test]
+    async fn an_api_key_gets_the_module_off_refusal_for_a_file_url() {
+        let root = std::env::temp_dir().join(format!("konae-key-files-off-{}", uuid::Uuid::new_v4()));
+        let mut state = AppState::for_test(&root);
+        let mut deployment = crate::Settings::new("app", "App", "app", &json!({"visibility":"public"})).deployment(
+            crate::Installed { hostname:"app.localhost".into(), created_at:1, released_at:Some(2), source_digest:None, actions:"{}".into(), artifact_version:"v1".into(), released:None },
+            "http://localhost",
+        );
+        deployment.modules.get_mut("files").unwrap()["on"] = json!(false);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::from([(deployment.hostname.clone(), deployment.clone())])));
+        let key = ApiKey { id:"key".into(), actions:Vec::new(), files:vec!["public".into()] };
+        let response = read_file_as_key(&state, &deployment, &key, "018f2b2c-4a10-7a01-8000-000000000001", &HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "Module files is off. Turn it on with module_set.");
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

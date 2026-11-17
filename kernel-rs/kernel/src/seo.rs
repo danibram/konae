@@ -170,18 +170,14 @@ fn enrich_html_with(
 pub fn page_html(html: &[u8], params: &serde_json::Value, title: &str, description: &str, image: Option<&str>, canonical: Option<&str>) -> Vec<u8> {
     let Ok(mut html) = String::from_utf8(html.to_vec()) else { return html.to_vec() };
     let escaped_title = escape_all(title);
-    let lower = html.to_ascii_lowercase();
-    let title_start = lower.find("<title").and_then(|start| lower[start..].find('>').map(|end| start + end + 1));
-    let title_end = title_start.and_then(|start| lower[start..].find("</title").map(|end| start + end));
-    if let (Some(start), Some(end)) = (title_start, title_end) {
+    if let Some((start, end)) = title_span(&html) {
         html.replace_range(start..end, &escaped_title);
     } else {
         let at = head_end(&html);
         html.insert_str(at, &format!("<title>{escaped_title}</title>"));
     }
-    let encoded = serde_json::to_string(params).unwrap_or_else(|_| "{}".into());
-    let meta = format!("<meta name=\"konae-page-params\" content=\"{}\">", escape_all(&encoded));
-    html.insert_str(head_end(&html), &meta);
+    let html = page_params_html(html.as_bytes(), params);
+    let Ok(mut html) = String::from_utf8(html) else { return Vec::new() };
     if let Some(canonical) = canonical {
         for (element, key, value) in [
             ("link", "rel", "canonical"),
@@ -198,6 +194,14 @@ pub fn page_html(html: &[u8], params: &serde_json::Value, title: &str, descripti
     } else {
         html.into_bytes()
     }
+}
+
+pub fn page_params_html(html: &[u8], params: &serde_json::Value) -> Vec<u8> {
+    let Ok(mut html) = String::from_utf8(html.to_vec()) else { return html.to_vec() };
+    let encoded = serde_json::to_string(params).unwrap_or_else(|_| "{}".into());
+    let meta = format!("<meta name=\"konae-page-params\" content=\"{}\">", escape_all(&encoded));
+    html.insert_str(head_end(&html), &meta);
+    html.into_bytes()
 }
 
 fn remove_head_tag(html: &mut String, element: &str, key: &str, value: &str) {
@@ -221,15 +225,20 @@ fn escape_all(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-pub fn page_canonical(base: &str, file: &str) -> String {
-    let mut path = file
-        .trim_end_matches(".html")
-        .trim_end_matches(".htm")
-        .to_owned();
-    if path == "index" {
+pub fn page_canonical(base: &str, file: &str, routing: crate::artifact::Routing) -> String {
+    let mut path = file.to_owned();
+    if path == "index.html" {
         path.clear();
-    } else if let Some(directory) = path.strip_suffix("/index") {
-        path = format!("{directory}/");
+    } else if routing == crate::artifact::Routing::Pages && path.ends_with("/index.html") {
+        path.truncate(path.len() - "/index.html".len());
+        path.push('/');
+    } else if routing == crate::artifact::Routing::Pages && path.ends_with(".html") {
+        let extensionless = path.trim_end_matches(".html");
+        if !extensionless.rsplit('/').next().unwrap_or(extensionless).contains('.')
+            && crate::artifact::candidates(extensionless, routing).iter().any(|candidate| candidate == file)
+        {
+            path = extensionless.to_owned();
+        }
     }
     format!(
         "{}{}",
@@ -242,6 +251,18 @@ pub fn page_canonical(base: &str, file: &str) -> String {
     )
 }
 
+pub fn page_path_canonical(base: &str, pattern: &str, params: &serde_json::Map<String, serde_json::Value>) -> String {
+    let path = pattern.split('/').skip(1).map(|segment| {
+        if let Some(key) = segment.strip_prefix(':') {
+            params.get(key).map(|value| encode_path_value(&match value {
+                serde_json::Value::String(value) => value.clone(),
+                _ => value.to_string(),
+            })).unwrap_or_default()
+        } else { segment.to_owned() }
+    }).collect::<Vec<_>>().join("/");
+    format!("{}/{}", base.trim_end_matches('/'), path)
+}
+
 pub fn html_response(
     deployment: &Deployment,
     candidate: &str,
@@ -249,12 +270,12 @@ pub fn html_response(
     address: &Address,
     headers: &HeaderMap,
     cache: &ArtifactCache,
-    navigation: bool,
 ) -> Option<Response> {
     if !(candidate.to_ascii_lowercase().ends_with(".html") || candidate.to_ascii_lowercase().ends_with(".htm")) {
         return None;
     }
-    let canonical = page_canonical(&address.url, candidate);
+    let is_template = page_template(&deployment.actions, candidate);
+    let canonical = page_canonical(&address.url, candidate, crate::artifact::routing(&deployment.manifest));
     let Some(title) = title(&bytes) else {
         let mut response = cache.respond(headers, bytes.to_vec(), candidate);
         response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
@@ -266,8 +287,17 @@ pub fn html_response(
     let option_state = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
     let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes(), option_state.as_bytes()].concat());
     let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
-    if !navigation && crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
-    Some(tagged.respond(&HeaderMap::new(), body, candidate))
+    if crate::etag_matches(headers, &tagged.version_tag()) { return Some(tagged.not_modified(tagged.version_tag())); }
+    let mut response = tagged.respond(&HeaderMap::new(), body, candidate);
+    if is_template { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
+    Some(response)
+}
+
+fn page_template(actions: &str, candidate: &str) -> bool {
+    crate::action_shape::read(actions)
+        .is_ok_and(|program| program.actions.values().any(|action| {
+            action.page.as_ref().and_then(|page| page.get("file")).and_then(serde_json::Value::as_str) == Some(candidate)
+        }))
 }
 
 pub fn robots_response(
@@ -292,31 +322,101 @@ pub fn robots_response(
 }
 
 pub fn sitemap_response(
-    root: &Path,
+    state: &AppState,
     deployment: &Deployment,
     candidate: &str,
     bytes: Option<Vec<u8>>,
     address: &Address,
     headers: &HeaderMap,
     cache: &ArtifactCache,
-) -> Option<Response> {
+) -> impl std::future::Future<Output = Option<Response>> + Send {
+    async move {
     if candidate != "sitemap.xml" { return None; }
     if let Some(bytes) = bytes { return Some(cache.respond(headers, bytes, candidate)); }
-    let body = sitemap(root, deployment, &address.url);
+    let root = state.data_root.clone();
+    let id = deployment.id.clone();
+    let db = crate::layout::database(&root, &id);
+    let row_version = format!("{}-{}", metadata_version(&db).await, metadata_version(&database_sidecar(&db, "-wal")).await);
+    let options = serde_json::to_string(&deployment.modules["seo"]).unwrap_or_default();
+    let key = format!("{}|{}|{}|{}|{}", deployment.artifact_version, address.url, options, row_version, candidate);
+    let body = if let Some((_, body)) = sitemap_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&deployment.id).filter(|(cached, _)| cached == &key).cloned() {
+        body
+    } else {
+        let program = crate::action_shape::read(&deployment.actions).ok();
+        let mut lists = std::collections::HashMap::new();
+        let mut cacheable = true;
+        if let Some(program) = &program {
+            let names = program.actions.values().filter_map(|action| action.page.as_ref()?.get("list")?.as_str()).collect::<std::collections::BTreeSet<_>>();
+            for name in names {
+                let Some(list) = program.actions.get(name).cloned() else { continue };
+                let Ok(bindings) = crate::resolve_bindings(&list, &serde_json::Value::Object(serde_json::Map::new()), None) else { cacheable = false; continue };
+                let _database = crate::action_lock(state, &deployment.id, &list.kind).await;
+                let permit = match state.guards.statement_permit(&deployment.id).await { Ok(permit) => permit, Err(_) => { cacheable = false; continue } };
+                let path = db.clone();
+                if let Ok(Ok(rows)) = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    crate::run_query(&path, &list, bindings)
+                }).await {
+                    lists.insert(name.to_owned(), rows);
+                } else {
+                    cacheable = false;
+                }
+            }
+        }
+        let deployment = deployment.clone();
+        let deployment_id = deployment.id.clone();
+        let base = address.url.clone();
+        let built = tokio::task::spawn_blocking(move || sitemap(&root, &deployment, &base, lists)).await.ok()?;
+        if cacheable { sitemap_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(deployment_id, (key, built.clone())); }
+        built
+    };
     let digest = sha2::Sha256::digest([body.as_slice(), address.url.as_bytes()].concat());
     let tagged = ArtifactCache { version: format!("{}-{}", deployment.artifact_version, hex::encode(digest)), private: cache.private };
     Some(tagged.respond(headers, body, candidate))
+    }
+}
+
+fn database_sidecar(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    name.into()
+}
+
+async fn metadata_version(path: &Path) -> String {
+    tokio::fs::metadata(path).await.ok().map(|metadata| format!("{}:{:?}", metadata.len(), metadata.modified().ok())).unwrap_or_default()
+}
+
+fn sitemap_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, Vec<u8>)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, Vec<u8>)>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
 }
 
 pub fn title(html: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(html);
-    let head = head_content(&text);
-    let lower = head.to_ascii_lowercase();
-    let start = lower.find("<title")?;
-    let open = head[start..].find('>')? + start + 1;
-    let end = lower[open..].find("</title")? + open;
-    let value = head[open..end].trim();
+    let (start, end) = title_span(&text)?;
+    let value = text[start..end].trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn title_span(html: &str) -> Option<(usize, usize)> {
+    let (head_start, head_end) = head_range(html);
+    let mut cursor = head_start;
+    let (open, close) = loop {
+        let tag = next_tag(html, cursor)?;
+        cursor = tag.end;
+        if tag.start >= head_end { return None }
+        if tag.comment { continue }
+        if !tag.closing && matches!(tag.name.as_str(), "script" | "style") {
+            cursor = raw_text_end(html, tag.end, &tag.name).unwrap_or(head_end).min(head_end);
+            continue;
+        }
+        if !tag.closing && tag.name == "title" {
+            let lower = html[tag.end..].to_ascii_lowercase();
+            let close = tag.end + lower.find("</title")?;
+            break (tag.end, close)
+        }
+    };
+    Some((open, close))
 }
 
 pub fn description(html: &[u8]) -> String {
@@ -339,19 +439,70 @@ pub fn description(html: &[u8]) -> String {
 }
 
 fn head_content(html: &str) -> &str {
-    let start = html.to_ascii_lowercase().find("<head").and_then(|start| {
-        html[start..].find('>').map(|end| start + end + 1)
-    }).unwrap_or(0);
-    let end = head_end(html);
-    if start <= end { &html[start..end] } else { "" }
+    let (start, end) = head_range(html);
+    &html[start..end]
 }
 
 fn head_end(html: &str) -> usize {
-    let lower = html.to_ascii_lowercase();
-    lower.find("</head>").unwrap_or_else(|| lower.find("<body").unwrap_or(html.len()))
+    head_range(html).1
 }
 
-pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
+struct HtmlTag {
+    start: usize,
+    end: usize,
+    name: String,
+    closing: bool,
+    comment: bool,
+}
+
+fn next_tag(html: &str, from: usize) -> Option<HtmlTag> {
+    let start = from + html.get(from..)?.find('<')?;
+    let rest = &html[start..];
+    if rest.starts_with("<!--") {
+        return Some(HtmlTag { start, end: start + rest.find("-->").map_or(rest.len(), |end| end + 3), name: String::new(), closing: false, comment: true });
+    }
+    let end = start + rest.find('>')? + 1;
+    let body = html[start + 1..end - 1].trim_start();
+    let closing = body.starts_with('/');
+    let body = body.trim_start_matches('/').trim_start();
+    let name = body.chars().take_while(|character| character.is_ascii_alphanumeric() || *character == ':' || *character == '-').collect::<String>().to_ascii_lowercase();
+    Some(HtmlTag { start, end, name, closing, comment: false })
+}
+
+fn raw_text_end(html: &str, from: usize, name: &str) -> Option<usize> {
+    let lower = html[from..].to_ascii_lowercase();
+    let start = from + lower.find(&format!("</{name}"))?;
+    Some(start + html[start..].find('>')? + 1)
+}
+
+fn head_range(html: &str) -> (usize, usize) {
+    let mut cursor = 0;
+    let mut start = 0;
+    let mut found = false;
+    while let Some(tag) = next_tag(html, cursor) {
+        cursor = tag.end;
+        if tag.comment { continue }
+        if !tag.closing && matches!(tag.name.as_str(), "script" | "style") {
+            cursor = raw_text_end(html, tag.end, &tag.name).unwrap_or(html.len());
+            continue;
+        }
+        if !found && !tag.closing && tag.name == "head" {
+            start = tag.end;
+            found = true;
+        } else if found && tag.closing && tag.name == "head" {
+            return (start, tag.start);
+        } else if !found && !tag.closing && tag.name == "body" {
+            return (0, tag.start);
+        }
+    }
+    (start, html.len())
+}
+
+pub fn sitemap(root: &Path, deployment: &Deployment, base: &str, lists: std::collections::HashMap<String, Vec<serde_json::Value>>) -> Vec<u8> {
+    let program = crate::action_shape::read(&deployment.actions).ok();
+    let page_files = program.as_ref().map(|program| program.actions.values().filter_map(|action| {
+        action.page.as_ref()?.get("file")?.as_str().map(str::to_owned)
+    }).collect::<std::collections::HashSet<_>>()).unwrap_or_default();
     let mut files = Vec::new();
     if crate::artifact::routing(&deployment.manifest) == crate::artifact::Routing::Spa {
         files.push("index.html".to_owned());
@@ -367,25 +518,25 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">",
     );
     for file in files {
-        if file.eq_ignore_ascii_case("404.html") {
+        if file.eq_ignore_ascii_case("404.html") || page_files.contains(&file) {
             continue;
         }
         if let Ok(bytes) = std::fs::read(crate::layout::dist(root, &deployment.id).join(&file)) {
             if title(&bytes).is_some() {
                 xml.push_str(&format!(
                     "<url><loc>{}</loc></url>",
-                    escape(&page_canonical(base, &file))
+                    escape(&page_canonical(base, &file, crate::artifact::routing(&deployment.manifest)))
                 ));
             }
         }
     }
-    if let Ok(program) = crate::action_shape::read(&deployment.actions) {
+    if let Some(program) = program {
         for action in program.actions.values() {
             let Some(page) = action.page.as_ref() else { continue };
             let Some(template) = page.get("path").and_then(serde_json::Value::as_str) else { continue };
             let Some(list_name) = page.get("list").and_then(serde_json::Value::as_str) else { continue };
-            let Some(list) = program.actions.get(list_name) else { continue };
-            let Ok(rows) = crate::run_query(&crate::layout::database(root, &deployment.id), list, Vec::new()) else { continue };
+            let Some(_list) = program.actions.get(list_name) else { continue };
+            let Some(rows) = lists.get(list_name) else { continue };
             let segments = template.trim_start_matches('/').split('/').collect::<Vec<_>>();
             for row in rows {
                 let Some(row) = row.as_object() else { continue };
@@ -413,7 +564,7 @@ pub fn sitemap(root: &Path, deployment: &Deployment, base: &str) -> Vec<u8> {
     xml.into_bytes()
 }
 
-fn encode_path_value(value: &str) -> String {
+pub(crate) fn encode_path_value(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
@@ -555,17 +706,56 @@ mod tests {
     #[test]
     fn canonical_pages_drop_html_suffix_and_index_names() {
         assert_eq!(
-            page_canonical("https://app.example/", "index.html"),
+            page_canonical("https://app.example/", "index.html", crate::artifact::Routing::Pages),
             "https://app.example/"
         );
         assert_eq!(
-            page_canonical("https://app.example/", "about.html"),
+            page_canonical("https://app.example/", "about.html", crate::artifact::Routing::Pages),
             "https://app.example/about"
         );
         assert_eq!(
-            page_canonical("https://app.example/", "guide/index.html"),
+            page_canonical("https://app.example/", "guide/index.html", crate::artifact::Routing::Pages),
             "https://app.example/guide/"
         );
+    }
+
+    #[test]
+    fn file_canonicals_resolve_to_the_same_artifact_in_each_routing_mode() {
+        for routing in [crate::artifact::Routing::Pages, crate::artifact::Routing::Spa] {
+            for file in ["v1.2.html", "page.htm", "about.html", "index.html", "guide/index.html"] {
+                let canonical = page_canonical("https://app.example", file, routing);
+                let path = canonical.strip_prefix("https://app.example/").unwrap_or("");
+                let answer = crate::artifact::candidates(path, routing);
+                assert!(answer.iter().any(|candidate| candidate == file), "{routing:?} {file} canonicalized to {canonical}, candidates were {answer:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn page_path_canonical_uses_the_sitemap_segment_encoder() {
+        let params = serde_json::from_value(serde_json::json!({"slug": "c# 100%"})).unwrap();
+        assert_eq!(page_path_canonical("https://app.example/", "/posts/:slug", &params), "https://app.example/posts/c%23%20100%25");
+    }
+
+    #[test]
+    fn page_title_search_ignores_svg_titles_and_head_end_strings_in_scripts() {
+        let html = br#"<html><head><script>const marker = "</head>"; window.value = "${value}";</script></head><body><svg><title>Icon</title></svg></body></html>"#;
+        let output = String::from_utf8(page_html(html, &serde_json::json!({}), "Row", "", None, None)).unwrap();
+        assert!(output.contains("const marker = \"</head>\"; window.value = \"${value}\";"));
+        assert!(output.contains("<title>Icon</title>"));
+        assert!(output.contains("<head><script>const marker = \"</head>\"; window.value = \"${value}\";</script><title>Row</title>"));
+    }
+
+    #[test]
+    fn title_in_svg_does_not_count_as_a_document_title() {
+        assert_eq!(title(br#"<html><head></head><body><svg><title>Icon</title></svg></body></html>"#), None);
+    }
+
+    #[test]
+    fn untitled_page_templates_still_receive_row_parameters() {
+        let output = String::from_utf8(page_params_html(br#"<html><head></head><body></body></html>"#, &serde_json::json!({"slug": "hello"}))).unwrap();
+        assert!(output.contains("name=\"konae-page-params\""));
+        assert!(output.contains("&quot;slug&quot;:&quot;hello&quot;"));
     }
 
     #[test]

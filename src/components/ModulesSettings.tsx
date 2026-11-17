@@ -44,7 +44,7 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
   })), [initial, view]);
   const switchable = entries.filter(({ contract, live }) => live?.switch ?? contract.switch);
   const fixed = entries.filter(({ contract, live }) => !(live?.switch ?? contract.switch));
-  const imageFiles = useMemo(() => files.filter((file) => /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(file)), [files]);
+  const imageFiles = useMemo(() => files.filter((file) => file.startsWith("public/") && /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(file)).map((file) => file.slice("public/".length)), [files]);
 
   const save = async (name: string, on: boolean | undefined, options: Record<string, unknown>) => {
     if (!view || !projectId) return;
@@ -114,7 +114,7 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
           if (option.type === "boolean") return <Switch key={option.key} checked={value === true} onChange={(next) => change(contract.name, option.key, next)} label={option.label} disabled={busy || reading || !switchable || !projectId} />;
           if (option.type === "enum") return <Field key={option.key} label={option.label} help={live?.options.find((item) => item.key === option.key)?.help ?? option.help}>
             <Select value={String(value ?? "")} onChange={(event) => change(contract.name, option.key, event.target.value || null)} disabled={busy || reading || !switchable || !projectId}>
-              {value === null && <option value="">{option.defaultLabel ?? "Use the default"}</option>}
+              <option value="">{option.defaultLabel ?? "Use the default"}</option>
               {(option.values ?? []).map((item) => <option key={item} value={item}>{option.valueLabels?.[item] ?? item}</option>)}
             </Select>
           </Field>;
@@ -133,8 +133,8 @@ export function ModulesSettings({ projectId, initial, files = [], onSignedOut }:
         })}
         {statusByModule[contract.name]?.(live?.current)}
         {live && <div className="module-settings-actions">
-          <Button disabled={busy || reading || !changed} onClick={() => void save(contract.name, undefined, draftOptions(contract.options, draft))}>Save changes</Button>
-          <Switch checked={state.on === true} onChange={(next) => void save(contract.name, next, draftOptions(contract.options, draft))} label={`Turn ${contract.title} ${state.on ? "off" : "on"}`} disabled={busy || reading} />
+          <Button disabled={busy || reading || !changed} onClick={() => void save(contract.name, undefined, draftOptions(draft))}>Save changes</Button>
+          <Switch checked={state.on === true} onChange={(next) => void save(contract.name, next, draftOptions(draft))} label={`Turn ${contract.title} ${state.on ? "off" : "on"}`} disabled={busy || reading} />
         </div>}
       </article>;
     })}
@@ -170,9 +170,6 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 const statusByModule: Record<string, (current: unknown) => ReactNode> = { seo: (current) => <SeoStatus current={current} /> };
 
-function draftOptions(options: readonly SdkModuleOption[], draft: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(draft).filter(([key, value]) => {
-    const option = options.find((item) => item.key === key);
-    return value !== null || option?.type === "path";
-  }));
+function draftOptions(draft: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(draft));
 }

@@ -119,13 +119,15 @@ test("invalid bindings are missing pages, and untitled rows leave the file alone
   const untitled = await appFetch(kernel, deployment.hostname, "/posts/untitled");
   expect(untitled.status).toBe(200);
   expect(untitled.headers.get("x-robots-tag")).toBe("noindex");
-  expect(await untitled.text()).toBe(payload.artifact.files["post.html"]);
+  const untitledHtml = await untitled.text();
+  expect(untitledHtml).toContain('<meta name="konae-page-params" content="{&quot;slug&quot;:&quot;untitled&quot;}">');
+  expect(untitledHtml).toContain(payload.artifact.files["post.html"].replace("</head>", '<meta name="konae-page-params" content="{&quot;slug&quot;:&quot;untitled&quot;}"></head>'));
   const empty = await appFetch(kernel, deployment.hostname, "/posts/empty");
   await kernel.owner.call("database_execute", { projectId: deployment.id, operation: "sql", input: { sql: "INSERT INTO posts VALUES ('empty', '', 'Summary', 'cover.png', 'Body', 1, 1)" } });
   expect(empty.status).toBe(404);
   const emptyTitle = await appFetch(kernel, deployment.hostname, "/posts/empty");
   expect(emptyTitle.headers.get("x-robots-tag")).toBe("noindex");
-  expect(await emptyTitle.text()).toBe(payload.artifact.files["post.html"]);
+  expect(await emptyTitle.text()).toContain('<meta name="konae-page-params" content="{&quot;slug&quot;:&quot;empty&quot;}">');
   const failure = await appFetch(kernel, deployment.hostname, "/errors/explode");
   expect(failure.status).toBe(500);
   expect(await failure.text()).toBe("The page query failed.");

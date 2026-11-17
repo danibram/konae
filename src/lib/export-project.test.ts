@@ -37,7 +37,7 @@ test("a draft's export writes a file that is not text as its bytes", async () =>
   expect(entries.get("notes/dist/logo.png")).toEqual(png);
 });
 
-test("a draft export writes the full module state into konae.json", async () => {
+test("a draft export writes only module states the owner or template chose", async () => {
   const withActions = { ...draft, modules: { seo: { on: true, canonical: "path", image: "social.png" } }, files: { ...draft.files, "actions.json": JSON.stringify({ version: 1, actions: {} }) } } as never;
   const result = await createProjectExport(withActions, undefined, {
     mcp,
@@ -45,10 +45,7 @@ test("a draft export writes the full module state into konae.json", async () => 
   });
   const entry = readTar(new Uint8Array(await result.blob.arrayBuffer())).find((item) => item.path === `notes/${SETTINGS_FILE}`)!;
   const exported = JSON.parse(new TextDecoder().decode(entry.contents));
-  expect(Object.keys(exported.modules).sort()).toEqual(["auth", "files", "seo"]);
-  expect(exported.modules.auth).toEqual({ on: false });
-  expect(exported.signupPolicy).toEqual({ mode: "closed", allowlist: [] });
-  expect(exported.signInMethods).toEqual(["password"]);
+  expect(Object.keys(exported.modules).sort()).toEqual(["seo"]);
   expect(exported.modules.seo).toEqual({ on: true, canonical: "path", image: "social.png" });
 });
 

@@ -141,6 +141,18 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(calls.map(({ name }) => name)).toEqual(["module_set", "modules_read"]);
   });
 
+  test("a module write reports success when its read-back fails", async () => {
+    const { value, calls } = binding({ call: async (name, args) => {
+      calls.push({ name, args });
+      if (name === "modules_read" && calls.length > 1) throw new Error("read unavailable");
+      return { changed: true };
+    } });
+    const tools = await toolsFor(value);
+    const result = await run(tools.module_set, { module: "seo", on: true, expected: { on: false } });
+    expect(result.content[0]?.text).toContain("module_set succeeded; modules_read failed");
+    expect(calls.map(({ name }) => name)).toEqual(["module_set", "modules_read"]);
+  });
+
   test("accepting the shared origin is said in the confirmation", async () => {
     const { value, confirmations } = binding();
     const tools = await toolsFor(value);

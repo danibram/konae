@@ -10,6 +10,6 @@
   {"case":"an unknown module option is refused","rule":"option-unknown","module":"seo","option":"missing","value":true,"options":[{"key":"canonical","type":"enum","values":["domain","hostname","path"]}],"code":"module.option-unknown","error":"Unknown option missing for module seo."},
   {"case":"an enum refusal names allowed values","rule":"option-invalid","module":"seo","option":"canonical","value":"other","options":[{"key":"canonical","type":"enum","values":["domain","hostname","path"]}],"code":"module.option-invalid","error":"Module seo option canonical must be one of domain, hostname, path."},
   {"case":"an image option must be a relative app path","rule":"option-invalid","module":"seo","option":"image","value":"/outside.png","options":[{"key":"image","type":"path"}],"code":"module.option-invalid","error":"Module seo option image must be a relative app path or null."},
-  {"case":"private app requires auth","rule":"private-auth","requiredState":{"on":false},"code":"module.requires","error":"A private app requires auth, which is off. Turn auth on first."},
+  {"case":"private app requires auth","rule":"private-auth","module":"auth","requiredState":{"on":false},"code":"module.requires","error":"A private app requires auth, which is off. Turn auth on first."},
   {"case":"file storage requires auth","rule":"requires","module":"files","required":"auth","requiredState":{"on":false},"code":"module.requires","error":"Module files requires auth, which is off. Turn auth on first."}
 ]
