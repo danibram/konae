@@ -18,13 +18,17 @@ function matchesLegacyModuleDefaults(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const modules = value as Record<string, unknown>;
   const switchable = sdkContract.modules.filter((module) => module.switch);
-  if (Object.keys(modules).length !== switchable.length) return false;
+  const hasAuth = Object.hasOwn(modules, "auth");
+  if (Object.keys(modules).length !== switchable.length - (hasAuth ? 0 : 1)) return false;
+  if (!Object.keys(modules).every((name) => switchable.some((module) => module.name === name))) return false;
   return switchable.every((module) => {
+    if (module.name === "auth" && !hasAuth) return true;
     const state = modules[module.name];
     if (!state || typeof state !== "object" || Array.isArray(state)) return false;
     const record = state as Record<string, unknown>;
-    if (typeof record.on !== "boolean" || (module.name !== "files" && record.on)) return false;
+    if (typeof record.on !== "boolean" || (module.name !== "files" && module.name !== "auth" && record.on)) return false;
     for (const option of module.options) {
+      if (module.name === "auth" && !Object.hasOwn(record, option.key)) continue;
       if (module.name === "files" && option.key === "fileAccess" && record[option.key] === "app-users") continue;
       if (record[option.key] !== option.default) return false;
     }

@@ -50,7 +50,7 @@ describe("validation gate", () => {
     const files = capsule({ "app.js": "await miniapp.auth.session();" });
     expect((await validator.validate(files)).ok).toBe(true);
     const result = await validator.validate(files, undefined, { modules: { files: { on: false }, auth: { on: false } } });
-    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module auth is off. Turn it on with module_set." });
+    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module auth is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
   });
 
   test("file storage requires auth when the app turns it on", async () => {

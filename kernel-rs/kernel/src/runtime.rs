@@ -687,7 +687,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     }
     super::modules::check_requirements(&candidate_modules).map_err(anyhow::Error::new)?;
     if uses_auth && !super::modules::is_on(&candidate_modules, "auth") {
-        return Err(anyhow::Error::new(super::refusal::refuse("module.off", "Module auth is off. Turn it on with module_set.")));
+        return Err(anyhow::Error::new(super::modules::require_on(&candidate_modules, "auth").unwrap_err()));
     }
     super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
