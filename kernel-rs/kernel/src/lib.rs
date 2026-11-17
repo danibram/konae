@@ -1092,8 +1092,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
                 || legacy_file_access;
             let uses_auth = modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
                 || modules::artifact_uses_auth(artifact_files.values().map(Vec::as_slice));
-            let uses_actions = modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
             let action_files = input.project.files.iter().map(|(name, text)| (name.as_str(), text.as_bytes())).collect::<Vec<_>>();
+            let uses_actions = modules::named_sources_use_actions(action_files.iter().copied());
             let uses_http = modules::sources_use_http(action_files.iter().copied());
             let uses_calls = modules::sources_use_calls(action_files.iter().copied());
             let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
@@ -3789,8 +3789,17 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
         let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
-        crate::folder::decide_app_modules(root, &id).await?;
-        let settings = Settings::read(root, &id).with_context(|| format!("{} is not readable.", layout::settings(root, &id).display()))?;
+        if let Err(error) = crate::folder::decide_app_modules(root, &id).await {
+            eprintln!("konae: skipping apps/{id}: {error:#}");
+            continue;
+        }
+        let settings = match Settings::read(root, &id) {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("konae: skipping apps/{id}: {} is not readable: {error:#}", layout::settings(root, &id).display());
+                continue;
+            }
+        };
         let deployment = settings.deployment(installed, public_origin);
         result.insert(deployment.hostname.clone(), deployment);
     }
@@ -5867,6 +5876,117 @@ pub mod tests {
         assert!(!html.contains("runtime.js"));
         let reloaded = load_deployments(&root, "http://localhost").await.unwrap();
         assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["seo"]["on"], true);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_first_release_refuses_unknown_module_options_from_an_import_package() {
+        let root = std::env::temp_dir().join(format!("konae-invalid-package-modules-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let mut body = release_body("app_bad_package_modules", "", json!({}), "<p>Home</p>", None);
+        body["initialPackage"] = json!({
+            "manifest": {
+                "format": "konae-package", "version": 1, "packageId": "pkg_bad_modules", "createdAt": 1,
+                "deploymentId": "dep_source", "projectId": "project_source", "visibility": "public",
+                "modules": {
+                    "actions": {"on": false},
+                    "seo": {"on": true, "canonical": "path", "image": null, "futureOption": true}
+                },
+                "publishedRevision": 1, "contents": [], "excluded": []
+            },
+            "components": {}
+        });
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let message = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("Unknown option futureOption for module seo."), "{message}");
+        assert!(!crate::layout::settings(&root, "app_bad_package_modules").exists());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn deployment_loading_skips_one_app_with_an_unknown_module_option() {
+        let root = std::env::temp_dir().join(format!("konae-load-invalid-module-option-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        for (id, hostname, invalid) in [
+            ("app_bad_option", "bad.localhost", true),
+            ("app_good_option", "good.localhost", false),
+        ] {
+            tokio::fs::create_dir_all(crate::layout::private(&root, id)).await.unwrap();
+            let mut settings = Settings::new(id, id, id, &json!({"visibility":"public"}));
+            if invalid { settings.modules.get_mut("seo").unwrap()["futureOption"] = json!(true); }
+            settings.write(&root).await.unwrap();
+            let installed = Installed {
+                hostname: hostname.into(), created_at: 1, released_at: Some(1), source_digest: None,
+                actions: r#"{"version":1,"actions":{}}"#.into(), artifact_version: "v1".into(), released: None,
+            };
+            tokio::fs::write(crate::layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).await.unwrap();
+        }
+        let loaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded.values().any(|deployment| deployment.id == "app_good_option"));
+        assert!(!loaded.values().any(|deployment| deployment.id == "app_bad_option"));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_release_with_schema_and_actions_off_gets_the_module_refusal() {
+        let root = std::env::temp_dir().join(format!("konae-schema-actions-off-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let mut body = release_body("app_schema_actions_off", "CREATE TABLE notes(id INTEGER PRIMARY KEY);", json!({}), "<main>Home</main>", None);
+        body["initialModules"] = json!({"actions":{"on":false}});
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let message = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{message}");
+        assert!(message.contains("Module actions is off"), "{message}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn an_actions_key_in_another_json_file_does_not_turn_on_actions() {
+        let root = std::env::temp_dir().join(format!("konae-other-json-actions-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let mut body = release_body("app_other_json_actions", "", json!({}), "<main>Home</main>", None);
+        body["initialModules"] = json!({"actions":{"on":false}});
+        body["project"]["files"]["public/keys.json"] = json!("{\"actions\":{\"jump\":\"Space\"}}");
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let message = String::from_utf8(axum::body::to_bytes(response.into_body(), 100_000).await.unwrap().to_vec()).unwrap();
+        assert_eq!(status, StatusCode::OK, "{message}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn release_checks_files_before_actions_when_both_modules_are_off() {
+        let root = std::env::temp_dir().join(format!("konae-files-before-actions-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let mut body = release_body("app_files_before_actions", "", json!({"notes.list":{"kind":"query","statement":"SELECT 1"}}), "<main>Home</main>", None);
+        body["initialModules"] = json!({"actions":{"on":false},"files":{"on":false}});
+        body["artifact"]["files"]["app.js"] = json!("miniapp.files.list()");
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let refused = response_json(response).await;
+        assert_eq!(refused["code"], "module.off");
+        assert_eq!(refused["error"], "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_static_whole_document_can_release_without_a_browser_sdk_module() {
+        let root = std::env::temp_dir().join(format!("konae-static-whole-document-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let mut body = release_body("app_static_whole_document", "", json!({}), "<!doctype html><title>Static</title>", None);
+        body["initialModules"] = json!({"actions":{"on":false},"auth":{"on":false},"files":{"on":false}});
+        body["project"]["files"].as_object_mut().unwrap().remove("actions.json");
+        body["project"]["files"].as_object_mut().unwrap().remove("schema.sql");
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        assert_eq!(response.status(), StatusCode::OK);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

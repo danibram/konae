@@ -183,11 +183,18 @@ describe("init, publish, pull, dev --reset", () => {
     const born = configOf(await initLocal(folder, { name: "Static pull" }));
     await rm(path.join(folder, "app/actions.json"), { force: true });
     await rm(path.join(folder, "app/schema.sql"), { force: true });
+    await rm(path.join(folder, "app/app.js"), { force: true });
+    await writeFile(path.join(folder, "app/index.html"), "<!doctype html><title>Static pull</title><main>Static</main>");
+    born.project.manifest.visibility = "public";
     const published = await publishLocal(folder, { ...born, url: origin.url }, origin.token);
     const pulled = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
     expect(pulled.manifest.projectId).toBe(published.id);
-    expect(await readFile(path.join(folder, "app/index.html"), "utf8")).toContain("<title>Private notes</title>");
+    expect(await readFile(path.join(folder, "app/index.html"), "utf8")).toContain("<title>Static pull</title>");
     expect(await readdir(path.join(folder, "app"))).not.toContain("actions.json");
+    const pulledData = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id, { dataOnly: true });
+    expect(pulledData.manifest.contents.map((content) => content.name)).not.toContain("database");
+    await importPulled(folder, pulledData);
+    expect(await readdir(path.join(folder, "data")).catch(() => [])).not.toContain("database.sqlite");
   }, 120_000);
 
   test("a folder whose schema.sql is ahead of the exported data runs on it, and the Kernel adds the column with every row kept", async () => {

@@ -16,6 +16,7 @@ import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
 import { version } from "../../package.json";
 import { sdkContract } from "../sdk/contract";
+import { sdkRequired } from "./module-use";
 
 export type FolderEntry = { path: string; contents: string | Uint8Array };
 
@@ -268,6 +269,8 @@ import { fileURLToPath } from 'node:url';
 import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
 import { bundleModule } from './local-builder.mjs';
 
+const sdkRequired = ${sdkRequired.toString()};
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
 const dist = path.join(root, 'dist');
@@ -278,15 +281,7 @@ const paths = await walk('');
 const sources = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(app, file), 'utf8').catch(() => '')]));
 const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
 const schemaSource = await readFile(path.join(app, 'schema.sql'), 'utf8').catch(() => '');
-let actionsUsed = false;
-try { const value = JSON.parse(actionsSource); actionsUsed = value && typeof value === 'object' && !Array.isArray(value) && value.actions && typeof value.actions === 'object' && !Array.isArray(value.actions) && Object.keys(value.actions).length > 0; } catch {}
-actionsUsed ||= /\bCREATE\s+(?:(?:TEMP(?:ORARY)?|UNIQUE)\s+)*(?:TABLE|INDEX)\b/i.test(schemaSource) || sources.some(([file, source]) => file !== 'actions.json' && file !== 'schema.sql' && source.includes('miniapp.actions'));
-const text = sources.map(([, source]) => source);
-const authUsed = settings.visibility !== 'public' || text.some((source) => source.includes('miniapp.auth') || source.includes('miniapp.files') || /"access"\s*:\s*"authenticated"/.test(source) || /"source"\s*:\s*"actor"/.test(source));
-const filesUsed = text.some((source) => source.includes('miniapp.files') || source.includes('/_konae/files/'));
-const browserCall = (name) => text.some((source) => new RegExp('(?:miniapp\\s*\\.\\s*' + name + '\\b|miniapp\\s*\\[\\s*["\\']' + name + '["\\']\\s*\\]|window\\s*\\[\\s*["\\']miniapp["\\']\\s*\\]\\s*\\.\\s*' + name + '\\b|window\\s*\\[\\s*["\\']miniapp["\\']\\s*\\]\\s*\\[\\s*["\\']' + name + '["\\']\\s*\\])').test(source));
-const on = (name, inferred) => settings.modules?.[name] ? settings.modules[name].on === true : inferred;
-const sdk = browserCall('page') || (on('actions', actionsUsed) && browserCall('actions')) || (on('auth', authUsed) && browserCall('auth')) || (on('files', filesUsed) && browserCall('files'));
+const sdk = sdkRequired(settings.modules, Object.fromEntries(sources), settings.visibility);
 if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,

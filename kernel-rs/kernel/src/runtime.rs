@@ -621,8 +621,8 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     if let Some(initial_modules) = input.initial_modules.as_ref() {
         crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
     }
-    if let Some(package) = input.initial_package.as_ref() {
-        crate::modules::validate_state(&package.manifest.modules).map_err(anyhow::Error::new)?;
+    if let Some(initial_package) = input.initial_package.as_ref() {
+        crate::modules::validate_state(&initial_package.manifest.modules).map_err(anyhow::Error::new)?;
     }
     anyhow::ensure!(
         input.artifact.version == 1
@@ -654,8 +654,8 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         || input.project.manifest["fileAccess"] == "app-users";
     let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
         || super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
-    let uses_actions = super::modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
     let action_files = input.project.files.iter().map(|(name, text)| (name.as_str(), text.as_bytes())).collect::<Vec<_>>();
+    let uses_actions = super::modules::named_sources_use_actions(action_files.iter().copied());
     let uses_http = super::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = super::modules::sources_use_calls(action_files.iter().copied());
     if uses_files {

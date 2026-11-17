@@ -36,6 +36,12 @@ const schema = starter.files["schema.sql"];
 const actions = starter.files["actions.json"];
 
 describe("runtime host", () => {
+  test("a missing actions.json uses an empty action program", () => {
+    const host = new MiniAppRuntimeHost("static", "", undefined as never);
+    expect(host.actionsError).toBeNull();
+    expect(host.previewErrors()).toEqual([]);
+  });
+
   test("an invalid actions.json is reported, not thrown, and the last valid program keeps running", async () => {
     expect(() => new MiniAppRuntimeHost("broken", schema, "{ \"version\": 1, ")).not.toThrow();
     const broken = new MiniAppRuntimeHost("broken", schema, "{ \"version\": 1, ");

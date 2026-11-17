@@ -63,6 +63,11 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const schemaSource = files["schema.sql"] ?? "";
     const actionsSource = files["actions.json"] ?? `{"version":1,"actions":{}}`;
     const filesCall = sourcesUseFiles(Object.values(files));
+    const filesState = facts.modules?.files;
+    const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
+    if (filesCall && filesOff) {
+      return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code as "module.off") }, ["sources"]);
+    }
     const actionsState = facts.modules?.actions;
     const actionsOff = actionsState ? checkModuleChange({ rule: "on", module: "actions", state: actionsState }) : null;
     if (sourcesUseActions(files) && actionsOff) {
@@ -72,11 +77,6 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       const state = facts.modules?.[module];
       const off = state ? checkModuleChange({ rule: "on", module, state }) : null;
       if (used && off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
-    }
-    const filesState = facts.modules?.files;
-    const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
-    if (filesCall && filesOff) {
-      return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code as "module.off") }, ["sources"]);
     }
     const authState = facts.modules?.auth;
     if (facts.visibility === "private" && authState && authState.on !== true) {

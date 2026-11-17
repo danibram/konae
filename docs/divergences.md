@@ -51,7 +51,7 @@ The editor preview re-runs `schema.sql` on its own test rows and never changes a
 
 ## Gate and publish builders
 
-The Validation Gate checks schema and `actions.json`, and refuses a Capsule whose pages are all whole documents that load no script, as the build does. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
+The Validation Gate checks schema and `actions.json`. The Gate and builder refuse a Capsule whose pages are all whole documents that load no script when a module with browser calls is on. A static Capsule with no browser calls may use whole documents without scripts. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
 
 ## Read next
 

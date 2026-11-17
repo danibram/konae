@@ -87,6 +87,7 @@ export function appEntry(paths) {
  * when the Capsule passes.
  */
 export function entryNeverRunsMessage(paths, pages, sdk = true) {
+  if (!sdk) return null;
   const list = [...paths];
   const entry = appEntry(list);
   if (entry === null) return null;

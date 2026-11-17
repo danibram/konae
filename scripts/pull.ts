@@ -209,6 +209,7 @@ async function pullDataOnly(root: string, client: McpClient, from: string, proje
   const scratch = await mkdtemp(path.join(root, ".konae/pull-data-"));
   try {
     const { manifest, files } = await downloadPackage(client, remote.deployment.id, scratch, false);
+    await mkdir(path.join(scratch, "data"), { recursive: true });
     for (const { name, file } of files) {
       for (const entry of dataEntries(name as PackageComponentName, new Uint8Array(await readFile(file)))) {
         const target = path.resolve(scratch, entry.path);

@@ -109,10 +109,10 @@ function snapshot(source: string, target: string) {
 
 async function exists(file: string) { return stat(file).then(() => true, () => false); }
 
-export async function stageData(root: string, scratch: string, limits: FileLimits): Promise<LocalData> {
+export async function stageData(root: string, scratch: string, limits: FileLimits, databaseRequired = true): Promise<LocalData> {
   const data = path.join(root, DATA_FOLDER);
   const source = (name: string) => path.join(data, name);
-  if (!(await exists(source("database.sqlite")))) throw Error(`${path.join(DATA_FOLDER, "database.sqlite")} does not exist in ${root}, so there is no data to push. Run dev, pull and dev --reset, or write data/ as docs/guides/bring-existing-data.md says.`);
+  if (databaseRequired && !(await exists(source("database.sqlite")))) throw Error(`${path.join(DATA_FOLDER, "database.sqlite")} does not exist in ${root}, so there is no data to push. Run dev, pull and dev --reset, or write data/ as docs/guides/bring-existing-data.md says.`);
   const components: Staged[] = [];
   const add = async (name: PackageComponentName, file: string) => {
     const sized = await checksumFile(file);
@@ -179,15 +179,16 @@ export type Pushed = { backupId: string; deploymentId: string; leftInMaintenance
 
 export async function pushData(root: string, client: McpClient, project: { id: string; name: string; visibility: "public" | "private" }, options: PushOptions): Promise<Pushed> {
   const log = options.log ?? console.log;
-  const inspected = await client.call<{ deployment?: { id: string; url?: string; projectId?: string; manifest?: { visibility?: string } } | null }>("project_inspect", { projectId: project.id });
+  const inspected = await client.call<{ deployment?: { id: string; url?: string; projectId?: string; manifest?: { visibility?: string }; modules?: Record<string, { on?: boolean }> } | null }>("project_inspect", { projectId: project.id });
   const deployment = inspected.deployment;
   if (!deployment) throw Error("This project has no Deployment to push to. Publish it first.");
+  const actionsOn = deployment.modules?.actions?.on !== false;
   const limits = await fileLimits(client);
   const scratch = await mkdtemp(path.join(tmpdir(), "konae-push-"));
   const transfers: Transfer[] = [];
   try {
-    const local = await stageData(root, scratch, limits);
-    const before = await remoteRows(client, deployment.id);
+    const local = await stageData(root, scratch, limits, actionsOn);
+    const before = actionsOn ? await remoteRows(client, deployment.id) : undefined;
     const sent = local.components.map((component) => component.name);
     log(`push replaces the data of ${project.name} at ${deployment.url ?? deployment.id} with ${path.join(root, DATA_FOLDER)}. Rows are never merged.`);
     for (const line of rowsTable(local.tables, before, ["here", "published"])) log(line);
@@ -238,9 +239,9 @@ export async function pushData(root: string, client: McpClient, project: { id: s
       log(`Imported. Backup ${backupId} holds the published data as it was before.`);
       const backups = await client.call<{ id: string }[] | { result: { id: string }[] }>("database_execute", { projectId: deployment.id, operation: "list-backups" });
       if (!(Array.isArray(backups) ? backups : backups.result).some((backup) => backup.id === backupId)) throw Error(`The import answered backup ${backupId}, but list-backups does not show it.`);
-      const after = await remoteRows(client, deployment.id);
+      const after = actionsOn ? await remoteRows(client, deployment.id) : undefined;
       for (const line of rowsTable(local.tables, after, ["sent", "published"])) log(line);
-      const differ = local.tables.filter((table) => after.get(table.name) !== table.rows);
+      const differ = after ? local.tables.filter((table) => after.get(table.name) !== table.rows) : [];
       if (differ.length > 0) log(`Warning: ${differ.map((table) => table.name).join(", ")} ${differ.length === 1 ? "has" : "have"} other row counts than were sent, because the published schema changed them.`);
     } catch (error) {
       failure = error;

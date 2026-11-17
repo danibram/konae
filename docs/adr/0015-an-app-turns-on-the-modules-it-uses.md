@@ -1,6 +1,6 @@
 # An app turns on the modules it uses
 
-Status: accepted.
+Status: proposed.
 
 Every app carries a database, accounts, files and routes whether it uses them or not. The Konae home is HTML, CSS and one script, and it still ships an `actions.json` with no action, a `schema.sql`, and the SDK in every page. Each option of an app has a tool of its own, so a new one needs a tool, an entry in the build agent's allowlist and a form in the editor, and the permission it needs lives in code under the tool's name. Search listing (ADR-0016) is the next capability, and it should not add a fourth way to set an option.
 

@@ -687,7 +687,7 @@ pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_sto
     check_components_for_modules(components, file_limits, true)
 }
 
-fn check_components_for_modules(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits, actions_on: bool) -> Result<()> {
+pub fn check_components_for_modules(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits, actions_on: bool) -> Result<()> {
     let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
     let database = path("database");
     ensure!(database.is_some() || !actions_on, "The package has no database. This Kernel requires a database component for apps with actions on.");

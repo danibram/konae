@@ -173,6 +173,36 @@ test("downloadKernel verifies the release checksum and repairs a changed cached 
 });
 
 describe("konae CLI", () => {
+  test("a folder build injects the SDK for each browser call shape and omits it for a static app", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "konae-folder-sdk-build-"));
+    try {
+      await initLocal(root, { template: "tasks" });
+      await symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
+      const script = path.join(root, "app/app.js");
+      const html = path.join(root, "app/index.html");
+      for (const source of [
+        'miniapp.actions.call("tasks.feed");',
+        'const { actions } = window.miniapp; actions.call("tasks.feed");',
+        'const api = window.miniapp; api.actions.call("tasks.feed");',
+        'window.miniapp?.actions.call("tasks.feed");',
+      ]) {
+        await writeFile(script, source);
+        const child = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect(code, stdout + stderr).toBe(0);
+        expect(await readFile(path.join(root, "dist/index.html"), "utf8")).toContain("data-konae-runtime");
+      }
+      await writeFile(script, "document.body.dataset.ready = 'yes';");
+      await rm(path.join(root, "app/actions.json"), { force: true });
+      await rm(path.join(root, "app/schema.sql"), { force: true });
+      await writeFile(html, '<!doctype html><html><head><title>Static</title></head><body>Home<script type="module" src="app.js"></script></body></html>');
+      const child = Bun.spawn(["node", "scripts/build.mjs"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, stdout + stderr).toBe(0);
+      expect(await readFile(path.join(root, "dist/index.html"), "utf8")).not.toContain("data-konae-runtime");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   test("a page build refreshes generated runtime and builder files in an older app folder", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "konae-old-page-builder-"));
     try {
