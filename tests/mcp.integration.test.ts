@@ -1434,9 +1434,8 @@ describe("authenticated MCP", () => {
     for (const [route, host, email] of [["/_konae/auth/login", receipt.hostname, "victim@lockout.test"], ["/_konae/owner/login", undefined, "alice@owner.test"]] as const) {
       const send = (client: string, pw: string) => fetch(`${url}${route}`, { method: "POST", headers: { ...(host ? { host } : {}), "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email, password: pw }) });
       const attacker = freshClient();
-      const statuses = [];
-      for (let i = 0; i < 8; i++) statuses.push((await send(attacker, "wrong-password-123")).status);
-      expect(statuses).toEqual([...Array(5).fill(401), ...Array(3).fill(429)]);
+      const statuses = await Promise.all(Array.from({ length: 8 }, () => send(attacker, "wrong-password-123").then((response) => response.status)));
+      expect(statuses.sort((left, right) => left - right)).toEqual([...Array(5).fill(401), ...Array(3).fill(429)]);
       expect((await send(freshClient(), password)).status).toBe(200);
     }
   }, 60_000);

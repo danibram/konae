@@ -1514,8 +1514,27 @@ mod tests {
             .header("x-signature", "invalid").body(Body::from("{}"));
         let response = post_route(State(state.clone()), post.unwrap()).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "signature verification never runs with http off");
+        let signature_refusal: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+        assert_eq!(signature_refusal["code"], "module.off");
+        assert_eq!(signature_refusal["error"], "Module http is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+        let token = format!("{KEY_PREFIX}http-off-test-key");
+        let db = identity_connection(&state, &post_deployment).unwrap();
+        db.execute(
+            "INSERT INTO api_keys(id, token_hash, name, actions, files, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params!["key_http_off", key_hash(&token), "HTTP off", "[\"hooks.signed\"]", "[]", now_ms() as i64],
+        ).unwrap();
+        let keyed = Request::builder().method("POST").uri("/hooks/signed").header(header::HOST, &post_deployment.hostname)
+            .header(header::AUTHORIZATION, format!("Bearer {token}")).body(Body::from("{}"));
+        let keyed = post_route(State(state.clone()), keyed.unwrap()).await;
+        assert_eq!(keyed.status(), StatusCode::BAD_REQUEST, "the API key path refuses before running the route");
+        let keyed_refusal: Value = serde_json::from_slice(&axum::body::to_bytes(keyed.into_body(), 100_000).await.unwrap()).unwrap();
+        assert_eq!(keyed_refusal["code"], "module.off");
+        assert_eq!(keyed_refusal["error"], signature_refusal["error"]);
         let response = call_route(&state, &post_deployment, "POST", "/hooks/signed", "", b"{}", &HeaderMap::new(), "127.0.0.1".parse().unwrap()).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "the internal route path refuses too");
+        let internal_refusal: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+        assert_eq!(internal_refusal["code"], "module.off");
+        assert_eq!(internal_refusal["error"], signature_refusal["error"]);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
