@@ -330,7 +330,7 @@ pub fn snapshot(folder: &Path, target: &Path, blobs: &file_store::BlockingFiles,
     usage::flush();
     std::fs::create_dir_all(target)?;
     let mut components = Vec::new();
-    if crate::modules::is_on(modules, "actions") {
+    if crate::modules::is_on(modules, "actions") || folder.join("database.sqlite").is_file() {
         let database = target.join("database.sqlite");
         copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
         components.push(("database", database));
@@ -829,6 +829,26 @@ fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn snapshots_carry_an_existing_database_when_actions_are_off() {
+        let root = std::env::temp_dir().join(format!("konae-package-off-{}", Uuid::new_v4()));
+        let folder = root.join("app/data");
+        let target = root.join("snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        let database = Connection::open(folder.join("database.sqlite")).unwrap();
+        database.execute_batch("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES('kept');").unwrap();
+        drop(database);
+        let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
+        let blobs = file_store::BlockingFiles::new(store, "app");
+        let mut modules = crate::modules::defaults();
+        modules.get_mut("actions").unwrap()["on"] = json!(false);
+        let parts = snapshot(&folder, &target, &blobs, &modules).unwrap();
+        assert!(parts.iter().any(|(name, _)| *name == "database"));
+        let copied = Connection::open(target.join("database.sqlite")).unwrap();
+        assert_eq!(copied.query_row("SELECT value FROM notes", [], |row| row.get::<_, String>(0)).unwrap(), "kept");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn manifest() -> Manifest {
         Manifest {

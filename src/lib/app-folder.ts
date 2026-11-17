@@ -275,17 +275,18 @@ const development = process.argv.includes('--dev');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));
 const runtime = await readFile(path.join(root, 'scripts/runtime.js'), 'utf8');
 const paths = await walk('');
-const sources = await Promise.all(paths.map((file) => readFile(path.join(app, file), 'utf8').catch(() => '')));
+const sources = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(app, file), 'utf8').catch(() => '')]));
 const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
 const schemaSource = await readFile(path.join(app, 'schema.sql'), 'utf8').catch(() => '');
 let actionsUsed = false;
-try { actionsUsed = Object.keys(JSON.parse(actionsSource).actions ?? {}).length > 0; } catch {}
-actionsUsed ||= /\bCREATE\s+(?:(?:TEMP|TEMPORARY)\s+)?TABLE\b/i.test(schemaSource) || /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b/i.test(schemaSource) || sources.some((source) => source.includes('miniapp.actions'));
-const authUsed = settings.visibility !== 'public' || sources.some((source) => source.includes('miniapp.auth') || source.includes('miniapp.files') || /"access"\s*:\s*"authenticated"/.test(source) || /"source"\s*:\s*"actor"/.test(source));
-const filesUsed = sources.some((source) => source.includes('miniapp.files') || source.includes('/_konae/files/'));
-const sdk = (settings.modules?.actions ? settings.modules.actions.on : actionsUsed)
-  || (settings.modules?.auth ? settings.modules.auth.on : authUsed)
-  || (settings.modules?.files ? settings.modules.files.on : filesUsed);
+try { const value = JSON.parse(actionsSource); actionsUsed = value && typeof value === 'object' && !Array.isArray(value) && value.actions && typeof value.actions === 'object' && !Array.isArray(value.actions) && Object.keys(value.actions).length > 0; } catch {}
+actionsUsed ||= /\bCREATE\s+(?:(?:TEMP(?:ORARY)?|UNIQUE)\s+)*(?:TABLE|INDEX)\b/i.test(schemaSource) || sources.some(([file, source]) => file !== 'actions.json' && file !== 'schema.sql' && source.includes('miniapp.actions'));
+const text = sources.map(([, source]) => source);
+const authUsed = settings.visibility !== 'public' || text.some((source) => source.includes('miniapp.auth') || source.includes('miniapp.files') || /"access"\s*:\s*"authenticated"/.test(source) || /"source"\s*:\s*"actor"/.test(source));
+const filesUsed = text.some((source) => source.includes('miniapp.files') || source.includes('/_konae/files/'));
+const browserCall = (name) => text.some((source) => new RegExp('(?:miniapp\\s*\\.\\s*' + name + '\\b|miniapp\\s*\\[\\s*["\\']' + name + '["\\']\\s*\\]|window\\s*\\[\\s*["\\']miniapp["\\']\\s*\\]\\s*\\.\\s*' + name + '\\b|window\\s*\\[\\s*["\\']miniapp["\\']\\s*\\]\\s*\\[\\s*["\\']' + name + '["\\']\\s*\\])').test(source));
+const on = (name, inferred) => settings.modules?.[name] ? settings.modules[name].on === true : inferred;
+const sdk = browserCall('page') || (on('actions', actionsUsed) && browserCall('actions')) || (on('auth', authUsed) && browserCall('auth')) || (on('files', filesUsed) && browserCall('files'));
 if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,

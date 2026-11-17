@@ -48,7 +48,7 @@ The publish build, the same one the CLI and the export run, decides what a Deplo
 
 # The data contract
 
-The published browser never receives SQL and never receives database credentials. It only knows action names. Every database read or write goes through a named Server Action declared in actions.json and invoked with miniapp.actions.call. Before you add a Server Action, read modules_read and ask the owner to turn on Data and actions with module_set in the confirmation dialog.
+The published browser never receives SQL and never receives database credentials. It only knows action names. Every database read or write goes through a named Server Action declared in actions.json and invoked with miniapp.actions.call. On a published project, read modules_read before adding a Server Action. If Data and actions is off, ask the owner to turn it on with module_set in the confirmation dialog. On an unpublished project, finish the Capsule first. Read modules_read after its first publish.
 
 actions.json format, every key an action takes (each kind takes only its own; the SDK section below says what each does):
 

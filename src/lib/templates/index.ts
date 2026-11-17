@@ -34,7 +34,7 @@ export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProj
   const modules = defaultModuleStates(base.modules);
   const applyModules = (files: Record<string, string>, visibility: "public" | "private") => {
     const state = { ...modules };
-    if (sourcesUseActions(Object.values(files))) state.actions = { ...state.actions, on: true };
+    if (sourcesUseActions(files)) state.actions = { ...state.actions, on: true };
     else delete state.actions;
     if (Object.values(files).some((source) => /miniapp\s*\.\s*files/.test(source))) state.files = { ...state.files, on: true };
     else delete state.files;

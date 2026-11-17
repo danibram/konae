@@ -33,6 +33,8 @@ describe("preview document", () => {
     const document = createPreviewDocument({ ...project, files: { "index.html": "<!doctype html><title>Static</title>" }, manifest: { ...project.manifest, visibility: "public" }, modules: { actions: { on: false }, auth: { on: false }, files: { on: false }, seo: { on: true } } });
     expect(document).not.toContain("data-konae-runtime");
     expect(document).not.toContain("window.miniapp");
+    expect(document).toContain("addEventListener('error'");
+    expect(document).toContain("preview_error");
   });
   test("runs app.js as a module, the same way a Deployment does", () => {
     const document = createPreviewDocument(project);
@@ -159,7 +161,7 @@ describe("preview document", () => {
   });
 
   test("emits the compiled module exactly as a Deployment does", () => {
-    const script = "const x = 1;\nif (!document.querySelector('#app')) throw new Error('boom');\nexport { x };";
+    const script = "miniapp.actions.call('hello.read');\nconst x = 1;\nif (!document.querySelector('#app')) throw new Error('boom');\nexport { x };";
     const body = "<main id=app></main>";
     const styles = "main { color: red }";
     const preview = createPreviewDocument({ ...project, files: { ...project.files, "index.html": body, "styles.css": styles, "app.js": script } });

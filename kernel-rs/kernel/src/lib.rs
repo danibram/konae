@@ -2541,6 +2541,9 @@ pub async fn admin_database(state: &AppState, id: &str, body: &[u8]) -> Response
         }
     };
     let operation = body.get("operation").and_then(Value::as_str).unwrap_or("");
+    if !matches!(operation, "list-backups" | "restore-backup") {
+        if let Err(refused) = modules::require_on(&deployment.modules, "actions") { return refusal_error(&refused); }
+    }
     let _project_guard = database_lock(&state, &format!("project:{}", deployment.project_id)).await;
     let path = database_path(&state, &deployment.id);
     let _guard = database_lock(&state, &deployment.id).await;

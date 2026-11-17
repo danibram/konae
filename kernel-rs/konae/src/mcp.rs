@@ -2544,6 +2544,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn actions_cannot_be_turned_off_while_an_action_feature_is_declared() {
+        let root = std::env::temp_dir().join(format!("konae-actions-in-use-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
+        let body = json!({"project":{"id":"app_actions_in_use","name":"Actions in use","slug":"actions-in-use","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Actions</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_actions_in_use','o','{}')", []).unwrap();
+        let cases = [
+            ("route", json!({"kind":"query","access":"anonymous","http":{"method":"GET","path":"/route"}})),
+            ("call", json!({"kind":"call","method":"POST","url":"https://example.test/hook"})),
+            ("schedule", json!({"kind":"mutation","access":"anonymous","schedule":{"every":"5m"}})),
+            ("notice", json!({"kind":"mutation","access":"anonymous","notify":{"to":"owner","subject":"Changed","body":"Changed"}})),
+            ("page path", json!({"kind":"query","access":"anonymous","page":{"path":"/notes/:slug","file":"note.html"}})),
+            ("authenticated access", json!({"kind":"query","access":"authenticated"})),
+        ];
+        for (index, (label, action)) in cases.into_iter().enumerate() {
+            let name = format!("feature_{index}");
+            let actions = json!({"version":1,"actions":{name:action}});
+            tokio::fs::write(crate::layout::sources(&state.data_root, "app_actions_in_use").join("actions.json"), serde_json::to_vec(&actions).unwrap()).await.unwrap();
+            let record = kernel::layout::record(&state.data_root, "app_actions_in_use");
+            let mut installed: Value = serde_json::from_slice(&tokio::fs::read(&record).await.unwrap()).unwrap();
+            installed["actions"] = json!(serde_json::to_string(&actions).unwrap());
+            tokio::fs::write(&record, serde_json::to_vec(&installed).unwrap()).await.unwrap();
+            let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"app_actions_in_use"})).await.unwrap();
+            if before["modules"]["actions"]["state"]["on"] != true {
+                admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"app_actions_in_use","module":"actions","on":true,"expected":before["modules"]["actions"]["state"]})).await.unwrap();
+            }
+            let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"app_actions_in_use"})).await.unwrap();
+            let error = admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"app_actions_in_use","module":"actions","on":false,"expected":current["modules"]["actions"]["state"]})).await.unwrap_err();
+            let refusal = error.downcast_ref::<kernel::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, "module.in-use", "{label}");
+            assert!(refusal.message.contains("Module actions is in use by actions.json"), "{label}: {}", refusal.message);
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn first_release_persists_inferred_files_state_for_missing_and_partial_initial_modules() {
         use base64::Engine;
         use sha2::Digest;
@@ -2578,6 +2616,42 @@ mod tests {
             let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
             let expected = read["modules"]["seo"]["state"].clone();
             admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"seo","on":true,"expected":expected})).await.unwrap();
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn first_release_persists_inferred_actions_state_in_memory_and_on_disk() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-first-actions-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        for (id, actions, schema, expected_on) in [
+            ("app_first_actions_on", r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}"#, "", true),
+            ("app_first_actions_off", r#"{"version":1,"actions":{}}"#, "", false),
+        ] {
+            admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"First actions release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+            let payload = json!({
+                "project":{"id":id,"name":"First actions release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":actions,"schema.sql":schema}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<!doctype html><title>Static</title>"}}
+            });
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+            assert_eq!(state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_on, "memory {id}");
+            assert_eq!(crate::Settings::read(&state.data_root, id).unwrap().modules["actions"]["on"], expected_on, "disk {id}");
+            let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_on, "reload {id}");
+            let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+            let expected = read["modules"]["actions"]["state"].clone();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"actions","on":expected_on,"expected":expected})).await.unwrap();
         }
         let _ = tokio::fs::remove_dir_all(root).await;
     }

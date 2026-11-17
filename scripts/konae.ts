@@ -508,7 +508,9 @@ async function hasPackageBuild(root: string) {
 }
 
 async function refreshPageBuilder(root: string, sdk: boolean) {
+  const buildScript = (await folderFiles(root, await readSettings(root))).find((entry) => entry.path === "scripts/build.mjs")!.contents;
   const resources = [
+    ["scripts/build.mjs", buildScript],
     ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
     ...(sdk ? [["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")] as const] : []),
   ] as const;
@@ -570,7 +572,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
   const source = await sources(root);
   const files = textFiles(source);
   const settings = await readSettings(root).catch(() => undefined);
-  const sdkEnabled = sdkRequired(settings?.modules, Object.values(files), settings?.visibility ?? "private");
+  const sdkEnabled = sdkRequired(settings?.modules, files, settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
@@ -869,7 +871,7 @@ async function writeDist(root: string, artifact: { files: Record<string, string>
 async function folderFiles(root: string, settings: AppSettings) {
   const read = (file: string) => readFile(path.join(appDir(root), file), "utf8").catch(() => "");
   return generatedFiles({
-    settings, actionsSource: await read("actions.json"), schemaSource: await read("schema.sql"),
+    settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"),
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),

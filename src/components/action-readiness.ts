@@ -14,12 +14,14 @@ type Visibility = "public" | "private";
 export { ownerFixes };
 export type { ReleaseFacts };
 
+export const emptyActionProgram = '{"version":1,"actions":{}}';
+
 export function deployReadiness(
   project: { files: Record<string, string | undefined> },
   facts: ReleaseFacts = {},
 ): { refusal: string | null; ownerActs: boolean; actions: DescribedAction[] } {
   try {
-    const program = parseServerActionSource(project.files["actions.json"] ?? "");
+    const program = parseServerActionSource(project.files["actions.json"] ?? emptyActionProgram);
     const refusal = releaseRefusal(program, facts);
     return { refusal: refusal?.message ?? null, ownerActs: ownerFixes(refusal?.code), actions: Object.values(program.actions) };
   } catch (error) {

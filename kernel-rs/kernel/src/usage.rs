@@ -736,8 +736,9 @@ pub fn storage(data_root: &Path, id: &str) -> Value {
     let files: Vec<Value> = std::fs::read(&index).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
     let file_bytes: u64 = files.iter().filter_map(|file| file["size"].as_u64()).sum::<u64>() + bytes_on_disk(&index);
     let limits = crate::file_store::FileLimits::from_env().unwrap_or_default();
+    let database_exists = layout::database(data_root, id).is_file();
     let parts = [
-        ("database", sqlite_bytes(&layout::database(data_root, id)), Some(super::MAX_APP_DATABASE_BYTES), true),
+        ("database", sqlite_bytes(&layout::database(data_root, id)), Some(super::MAX_APP_DATABASE_BYTES), database_exists),
         ("files", file_bytes, Some(limits.quota_bytes), true),
         ("accounts", sqlite_bytes(&layout::identity(data_root, id)), Some(super::auth::MAX_IDENTITY_DATABASE_BYTES), true),
         ("usage", sqlite_bytes(&layout::usage(data_root, id)), Some(MAX_USAGE_DATABASE_BYTES), true),
@@ -910,6 +911,7 @@ mod tests {
         let part = |name: &str| storage["parts"].as_array().unwrap().iter().find(|p| p["part"] == name).unwrap().clone();
         assert_eq!(part("files")["bytes"].as_u64().unwrap(), 1024 + std::fs::metadata(data.join("files/index.json")).unwrap().len());
         assert_eq!(part("published")["bytes"], 9);
+        assert_eq!(part("database")["exported"], false);
         assert_eq!(part("backups")["exported"], false);
         assert_eq!(storage["files"], 2);
         assert!(part("usage")["bytes"].as_u64().unwrap() > 0 && part("accounts")["bytes"].as_u64().unwrap() > 0);

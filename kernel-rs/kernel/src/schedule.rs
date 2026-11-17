@@ -524,6 +524,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_deployments_keeps_a_legacy_route_and_schedule_running() {
+        use axum::{body::{Body, to_bytes}, extract::{Path as AxumPath, State}, http::{Request, StatusCode, header}};
+        let root = std::env::temp_dir().join(format!("konae-schedule-legacy-{}", uuid::Uuid::new_v4()));
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-actions-schedule-route-0.9.0");
+        for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
+            let destination = crate::layout::folder(&root, "legacy_schedule_route").join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::copy(fixture.join(relative), destination).unwrap();
+        }
+        let settings_path = crate::layout::settings(&root, "legacy_schedule_route");
+        let mut settings: Value = serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+        settings["id"] = json!("legacy_schedule_route");
+        settings["slug"] = json!("legacy-schedule-route");
+        std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        std::fs::create_dir_all(crate::layout::dist(&root, "legacy_schedule_route")).unwrap();
+        std::fs::write(crate::layout::dist(&root, "legacy_schedule_route").join("index.html"), "<!doctype html><title>Legacy scheduled app</title>").unwrap();
+        let actions = std::fs::read_to_string(crate::layout::sources(&root, "legacy_schedule_route").join("actions.json")).unwrap();
+        let installed = crate::Installed { hostname: "legacy-schedule-route.localhost".into(), created_at: 1, released_at: Some(2), source_digest: None, actions, artifact_version: "v1".into(), released: None };
+        std::fs::create_dir_all(crate::layout::private(&root, "legacy_schedule_route")).unwrap();
+        std::fs::write(crate::layout::record(&root, "legacy_schedule_route"), serde_json::to_vec(&installed).unwrap()).unwrap();
+        let database = crate::layout::database(&root, "legacy_schedule_route");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);").unwrap();
+
+        let mut state = AppState::for_test(&root);
+        state.deployments = Arc::new(tokio::sync::RwLock::new(crate::load_deployments(&root, "http://localhost").await.unwrap()));
+        let deployment = state.deployments.read().await["legacy-schedule-route.localhost"].clone();
+        assert!(deployment.modules["actions"]["on"].as_bool().unwrap());
+        let request = Request::builder().uri("/api/notes").header(header::HOST, &deployment.hostname).body(Body::empty()).unwrap();
+        let response = crate::http::get_route(State(state.clone()), AxumPath("api/notes".into()), request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(serde_json::from_slice::<Value>(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()["result"], json!([]));
+
+        let clock = Clock { test_seconds: None };
+        let work = {
+            let program = program(&serde_json::from_str::<Value>(&deployment.actions).unwrap()["actions"]);
+            program.actions.into_iter().filter_map(|(name, action)| declaration(&name, &action).unwrap().map(|schedule| (name, action, schedule))).collect::<Vec<_>>()
+        };
+        let before = utc("2026-11-07T10:00:00");
+        run_due(&state, clock, &deployment, &work, &|| before).await.unwrap();
+        let after = utc("2026-11-08T10:00:01");
+        run_due(&state, clock, &deployment, &work, &|| after).await.unwrap();
+        let rows: i64 = rusqlite::Connection::open(&database).unwrap().query_row("SELECT COUNT(*) FROM notes WHERE body='scheduled'", [], |row| row.get(0)).unwrap();
+        assert_eq!(rows, 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn test_mode_lists_paused_schedules_and_runs_one_through_the_kernel_action_path() {
         let mut rig = Rig::new("manual-test").await;
         rig.state.execution_mode = crate::execution::ExecutionMode::Test;

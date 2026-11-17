@@ -33,6 +33,9 @@ describe("system prompt", () => {
       expect(prompt).toContain(fragment);
     }
     expect(prompt).toContain("private deployment");
+    expect(prompt).toContain("On a published project, read modules_read before adding a Server Action.");
+    expect(prompt).toContain("On an unpublished project, finish the Capsule first.");
+    expect(prompt).not.toContain("Before you add a Server Action, read modules_read");
     expect(prompt).not.toContain('"granted"');
   });
 });

@@ -104,7 +104,6 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     const artifactEntries = folderEntries
       .filter((entry) => entry.path.startsWith("dist/"))
       .map((entry) => ({ path: entry.path.slice(5), contents: entry.contents }));
-    if (!sourceEntries.some((entry) => entry.path === "actions.json")) throw new Error("The export's app/ has no actions.json.");
     const stagedApp = path.join(scratch, "app");
     await mkdir(stagedApp, { recursive: true });
     for (const entry of sourceEntries) {

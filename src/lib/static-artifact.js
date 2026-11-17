@@ -113,7 +113,7 @@ function loadsScript(html, from, sdk) {
     }
     let target;
     try { target = resolveReference(src, from); } catch { return true; }
-    if (sdk && target === runtimeFile) continue;
+    if (target === runtimeFile) continue;
     return true;
   }
   return false;
@@ -129,9 +129,10 @@ function loadsScript(html, from, sdk) {
 export function renderCapsuleDocument(input) {
   const { head, body } = splitFragmentHead(input.body);
   const runtime = input.runtime ? `<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script>` : "";
+  const reporter = input.reporter ? `<script data-konae-preview-reporter>${escapeInlineScript(input.reporter)}</script>` : "";
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${input.head ?? ""}${head}<style>${input.styles}</style></head>
-<body>${body}${runtime}<script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
+<body>${body}${runtime}${reporter}<script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
 }
 
 
@@ -216,7 +217,7 @@ export async function assembleStaticArtifact(input) {
   const reference = (raw, from, kind) => {
     const target = resolveReference(raw, from);
     if (target === null) return;
-    if (target === runtimeFile) { usesRuntimeFile = true; return; }
+    if (target === runtimeFile) { if (input.sdk !== false) usesRuntimeFile = true; return; }
     if (sources.has(target)) {
       if (kind === "module" && !bundled.has(target) && !sources.get(target).startsWith("public/")) pending.push({ target, kind, from, raw });
       return;

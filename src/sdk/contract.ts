@@ -380,7 +380,7 @@ export const sdkContract = {
       name: "page",
       title: "Page address values",
       summary: "Values from the page address. The Kernel fills params when a declared page path answers.",
-      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json"],
       declarations: [],
       calls: [
         { name: "params", signature: "miniapp.page.params", summary: "Read the values captured by the page path, or an empty object on a file page.", signedOut: true, tools: [], args: [], returns: "An object keyed by page path parameter, such as { slug: \"hello\" }", errors: [], limits: [], examples: [{ code: "const { slug } = miniapp.page.params;" }], preview: "Always returns an empty object because the editor preview has no page URL." },

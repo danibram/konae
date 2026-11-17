@@ -290,6 +290,11 @@ describe("refusals", () => {
       'pages/index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.');
   });
 
+  test("a whole document with only the SDK tag does not count the tag as its entry", async () => {
+    await expect(assemble({ "index.html": page("App", '<script src="/runtime.js"></script>'), "app.js": "document.body.textContent = 'app';" }, { sdk: false })).rejects.toThrow(
+      'index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.');
+  });
+
   test("a whole document with no script passes while the app runs elsewhere, or when there is no app", async () => {
     const passes = (files: Record<string, string>) => expect(assemble(files)).resolves.toBeDefined();
     await passes({ "index.html": "<div id=root></div>", "404.html": page("Not found"), "app.js": "" });
@@ -323,7 +328,7 @@ describe("the CLI and the editor build the same artifact", () => {
     "about.html": page("About", '<script src="/runtime.js"></script><script type="module" src="/app.js"></script>'),
     "pages/guide/install.html": page("Install", '<link rel="stylesheet" href="../styles.css">'),
     "styles.css": "body { color: #222 }",
-    "app.js": "const greeting = 'hi';\ndocument.title = greeting;\n",
+    "app.js": "miniapp.actions.call('notes.list');\nconst greeting = 'hi';\ndocument.title = greeting;\n",
     "public/robots.txt": "User-agent: *\n",
     "schema.sql": "",
     "actions.json": "{\"version\":1,\"actions\":{}}",

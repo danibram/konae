@@ -70,7 +70,9 @@
       "options": [],
       "permission": "publish",
       "agentRule": "never",
-      "requires": [],
+      "requires": [
+        "actions"
+      ],
       "uses": [
         "actions.json"
       ]

@@ -29,7 +29,7 @@ impl Target {
     pub fn release(input: &DeployInput) -> Result<Self> {
         Ok(Self {
             sql: input.project.files.get("schema.sql").cloned().unwrap_or_default(),
-            program: serde_json::from_str(input.project.files.get("actions.json").context("actions.json is required.")?)?,
+            program: serde_json::from_str(input.project.files.get("actions.json").map(String::as_str).unwrap_or(r#"{"version":1,"actions":{}}"#))?,
             schema_transforms: input.project.files.get("schema-transforms.json").cloned(),
         })
     }
@@ -40,7 +40,7 @@ impl Target {
         let sources = layout::sources(&state.data_root, id);
         Ok(Self {
             sql: std::fs::read_to_string(sources.join("schema.sql")).unwrap_or_default(),
-            program: serde_json::from_str(&std::fs::read_to_string(sources.join("actions.json")).context("app/actions.json is missing.")?)?,
+            program: serde_json::from_str(&std::fs::read_to_string(sources.join("actions.json")).unwrap_or_else(|_| r#"{"version":1,"actions":{}}"#.into()))?,
             schema_transforms: read_optional_transform_document(&sources.join("schema-transforms.json"))?,
         })
     }

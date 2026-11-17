@@ -181,11 +181,13 @@ describe("konae CLI", () => {
       await mkdir(path.join(root, "node_modules"));
       await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
       await writeFile(path.join(root, "konae.json"), JSON.stringify({ manifest: { version: 1 } }));
-      await writeFile(path.join(root, "app/index.html"), "<!doctype html><html><body>Home</body></html>");
+      await writeFile(path.join(root, "app/index.html"), "<!doctype html><html><body>Home<script type=\"module\" src=\"app.js\"></script></body></html>");
+      await writeFile(path.join(root, "app/app.js"), "miniapp.page.url('/posts');");
       await writeFile(path.join(root, "app/actions.json"), JSON.stringify({ version: 1, actions: { "posts.head": { kind: "query", access: "anonymous", statement: "SELECT title FROM posts LIMIT 1", bindings: [], page: { path: "/posts", file: "post.html" } } } }));
       await writeFile(path.join(root, "scripts/static-artifact.mjs"), "old builder");
       await writeFile(path.join(root, "scripts/runtime.js"), "old runtime");
       await writeFile(path.join(root, "scripts/build.mjs"), "import { mkdir, writeFile } from 'node:fs/promises'; await mkdir('dist', { recursive: true }); await writeFile('dist/index.html', '<!doctype html><html><body>Home</body></html>');");
+      await writeFile(path.join(root, "scripts/local-builder.mjs"), "export async function bundleModule() { return { script: 'window.miniapp.page.url(\"/posts\");', styles: '' }; }");
       await buildLocal(root);
       expect(await readFile(path.join(root, "scripts/static-artifact.mjs"), "utf8")).toContain("rewritePageUrls");
       expect(await readFile(path.join(root, "scripts/runtime.js"), "utf8")).toContain("page: {");
@@ -200,11 +202,15 @@ describe("konae CLI", () => {
       await mkdir(path.join(root, "node_modules"));
       await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
       await writeFile(path.join(root, "konae.json"), JSON.stringify({ visibility: "public", modules: { seo: { on: true } }, manifest: { version: 1 } }));
-      await writeFile(path.join(root, "app/index.html"), "<!doctype html><html><head><title>Static</title></head><body>Home</body></html>");
+      await writeFile(path.join(root, "app/index.html"), '<!doctype html><html><head><title>Static</title></head><body>Home<script type="module" src="app.js"></script></body></html>');
+      await writeFile(path.join(root, "app/app.js"), "document.body.dataset.ready = 'yes';");
       await writeFile(path.join(root, "scripts/static-artifact.mjs"), "old builder");
-      await writeFile(path.join(root, "scripts/build.mjs"), "import { mkdir, writeFile } from 'node:fs/promises'; await mkdir('dist', { recursive: true }); await writeFile('dist/index.html', '<!doctype html><html><head><title>Static</title></head><body>Home</body></html>');");
+      await writeFile(path.join(root, "scripts/build.mjs"), "old build script");
+      await writeFile(path.join(root, "scripts/local-builder.mjs"), "export async function bundleModule() { return { script: \"document.body.dataset.ready = 'yes';\", styles: '' }; }");
+      await writeFile(path.join(root, "scripts/runtime.js"), "old runtime");
       await buildLocal(root);
       expect(await readFile(path.join(root, "scripts/static-artifact.mjs"), "utf8")).toContain("assembleStaticArtifact");
+      expect(await readFile(path.join(root, "scripts/build.mjs"), "utf8")).toContain("browserCall");
       expect(await readFile(path.join(root, "dist/index.html"), "utf8")).not.toContain("runtime.js");
       expect(await stat(path.join(root, "dist/runtime.js")).then(() => true, () => false)).toBe(false);
     } finally { await rm(root, { recursive: true, force: true }); }
@@ -335,7 +341,7 @@ describe("konae CLI", () => {
     expect(calls.map((call) => call.name)).toContain("transfer_cancel");
     expect(releaseUpload().visibility).toBe("private");
     const html = await readFile(path.join(directory, "dist/index.html"), "utf8");
-    expect(html).toContain("<script data-konae-runtime>");
+    expect(html).not.toContain("data-konae-runtime");
   });
 
   test("a publish sends the files of app/ in an upload of their own and names both uploads to release_plan", async () => {

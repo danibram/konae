@@ -49,19 +49,22 @@ pub fn artifact_uses_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> boo
 }
 
 pub fn sources_use_actions<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
-    files.into_iter().any(|bytes| {
-        contains(bytes, b"miniapp.actions")
-            || creates_schema_object(bytes)
-            || serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| !actions.is_empty())).unwrap_or(false)
+    files.into_iter().any(|bytes| contains(bytes, b"miniapp.actions") || serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| !actions.is_empty())).unwrap_or(false))
+}
+
+fn named_sources_use_actions<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
+    files.into_iter().any(|(name, bytes)| match name {
+        "schema.sql" => creates_schema_object(bytes),
+        "actions.json" => sources_use_actions([bytes]),
+        _ => contains(bytes, b"miniapp.actions"),
     })
 }
 
 fn creates_schema_object(bytes: &[u8]) -> bool {
-    let words = bytes.split(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_').filter(|word| !word.is_empty()).collect::<Vec<_>>();
-    words.windows(3).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && words[1].eq_ignore_ascii_case(b"TABLE"))
-        || words.windows(4).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && (words[1].eq_ignore_ascii_case(b"TEMP") || words[1].eq_ignore_ascii_case(b"TEMPORARY")) && words[2].eq_ignore_ascii_case(b"TABLE"))
-        || words.windows(3).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && words[1].eq_ignore_ascii_case(b"INDEX"))
-        || words.windows(4).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && words[1].eq_ignore_ascii_case(b"UNIQUE") && words[2].eq_ignore_ascii_case(b"INDEX"))
+    let text = String::from_utf8_lossy(bytes);
+    let words = text.split_whitespace().map(|word| word.trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '_')).collect::<Vec<_>>();
+    words.windows(2).any(|words| words[0].eq_ignore_ascii_case("CREATE") && (words[1].eq_ignore_ascii_case("TABLE") || words[1].eq_ignore_ascii_case("INDEX")))
+        || words.windows(3).any(|words| words[0].eq_ignore_ascii_case("CREATE") && (words[1].eq_ignore_ascii_case("TEMP") || words[1].eq_ignore_ascii_case("TEMPORARY") || words[1].eq_ignore_ascii_case("UNIQUE")) && (words[2].eq_ignore_ascii_case("TABLE") || words[2].eq_ignore_ascii_case("INDEX")))
 }
 
 pub fn sources_use_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
@@ -399,7 +402,18 @@ fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, sta
 }
 
 pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
-    walk(&crate::layout::sources(root, id), &|bytes| sources_use_actions([bytes]))
+    if let Ok(bytes) = std::fs::read(crate::layout::record(root, id)) {
+        if let Ok(installed) = serde_json::from_slice::<Value>(&bytes) {
+            let actions = installed.get("actions").and_then(Value::as_str).unwrap_or("");
+            let schema = installed.pointer("/released/schemaSql").and_then(Value::as_str).unwrap_or("");
+            return named_sources_use_actions([("actions.json", actions.as_bytes()), ("schema.sql", schema.as_bytes())]);
+        }
+        return true;
+    }
+    let sources = crate::layout::sources(root, id);
+    let actions = std::fs::read(sources.join("actions.json")).unwrap_or_default();
+    let schema = std::fs::read(sources.join("schema.sql")).unwrap_or_default();
+    named_sources_use_actions([("actions.json", actions.as_slice()), ("schema.sql", schema.as_slice())])
 }
 
 #[cfg(test)]
@@ -457,7 +471,10 @@ mod tests {
             let Some(expected) = case.get("usesActions") else { continue };
             let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
             let artifact = case["artifact"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
-            assert_eq!(sources_use_actions(sources) || sources_use_actions(artifact), *expected, "{}", case["case"]);
+            let source_action = if let Some(files) = case.get("sourceFiles").and_then(Value::as_object) {
+                named_sources_use_actions(files.iter().map(|(name, value)| (name.as_str(), value.as_str().unwrap().as_bytes())))
+            } else { sources_use_actions(sources) };
+            assert_eq!(source_action || sources_use_actions(artifact), *expected, "{}", case["case"]);
         }
     }
 
@@ -473,6 +490,28 @@ mod tests {
         assert!(!is_on(&partial, "actions"));
         assert!(is_on(&partial, "seo"));
         assert!(!is_on(&modules, "seo"));
+    }
+
+    #[test]
+    fn action_keys_require_actions_in_the_module_contract() {
+        let modules = registry()["modules"].as_object().unwrap().clone();
+        for module in ["http", "calls", "page"] {
+            let requires = modules[module]["requires"].as_array().unwrap();
+            assert!(requires.iter().any(|required| required == "actions"), "{module}");
+        }
+    }
+
+    #[tokio::test]
+    async fn action_use_follows_the_installed_release_after_a_source_save() {
+        let root = std::env::temp_dir().join(format!("konae-published-actions-{}", uuid::Uuid::new_v4()));
+        let app = crate::layout::folder(&root, "app");
+        std::fs::create_dir_all(crate::layout::sources(&root, "app")).unwrap();
+        std::fs::create_dir_all(crate::layout::private(&root, "app")).unwrap();
+        std::fs::write(crate::layout::sources(&root, "app").join("actions.json"), r#"{"version":1,"actions":{}}"#).unwrap();
+        std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&json!({"actions":"{\"version\":1,\"actions\":{\"notes.list\":{\"kind\":\"query\"}}}","released":{"schemaSql":"CREATE TABLE notes(id INTEGER PRIMARY KEY);"}})).unwrap()).unwrap();
+        assert!(uses_actions(&root, "app"));
+        let _ = std::fs::remove_dir_all(app);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

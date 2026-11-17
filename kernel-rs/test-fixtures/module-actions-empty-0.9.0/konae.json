@@ -1,0 +1,10 @@
+{
+  "id": "app_legacy_empty_actions",
+  "name": "Legacy empty actions",
+  "slug": "legacy-empty-actions",
+  "visibility": "public",
+  "signupPolicy": { "mode": "open", "allowlist": [] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

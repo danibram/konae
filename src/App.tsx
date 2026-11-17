@@ -81,7 +81,7 @@ import type { MiniAppProject, ProjectFile } from "./lib/types";
 import { isEncoded, sourceBytes } from "./lib/source-files";
 import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
-import { actionReadout, refusedSpot } from "./components/action-readiness";
+import { actionReadout, emptyActionProgram, refusedSpot } from "./components/action-readiness";
 import { createWorkspaceProject, loadWorkspaceState, persistWorkspace, resetWorkspaceProject } from "./lib/workspace";
 import { ProjectSources, SaveSupersededError, type ProjectMetadata } from "./lib/project-sources";
 import { createPreviewDocument } from "./runtime/preview";
@@ -1053,7 +1053,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       synchronized.current.set(project.id, JSON.stringify(project));
       const observedSourcesRevision = await sources.save(project);
       serverSnapshots.current.set(project.id, JSON.stringify(project));
-      const artifact = await buildProjectInBrowser(project);
+      const deployment = deploymentsRef.current[project.id];
+      const buildProject = deployment
+        ? { ...project, modules: Object.fromEntries(Object.entries((await platformMcp.call<{ modules: Record<string, { state: { on: boolean; [option: string]: unknown } }> }>("modules_read", { projectId: deployment.id })).modules).map(([name, module]) => [name, module.state])) }
+        : project;
+      const artifact = await buildProjectInBrowser(buildProject);
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
       const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules);
@@ -1170,7 +1174,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const setActionAccess = (name: string, access: RuntimeActionAccess) => {
     let parsed: { actions?: Record<string, { access?: string }> };
     try {
-      parsed = JSON.parse(project.files["actions.json"] ?? "");
+      parsed = JSON.parse(project.files["actions.json"] ?? emptyActionProgram);
     } catch {
       setOperationError("actions.json is not valid JSON, so who can run it cannot be changed from here.");
       return;
@@ -1214,7 +1218,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   const signInHref = platformAccessHref(window.location.pathname);
 
-  const actionsRefusal = actionReadout(project.files["actions.json"] ?? "", project.manifest.visibility).refusal;
+  const actionsRefusal = actionReadout(project.files["actions.json"] ?? emptyActionProgram, project.manifest.visibility).refusal;
   const quietDeploy = asCreated && agentThread.draft.trim() !== "";
   const sections: { id: PanelId; label: string; icon: typeof Code2 }[] = [
     { id: "preview", label: "Preview", icon: Play },
@@ -1242,7 +1246,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const reveal = show;
 
   const openRefusal = () => {
-    const source = projectRef.current.files["actions.json"] ?? "";
+    const source = projectRef.current.files["actions.json"] ?? emptyActionProgram;
     const spot = refusedSpot(source, actionReadout(source, projectRef.current.manifest.visibility).refusal);
     setActiveFile("actions.json");
     setSelectedPath("actions.json");

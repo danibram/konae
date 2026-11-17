@@ -9,6 +9,11 @@ function withActions(actions: Record<string, unknown>) {
 }
 
 describe("the Deploy dialog's readiness", () => {
+  test("a project without actions.json has an empty action program", () => {
+    const project = cloneStarter();
+    delete project.files["actions.json"];
+    expect(deployReadiness(project)).toMatchObject({ refusal: null, actions: [] });
+  });
   test("lets a total with no LIMIT leave, as both doors do", () => {
     const project = withActions({ "orders.count": { kind: "query", access: "anonymous", statement: "SELECT count(*) AS n FROM orders", bindings: [] } });
     const { refusal, actions } = deployReadiness(project);

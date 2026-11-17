@@ -178,6 +178,18 @@ describe("init, publish, pull, dev --reset", () => {
     expect((await readPulled(app))?.manifest.projectId).toBe(config.project.id);
   }, 60_000);
 
+  test("pull accepts a static Deployment whose exported app has no actions.json", async () => {
+    const folder = path.join(root, "static-pull");
+    const born = configOf(await initLocal(folder, { name: "Static pull" }));
+    await rm(path.join(folder, "app/actions.json"), { force: true });
+    await rm(path.join(folder, "app/schema.sql"), { force: true });
+    const published = await publishLocal(folder, { ...born, url: origin.url }, origin.token);
+    const pulled = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
+    expect(pulled.manifest.projectId).toBe(published.id);
+    expect(await readFile(path.join(folder, "app/index.html"), "utf8")).toContain("<title>Private notes</title>");
+    expect(await readdir(path.join(folder, "app"))).not.toContain("actions.json");
+  }, 120_000);
+
   test("a folder whose schema.sql is ahead of the exported data runs on it, and the Kernel adds the column with every row kept", async () => {
     const next = path.join(root, "next");
     const born = configOf(await initLocal(next, { name: "Next version" }));

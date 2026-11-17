@@ -16,7 +16,7 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
     compile: () => compileProjectInBrowser(project, { release: true }),
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
-    sdk: sdkRequired(project.modules, Object.values(project.files), project.manifest.visibility as string | undefined),
+    sdk: sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined),
     routing: project.manifest.routing,
   });
 }
@@ -35,7 +35,7 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
     compile: async () => ({ styles: compiled.styles, script: compiled.script }),
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
-    sdk: sdkRequired(project.modules, Object.values(project.files), project.manifest.visibility as string | undefined),
+    sdk: sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined),
     routing: project.manifest.routing,
   });
   return compiled;

@@ -6,23 +6,27 @@ export function sourcesUseAuth(sources: Iterable<string>): boolean {
   return Array.from(sources).some((source) => source.includes("miniapp.auth") || source.includes("miniapp.files") || source.includes("/_konae/files/") || /"access"\s*:\s*"authenticated"/.test(source) || /"source"\s*:\s*"actor"/.test(source));
 }
 
-export function sourcesUseActions(sources: Iterable<string>): boolean {
-  return Array.from(sources).some((source) => {
+export function sourcesUseActions(sources: Iterable<string> | Record<string, string>): boolean {
+  const entries = Symbol.iterator in Object(sources) ? Array.from(sources as Iterable<string>).map((source) => ["", source] as const) : Object.entries(sources as Record<string, string>);
+  return entries.some(([name, source]) => {
     if (source.includes("miniapp.actions")) return true;
-    if (/\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?TABLE\b/i.test(source) || /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b/i.test(source)) return true;
+    if (name === "schema.sql" && /\bCREATE\s+(?:(?:TEMP(?:ORARY)?|UNIQUE)\s+)*(?:TABLE|INDEX)\b/i.test(source)) return true;
+    if (name !== "actions.json") return false;
     try {
-      const actions = JSON.parse(source)?.actions;
-      return actions !== null && typeof actions === "object" && Object.keys(actions).length > 0;
-    } catch {
-      return false;
-    }
+      const value = JSON.parse(source);
+      const actions = value && typeof value === "object" && !Array.isArray(value) ? value.actions : undefined;
+      return actions !== null && typeof actions === "object" && !Array.isArray(actions) && Object.keys(actions).length > 0;
+    } catch { return false; }
   });
 }
 
-export function sdkRequired(modules: Record<string, { on?: boolean }> | undefined, sources: Iterable<string>, visibility?: string): boolean {
-  const files = Array.from(sources);
+export function sdkRequired(modules: Record<string, { on?: boolean }> | undefined, sources: Iterable<string> | Record<string, string>, visibility?: string): boolean {
+  const sourceFiles = Symbol.iterator in Object(sources) ? undefined : sources as Record<string, string>;
+  const files = sourceFiles ? Object.values(sourceFiles) : Array.from(sources as Iterable<string>);
+  const browserCall = (name: string) => files.some((source) => new RegExp(`(?:miniapp\\s*\\.\\s*${name}\\b|miniapp\\s*\\[\\s*["']${name}["']\\s*\\]|window\\s*\\[\\s*["']miniapp["']\\s*\\]\\s*\\.\\s*${name}\\b|window\\s*\\[\\s*["']miniapp["']\\s*\\]\\s*\\[\\s*["']${name}["']\\s*\\])`).test(source));
   const on = (name: string, inferred: boolean) => modules?.[name] ? modules[name].on === true : inferred;
-  return on("actions", sourcesUseActions(files))
-    || on("auth", visibility === "private" || sourcesUseAuth(files))
-    || on("files", sourcesUseFiles(files));
+  return browserCall("page")
+    || (on("actions", sourcesUseActions(sourceFiles ?? files)) && browserCall("actions"))
+    || (on("auth", visibility === "private" || sourcesUseAuth(files)) && browserCall("auth"))
+    || (on("files", sourcesUseFiles(files)) && browserCall("files"));
 }

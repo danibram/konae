@@ -1,0 +1,10 @@
+{
+  "id": "app_legacy_schedule_route",
+  "name": "Legacy schedule route",
+  "slug": "legacy-schedule-route",
+  "visibility": "public",
+  "signupPolicy": { "mode": "open", "allowlist": [] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

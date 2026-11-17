@@ -29,6 +29,12 @@ describe("changes not deployed", () => {
     expect(changesNotDeployed(changed, live, await sourceDigest(changed))).toBe(true);
   });
 
+  test("a missing actions.json matches an empty action program", () => {
+    const staticProject = project();
+    delete staticProject.files["actions.json"];
+    expect(accessNotDeployed(staticProject, live)).toBe(false);
+  });
+
   test("who can open the app counts", () => {
     expect(accessNotDeployed(project({}, "private"), live)).toBe(true);
   });

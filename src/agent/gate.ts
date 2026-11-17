@@ -65,7 +65,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const filesCall = sourcesUseFiles(Object.values(files));
     const actionsState = facts.modules?.actions;
     const actionsOff = actionsState ? checkModuleChange({ rule: "on", module: "actions", state: actionsState }) : null;
-    if (sourcesUseActions(Object.values(files)) && actionsOff) {
+    if (sourcesUseActions(files) && actionsOff) {
       return failure({ stage: "actions", message: actionsOff.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const filesState = facts.modules?.files;
@@ -195,7 +195,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
-    const sdk = sdkRequired(facts.modules, Object.values(files), facts.visibility);
+    const sdk = sdkRequired(facts.modules, files, facts.visibility);
     const neverRuns = entryNeverRunsMessage(Object.keys(files), files, sdk);
     if (neverRuns) errors.push({ stage: "actions", message: neverRuns });
     warnings.push(...rootRelativeWarnings(files).map(({ message }) => ({ stage: "actions" as const, message })));

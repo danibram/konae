@@ -116,7 +116,8 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         slug: if candidate_sources || rebuilt { settings.slug.clone() } else { applied_slug.to_owned() },
             files: {
             let mut files = HashMap::new();
-                if actions_enabled { files.insert("actions.json".to_owned(), actions.clone()); files.insert("schema.sql".to_owned(), schema.clone()); }
+                files.insert("actions.json".to_owned(), actions.clone());
+                files.insert("schema.sql".to_owned(), schema.clone());
                 if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
                 files
             },
@@ -437,6 +438,43 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
         assert_eq!(body["result"][0]["body"], "kept row");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn load_deployments_keeps_a_legacy_database_when_empty_actions_are_decided_off() {
+        let root = scratch();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-actions-empty-0.9.0");
+        for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
+            let destination = layout::folder(&root, "legacy_empty_actions").join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::copy(fixture.join(relative), destination).unwrap();
+        }
+        let settings_path = layout::settings(&root, "legacy_empty_actions");
+        let mut settings: Value = serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+        settings["id"] = json!("legacy_empty_actions");
+        settings["slug"] = json!("legacy-empty-actions");
+        std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        std::fs::create_dir_all(layout::dist(&root, "legacy_empty_actions")).unwrap();
+        std::fs::write(layout::dist(&root, "legacy_empty_actions").join("index.html"), "<!doctype html><title>Legacy static</title><main>Still here</main>").unwrap();
+        let actions = std::fs::read_to_string(layout::sources(&root, "legacy_empty_actions").join("actions.json")).unwrap();
+        let installed = crate::Installed { hostname: "legacy-empty-actions.localhost".into(), created_at: 1, released_at: Some(2), source_digest: None, actions, artifact_version: "v1".into(), released: None };
+        std::fs::create_dir_all(layout::private(&root, "legacy_empty_actions")).unwrap();
+        std::fs::write(layout::record(&root, "legacy_empty_actions"), serde_json::to_vec(&installed).unwrap()).unwrap();
+        let database = layout::database(&root, "legacy_empty_actions");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        Connection::open(&database).unwrap().execute_batch("CREATE TABLE old_rows(value TEXT NOT NULL); INSERT INTO old_rows VALUES('keep');").unwrap();
+
+        let mut state = AppState::for_test(&root);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(crate::load_deployments(&root, "http://localhost").await.unwrap()));
+        assert!(!state.deployments.read().await["legacy-empty-actions.localhost"].modules["actions"]["on"].as_bool().unwrap());
+        let deployment = open(&state, "legacy_empty_actions", None).await.unwrap();
+        assert!(!crate::modules::is_on(&deployment.modules, "actions"));
+        let page = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
+        assert!(String::from_utf8(page).unwrap().contains("Still here"));
+        let kept: String = Connection::open(&database).unwrap().query_row("SELECT value FROM old_rows", [], |row| row.get(0)).unwrap();
+        assert_eq!(kept, "keep");
+        assert!(database.is_file());
         let _ = std::fs::remove_dir_all(root);
     }
 

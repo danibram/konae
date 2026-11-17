@@ -39,7 +39,7 @@ const candidates: { sentence: string; done: (actions: ServerActionDefinition[], 
 export function suggestedChanges(facts: SuggestionFacts, count = 3): string[] {
   let actions: ServerActionDefinition[] = [];
   try {
-    actions = Object.values(parseServerActionSource(facts.files["actions.json"] ?? "").actions);
+    actions = Object.values(parseServerActionSource(facts.files["actions.json"] ?? '{"version":1,"actions":{}}').actions);
   } catch {
     // A file the check refuses still gets suggestions; none of them is marked done.
   }

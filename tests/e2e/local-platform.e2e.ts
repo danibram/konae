@@ -1,8 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { expect, test, type Page } from "playwright/test";
 import { McpClient, type Transfer } from "../../src/mcp/client";
 import { publishProject } from "../../src/deployments/release";
+
+const runCommand = promisify(execFile);
 
 test.beforeEach(async ({ page }) => {
   const client = `198.51.100.${1 + Math.floor(Math.random() * 254)}`;
@@ -242,9 +247,37 @@ async function installModuleSetFixture(page: Page, input: object = { module: "se
   });
 }
 
+async function installActionsUpgradeFixture(page: Page) {
+  let step = 0;
+  const actions = JSON.stringify({ version: 1, actions: {
+    "hello.read": { kind: "query", access: "anonymous", statement: "SELECT 1 AS value LIMIT 1", bindings: [] },
+  } });
+  await page.route("https://api.anthropic.com/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: { "access-control-allow-origin": route.request().headers().origin ?? "*", "access-control-allow-methods": "POST,OPTIONS", "access-control-allow-headers": "*" } });
+      return;
+    }
+    const tools = [
+      { name: "write", input: { path: "/workspace/actions.json", content: actions } },
+      { name: "validate_capsule", input: {} },
+      { name: "module_set", input: { module: "actions", on: true, expected: { on: false } } },
+      { name: "write", input: { path: "/workspace/actions.json", content: actions } },
+      { name: "validate_capsule", input: {} },
+    ];
+    const tool = tools[step++];
+    const origin = route.request().headers().origin ?? "*";
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "access-control-allow-origin": origin, "access-control-allow-headers": "*", "access-control-expose-headers": "*", "cache-control": "no-cache" },
+      body: providerReply(tool, "I read the module state after the change."),
+    });
+  });
+}
+
 async function connectProposalFixture(page: Page) {
   await showSection(page, "Describe");
-  await page.getByRole("button", { name: "Connect a model to send" }).click();
+  await page.getByRole("button", { name: /Connect a model/ }).click();
   const dialog = page.getByRole("dialog", { name: "Connect a model" });
   await dialog.getByLabel("Anthropic API key").fill("fixture-key-unused");
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -735,7 +768,7 @@ test("the build agent confirms module changes and reads them back", async ({ pag
   await confirm.getByRole("button", { name: "Allow", exact: true }).click();
   await expect(page.getByText("I read the module state after the change.", { exact: true })).toBeVisible({ timeout: 30_000 });
   expect(calls).toContain("module_set");
-  expect(calls.indexOf("modules_read")).toBeGreaterThan(calls.indexOf("module_set"));
+  expect(calls.lastIndexOf("modules_read")).toBeGreaterThan(calls.indexOf("module_set"));
   const cookie = (await page.context().cookies()).map(({ name, value }) => `${name}=${value}`).join("; ");
   const client = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
   const readback = await client.call<{ modules: { seo: { state: { on: boolean; canonical: string } } } }>("modules_read", { projectId: projectPath.split("/").at(-1) });
@@ -763,6 +796,135 @@ test("the build agent confirms module changes and reads them back", async ({ pag
   const authReadback = await client.call<{ modules: { auth: { state: { on: boolean; signupPolicy: { mode: string; allowlist: string[] } } } } }>("modules_read", { projectId: authPath.split("/").at(-1) });
   expect(authReadback.modules.auth.state).toMatchObject({ on: true, signupPolicy: { mode: "allowlist", allowlist: ["@example.test"] } });
 });
+
+test("the agent enables Data and actions after the Gate blocks a static app proposal", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project" }).click();
+  const name = "Static action proposal";
+  await page.getByRole("textbox", { name: "What should it do?", exact: true }).fill("A static page with a greeting.");
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill(name);
+  await page.getByText("Start from a template instead", { exact: true }).click();
+  await page.getByRole("radio", { name: /No template/ }).check();
+  const projectSaved = page.waitForResponse((response) => {
+    const body = response.request().postData() ?? "";
+    return new URL(response.url()).pathname === "/mcp" && response.ok()
+      && (body.includes('"project_sources_save"') || (body.includes('"project_create"') && body.includes('"sourcesTransferId"')));
+  });
+  await page.getByRole("button", { name: /^Create/ }).click();
+  await expect(page).toHaveURL(/\/app\/[^/]+$/);
+  await projectSaved;
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const files = await openExplorer(page);
+  for (const file of ["actions.json", "schema.sql"]) {
+    await files.getByRole("button", { name: file, exact: true }).click();
+    await files.getByRole("button", { name: "Delete selected path" }).click();
+    const deletion = page.getByRole("dialog", { name: "Delete this file?" });
+    await deletion.getByRole("button", { name: "Delete", exact: true }).click();
+  }
+  await openFile(page, "app.js").then((editor) => editor.fill("document.documentElement.dataset.static = 'ready';"));
+  await waitForKernelSave(page);
+  await publish(page);
+  await fromMore(page, "App settings");
+  const settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  const actionsSwitch = settings.locator(".module-settings-card").filter({ hasText: "Data and actions" }).getByRole("switch");
+  if (await actionsSwitch.getAttribute("aria-checked") === "true") await actionsSwitch.click();
+  await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
+  await connectProposalFixture(page);
+  await installActionsUpgradeFixture(page);
+  const calls: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname !== "/mcp") return;
+    try {
+      const body = request.postDataJSON();
+      if (body.method === "tools/call") calls.push(body.params.name);
+    } catch { }
+  });
+  await askFixture(page, "Add a Server Action that answers one row.");
+  await expect(page.locator(".agent-proposal")).toContainText("Module actions is off.", { timeout: 30_000 });
+  await expect(page.locator(".agent-proposal")).toContainText("Check code: module.off");
+  const confirm = page.getByRole("dialog", { name: "Allow the agent to do this?" });
+  await expect(confirm.getByText("The agent will turn on Data and actions (actions).", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await confirm.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toBeEnabled({ timeout: 30_000 });
+  expect(calls).toContain("module_set");
+  expect(calls.lastIndexOf("modules_read")).toBeGreaterThan(calls.indexOf("module_set"));
+  await page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.getByLabel("actions.json code editor")).toContainText("hello.read", { timeout: 30_000 });
+  await publish(page);
+});
+
+test("the CLI-published Konae home opens in the editor without an actions file", async ({ page }) => {
+  await page.goto("/");
+  const folder = await mkdtemp(path.join(tmpdir(), "konae-home-editor-"));
+  try {
+    await runCommand("bun", ["run", "scripts/konae.ts", "init", "--dir", folder, "--name", "Konae home"]);
+    const localSettings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
+    await rm(path.join(folder, "app"), { recursive: true, force: true });
+    await cp(path.resolve("examples/home"), path.join(folder, "app"), { recursive: true });
+    await rm(path.join(folder, "app/actions.json"), { force: true });
+    await rm(path.join(folder, "app/schema.sql"), { force: true });
+    const settingsPath = path.join(folder, "konae.json");
+    localSettings.visibility = "public";
+    localSettings.modules = { seo: { on: true, canonical: "path", image: null } };
+    localSettings.manifest = { version: 1, visibility: "public", routing: "pages" };
+    await writeFile(settingsPath, JSON.stringify(localSettings, null, 2));
+    const cookie = (await page.context().cookies()).map(({ name, value }) => `${name}=${value}`).join("; ");
+    const client = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+    const { token } = await client.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
+    await runCommand("bun", ["run", "scripts/konae.ts", "publish", "--dir", folder, "--url", new URL(page.url()).origin], { env: { ...process.env, KONAE_MCP_TOKEN: token } });
+    await page.goto(`/app/${localSettings.id}`);
+    await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+    const deployButton = page.getByRole("banner").getByRole("button", { name: /^Deploy changes$/ });
+    await expect(deployButton).toBeEnabled();
+    await deployButton.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("button", { name: /^Deploy changes$/ })).toBeEnabled();
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}, 90_000);
+
+test("an editor publish keeps the SDK when a published module uses bracket access", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill("Published auth browser call");
+  await page.getByText("Start from a template instead", { exact: true }).click();
+  await page.getByRole("radio", { name: /No template/ }).check();
+  await page.getByRole("button", { name: /^Create/ }).click();
+  await expect(page).toHaveURL(/\/app\/[^/]+$/);
+  await waitForKernelSave(page);
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const cookie = (await page.context().cookies()).map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+  const sourceRead = await client.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const source = JSON.parse(new TextDecoder().decode(await client.download(sourceRead.transfer))) as { files: Record<string, string>; manifest: Record<string, unknown>; modules?: Record<string, { on: boolean }>; [key: string]: unknown };
+  source.files = { "index.html": '<!doctype html><html><head><title>Static browser call</title></head><body><main>Ready</main><script type="module" src="/app.js"></script></body></html>', "app.js": "document.body.dataset.ready = 'yes';" };
+  source.manifest = { ...source.manifest, visibility: "public" };
+  source.modules = { auth: { on: false }, actions: { on: false }, files: { on: false } };
+  const sourceTransfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
+  await client.call("project_sources_save", { projectId, transferId: sourceTransfer.transferId, expectedRevision: sourceRead.revision });
+  await client.cancel(sourceRead.transfer.transferId);
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await publish(page);
+  await fromMore(page, "App settings");
+  const settings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  const auth = settings.locator(".module-settings-card").filter({ hasText: "App accounts" });
+  const authSwitch = auth.getByRole("switch");
+  if (await authSwitch.getAttribute("aria-checked") !== "true") {
+    await authSwitch.click();
+    await expect(settings.getByRole("status")).toContainText("App accounts settings saved.");
+  }
+  await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
+  await openFile(page, "app.js").then((editor) => editor.fill('window["miniapp"].auth.session().catch(() => {});'));
+  await waitForKernelSave(page);
+  const url = await publish(page);
+  const pageResponse = await page.request.get(url);
+  expect(pageResponse.ok()).toBe(true);
+  expect(await pageResponse.text()).toContain("runtime.js");
+}, 90_000);
 
 test("files module cannot be turned off while the app has an uploaded file", async ({ page, context }) => {
   const projectPath = await createProject(page, "Files module in use");

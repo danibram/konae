@@ -52,6 +52,14 @@ describe("project file tree", () => {
     expect(() => createFile({ files: {}, directories: [] }, "Schema-Transforms.json")).toThrow("schema-transforms.json is a reserved project file");
   });
 
+  test("actions.json and schema.sql may be removed, while the page entry files stay", () => {
+    expect(protectedProjectPaths.has("actions.json")).toBe(false);
+    expect(protectedProjectPaths.has("schema.sql")).toBe(false);
+    expect(protectedProjectPaths.has("index.html")).toBe(true);
+    expect(protectedProjectPaths.has("styles.css")).toBe(true);
+    expect(protectedProjectPaths.has("app.js")).toBe(true);
+  });
+
   test("compares reserved paths and collisions without case", () => {
     const tree = { files: { "app.js": "app", "src/Label.js": "l" }, directories: ["docs"] };
     expect(() => createFile(tree, "App.js")).toThrow("app.js is a reserved project file");

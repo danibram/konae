@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseFiles } from "./module-use";
 
-const cases = JSON.parse(readFileSync("kernel-rs/kernel/src/module-use-cases.json", "utf8")) as Array<{ case: string; sources: string[]; artifact: string[]; usesFiles?: boolean; usesAuth?: boolean }>;
+const cases = JSON.parse(readFileSync("kernel-rs/kernel/src/module-use-cases.json", "utf8")) as Array<{ case: string; sources: string[]; sourceFiles?: Record<string, string>; artifact: string[]; usesFiles?: boolean; usesAuth?: boolean }>;
 
 test("file module source detection matches the Kernel cases", () => {
   for (const item of cases) if (item.usesFiles !== undefined) {
@@ -13,7 +13,7 @@ test("file module source detection matches the Kernel cases", () => {
 
 test("actions module use detection matches the Kernel cases", () => {
   for (const item of cases) if (item.usesActions !== undefined) {
-    expect(sourcesUseActions(item.sources), `${item.case} in sources`).toBe(item.usesActions);
+    expect(sourcesUseActions(item.sourceFiles ?? item.sources), `${item.case} in sources`).toBe(item.usesActions);
     if (item.artifact.length) expect(sourcesUseActions(item.artifact), `${item.case} in artifact`).toBe(item.artifact.some((source) => source.includes("miniapp.actions")));
   }
 });
@@ -21,8 +21,13 @@ test("actions module use detection matches the Kernel cases", () => {
 test("the SDK follows decided modules or the modules a new app uses", () => {
   expect(sdkRequired({ actions: { on: false }, auth: { on: false }, files: { on: false } }, ["<main>Static</main>"], "public")).toBe(false);
   expect(sdkRequired(undefined, ["<main>Static</main>"])).toBe(false);
-  expect(sdkRequired(undefined, ['{"version":1,"actions":{"notes.list":{"kind":"query"}}}'], "public")).toBe(true);
-  expect(sdkRequired({ actions: { on: false }, auth: { on: false }, files: { on: false } }, ['{"version":1,"actions":{"notes.list":{"kind":"query"}}}'], "public")).toBe(false);
+  expect(sdkRequired({ actions: { on: true } }, { "actions.json": '{"version":1,"actions":{"notes.list":{"kind":"query"}}}' }, "public")).toBe(false);
+  expect(sdkRequired({ actions: { on: true } }, { "app.js": 'miniapp.actions.call("notes.list")' }, "public")).toBe(true);
+  expect(sdkRequired({ auth: { on: true } }, { "app.js": 'window["miniapp"].auth.session()' }, "public")).toBe(true);
+  expect(sdkRequired({ actions: { on: false }, auth: { on: false }, files: { on: false } }, { "actions.json": '{"version":1,"actions":{"notes.list":{"kind":"query"}}}' }, "public")).toBe(false);
+  expect(sdkRequired(undefined, ["miniapp.page.url('/about')"], "public")).toBe(true);
+  expect(sdkRequired({ actions: { on: false }, auth: { on: false }, files: { on: false } }, ["miniapp.page.url('/about')"], "public")).toBe(true);
+  expect(sdkRequired({ actions: { on: false }, auth: { on: false }, files: { on: false } }, ['window["miniapp"].page.url("/about")'], "public")).toBe(true);
 });
 
 test("auth module use detection matches the Kernel cases", () => {
