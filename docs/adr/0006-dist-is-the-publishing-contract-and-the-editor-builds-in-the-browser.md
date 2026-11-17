@@ -8,21 +8,21 @@ An app may be built in the editor's tab, by `konae build` on a laptop, or by any
 
 ### Any builder may write `dist/`, and the Kernel checks it
 
-The publishing contract is the static files in `dist/` with a manifest of their paths, hashes, sizes, content types, `encodings` and `routing`. It is not a compiler or a project layout. The Kernel does not build. It treats what it receives as untrusted input. It decodes the files `encodings` names, refuses a `routing` other than `"pages"` or `"spa"` with the builders' words, and serves the result under the Content Security Policy of ADR-0002. `/_konae/*` belongs to the Kernel on every app. Each whole-document artifact carries its SDK loader and `runtime.js` file; the Kernel has no `/runtime.js` route. Owner authentication says who may publish. It never says the bytes are well formed.
+The publishing contract is the static files in `dist/` with a manifest of their paths, hashes, sizes, content types, `encodings` and `routing`. It is not a compiler or a project layout. The Kernel does not build. It treats what it receives as untrusted input. It decodes the files `encodings` names, refuses a `routing` other than `"pages"` or `"spa"` with the builders' words, and serves the result under the Content Security Policy of ADR-0002. `/_konae/*` belongs to the Kernel on every app. A whole-document artifact carries the SDK loader and `runtime.js` only when a module with a browser call is on. The Kernel has no `/runtime.js` route when the artifact has no SDK. Owner authentication says who may publish. It never says the bytes are well formed.
 
 ### The static publishing rules
 
 `src/lib/static-artifact.js` decides which files of `app/` become the artifact, and `konae build`, the editor's browser build and the app folder's own build script all run it. It is plain JavaScript with no imports for that reason.
 
 - Every `.html` at the root of `app/` and under `pages/` is a page, served without the `pages/` prefix. Files under `public/` are served as they are, without the prefix. Every other file ships only when a page, or a stylesheet a page loads, references it. A reference to a file `app/` does not hold refuses the build with the path.
-- A whole-document page keeps its head and loads the SDK from `/runtime.js` through a loader that knows the page's base path. A fragment page runs in the app's document, and its `<title>` and icon links move into that document's head.
+- When a module with a browser call is on, a whole-document page keeps its head and loads the SDK from `/runtime.js` through a loader that knows the page's base path. A fragment page runs in the app's document, and its `<title>` and icon links move into that document's head. With all such modules off, the builder injects no SDK and allows whole-document pages that load no script.
 - `routing` is `"pages"` by default, where an unknown path answers 404 with `404.html`. `"spa"` answers `index.html` for every unknown path.
 - `encodings` names the files that travel as base64, so images and fonts publish.
 - Each builder uses the same static artifact rules, but the built files are not guaranteed to be byte-identical. The editor resolves packages through esm.sh, while local builders use the package contents installed in `node_modules`.
 
 ### The editor builds in the browser
 
-The editor bundles `app/` with `esbuild-wasm` in its own worker (`src/runtime/browser-build.ts`). Bundling parses and links source without running it, so a dependency cannot act during a build, and the worker is apart from the editor's context, which holds the model provider's keys. The Validation Gate checks the schema and `actions.json`, not the build, so a page that names a missing file fails at build or publish, not at `validate_capsule`.
+The editor bundles `app/` with `esbuild-wasm` in its own worker (`src/runtime/browser-build.ts`). Bundling parses and links source without running it, so a dependency cannot act during a build, and the worker is apart from the editor's context, which holds the model provider's keys. When actions is on, the Validation Gate checks the schema and `actions.json`, not the build, so a page that names a missing file fails at build or publish, not at `validate_capsule`. With actions off, both files may be absent.
 
 ### An app may import npm packages
 

@@ -671,11 +671,12 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
   await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
-  await expect(settings.locator(".module-settings-card")).toHaveCount(3);
+  await expect(settings.locator(".module-settings-card")).toHaveCount(4);
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "Data and actions" })).toContainText("actions");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "File storage" })).toContainText("files");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "App accounts" })).toContainText("auth");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "Search listing" })).toContainText("seo");
-  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(4);
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(3);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");

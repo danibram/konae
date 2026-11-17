@@ -42,4 +42,4 @@ bun run konae -- tool path_set '{"projectId":"<home id>","enabled":true,"name":"
 bun run konae -- tool path_read '{"projectId":"<home id>"}' --dir /tmp/konae-home
 ```
 
-The app has no accounts, so `path_set` needs no `acceptSharedOrigin`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect, and [the invitation requests](../invitation/README.md) with the name `invitation`.
+The app has no database, accounts or file store. Turn on `seo` with `module_set` and set its image to `card.png`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect, and [the invitation requests](../invitation/README.md) with the name `invitation`.

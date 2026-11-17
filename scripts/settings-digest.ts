@@ -18,15 +18,15 @@ function matchesLegacyModuleDefaults(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const modules = value as Record<string, unknown>;
   const switchable = sdkContract.modules.filter((module) => module.switch);
-  const hasAuth = Object.hasOwn(modules, "auth");
-  if (Object.keys(modules).length !== switchable.length - (hasAuth ? 0 : 1)) return false;
+  const omitted = switchable.filter((module) => ["auth", "actions"].includes(module.name) && !Object.hasOwn(modules, module.name)).length;
+  if (Object.keys(modules).length !== switchable.length - omitted) return false;
   if (!Object.keys(modules).every((name) => switchable.some((module) => module.name === name))) return false;
   return switchable.every((module) => {
-    if (module.name === "auth" && !hasAuth) return true;
+    if (["auth", "actions"].includes(module.name) && !Object.hasOwn(modules, module.name)) return true;
     const state = modules[module.name];
     if (!state || typeof state !== "object" || Array.isArray(state)) return false;
     const record = state as Record<string, unknown>;
-    if (typeof record.on !== "boolean" || (module.name !== "files" && module.name !== "auth" && record.on)) return false;
+    if (typeof record.on !== "boolean" || (!(["files", "auth", "actions"].includes(module.name)) && record.on)) return false;
     for (const option of module.options) {
       if (module.name === "auth" && !Object.hasOwn(record, option.key)) continue;
       if (module.name === "files" && option.key === "fileAccess" && record[option.key] === "app-users") continue;

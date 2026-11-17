@@ -651,6 +651,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         || input.project.manifest["fileAccess"] == "app-users";
     let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
         || super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
+    let uses_actions = super::modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
     if uses_files {
         let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
         let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
@@ -668,15 +669,19 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     anyhow::ensure!(sizes.clone().map(|(_, bytes)| bytes).sum::<usize>() <= super::size::ARTIFACT_BYTES, "{}", super::size::artifact_refused(sizes));
     drop(artifact);
     super::sources::check_files(&input.project.sources().map_err(anyhow::Error::msg)?)?;
-    let program = super::action_shape::read(
-        input
-            .project
-            .files
-            .get("actions.json")
-            .ok_or_else(|| anyhow::anyhow!("actions.json is required."))?,
-    )?;
+    let empty_actions = r#"{"version":1,"actions":{}}"#;
+    let actions_source = input.project.files.get("actions.json").map(String::as_str).unwrap_or(empty_actions);
+    let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
+    let initial_modules = input.initial_modules.as_ref().or(package_modules);
+    let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| super::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public"));
+    if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
+        && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
+        candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
+    }
+    if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
+    let program = super::action_shape::read(actions_source)?;
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-    let mut candidate_modules = existing_modules.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
+    candidate_modules = existing_modules.unwrap_or(candidate_modules);
     if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
         && input.initial_modules.as_ref().is_none_or(|modules| !modules.contains_key("auth"))
         && (input.visibility != "public" || input.initial_signup_policy.is_some() || uses_auth) {
@@ -689,6 +694,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     if uses_auth && !super::modules::is_on(&candidate_modules, "auth") {
         return Err(anyhow::Error::new(super::modules::require_on(&candidate_modules, "auth").unwrap_err()));
     }
+    if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
     super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
@@ -704,6 +710,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         .data_root
         .join(format!("validate-{}.sqlite", Uuid::new_v4()));
     let result = (|| -> Result<super::schema_change::Change> {
+        if !super::modules::is_on(&candidate_modules, "actions") { return Ok(super::schema_change::Change::default()); }
         if let Some(database) = against {
             std::fs::copy(database, &temp)?;
         } else if let Some(ref deployment) = existing {
@@ -749,6 +756,13 @@ pub async fn runtime_call(
         if let Some(id) = app {
             if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
                 super::modules::require_on(&deployment.modules, "auth")?;
+            }
+        }
+    }
+    if name == "actions_invoke" {
+        if let Some(id) = app {
+            if let Some(deployment) = state.deployments.read().await.values().find(|deployment| deployment.id == id) {
+                super::modules::require_on(&deployment.modules, "actions")?;
             }
         }
     }

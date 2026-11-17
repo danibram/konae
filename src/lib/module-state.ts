@@ -41,7 +41,10 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
     return { code: "module.requires", message: "A private app requires auth, which is off. Turn auth on first." };
   }
   if (input.rule === "in-use" && input.used === true) {
-    return { code: "module.in-use", message: `Module ${input.module} is in use by the published app. Remove its use before turning it off.` };
+    const message = input.module === "actions"
+      ? "Module actions is in use by actions.json, which declares Server Actions, HTTP routes, calls, schedules, notices, Signals or page paths, or by schema.sql or miniapp.actions. Remove those uses before turning it off."
+      : `Module ${input.module} is in use by the published app. Remove its use before turning it off.`;
+    return { code: "module.in-use", message };
   }
   if (input.rule === "option-unknown" || input.rule === "option-invalid") {
     const option = input.options?.find((candidate) => candidate.key === input.option);

@@ -240,7 +240,8 @@ async fn backup_held(state: &AppState, deployment: &Deployment, label: &str, hol
             let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
             let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
             let target = folder.clone();
-            tokio::task::spawn_blocking(move || package::snapshot(&data, &target, &blobs)).await??;
+            let modules = deployment.modules.clone();
+            tokio::task::spawn_blocking(move || package::snapshot(&data, &target, &blobs, &modules)).await??;
         }
         if holds.contains(&HOLDS_SOURCES) {
             let saved = sources::read(&state.data_root, &deployment.id).await?;

@@ -115,11 +115,11 @@ Returns { ok: true }.
 
 Editor preview: Switches to the signed-out state and returns the anonymous session.
 
-### App actions (`actions`)
+### Data and actions (`actions`)
 
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
 
-Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
 - A binding passes who calls: { "source": "actor", "field": "id" } is the signed-in person's ID or the API key's ID, and refuses a caller without one. It cannot come from the input. Roles are rows in the app's own tables, checked in SQL against that ID.
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.

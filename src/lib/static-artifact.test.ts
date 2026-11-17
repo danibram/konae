@@ -16,18 +16,25 @@ const { buildProjectInBrowser } = await import("../runtime/browser-build");
 const runtime = "window.miniapp = {};";
 const page = (title: string, body = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
-function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; runtime?: string; bundle?: (path: string) => { script: string; styles: string } } = {}) {
+function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; runtime?: string; sdk?: boolean; bundle?: (path: string) => { script: string; styles: string } } = {}) {
   return assembleStaticArtifact({
     paths: Object.keys(files),
     read: async (file) => files[file],
     compile: async () => ({ styles: typeof files["styles.css"] === "string" ? files["styles.css"] : "", script: "console.log('app')" }),
     bundle: async (file) => options.bundle?.(file) ?? { script: `/* bundled ${file} */`, styles: "" },
     runtime: options.runtime ?? runtime,
+    sdk: options.sdk,
     routing: options.routing,
   });
 }
 
 describe("page path assets", () => {
+  test("a static document does not receive the SDK or runtime.js", async () => {
+    const artifact = await assemble({ "index.html": page("Home") }, { sdk: false });
+    expect(artifact.files["index.html"]).not.toContain("/runtime.js");
+    expect(artifact.files["index.html"]).not.toContain("data-konae-runtime");
+    expect(artifact.files[runtimeFile]).toBeUndefined();
+  });
   test("the builder moves relative URLs up to the app root by the declared page depth", async () => {
     const files = {
       "index.html": page("Blog", "<main></main>"),
@@ -337,10 +344,10 @@ describe("the CLI and the editor build the same artifact", () => {
   }
 
   test("the same pages, files and SDK from both doors", async () => {
-    const root = await onDisk(capsule);
+    const root = await onDisk({ ...capsule, "konae.json": JSON.stringify({ modules: { actions: { on: true } } }) });
     try {
       const cli = (await buildLocal(root)).artifact;
-      const editor = await buildProjectInBrowser(project(capsule));
+      const editor = await buildProjectInBrowser({ ...project(capsule), modules: { actions: { on: true } } });
       expect(Object.keys(cli.files).sort()).toEqual(["about.html", "app.js", "guide/install.html", "index.html", "robots.txt", "runtime.js", "styles.css"]);
       expect(Object.keys(editor.files).sort()).toEqual(Object.keys(cli.files).sort());
       for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js", "app.js"]) {

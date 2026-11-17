@@ -4,7 +4,7 @@ import { createHostedArtifact } from "./artifact";
 import { createPreviewDocument } from "./preview";
 import { encodeBase64 } from "../mcp/client";
 
-const project = cloneStarter();
+const project = { ...cloneStarter(), modules: { actions: { on: true }, auth: { on: true } } };
 
 function sdkSurfaceOf(html: string): string[] {
   const source = html.match(/<script data-konae-runtime>([\s\S]*?)<\/script>/)?.[1];
@@ -29,6 +29,11 @@ function sdkSurfaceOf(html: string): string[] {
 }
 
 describe("preview document", () => {
+  test("a static project preview has no SDK runtime", () => {
+    const document = createPreviewDocument({ ...project, files: { "index.html": "<!doctype html><title>Static</title>" }, manifest: { ...project.manifest, visibility: "public" }, modules: { actions: { on: false }, auth: { on: false }, files: { on: false }, seo: { on: true } } });
+    expect(document).not.toContain("data-konae-runtime");
+    expect(document).not.toContain("window.miniapp");
+  });
   test("runs app.js as a module, the same way a Deployment does", () => {
     const document = createPreviewDocument(project);
     expect(document).toContain('<script type="module">');

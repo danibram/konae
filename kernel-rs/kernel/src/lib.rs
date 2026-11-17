@@ -276,7 +276,11 @@ impl Settings {
             contact_email: None,
             kernel: KERNEL_VERSION.into(),
             manifest,
-            modules: modules::defaults(),
+            modules: {
+                let mut modules = modules::defaults();
+                modules.remove("actions");
+                modules
+            },
             directories: Vec::new(),
             updated_at: 0,
             released: None,
@@ -960,10 +964,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         Ok(files) => files,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
     };
-    let actions = match input.project.files.get("actions.json") {
-        Some(value) => value.clone(),
-        None => return error(StatusCode::BAD_REQUEST, "actions.json is required."),
-    };
+    let actions = input.project.files.get("actions.json").cloned().unwrap_or_else(|| r#"{"version":1,"actions":{}}"#.to_owned());
     let program = match action_shape::read(&actions) {
         Ok(program) => program,
         Err(error_value) => match refusal::of(&error_value) {
@@ -1089,11 +1090,17 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
                 || legacy_file_access;
             let uses_auth = modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
                 || modules::artifact_uses_auth(artifact_files.values().map(Vec::as_slice));
-            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
+            let uses_actions = modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
+            let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
+            let initial_modules = input.initial_modules.as_ref().or(package_modules);
+            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public"));
             if legacy_file_access {
                 let files = modules.get_mut("files").expect("files is switchable");
                 files["on"] = json!(true);
                 files["fileAccess"] = json!("app-users");
+            }
+            if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("actions")) && uses_actions {
+                modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
             }
             modules::complete(&mut modules);
             modules
@@ -1144,7 +1151,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         .get("schema.sql")
         .cloned()
         .unwrap_or_default();
-    if !db_path.exists() {
+    let actions_enabled = modules::is_on(&deployment.modules, "actions");
+    if actions_enabled && !db_path.exists() {
         if let Err(error_value) = initialize_database(&db_path) {
             remove_staged_dist(&state, &id, &artifact_version).await;
             return error(
@@ -1154,12 +1162,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         }
     }
     let identity_path = layout::identity(&state.data_root, &id);
-    let identity = if identity_path.exists() {
+    let identity = if !modules::is_on(&deployment.modules, "auth") || identity_path.exists() {
         Ok(())
     } else {
         open_auth(&state, &deployment).map(drop).map_err(|error_value| anyhow::anyhow!(error_value.to_string()))
     };
-    if let Err(error_value) = identity.and_then(|()| release_step(&id, "open_auth")) {
+    if let Err(error_value) = identity.and_then(|()| if modules::is_on(&deployment.modules, "auth") { release_step(&id, "open_auth") } else { Ok(()) }) {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
@@ -1167,7 +1175,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
 
     let database_guard = database_lock(&state, &id).await;
     let staged_database = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}.sqlite"));
-    let staged = stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref())
+    let staged = if actions_enabled { stage_database(&db_path, &staged_database, &schema, &program, input.project.files.get("schema-transforms.json").map(String::as_str), input.schema_confirmation.as_deref()) } else { Ok(schema_change::Change::default()) }
         .and_then(|change| release_step(&id, "schema_change").map(|()| change));
     let change = match staged {
         Ok(change) => change,
@@ -1204,7 +1212,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
     let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
-    let swapped = if change.statements.is_empty() && !has_transformation_changes {
+    let swapped = if !actions_enabled || change.statements.is_empty() && !has_transformation_changes {
         remove_database_files(&staged_database);
         false
     } else if let Err(error_value) = swap_database(&db_path, &staged_database, &replaced) {
@@ -1222,7 +1230,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             }
         }
     };
-    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref(), input.initial_modules.as_ref())
+    if let Err(error_value) = persist_release(&state, &deployment, &folder::version_of(&artifact_files), &release_directories, released_transforms.as_deref(), Some(&deployment.modules))
         .await
         .and_then(|()| release_step(&id, "persist_deployment"))
     {
@@ -1470,6 +1478,9 @@ pub async fn invoke_action(
         Some(value) => value,
         None => return error(StatusCode::NOT_FOUND, "Deployment not found."),
     };
+    if let Err(refused) = modules::require_on(&deployment.modules, "actions") {
+        return refusal_error(&refused);
+    }
     let program: ActionProgram = match serde_json::from_str(&deployment.actions) {
         Ok(value) => value,
         Err(_) => {
@@ -4482,6 +4493,7 @@ pub mod tests {
             contact_email: None,
             modules: {
                 let mut modules = modules::auth_enabled_defaults();
+                modules.get_mut("actions").unwrap()["on"] = json!(true);
                 modules.get_mut("files").unwrap()["on"] = json!(true);
                 modules
             },
@@ -5819,6 +5831,36 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn a_static_release_with_only_seo_creates_no_action_database_and_serves_its_page() {
+        let root = std::env::temp_dir().join(format!("konae-static-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = AppState::for_test(&root);
+        let id = "app_static_home";
+        let body = json!({
+            "project":{"id":id,"name":"Home","slug":"home","manifest":{"version":1,"visibility":"public"},"files":{"index.html":"<!doctype html><title>Konae</title>"}},
+            "visibility":"public",
+            "initialModules":{"seo":{"on":true}},
+            "artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<!doctype html><title>Konae</title>"}}
+        });
+        let response = deploy(&state, body.to_string().as_bytes()).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+        let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+        assert_eq!(deployment.modules["seo"]["on"], true);
+        assert_eq!(deployment.modules["actions"]["on"], false);
+        assert!(!database_path(&state, id).exists());
+        assert!(!crate::layout::identity(&root, id).exists());
+        let html = read_artifact(&state, &deployment, "index.html").await.unwrap();
+        let html = String::from_utf8(html).unwrap();
+        assert!(html.contains("<title>Konae</title>"));
+        assert!(!html.contains("runtime.js"));
+        let reloaded = load_deployments(&root, "http://localhost").await.unwrap();
+        assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["seo"]["on"], true);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn release_swaps_fresh_baseline_and_existing_data_transformations() {
         let root = std::env::temp_dir().join(format!("konae-release-transform-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
@@ -5895,7 +5937,7 @@ pub mod tests {
         let list = |table: &str, column: &str| json!({"kind": "query", "access": "anonymous", "statement": format!("SELECT {column} FROM {table} ORDER BY id LIMIT 50"), "bindings": []});
         let both = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n";
         let notes_only = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);\n";
-        for step in ["stage_local_artifact", "open_auth", "schema_change", "stage_sources", "persist_deployment", "swap_sources", "switch_dist"] {
+        for step in ["stage_local_artifact", "schema_change", "stage_sources", "persist_deployment", "swap_sources", "switch_dist"] {
             let root = std::env::temp_dir().join(format!("konae-release-step-{}", Uuid::new_v4()));
             tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
             let state = test_state(&root);

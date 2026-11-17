@@ -48,6 +48,22 @@ pub fn artifact_uses_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> boo
     files.into_iter().any(|bytes| contains(bytes, b"miniapp.files"))
 }
 
+pub fn sources_use_actions<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
+    files.into_iter().any(|bytes| {
+        contains(bytes, b"miniapp.actions")
+            || creates_schema_object(bytes)
+            || serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| !actions.is_empty())).unwrap_or(false)
+    })
+}
+
+fn creates_schema_object(bytes: &[u8]) -> bool {
+    let words = bytes.split(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_').filter(|word| !word.is_empty()).collect::<Vec<_>>();
+    words.windows(3).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && words[1].eq_ignore_ascii_case(b"TABLE"))
+        || words.windows(4).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && (words[1].eq_ignore_ascii_case(b"TEMP") || words[1].eq_ignore_ascii_case(b"TEMPORARY")) && words[2].eq_ignore_ascii_case(b"TABLE"))
+        || words.windows(3).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && words[1].eq_ignore_ascii_case(b"INDEX"))
+        || words.windows(4).any(|words| words[0].eq_ignore_ascii_case(b"CREATE") && words[1].eq_ignore_ascii_case(b"UNIQUE") && words[2].eq_ignore_ascii_case(b"INDEX"))
+}
+
 pub fn sources_use_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> bool {
     files.into_iter().any(|bytes| contains(bytes, b"/_konae/files/"))
 }
@@ -173,7 +189,7 @@ pub fn check_private_auth(on: bool) -> std::result::Result<(), crate::refusal::R
 
 pub fn check_requirements(modules: &BTreeMap<String, Value>) -> std::result::Result<(), crate::refusal::Refusal> {
     for (module, description) in registry()["modules"].as_object().into_iter().flatten() {
-        if !is_on(modules, module) { continue; }
+        if description["switch"] != true || !is_on(modules, module) { continue; }
         for required in description["requires"].as_array().into_iter().flatten().filter_map(Value::as_str) {
             check_requires(module, required, is_on(modules, required))?;
         }
@@ -197,10 +213,12 @@ pub fn require_not_in_use(module: &str, used: bool) -> std::result::Result<(), c
     if !used {
         return Ok(());
     }
-    Err(crate::refusal::refuse(
-        "module.in-use",
-        format!("Module {module} is in use by the published app. Remove its use before turning it off."),
-    ))
+    let message = if module == "actions" {
+        "Module actions is in use by actions.json, which declares Server Actions, HTTP routes, calls, schedules, notices, Signals or page paths, or by schema.sql or miniapp.actions. Remove those uses before turning it off.".to_owned()
+    } else {
+        format!("Module {module} is in use by the published app. Remove its use before turning it off.")
+    };
+    Err(crate::refusal::refuse("module.in-use", message))
 }
 
 fn check_option(module: &str, description: &Value, key: &str, value: &Value) -> std::result::Result<(), crate::refusal::Refusal> {
@@ -336,7 +354,7 @@ pub async fn set(
             }
         } else {
             for (dependent, description) in registry()["modules"].as_object().into_iter().flatten() {
-                let depends_on_module = description["requires"].as_array().into_iter().flatten().any(|required| required == module);
+                let depends_on_module = description["switch"] == true && description["requires"].as_array().into_iter().flatten().any(|required| required == module);
                 if depends_on_module && is_on(&settings.modules, dependent) {
                     check_requires(dependent, module, false)?;
                 }
@@ -375,8 +393,13 @@ fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, sta
     match module {
         "files" => uses_files(root, id, state),
         "auth" => uses_auth(root, id),
+        "actions" => uses_actions(root, id),
         _ => false,
     }
+}
+
+pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
+    walk(&crate::layout::sources(root, id), &|bytes| sources_use_actions([bytes]))
 }
 
 #[cfg(test)]
@@ -428,15 +451,26 @@ mod tests {
     }
 
     #[test]
+    fn actions_use_cases_match_the_kernel_rule() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        for case in cases {
+            let Some(expected) = case.get("usesActions") else { continue };
+            let sources = case["sources"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            let artifact = case["artifact"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::as_bytes);
+            assert_eq!(sources_use_actions(sources) || sources_use_actions(artifact), *expected, "{}", case["case"]);
+        }
+    }
+
+    #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["auth", "files", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "files", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);
         assert_eq!(partial.len(), modules.len());
         assert_eq!(partial["seo"]["on"], true);
-        assert!(is_on(&partial, "actions"));
+        assert!(!is_on(&partial, "actions"));
         assert!(is_on(&partial, "seo"));
         assert!(!is_on(&modules, "seo"));
     }
@@ -539,11 +573,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_refuses_non_switch_modules_unknown_options_and_invalid_values() {
+    async fn set_accepts_actions_and_refuses_unknown_options_and_invalid_values() {
         let root = std::env::temp_dir().join(format!("konae-modules-refusals-{}", uuid::Uuid::new_v4()));
         Settings::new("app", "App", "app", &json!({"visibility":"public"})).write(&root).await.unwrap();
-        let not_switch = set(&root, "app", "actions", Some(false), None, None).await.unwrap_err();
-        assert_eq!(not_switch.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.not-switch");
+        let actions = set(&root, "app", "actions", Some(true), None, None).await.unwrap();
+        assert_eq!(actions["state"]["on"], true);
         let unknown = set(&root, "app", "missing", Some(true), None, None).await.unwrap_err();
         assert_eq!(unknown.downcast_ref::<crate::refusal::Refusal>().unwrap().code, "module.unknown");
         let option = set(&root, "app", "seo", None, Some(&json!({"unknown":true})), None).await.unwrap_err();

@@ -204,9 +204,9 @@ export const sdkContract = {
     },
     {
       name: "actions",
-      title: "App actions",
+      title: "Data and actions",
       summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
-      switch: false, options: [], permission: "publish", agentRule: "never", requires: [], uses: ["actions.json"],
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [], uses: ["actions.json", "schema.sql", "miniapp.actions"],
       declarations: [
         {
           file: "actions.json",

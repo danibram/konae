@@ -46,6 +46,18 @@ describe("validation gate", () => {
     expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
     expect((await validator.validate(files, { state: "absent" }, { modules: { files: { on: true } } })).ok).toBe(true);
   });
+  test("an action declaration needs the actions module", async () => {
+    const files = capsule({ "actions.json": JSON.stringify({ version: 1, actions: { "notes.list": { kind: "query" } } }) });
+    const result = await validator.validate(files, { state: "absent" }, { modules: { actions: { on: false } } });
+    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module actions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
+  });
+  test("a static capsule can omit actions.json and schema.sql when actions are off", async () => {
+    const files = capsule();
+    delete files["actions.json"];
+    delete files["schema.sql"];
+    const result = await validator.validate(files, { state: "absent" }, { modules: { seo: { on: true } }, visibility: "public" });
+    expect(result.ok).toBe(true);
+  });
   test("requires auth when actions name an authenticated caller or actor binding", async () => {
     const files = capsule({ "app.js": "await miniapp.auth.session();" });
     expect((await validator.validate(files)).ok).toBe(true);

@@ -139,6 +139,34 @@ async function sourcePackage(id: string, directory: string) {
 }
 
 describe("chunked package", () => {
+  test("a static app exports and imports without a database component", async () => {
+    const sourceId = "pkg_static_source";
+    const targetId = "pkg_static_target";
+    const staticPayload = (id: string) => ({
+      project: { id, name: "Static", slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" }, files: { "index.html": "<!doctype html><title>Static</title>" } },
+      visibility: "public",
+      initialModules: { seo: { on: true } },
+      artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><title>Static</title>" } },
+    });
+    await owner.call("project_create", { projectId: sourceId, name: "Static" });
+    const source = (await release(owner, staticPayload(sourceId), sourceId)).receipt;
+    const exported = await owner.call<Exported>("project_export", { projectId: source.id });
+    const directory = await mkdtemp(path.join(root, "static-export-"));
+    try {
+      const files = await download(owner, exported, directory);
+      expect(exported.manifest.contents.map(({ name }) => name)).toEqual([]);
+      await owner.call("project_create", { projectId: targetId, name: "Static import" });
+      const components = await uploadPackage(owner, exported.manifest, files, targetId);
+      const target = (await release(owner, { ...staticPayload(targetId), initialPackage: { manifest: exported.manifest, components } }, targetId)).receipt;
+      expect(target.id).toBe(targetId);
+      expect(await readFile(path.join(root, "data", "apps", targetId, "dist", "index.html"), "utf8")).toContain("<title>Static</title>");
+      expect(await readFile(path.join(root, "data", "apps", targetId, "data", "database.sqlite"), "utf8").then(() => true, () => false)).toBe(false);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("a legacy export keeps saved source metadata separate from the installed release", async () => {
     const id = "pkg_legacy_metadata";
     const receipt = await publish(id);

@@ -86,7 +86,7 @@ export function appEntry(paths) {
  * the app. `pages` maps each page's Capsule path to its HTML. Returns null
  * when the Capsule passes.
  */
-export function entryNeverRunsMessage(paths, pages) {
+export function entryNeverRunsMessage(paths, pages, sdk = true) {
   const list = [...paths];
   const entry = appEntry(list);
   if (entry === null) return null;
@@ -96,14 +96,14 @@ export function entryNeverRunsMessage(paths, pages) {
   if (index === undefined) return null;
   for (const source of sources) {
     const html = pages[source];
-    if (typeof html !== "string" || !isDocument(html) || loadsScript(html, servedPath(source))) return null;
+    if (typeof html !== "string" || !isDocument(html) || loadsScript(html, servedPath(source), sdk)) return null;
   }
   const load = entry.endsWith(".js") ? `add <script type="module" src="${entry}"></script> to it` : `add a <script type="module" src> that names a .js file importing ${entry}`;
   return `${index} is a whole document that loads no script, so ${entry} never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts ${entry} into it, or ${load}.`;
 }
 
 /** True when the page has a script element other than the SDK's tag. */
-function loadsScript(html, from) {
+function loadsScript(html, from, sdk) {
   const visible = html.replace(/<!--[\s\S]*?-->/g, "");
   for (const match of visible.matchAll(/<script\b((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>([\s\S]*?)(?:<\/script\s*>|$)/gi)) {
     const src = parseAttributes(match[1] ?? "").src;
@@ -113,7 +113,8 @@ function loadsScript(html, from) {
     }
     let target;
     try { target = resolveReference(src, from); } catch { return true; }
-    if (target !== runtimeFile) return true;
+    if (sdk && target === runtimeFile) continue;
+    return true;
   }
   return false;
 }
@@ -127,9 +128,10 @@ function loadsScript(html, from) {
  */
 export function renderCapsuleDocument(input) {
   const { head, body } = splitFragmentHead(input.body);
+  const runtime = input.runtime ? `<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script>` : "";
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${input.head ?? ""}${head}<style>${input.styles}</style></head>
-<body>${body}<script ${runtimeScriptAttribute}>${escapeInlineScript(input.runtime)}</script><script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
+<body>${body}${runtime}<script type="module">${escapeInlineScript(input.script)}</script></body></html>`;
 }
 
 
@@ -225,7 +227,8 @@ export async function assembleStaticArtifact(input) {
   };
 
   for (const [, source] of pages) if (source !== null) seen[source] = await text(source);
-  const neverRuns = entryNeverRunsMessage(held, seen);
+  const sdk = input.sdk !== false;
+  const neverRuns = entryNeverRunsMessage(held, seen, sdk);
   if (neverRuns) throw new Error(neverRuns);
 
   for (const [served, source] of pages) {
@@ -238,14 +241,14 @@ export async function assembleStaticArtifact(input) {
       scanHtml(html, served, reference);
       scanCss(compiled.styles, served, reference);
       const sourceDirectory = source ? (servedPath(source) ?? served).split("/").slice(0, -1).join("/") : "";
-      files[served] = bom + renderCapsuleDocument({ body: rewritePageUrls(html, depth, sourceDirectory), styles: rewriteCssUrls(compiled.styles, depth), script: compiled.script, runtime: input.runtime, head: input.head });
+      files[served] = bom + renderCapsuleDocument({ body: rewritePageUrls(html, depth, sourceDirectory), styles: rewriteCssUrls(compiled.styles, depth), script: compiled.script, runtime: sdk ? input.runtime : "", head: input.head });
       continue;
     }
     scanHtml(html, served, reference);
     // A page's own SDK tag would load /runtime.js from the origin root, which a path address cannot reach.
     const sourceDirectory = (servedPath(source) ?? served).split("/").slice(0, -1).join("/");
-    const page = insertIntoHead(rewritePageUrls(withoutRuntimeTags(html, served), depth, sourceDirectory), `${input.head ?? ""}${runtimeLoaderScript()}`);
-    usesRuntimeFile = true;
+    const page = insertIntoHead(rewritePageUrls(withoutRuntimeTags(html, served), depth, sourceDirectory), `${input.head ?? ""}${sdk ? runtimeLoaderScript() : ""}`);
+    usesRuntimeFile ||= sdk;
     files[served] = bom + page;
   }
 

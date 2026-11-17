@@ -1489,6 +1489,27 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         "operator email and storage keys"
       ],
       "format": "konae-package",
+      "modules": {
+        "actions": {
+          "on": true
+        },
+        "auth": {
+          "on": true,
+          "signInMethods": [
+            "password"
+          ],
+          "signupPolicy": null
+        },
+        "files": {
+          "fileAccess": null,
+          "on": true
+        },
+        "seo": {
+          "canonical": null,
+          "image": null,
+          "on": false
+        }
+      },
       "packageId": "<package id>",
       "projectId": "<project id>",
       "publishedRevision": 1,

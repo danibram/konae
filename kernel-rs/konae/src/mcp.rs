@@ -2533,9 +2533,8 @@ mod tests {
         assert_eq!(after["modules"]["seo"]["state"]["on"], true);
         assert_eq!(after["modules"]["seo"]["state"]["canonical"], "path");
         assert_eq!(state.deployments.read().await.values().find(|item| item.id == "app_modules").unwrap().modules["seo"]["canonical"], "path");
-        assert_eq!(after["modules"]["actions"]["state"]["on"], true);
-        assert_eq!(after["modules"]["actions"]["switch"], false);
-        assert!(after["modules"]["actions"].get("canChange").is_none());
+        assert_eq!(after["modules"]["actions"]["state"]["on"], false);
+        assert_eq!(after["modules"]["actions"]["switch"], true);
         let stale = admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false,"expected":expected})).await.unwrap_err();
         let refusal = stale.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.changed");
@@ -2555,7 +2554,7 @@ mod tests {
         for (id, initial_modules) in [("app_first_files_none", None), ("app_first_files_partial", Some(json!({"seo":{"on":false}})))] {
             admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
             let mut payload = json!({
-                "project":{"id":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+                "project":{"id":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{\"notes.list\":{\"kind\":\"query\",\"access\":\"anonymous\",\"statement\":\"SELECT 1 AS n LIMIT 1\",\"bindings\":[]}}}","schema.sql":""}},
                 "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<script>miniapp.files.upload()</script>"}}
             });
             if let Some(modules) = initial_modules { payload["initialModules"] = modules; }
@@ -2569,10 +2568,13 @@ mod tests {
             admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
             let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
             assert_eq!(deployment.modules["files"]["on"], true, "{id}");
+            assert_eq!(deployment.modules["actions"]["on"], true, "{id}");
             let settings = crate::Settings::read(&state.data_root, id).unwrap();
             assert_eq!(settings.modules["files"]["on"], true, "{id}");
+            assert_eq!(settings.modules["actions"]["on"], true, "{id}");
             let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
             assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["files"]["on"], true, "{id}");
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], true, "{id}");
             let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
             let expected = read["modules"]["seo"]["state"].clone();
             admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"seo","on":true,"expected":expected})).await.unwrap();

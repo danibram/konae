@@ -26,6 +26,7 @@ import {
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
+import { sdkRequired } from "../src/lib/module-use";
 import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
@@ -506,16 +507,10 @@ async function hasPackageBuild(root: string) {
   return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
 }
 
-async function refreshPageBuilder(root: string, actionsSource: string) {
-  let actions: unknown;
-  try { actions = JSON.parse(actionsSource)?.actions; } catch { return; }
-  if (!actions || typeof actions !== "object" || Array.isArray(actions) || !Object.values(actions).some((action) => {
-    const page = (action as { page?: { path?: unknown; file?: unknown } } | null)?.page;
-    return typeof page?.path === "string" && typeof page.file === "string";
-  })) return;
+async function refreshPageBuilder(root: string, sdk: boolean) {
   const resources = [
     ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
-    ["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")],
+    ...(sdk ? [["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")] as const] : []),
   ] as const;
   for (const [relative, contents] of resources) {
     const target = path.join(root, relative);
@@ -574,13 +569,15 @@ async function quietly(command: string[], cwd: string) {
 export async function buildLocal(root: string, options: { development?: boolean } = {}) {
   const source = await sources(root);
   const files = textFiles(source);
+  const settings = await readSettings(root).catch(() => undefined);
+  const sdkEnabled = sdkRequired(settings?.modules, Object.values(files), settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
-    await refreshPageBuilder(root, files["actions.json"] ?? "");
+    await refreshPageBuilder(root, sdkEnabled);
     // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
-    const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
+    const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files, sdkEnabled);
     if (neverRuns) throw Error(neverRuns);
     // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
     if (!(await quietly(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], root))) throw Error("npm run build failed.");
@@ -589,8 +586,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
     const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };
     return { artifact, source, files };
   }
-  const settings = await readSettings(root).catch(() => undefined);
-  const sdk = embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8");
+  const sdkRuntime = embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8");
   const entry = appEntry(Object.keys(files)) ?? "app.js";
   const artifact = await assembleStaticArtifact({
     paths,
@@ -600,7 +596,8 @@ export async function buildLocal(root: string, options: { development?: boolean 
       return { script, styles: [files["styles.css"] ?? "", styles].filter(Boolean).join("\n") };
     },
     bundle: (relative) => bundleModule(appDir(root), relative, options.development),
-    runtime: sdk,
+    runtime: sdkRuntime,
+    sdk: sdkEnabled,
     routing: settings?.manifest?.routing as "pages" | "spa" | undefined,
     warn: (message) => console.warn(`Warning: ${message}`),
   });

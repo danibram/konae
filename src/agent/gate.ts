@@ -6,7 +6,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange } from "../lib/module-state";
-import { sourcesUseAuth, sourcesUseFiles } from "../lib/module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseFiles } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -60,7 +60,14 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       });
     }
     const SQL = await this.loadSql();
+    const schemaSource = files["schema.sql"] ?? "";
+    const actionsSource = files["actions.json"] ?? `{"version":1,"actions":{}}`;
     const filesCall = sourcesUseFiles(Object.values(files));
+    const actionsState = facts.modules?.actions;
+    const actionsOff = actionsState ? checkModuleChange({ rule: "on", module: "actions", state: actionsState }) : null;
+    if (sourcesUseActions(Object.values(files)) && actionsOff) {
+      return failure({ stage: "actions", message: actionsOff.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
+    }
     const filesState = facts.modules?.files;
     const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
     if (filesCall && filesOff) {
@@ -98,7 +105,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           });
         }
       }
-      const refused = refusedStatements(files["schema.sql"]);
+      const refused = refusedStatements(schemaSource);
       if (refused.length > 0) {
         return failure({
           stage: "schema",
@@ -114,7 +121,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
 
       fresh = new SQL.Database();
       try {
-        fresh.run(files["schema.sql"]);
+        fresh.run(schemaSource);
       } catch (error) {
         return failure({
           stage: "schema",
@@ -124,7 +131,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       }
 
       try {
-        fresh.run(files["schema.sql"]);
+        fresh.run(schemaSource);
       } catch (error) {
         return failure({
           stage: "schema",
@@ -141,7 +148,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
 
       let program: ServerActionProgram | undefined;
       try {
-        program = parseServerActionSource(files["actions.json"]);
+        program = parseServerActionSource(actionsSource);
       } catch (error) {
         const refused = refusalOf(error);
         errors.push({ stage: "actions", message: "actions.json is not a valid server action program.", detail: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) });
@@ -151,7 +158,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       const release = program && errors.length === 0 ? releaseRefusal(program, facts) : null;
       if (release && ownerFixes(release.code)) warnings.push({ stage: "actions", message: release.message, detail: RELEASE_OWNER, owner: true, code: release.code, hint: release.hint });
       else if (release) errors.push({ stage: "actions", message: release.message, detail: RELEASE_AUTHOR, code: release.code, hint: release.hint });
-      if (program) warnings.push(...contractFromProgram(program, files["schema.sql"]).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
+      if (program) warnings.push(...contractFromProgram(program, schemaSource).warnings.map(({ message }) => ({ stage: "actions" as const, message })));
       checked.push("actions");
 
       if (live.state === "unreadable") {
@@ -171,7 +178,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         if (clone) {
           let behind: string[];
           try {
-            clone.run(files["schema.sql"]);
+            clone.run(schemaSource);
             behind = divergence(fresh, clone);
           } catch (error) {
             behind = [`schema.sql does not run on it: ${describe(error)}.`];
@@ -188,7 +195,8 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
       clone?.close();
     }
 
-    const neverRuns = entryNeverRunsMessage(Object.keys(files), files);
+    const sdk = sdkRequired(facts.modules, Object.values(files), facts.visibility);
+    const neverRuns = entryNeverRunsMessage(Object.keys(files), files, sdk);
     if (neverRuns) errors.push({ stage: "actions", message: neverRuns });
     warnings.push(...rootRelativeWarnings(files).map(({ message }) => ({ stage: "actions" as const, message })));
     return { ok: errors.length === 0, errors, checked, ...(warnings.length > 0 ? { warnings } : {}) };

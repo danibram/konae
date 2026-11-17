@@ -1,6 +1,7 @@
 import type { MiniAppProject } from "../lib/types";
 import { sourceBytes } from "../lib/source-files";
 import { resolveReference, servedPath } from "../lib/static-artifact.js";
+import { sdkRequired } from "../lib/module-use";
 import { renderCapsuleDocument } from "./artifact";
 
 export const runtimeClient = String.raw`
@@ -147,7 +148,7 @@ export function createPreviewDocument(project: MiniAppProject): string {
     body: project.files["index.html"] ?? "",
     styles: project.files["styles.css"] ?? "",
     script: project.files["app.js"] ?? "",
-    runtime: runtimeClient,
+    runtime: sdkRequired(project.modules, Object.values(project.files), project.manifest.visibility as string | undefined) ? runtimeClient : "",
   });
   return rewritePreviewAssets(document, assets, stylesheets);
 }

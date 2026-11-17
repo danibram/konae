@@ -43,7 +43,7 @@ The app's files and state. `konae init` writes `konae.json`, `app/`, generated d
 _Avoid_: kit, package, workspace, repo
 
 **Capsule**:
-The app's editable files in `app/`, including pages, styles, scripts, `schema.sql`, `actions.json`, optional `package.json` and binary assets. The editor and CLI read and write these files; a Deployment serves the Build Artifact built from them. Saved draft settings in `konae.json` can differ from the applied settings snapshot until release.
+The app's editable files in `app/`, including pages, styles, scripts, optional `schema.sql` and `actions.json` when the actions module is on, optional `package.json` and binary assets. The editor and CLI read and write these files; a Deployment serves the Build Artifact built from them. Saved draft settings in `konae.json` can differ from the applied settings snapshot until release.
 _Avoid_: bundle, repo, the project files
 
 **Server Action**:
@@ -51,7 +51,7 @@ A named operation in `actions.json` and the only way a page reaches the database
 _Avoid_: raw SQL endpoint, database API
 
 **Validation Gate**:
-The editor checks `schema.sql`, `actions.json` and file access declarations against preview state. A proposal stays in a candidate preview with candidate rows, files and actor until Apply accepts it. Apply waits for a successful build and a ready preview, merges the proposal into the editable project and updates the preview. The normal autosave then saves the accepted files through `project_sources_save` without another Gate run. Hand edits autosave the same way. Discard drops candidate state without saving it. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004). A source save after release planning makes `release_apply` refuse the stale plan.
+The editor checks `schema.sql` and `actions.json` against preview state when actions are on, and checks file access declarations when files are on. A proposal stays in a candidate preview with candidate rows, files and actor until Apply accepts it. Apply waits for a successful build and a ready preview, merges the proposal into the editable project and updates the preview. The normal autosave then saves the accepted files through `project_sources_save` without another Gate run. Hand edits autosave the same way. Discard drops candidate state without saving it. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004). A source save after release planning makes `release_apply` refuse the stale plan.
 _Avoid_: linter, preview
 
 **Refusal**:

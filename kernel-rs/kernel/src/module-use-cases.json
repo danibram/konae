@@ -10,5 +10,12 @@
   {"case":"auth SDK call","sources":["await miniapp.auth.session()"],"artifact":["await miniapp.auth.session()"],"usesAuth":true},
   {"case":"authenticated action","sources":["{\"actions\":[{\"name\":\"read\",\"access\":\"authenticated\"}]}"],"artifact":[],"usesAuth":true},
   {"case":"actor binding","sources":["{\"actor\":{\"source\":\"actor\",\"field\":\"id\"}}"],"artifact":[],"usesAuth":true},
-  {"case":"public static page","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesAuth":false}
+  {"case":"public static page","sources":["<main>Read this page</main>"],"artifact":["<main>Read this page</main>"],"usesAuth":false},
+  {"case":"declared action","sources":["{\"version\":1,\"actions\":{\"notes.list\":{\"kind\":\"query\"}}}"],"artifact":[],"usesActions":true},
+  {"case":"empty actions file","sources":["{\"version\":1,\"actions\":{}}"],"artifact":[],"usesActions":false},
+  {"case":"schema table","sources":["CREATE TABLE notes(id INTEGER PRIMARY KEY);"],"artifact":[],"usesActions":true},
+  {"case":"schema index","sources":["CREATE INDEX notes_id ON notes(id);"],"artifact":[],"usesActions":true},
+  {"case":"schema table with line break","sources":["CREATE\n TABLE notes(id INTEGER PRIMARY KEY);"],"artifact":[],"usesActions":true},
+  {"case":"temporary schema table","sources":["CREATE TEMP TABLE notes(id INTEGER PRIMARY KEY);"],"artifact":[],"usesActions":true},
+  {"case":"browser action call","sources":["miniapp.actions.call(\"notes.list\")"],"artifact":["miniapp.actions.call(\"notes.list\")"],"usesActions":true}
 ]

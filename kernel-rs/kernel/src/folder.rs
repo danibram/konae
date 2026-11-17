@@ -69,22 +69,25 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let dist_digest = version_of(&dist);
     let rebuilt = released.as_ref().and_then(|snapshot| snapshot.artifact_digest.as_deref()).is_some_and(|digest| digest != dist_digest);
     let candidate_sources = state.execution_mode.is_test();
-    let source_actions = || async { tokio::fs::read_to_string(sources.join("actions.json")).await.with_context(|| format!("apps/{id}/app/actions.json is missing")) };
+    let actions_enabled = crate::modules::is_on(&settings.modules, "actions");
+    let source_actions = || async { tokio::fs::read_to_string(sources.join("actions.json")).await.unwrap_or_else(|_| r#"{"version":1,"actions":{}}"#.to_owned()) };
     let source_schema = || async { tokio::fs::read_to_string(sources.join("schema.sql")).await.unwrap_or_default() };
     let source_transforms = || async { optional_text(&sources.join("schema-transforms.json")).await };
     let actions = if candidate_sources || rebuilt || (released.is_none() && stored.is_none()) {
-        source_actions().await?
+        source_actions().await
     } else if let Some(snapshot) = released.as_ref() {
         snapshot.actions.clone()
     } else if let Some(record) = stored.as_ref() {
         record.actions.clone()
-    } else { source_actions().await? };
+    } else { source_actions().await };
     let program = crate::action_shape::read(&actions)?;
     for (name, action) in &program.actions {
         let Some(file) = action.page.as_ref().and_then(|page| page.get("file")).and_then(Value::as_str) else { continue };
         ensure!(dist.contains_key(file), "Action {name} names {file} as its page file, but the Build Artifact does not contain it.");
     }
-    let schema = if candidate_sources || rebuilt || (released.is_none() && stored.is_none()) {
+    let schema = if !actions_enabled {
+        String::new()
+    } else if candidate_sources || rebuilt || (released.is_none() && stored.is_none()) {
         source_schema().await
     } else if let Some(snapshot) = released.as_ref() {
         snapshot.schema_sql.clone()
@@ -112,7 +115,8 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         name: if candidate_sources || rebuilt { settings.name.clone() } else { applied_name.to_owned() },
         slug: if candidate_sources || rebuilt { settings.slug.clone() } else { applied_slug.to_owned() },
             files: {
-                let mut files = HashMap::from([("actions.json".to_owned(), actions.clone()), ("schema.sql".to_owned(), schema.clone())]);
+            let mut files = HashMap::new();
+                if actions_enabled { files.insert("actions.json".to_owned(), actions.clone()); files.insert("schema.sql".to_owned(), schema.clone()); }
                 if let Some(document) = &schema_transforms { files.insert("schema-transforms.json".to_owned(), document.clone()); }
                 files
             },
@@ -138,11 +142,11 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     let program: crate::ActionProgram = serde_json::from_str(&actions)?;
     let _database = crate::database_lock(state, id).await;
     let database = layout::database(root, id);
-    tokio::fs::create_dir_all(layout::data(root, id)).await?;
-    if !database.exists() {
+    if actions_enabled { tokio::fs::create_dir_all(layout::data(root, id)).await?; }
+    if actions_enabled && !database.exists() {
         initialize_database(&database)?;
     }
-    let plan = plan(state, &database, &schema, &program, schema_transforms.as_deref())?;
+    let plan = if actions_enabled { plan(state, &database, &schema, &program, schema_transforms.as_deref())? } else { schema_change::Change::default() };
     if let Some(expected) = plan.confirmation() {
         if confirmation != Some(expected.as_str()) {
             let mut effects = plan.losses.iter().map(|loss| loss.sentence.clone()).collect::<Vec<_>>();
@@ -155,7 +159,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
             bail!("app/schema.sql asks for a change that loses data. {} To apply it, start the Kernel with {CONFIRM_SCHEMA}={expected}.", effects.join(" "));
         }
     }
-    schema_change::apply_with_transforms(&database, &schema, &program, schema_transforms.as_deref(), schema_change::Mode::Apply(plan.confirmation().as_deref()))?;
+    if actions_enabled { schema_change::apply_with_transforms(&database, &schema, &program, schema_transforms.as_deref(), schema_change::Mode::Apply(plan.confirmation().as_deref()))?; }
     let existing = find_project_deployment(&*state.deployments.read().await, id);
     let (hostname, created_at, _taking) = match existing.as_ref() {
         Some(deployment) => (deployment.hostname.clone(), deployment.created_at, None),
@@ -177,7 +181,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
         manifest: input.project.manifest.clone(), hostname, actions, artifact_version, signup_policy: policy,
         sign_in_methods, contact_email: input.contact_email.clone(), modules: settings.modules.clone(), released_schema: schema,
     };
-    open_auth(state, &deployment)?;
+    if crate::modules::is_on(&deployment.modules, "auth") { open_auth(state, &deployment)?; }
     if rebuilt { persist_release(state, &deployment, &dist_digest, &settings.directories, schema_transforms.as_deref(), None).await?; }
     else if candidate_sources || fresh_sources { crate::persist_folder_snapshot_with_transforms(state, &deployment, &dist_digest, schema_transforms.as_deref()).await?; }
     else { crate::persist_folder_snapshot(state, &deployment, &dist_digest).await?; }
@@ -213,6 +217,12 @@ pub async fn decide_app_modules(root: &Path, id: &str) -> Result<Option<std::col
                     let files = settings.modules.get_mut("files").expect("files is switchable");
                     files["on"] = json!(used || legacy_file_access == Some("app-users"));
                     if legacy_file_access == Some("app-users") { files["fileAccess"] = json!("app-users"); }
+                    changed = true;
+                }
+            }
+            "actions" => {
+                if raw_settings["modules"]["actions"].is_null() {
+                    settings.modules.get_mut("actions").expect("actions is switchable")["on"] = json!(crate::modules::uses_actions(root, id));
                     changed = true;
                 }
             }
@@ -361,7 +371,73 @@ mod tests {
         assert_eq!((again.hostname.as_str(), again.artifact_version.as_str()), (first.hostname.as_str(), first.artifact_version.as_str()));
         let kept: String = Connection::open(layout::database(&root, "notes_app")).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(kept, "kept");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_static_folder_without_actions_or_schema_creates_no_databases_or_sdk() {
+        use axum::{extract::{Path as AxumPath, State}, http::{HeaderMap, HeaderValue, StatusCode, header}, Json};
+        let root = scratch();
+        let state = AppState::for_test(&root);
+        write_folder(&root, "static_app", "");
+        let sources = layout::sources(&root, "static_app");
+        std::fs::remove_file(sources.join("actions.json")).unwrap();
+        std::fs::remove_file(sources.join("schema.sql")).unwrap();
+        std::fs::write(layout::dist(&root, "static_app").join("index.html"), "<!doctype html><title>Static</title>").unwrap();
+
+        let deployment = open(&state, "static_app", None).await.unwrap();
+        assert!(!crate::layout::database(&root, "static_app").exists());
+        assert!(!crate::layout::identity(&root, "static_app").exists());
+        assert!(!crate::modules::is_on(&deployment.modules, "actions"));
+        let html = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
+        assert!(!String::from_utf8(html).unwrap().contains("runtime.js"));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("notes.localhost"));
+        let response = crate::invoke_action(State(state), AxumPath("missing.action".into()), headers, Json(json!({}))).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "Module actions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_deployments_migrates_an_old_action_folder_and_http_returns_its_rows() {
+        use axum::{http::{HeaderValue, Request, StatusCode, header}, routing::post, Router};
+        use tower::ServiceExt;
+        let root = scratch();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-actions-0.9.0");
+        for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
+            let destination = layout::folder(&root, "legacy_actions").join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::copy(fixture.join(relative), destination).unwrap();
+        }
+        let mut settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "legacy_actions")).unwrap()).unwrap();
+        settings["id"] = json!("legacy_actions");
+        settings["slug"] = json!("legacy-actions");
+        std::fs::write(layout::settings(&root, "legacy_actions"), serde_json::to_vec(&settings).unwrap()).unwrap();
+        std::fs::create_dir_all(layout::dist(&root, "legacy_actions")).unwrap();
+        std::fs::write(layout::dist(&root, "legacy_actions").join("index.html"), "<!doctype html><title>Legacy actions</title>").unwrap();
+        std::fs::create_dir_all(layout::private(&root, "legacy_actions")).unwrap();
+        let actions = std::fs::read_to_string(layout::sources(&root, "legacy_actions").join("actions.json")).unwrap();
+        let installed = crate::Installed { hostname: "legacy-actions.localhost".into(), created_at: 1, released_at: Some(2), source_digest: None, actions, artifact_version: "v1".into(), released: None };
+        std::fs::write(layout::record(&root, "legacy_actions"), serde_json::to_vec(&installed).unwrap()).unwrap();
+        let database = layout::database(&root, "legacy_actions");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        crate::initialize_database(&database).unwrap();
+        Connection::open(&database).unwrap().execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL); INSERT INTO notes(body) VALUES('kept row');").unwrap();
+
+        let mut state = AppState::for_test(&root);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(crate::load_deployments(&root, "http://localhost").await.unwrap()));
+        let deployment = state.deployments.read().await["legacy-actions.localhost"].clone();
+        assert!(deployment.modules["actions"]["on"] == true);
+        assert!(deployment.actions.contains("notes.route") && deployment.actions.contains("notes.tick"));
+        let app = Router::new().route("/_konae/actions/{name}", post(crate::invoke_action)).with_state(state);
+        let response = app.oneshot(Request::builder().method("POST").uri("/_konae/actions/notes.list").header(header::HOST, HeaderValue::from_static("legacy-actions.localhost")).header(header::CONTENT_TYPE, "application/json").body(axum::body::Body::from("{}")).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap();
+        assert_eq!(body["result"][0]["body"], "kept row");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -394,10 +470,11 @@ mod tests {
         let served = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
         assert!(String::from_utf8(served).unwrap().contains("Legacy app"));
         let listed = crate::modules::read(&state, &deployment);
-        assert_eq!(listed["modules"]["actions"]["state"]["on"], true);
+        assert_eq!(listed["modules"]["actions"]["state"]["on"], false);
         let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
         assert_eq!(rewritten["modules"]["files"]["on"], false);
-        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["auth".to_owned(), "files".to_owned(), "seo".to_owned()].into());
+        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["actions".to_owned(), "auth".to_owned(), "files".to_owned(), "seo".to_owned()].into());
+        assert!(!layout::database(&root, "app_legacy_modules").exists());
         assert_eq!(rewritten["modules"]["seo"]["on"], false);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -472,6 +549,8 @@ mod tests {
         assert_eq!(loaded["legacy_uploads.localhost"].modules["files"]["on"], true);
         assert_eq!(loaded["legacy_uploads.localhost"].modules["auth"]["on"], true);
         assert_eq!(loaded["legacy_static.localhost"].modules["files"]["on"], false);
+        assert_eq!(loaded["legacy_static.localhost"].modules["actions"]["on"], false);
+        assert!(!layout::database(&root, "legacy_static").exists());
         state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(loaded));
         let auth = crate::auth::AuthService::open(layout::identity(&root, "legacy_uploads")).unwrap();
         let session = auth.signup("uploader@example.test", "correct horse battery").unwrap();

@@ -12,6 +12,12 @@ describe("package manifests", () => {
     expect(checkPackageManifest(manifest()).contents[0].name).toBe("database");
   });
 
+  test("a package without actions may omit its database", () => {
+    const staticPackage = { ...manifest(), contents: [], modules: { actions: { on: false } } };
+    expect(checkPackageManifest(staticPackage).contents).toEqual([]);
+    expect(() => checkPackageManifest({ ...staticPackage, modules: {} })).toThrow("The package manifest lists no database. This Kernel requires a database component for apps with actions on.");
+  });
+
   test("refuse what the Kernel refuses, with the Kernel's reason", () => {
     const cases: [string, (value: ReturnType<typeof manifest>) => unknown][] = [
       ["Package version 3 is not supported", (value) => ({ ...value, version: 3 })],

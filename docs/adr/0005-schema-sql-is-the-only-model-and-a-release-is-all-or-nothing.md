@@ -8,15 +8,15 @@ A person who writes SQL edits `schema.sql`. A person who does not write code ask
 
 ### `schema.sql` states what the database should be
 
-- `schema.sql` holds `CREATE TABLE` and `CREATE INDEX` statements. It is the only model of the database.
-- At publish, and when the `kernel` binary starts an app folder, the Kernel runs `schema.sql` in a scratch database in memory and compares its tables, columns and indexes with the live database, reading both through SQLite itself. Only statements the Kernel writes from that comparison touch the live file.
+- When the actions module is on, `schema.sql` holds `CREATE TABLE` and `CREATE INDEX` statements. It is the only model of the database.
+- At publish, and when the `kernel` binary starts an app folder, the Kernel runs `schema.sql` in a scratch database in memory and compares its tables, columns and indexes with the live database, reading both through SQLite itself. Only statements the Kernel writes from that comparison touch the live file. An app with actions off needs neither `schema.sql` nor a database.
 - A new table, column or index applies. A table whose definition changed is rebuilt the way SQLite's documentation on `ALTER TABLE` describes, in one transaction.
 - A dropped table, a dropped column and a column whose type changed lose something. `release_plan` names what is lost, with row and value counts, and returns a confirmation that is a digest of the statements. The change applies only with that confirmation, so a confirmation fits only the plan it was given for. A rename reads as a drop and an add.
 - `actions.d.ts` is generated from the Action Contract, so `miniapp.actions.call` is typed by action name, input and returned columns.
 
 ### A release is all or nothing
 
-A publish stages and uploads first. It then copies the database, applies the schema change to the copy, and swaps the database, the Deployment record, `dist/` and the Deployment in memory together, putting back each earlier swap if a later one fails. Server Actions wait from the copy to the swap. A publish that fails leaves the old actions answering on the old rows.
+A publish stages and uploads first. When actions is on, it copies the database, applies the schema change to the copy, and swaps the database, the Deployment record, `dist/` and the Deployment in memory together, putting back each earlier swap if a later one fails. Server Actions wait from the copy to the swap. A publish that fails leaves the old actions answering on the old rows.
 
 ### The database runs in WAL mode with kept connections
 
@@ -37,6 +37,6 @@ A publish stages and uploads first. It then copies the database, applies the sch
 
 ## Consequences
 
-- The editor preview runs `schema.sql` on its own test rows and never changes a table it already has. When its schema lacks a declared table or column, the Gate reports `PREVIEW_BEHIND`, names the difference, and marks preview row checks as skipped. Try such a change on `konae dev` or a published Deployment.
-- An export and a copy read the database with `VACUUM INTO`, which is consistent in WAL mode and writes a file in rollback mode.
+- When actions is on, the editor preview runs `schema.sql` on its own test rows and never changes a table it already has. When its schema lacks a declared table or column, the Gate reports `PREVIEW_BEHIND`, names the difference, and marks preview row checks as skipped. Try such a change on `konae dev` or a published Deployment.
+- An export and a copy read an app database with `VACUUM INTO`, which is consistent in WAL mode and writes a file in rollback mode. Apps with actions off have no app database to copy.
 - A tool that reads a live database from disk opens it read-write, or reads a copy, because bun's SQLite refuses to open a WAL file read-only once its `-shm` is gone.
