@@ -279,6 +279,8 @@ impl Settings {
             modules: {
                 let mut modules = modules::defaults();
                 modules.remove("actions");
+                modules.remove("http");
+                modules.remove("calls");
                 modules
             },
             directories: Vec::new(),
@@ -1091,9 +1093,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             let uses_auth = modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
                 || modules::artifact_uses_auth(artifact_files.values().map(Vec::as_slice));
             let uses_actions = modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
+            let action_files = input.project.files.iter().map(|(name, text)| (name.as_str(), text.as_bytes())).collect::<Vec<_>>();
+            let uses_http = modules::sources_use_http(action_files.iter().copied());
+            let uses_calls = modules::sources_use_calls(action_files.iter().copied());
             let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
             let initial_modules = input.initial_modules.as_ref().or(package_modules);
-            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public"));
+            let mut modules = existing.as_ref().map(|item| item.modules.clone()).unwrap_or_else(|| modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
             if legacy_file_access {
                 let files = modules.get_mut("files").expect("files is switchable");
                 files["on"] = json!(true);
@@ -1102,6 +1107,8 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
             if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("actions")) && uses_actions {
                 modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
             }
+            if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("http")) && uses_http { modules.get_mut("http").expect("http is switchable")["on"] = json!(true); }
+            if existing.is_none() && initial_modules.is_none_or(|state| !state.contains_key("calls")) && uses_calls { modules.get_mut("calls").expect("calls is switchable")["on"] = json!(true); }
             modules::complete(&mut modules);
             modules
         },
@@ -6385,6 +6392,7 @@ pub mod tests {
         for deployment in state.deployments.write().await.values_mut() {
             deployment.actions = program.to_string();
             deployment.manifest = json!({"visibility": "public"});
+            deployment.modules.get_mut("http").unwrap()["on"] = json!(true);
             initialize_database(&database_path(&state, &deployment.id)).unwrap();
             id = deployment.id.clone();
         }

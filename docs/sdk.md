@@ -465,11 +465,11 @@ Limits:
 
 - a row that still names the file ID keeps it; the app removes that row with its own action
 
-### Calls to other services (`calls`)
+### Outgoing calls (`calls`)
 
 Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.
 
-Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
 - The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.
 - http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.
@@ -534,11 +534,11 @@ Limits:
 
 - 10 origins
 
-### HTTP routes (`http`)
+### Incoming routes (`http`)
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
 
-Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
 - Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.

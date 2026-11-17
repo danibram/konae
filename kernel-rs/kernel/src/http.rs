@@ -477,6 +477,7 @@ fn key_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 /// `api_keys_create`, `api_keys_list` and `api_keys_revoke`. The caller has
 /// checked that the owner may act on `deployment`.
 pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
+    if name == "api_keys_create" { crate::modules::require_on(&deployment.modules, "http").map_err(anyhow::Error::new)?; }
     let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
     let db = identity_connection(state, deployment)?;
     match name {
@@ -827,6 +828,7 @@ pub async fn get_route(State(state): State<AppState>, AxumPath(relative): AxumPa
     if let Some(deployment) = deployment_for(&state, request.headers()).await {
         let table = route_table(&deployment);
         if let Some((name, http)) = table.find("GET", &path) {
+            if let Err(refused) = crate::modules::require_on(&deployment.modules, "http") { return crate::refusal_error(&refused); }
             if request.method() == axum::http::Method::HEAD {
                 let mut response = error(StatusCode::METHOD_NOT_ALLOWED, "A route does not answer HEAD. Send GET.");
                 response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET"));
@@ -987,6 +989,7 @@ pub async fn post_route(State(state): State<AppState>, request: Request) -> Resp
     let Some(deployment) = deployment_for(&state, request.headers()).await else { return not_allowed("GET, HEAD") };
     let table = route_table(&deployment);
     let Some((name, http)) = table.find("POST", &path) else { return not_allowed(table.allowed(&path)) };
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "http") { return crate::refusal_error(&refused); }
     let client = state.guards.client_ip(peer(&request), request.headers());
     let headers = request.headers().clone();
     let raw_query = request.uri().query().unwrap_or("").to_owned();
@@ -1009,6 +1012,7 @@ pub async fn call_route(
     headers: &HeaderMap,
     client: std::net::IpAddr,
 ) -> Response {
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "http") { return crate::refusal_error(&refused); }
     let table = route_table(deployment);
     let Some((name, http)) = table.find(method, path) else {
         return refusal(StatusCode::NOT_FOUND, "No route of this app answers that method and path.");
@@ -1069,6 +1073,7 @@ async fn run_route(
     raw_query: &str,
     body: &[u8],
 ) -> Response {
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "http") { return crate::refusal_error(&refused); }
     let mut caller = match resolve_caller(state, deployment, headers, client) {
         Ok(caller) => caller,
         Err(response) => return response,
@@ -1394,11 +1399,11 @@ mod tests {
 
     /// Publishes a public app whose one GET route is `path`, with a static
     /// `app.js` next to it.
-    async fn publish_route(state: &AppState, path: &str) -> Deployment {
+    async fn publish_route(state: &AppState, project_id: &str, path: &str) -> Deployment {
         let actions = json!({"version": 1, "actions": {"items.count": {"kind": "query", "access": "anonymous",
             "statement": "SELECT 1 AS n LIMIT 1", "bindings": [], "http": {"method": "GET", "path": path}}}});
         let body = json!({
-            "project": {"id": "route_cache", "name": "Route cache", "slug": "route-cache", "manifest": {},
+            "project": {"id": project_id, "name": "Route cache", "slug": project_id, "manifest": {},
                 "files": {"actions.json": actions.to_string(), "schema.sql": ""}},
             "visibility": "public",
             "artifact": {"version": 1, "entrypoint": "index.html", "files": {"index.html": "<p>shell</p>", "app.js": "app"}}
@@ -1420,7 +1425,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-route-cache-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = test_state(&root);
-        let first = publish_route(&state, "/api/count").await;
+        let first = publish_route(&state, "route_cache_test", "/api/count").await;
         assert_eq!(route_parses(&first.id), 1, "the publish parses the actions once");
         for _ in 0..3 {
             assert_eq!(get(&state, &first, "/app.js").await, (StatusCode::OK, "app".into()));
@@ -1438,7 +1443,7 @@ mod tests {
         assert_eq!(get(&state, &first, "/api/count").await.0, StatusCode::OK);
         assert!(database_path(&state, &first.id).exists(), "GET ran the query");
 
-        let second = publish_route(&state, "/api/total").await;
+        let second = publish_route(&state, "route_cache_test", "/api/total").await;
         assert_eq!(second.id, first.id);
         assert_ne!(second.artifact_version, first.artifact_version);
         assert_eq!(route_parses(&second.id), 2, "a publish parses the new release");
@@ -1456,6 +1461,39 @@ mod tests {
         assert_eq!(route_parses(&second.id), 3);
         assert_eq!(get(&state, &restarted, "/api/total").await.0, StatusCode::OK);
         assert_eq!(route_parses(&second.id), 3);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn every_http_route_entry_refuses_when_http_is_off() {
+        let root = std::env::temp_dir().join(format!("konae-http-module-off-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root);
+        let deployment = publish_route(&state, "route_http_off", "/hooks/incoming").await;
+        state.deployments.write().await.get_mut(&deployment.hostname).unwrap().modules.get_mut("http").unwrap()["on"] = json!(false);
+        let get_response = get(&state, &deployment, "/hooks/incoming").await;
+        let get_refusal: Value = serde_json::from_str(&get_response.1).unwrap();
+        assert_eq!(get_refusal["code"], "module.off");
+        assert_eq!(get_refusal["error"], "Module http is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+        let head = Request::builder().method(axum::http::Method::HEAD).uri("/hooks/incoming").header(header::HOST, &deployment.hostname).body(Body::empty()).unwrap();
+        assert_eq!(get_route(State(state.clone()), AxumPath("hooks/incoming".into()), head).await.status(), StatusCode::BAD_REQUEST);
+        let actions = json!({"version": 1, "actions": {"hooks.signed": {"kind": "mutation", "access": "anonymous",
+            "statement": "INSERT INTO events (name) VALUES (?1)", "bindings": [{"source":"input","key":"name","type":"string"}],
+            "http": {"method":"POST","path":"/hooks/signed","signature":{"header":"X-Signature","secret":"hook_secret"}}}}});
+        secrets_call(&secrets_store(&state.data_root, "route_signed").unwrap(), "route_signed", None, "secret_set", &json!({"name":"hook_secret","value":"test-secret-123456"})).unwrap();
+        let body = json!({"project":{"id":"route_signed","name":"Signed route","slug":"route-signed","manifest":{},"files":{"actions.json":actions.to_string(),"schema.sql":"CREATE TABLE IF NOT EXISTS events(name TEXT);"}},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<p>shell</p>"}}});
+        let deployed = deploy(&state, body.to_string().as_bytes()).await;
+        assert_eq!(deployed.status(), StatusCode::OK, "{}", String::from_utf8_lossy(&axum::body::to_bytes(deployed.into_body(), 100_000).await.unwrap()));
+        let mut post_deployment = state.deployments.read().await.values().find(|deployment| deployment.id == "route_signed").cloned().unwrap();
+        post_deployment.modules.get_mut("http").unwrap()["on"] = json!(false);
+        state.deployments.write().await.insert(post_deployment.hostname.clone(), post_deployment.clone());
+        let post = Request::builder().method("POST").uri("/hooks/signed").header(header::HOST, &post_deployment.hostname)
+            .header("x-signature", "invalid").body(Body::from("{}"));
+        let response = post_route(State(state.clone()), post.unwrap()).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "signature verification never runs with http off");
+        let response = call_route(&state, &post_deployment, "POST", "/hooks/signed", "", b"{}", &HeaderMap::new(), "127.0.0.1".parse().unwrap()).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "the internal route path refuses too");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

@@ -260,6 +260,8 @@ describe("Usage and Signals", () => {
   });
 
   test("account activity includes successful actions and queued calls, excludes refusals, and keeps emails out of the overview", async () => {
+    const modules = await owner.call<any>("modules_read", { projectId: "usage_app" });
+    await owner.call("module_set", { projectId: "usage_app", module: "calls", on: true, expected: modules.modules.calls.state });
     await release("usage_app", { "schema.sql": schema, "actions.json": JSON.stringify({ ...actions, actions: {
       ...actions.actions,
       "notes.absent": { kind: "mutation", access: "authenticated", statement: "DELETE FROM notes WHERE id = -1", bindings: [], guard: "This note no longer exists." },

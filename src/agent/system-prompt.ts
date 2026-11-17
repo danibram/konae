@@ -11,8 +11,8 @@ const PIECES = `| Need | Use | Not |
 | Email when a row changes | \`notify\` on that mutation | Browser mail or a call action for mail |
 | Work when nobody is looking | \`schedule\` on a no-input mutation | External cron unless asked |
 | Owner-facing occurrence | \`signal\` on a mutation, or \`kind: signal\` | A side table only the agent reads |
-| Another service calls this app | \`http\` on an anonymous action with callers / signature / key | A call action (that is outbound) |
-| This app calls another host | \`kind: call\` | \`fetch\` of a secret from the browser |
+| Another service calls this app | Turn on \`http\` with \`module_set\`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| This app calls another host | Turn on \`calls\` with \`module_set\`, then declare \`kind: call\` | \`fetch\` of a secret from the browser |
 | Uploaded files | \`miniapp.files\` | Large bytes in a SQLite column |
 | Every signed-in user reads every uploaded file | \`files.fileAccess\` set to \`app-users\` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
@@ -49,6 +49,7 @@ The publish build, the same one the CLI and the export run, decides what a Deplo
 # The data contract
 
 The published browser never receives SQL and never receives database credentials. It only knows action names. Every database read or write goes through a named Server Action declared in actions.json and invoked with miniapp.actions.call. On a published project, read modules_read before adding a Server Action. If Data and actions is off, ask the owner to turn it on with module_set in the confirmation dialog. On an unpublished project, finish the Capsule first. Read modules_read after its first publish.
+An action with an http route needs the http module on. An action of kind call needs calls on. Both modules require actions. On a published project, read modules_read before proposing either change and wait for the owner to confirm module_set.
 
 actions.json format, every key an action takes (each kind takes only its own; the SDK section below says what each does):
 

@@ -6,7 +6,7 @@ import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artif
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
 import { checkModuleChange } from "../lib/module-state";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseFiles } from "../lib/module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
 import { isEncoded } from "../lib/source-files";
@@ -67,6 +67,11 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const actionsOff = actionsState ? checkModuleChange({ rule: "on", module: "actions", state: actionsState }) : null;
     if (sourcesUseActions(files) && actionsOff) {
       return failure({ stage: "actions", message: actionsOff.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
+    }
+    for (const [module, used] of [["http", sourcesUseHttp(files)], ["calls", sourcesUseCalls(files)]] as const) {
+      const state = facts.modules?.[module];
+      const off = state ? checkModuleChange({ rule: "on", module, state }) : null;
+      if (used && off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
     const filesState = facts.modules?.files;
     const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;

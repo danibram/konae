@@ -621,6 +621,9 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     if let Some(initial_modules) = input.initial_modules.as_ref() {
         crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
     }
+    if let Some(package) = input.initial_package.as_ref() {
+        crate::modules::validate_state(&package.manifest.modules).map_err(anyhow::Error::new)?;
+    }
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"
@@ -652,9 +655,12 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
         || super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
     let uses_actions = super::modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
+    let action_files = input.project.files.iter().map(|(name, text)| (name.as_str(), text.as_bytes())).collect::<Vec<_>>();
+    let uses_http = super::modules::sources_use_http(action_files.iter().copied());
+    let uses_calls = super::modules::sources_use_calls(action_files.iter().copied());
     if uses_files {
         let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-        let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));
+        let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
         if input.project.manifest["fileAccess"] == "app-users" {
             let files = modules.get_mut("files").expect("files is switchable");
             files["on"] = serde_json::json!(true);
@@ -673,12 +679,14 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     let actions_source = input.project.files.get("actions.json").map(String::as_str).unwrap_or(empty_actions);
     let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
     let initial_modules = input.initial_modules.as_ref().or(package_modules);
-    let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| super::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public"));
+    let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| super::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
     if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
         && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
         candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
     }
     if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
+    if uses_http { super::modules::require_on(&candidate_modules, "http").map_err(anyhow::Error::new)?; }
+    if uses_calls { super::modules::require_on(&candidate_modules, "calls").map_err(anyhow::Error::new)?; }
     let program = super::action_shape::read(actions_source)?;
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
     candidate_modules = existing_modules.unwrap_or(candidate_modules);
@@ -956,5 +964,39 @@ mod tests {
         assert!(super::valid_host(&state, &headers("app.konae.es")));
         assert!(!super::valid_host(&state, &headers("evil.example")));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn package_module_state_uses_the_same_validation_as_initial_modules() {
+        let root = std::env::temp_dir().join(format!("konae-package-module-state-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+            "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{}},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>"}},
+            "initialPackage":{"manifest":{"modules":{"http":{"on":"yes"}}},"components":{}}
+        })).unwrap();
+        let error = super::validate_release(&state, &input, None).await.unwrap_err();
+        assert_eq!(error.to_string(), "Module http option on must be a boolean.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_release_refuses_http_and_calls_that_are_explicitly_off() {
+        let root = std::env::temp_dir().join(format!("konae-release-modules-off-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        let cases = [
+            ("http", r#"{"version":1,"actions":{"hooks.receive":{"kind":"mutation","access":"anonymous","statement":"SELECT 1","bindings":[],"http":{"method":"POST","path":"/hooks"}}}}"#),
+            ("calls", r#"{"version":1,"actions":{"notify.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://example.test","bindings":[]}}}"#),
+        ];
+        for (module, actions) in cases {
+            let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+                "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{"actions.json":actions,"schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>"}},
+                "initialModules":{"actions":{"on":true},"http":{"on":false},"calls":{"on":false}}
+            })).unwrap();
+            let error = super::validate_release(&state, &input, None).await.unwrap_err();
+            assert_eq!(error.to_string(), format!("Module {module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."));
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -51,6 +51,14 @@ describe("validation gate", () => {
     const result = await validator.validate(files, { state: "absent" }, { modules: { actions: { on: false } } });
     expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module actions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
   });
+  test("HTTP routes and call actions refuse when their modules are off", async () => {
+    const route = capsule({ "actions.json": JSON.stringify({ version: 1, actions: { "hooks.receive": { kind: "mutation", http: { method: "POST", path: "/hooks" } } } }) });
+    const call = capsule({ "actions.json": JSON.stringify({ version: 1, actions: { "notify.send": { kind: "call" } } }) });
+    for (const [files, module] of [[route, "http"], [call, "calls"]] as const) {
+      const result = await validator.validate(files, { state: "absent" }, { modules: { actions: { on: true }, http: { on: false }, calls: { on: false } } });
+      expect(result.errors[0]).toMatchObject({ code: "module.off", message: `Module ${module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.` });
+    }
+  });
   test("a static capsule can omit actions.json and schema.sql when actions are off", async () => {
     const files = capsule();
     delete files["actions.json"];

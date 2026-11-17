@@ -227,6 +227,18 @@ pub async fn decide_app_modules(root: &Path, id: &str) -> Result<Option<std::col
                     changed = true;
                 }
             }
+            "http" => {
+                if raw_settings["modules"]["http"].is_null() {
+                    settings.modules.get_mut("http").expect("http is switchable")["on"] = json!(crate::modules::uses_http(root, id));
+                    changed = true;
+                }
+            }
+            "calls" => {
+                if raw_settings["modules"]["calls"].is_null() {
+                    settings.modules.get_mut("calls").expect("calls is switchable")["on"] = json!(crate::modules::uses_calls(root, id));
+                    changed = true;
+                }
+            }
             _ => {}
         }
     }
@@ -347,6 +359,107 @@ mod tests {
     }
 
     const ACTIONS: &str = r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[]}}}"#;
+
+    #[tokio::test]
+    async fn legacy_module_decisions_read_installed_actions_and_persist_them() {
+        let root = scratch();
+        for (id, fixture, expected_http, expected_calls) in [
+            ("legacy_http", "module-http-route-0.9.0", true, false),
+            ("legacy_calls", "module-calls-call-0.9.0", false, true),
+            ("legacy_actions_only", "module-actions-only-0.9.0", false, false),
+        ] {
+            std::fs::create_dir_all(layout::sources(&root, id)).unwrap();
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures").join(fixture);
+            let actions = std::fs::read_to_string(fixture.join("app/actions.json")).unwrap();
+            std::fs::write(layout::sources(&root, id).join("actions.json"), r#"{"version":1,"actions":{}}"#).unwrap();
+            let mut settings = Settings::new(id, "Legacy", id, &json!({"visibility":"public"}));
+            settings.modules.remove("calls");
+            settings.modules.remove("http");
+            settings.write(&root).await.unwrap();
+            std::fs::create_dir_all(layout::private(&root, id)).unwrap();
+            std::fs::write(layout::record(&root, id), serde_json::to_vec(&json!({"actions":actions})).unwrap()).unwrap();
+            decide_app_modules(&root, id).await.unwrap();
+            let saved: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
+            assert_eq!(saved["modules"]["http"]["on"], expected_http, "{id}");
+            assert_eq!(saved["modules"]["calls"]["on"], expected_calls, "{id}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn load_deployments_keeps_legacy_signed_routes_and_calls_live() {
+        use axum::http::StatusCode;
+
+        let root = scratch();
+        let route_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-http-route-0.9.0");
+        let calls_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-calls-call-0.9.0");
+        let actions_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-actions-only-0.9.0");
+        for (id, fixture) in [("legacy_http", route_fixture), ("legacy_calls", calls_fixture), ("legacy_actions_only", actions_fixture)] {
+            let source = layout::sources(&root, id);
+            std::fs::create_dir_all(&source).unwrap();
+            let dist = layout::dist(&root, id);
+            std::fs::create_dir_all(&dist).unwrap();
+            std::fs::write(dist.join("index.html"), "<!doctype html><title>Legacy app</title><main>Still serving</main>").unwrap();
+            let actions = std::fs::read_to_string(fixture.join("app/actions.json")).unwrap();
+            std::fs::copy(fixture.join("app/actions.json"), source.join("actions.json")).unwrap();
+            let schema = std::fs::read_to_string(fixture.join("app/schema.sql")).unwrap();
+            std::fs::write(source.join("schema.sql"), &schema).unwrap();
+            let mut settings = Settings::new(id, "Legacy", id, &json!({"visibility":"public"}));
+            settings.modules.remove("http");
+            settings.modules.remove("calls");
+            settings.write(&root).await.unwrap();
+            if id == "legacy_http" {
+                std::fs::create_dir_all(layout::data(&root, id)).unwrap();
+                initialize_database(&layout::database(&root, id)).unwrap();
+                Connection::open(layout::database(&root, id)).unwrap().execute_batch(&schema).unwrap();
+                crate::http::secrets_call(&crate::http::secrets_store(&root, id).unwrap(), id, None, "secret_set", &json!({"name":"legacy_hook","value":"legacy-route-secret-1234"})).unwrap();
+            }
+            std::fs::create_dir_all(layout::private(&root, id)).unwrap();
+            let installed = Installed { hostname: format!("{id}.localhost"), created_at: 1, released_at: Some(2), source_digest: None, actions, artifact_version: "v0.9.0".into(), released: None };
+            std::fs::write(layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).unwrap();
+        }
+
+        let mut state = AppState::for_test(&root);
+        state.execution_mode = crate::execution::ExecutionMode::Test;
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(crate::load_deployments(&root, "http://localhost").await.unwrap()));
+        let loaded = state.deployments.read().await;
+        let modules = |id: &str| loaded.values().find(|deployment| deployment.id == id).unwrap().modules.clone();
+        assert!(modules("legacy_http")["http"]["on"] == true);
+        assert!(modules("legacy_calls")["calls"]["on"] == true);
+        assert!(modules("legacy_actions_only")["actions"]["on"] == true);
+        assert!(modules("legacy_actions_only")["http"]["on"] == false);
+        assert!(modules("legacy_actions_only")["calls"]["on"] == false);
+        drop(loaded);
+
+        let body = br#"{"name":"delivered"}"#;
+        let signed = crate::http::SignedRequest { method: "POST", path: "/hooks/events", query: "", body };
+        let timestamp = now_ms() / 1000;
+        let signature = crate::http::sign("legacy-route-secret-1234", timestamp, "legacy-nonce", &signed);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(crate::serve(listener, state.clone(), axum::Router::new()));
+        let static_page = reqwest::Client::new().get(format!("http://{address}/index.html"))
+            .header("host", "legacy_actions_only.localhost").send().await.unwrap();
+        assert_eq!(static_page.status(), StatusCode::OK);
+        assert!(static_page.text().await.unwrap().contains("Still serving"));
+        let response = reqwest::Client::new().post(format!("http://{address}/hooks/events"))
+            .header("host", "legacy_http.localhost")
+            .header("content-type", "application/json")
+            .header("X-Konae-Signature", signature)
+            .body(body.to_vec()).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        server.abort();
+        let stored: String = Connection::open(layout::database(&root, "legacy_http")).unwrap().query_row("SELECT name FROM events", [], |row| row.get(0)).unwrap();
+        assert_eq!(stored, "delivered");
+
+        let caller = state.deployments.read().await.values().find(|deployment| deployment.id == "legacy_calls").unwrap().clone();
+        assert_eq!(crate::calls::enqueue(&state, &caller, "notice.send", &json!({})).await.status(), StatusCode::OK);
+        assert_eq!(crate::calls::run_once(&state).await.unwrap(), 1);
+        assert_eq!(crate::calls::list_captured_requests_for_app(&state, "legacy_calls").await.unwrap().len(), 1);
+        let saved: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "legacy_http")).unwrap()).unwrap();
+        assert_eq!(saved["modules"]["http"]["on"], true);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn write_folder(root: &Path, id: &str, schema: &str) {
         let folder = layout::folder(root, id);
@@ -511,7 +624,7 @@ mod tests {
         assert_eq!(listed["modules"]["actions"]["state"]["on"], false);
         let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, "app_legacy_modules")).unwrap()).unwrap();
         assert_eq!(rewritten["modules"]["files"]["on"], false);
-        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["actions".to_owned(), "auth".to_owned(), "files".to_owned(), "seo".to_owned()].into());
+        assert_eq!(rewritten["modules"].as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>(), ["actions".to_owned(), "auth".to_owned(), "calls".to_owned(), "files".to_owned(), "http".to_owned(), "seo".to_owned()].into());
         assert!(!layout::database(&root, "app_legacy_modules").exists());
         assert_eq!(rewritten["modules"]["seo"]["on"], false);
         std::fs::remove_dir_all(root).unwrap();

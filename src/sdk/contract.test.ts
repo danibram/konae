@@ -54,9 +54,9 @@ describe("the SDK contract", () => {
       ],
     });
     expect(seo?.uses).toBeDefined();
-    expect(sdkContract.modules.map((module) => module.title)).toEqual(["App accounts", "Data and actions", "Page address values", "File storage", "Calls to other services", "HTTP routes", "Search listing"]);
+    expect(sdkContract.modules.map((module) => module.title)).toEqual(["App accounts", "Data and actions", "Page address values", "File storage", "Outgoing calls", "Incoming routes", "Search listing"]);
     expect(seo?.options[0].valueLabels).toEqual({ domain: "Custom domain", hostname: "Generated hostname", path: "Path address" });
-    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["auth", "actions", "files", "seo"]);
+    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["auth", "actions", "files", "calls", "http", "seo"]);
     const files = sdkContract.modules.find((module) => module.name === "files");
     expect(files).toMatchObject({ title: "File storage", switch: true, requires: ["auth"], options: [{ key: "fileAccess", label: "Who can read every file", valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader" }] });
     expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");

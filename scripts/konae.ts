@@ -26,7 +26,7 @@ import {
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
-import { sdkRequired } from "../src/lib/module-use";
+import { sdkRequired, sourcesUseCalls, sourcesUseHttp } from "../src/lib/module-use";
 import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
@@ -998,6 +998,8 @@ export async function initLocal(root: string, options: { name?: string; template
   // The template says who may open the app. Only people the owner invites can create an account.
   const modules = defaultModuleStates();
   if (Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source))) modules.files = { on: true, fileAccess: null };
+  if (sourcesUseHttp(born.files)) modules.http = { on: true };
+  if (sourcesUseCalls(born.files)) modules.calls = { on: true };
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
     signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },

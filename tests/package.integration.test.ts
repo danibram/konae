@@ -133,9 +133,18 @@ async function sourcePackage(id: string, directory: string) {
   const upload = await writer.upload(new TextEncoder().encode("attachment bytes"));
   const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
+  const signingSecret = `private-signing-material-${id}-012345`;
+  await owner.call("secret_set", { projectId: source.id, name: "private_hook", value: signingSecret });
+  const moduleState = await owner.call("modules_read", { projectId: source.id });
+  expect(JSON.stringify(moduleState)).not.toContain(signingSecret);
+  const http = await owner.call<{ modules: Record<string, { state: { on: boolean } }> }>("modules_read", { projectId: source.id });
+  await owner.call("module_set", { projectId: source.id, module: "http", on: true, expected: http.modules.http.state });
   const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { projectId: source.id, name: "Mirror", files: ["public"] });
   const exported = await owner.call<Exported>("project_export", { projectId: source.id });
-  return { source, cookie, fileId: file.id, key, exported, files: await download(owner, exported, directory) };
+  expect(JSON.stringify(exported)).not.toContain(signingSecret);
+  const files = await download(owner, exported, directory);
+  expect(folders.at(-1)).not.toContain("data/secrets.sqlite");
+  return { source, cookie, fileId: file.id, key, exported, files };
 }
 
 describe("chunked package", () => {

@@ -30,8 +30,8 @@ After any write through MCP or the editor, observe the effect through the same d
 | Email when a row changes | `notify` on that mutation | Browser mail or a call action for mail |
 | Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
-| Another service calls this app | `http` on an anonymous action with callers / signature / key | A call action (that is outbound) |
-| This app calls another host | `kind: call` | `fetch` of a secret from the browser |
+| Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
 | Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |

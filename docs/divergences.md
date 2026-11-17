@@ -19,6 +19,8 @@ The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It
 
 The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
 
+Turn on HTTP routes and outgoing calls with `module_set` for `http` and `calls`. Both require `actions`. `connects` remains in the Capsule manifest and controls the page's `connect-src`.
+
 The editor preview opens one `srcDoc` document in an iframe. It has no app URL or page history, so it cannot resolve declared page paths or populate `miniapp.page.params`. Use `konae dev` or a Deployment to check page paths. It writes no `<head>` tags for row values.
 
 The editor preview does not write canonical addresses, page cards, `robots.txt` or a sitemap. `konae dev` does, using its local host as the address. Check the `seo` module on `konae dev` or a published Deployment.

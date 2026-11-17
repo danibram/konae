@@ -1,6 +1,6 @@
 # An app turns on the modules it uses
 
-Status: proposed.
+Status: accepted.
 
 Every app carries a database, accounts, files and routes whether it uses them or not. The Konae home is HTML, CSS and one script, and it still ships an `actions.json` with no action, a `schema.sql`, and the SDK in every page. Each option of an app has a tool of its own, so a new one needs a tool, an entry in the build agent's allowlist and a form in the editor, and the permission it needs lives in code under the tool's name. Search listing (ADR-0016) is the next capability, and it should not add a fourth way to set an option.
 
@@ -24,6 +24,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 - A release is refused when the Capsule uses a module that is off. The Validation Gate and the Kernel answer `module.off` with the same sentence, which names the module and says where to turn it on.
 - Turning a module off is refused with `module.in-use` while the published app uses it.
 - Turning a module on is refused with `module.requires` while a module it requires is off. `http`, `calls` and a page route (ADR-0017) require `actions`. A private app requires `auth`.
+- `http` is in use when the installed release declares an HTTP route. `calls` is in use when the installed release declares a call action. A source save after release does not change either decision.
 
 ### Two tools change every module
 
@@ -45,6 +46,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 
 - `fileAccess` is an option of `files`, not the Capsule manifest. Setting it takes effect at once, including on files already uploaded. The option keeps the prior access rule that every signed-in app user may read every file.
 - `files` requires `auth` because an upload needs a signed-in app user. A later decision may allow uploads without an account, with its own rules for ownership and access.
+- `connects` stays in the Capsule manifest. It adds origins to the page's `connect-src` and does not govern what a call action can reach.
 
 ### Modules move one at a time
 

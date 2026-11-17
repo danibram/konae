@@ -306,6 +306,10 @@ describe("the MCP walkthrough", () => {
   });
 
   test("7. a signing secret, then publish with the policy konae.json names", async () => {
+    const settingsPath = path.join(app(), "konae.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    settings.modules.http = { on: true };
+    await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
     r.step("publish-refused");
     const refused = await cli(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);

@@ -946,6 +946,7 @@ pub async fn submit_synthetic_response(state: &AppState, app_id: &str, id: &str,
 /// Queues a call whose caller and inputs `invoke_action` has checked, and
 /// answers `{ callId, queued: true }`.
 pub async fn enqueue(state: &AppState, deployment: &Deployment, name: &str, input: &Value) -> Response {
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") { return crate::refusal_error(&refused); }
     let data_root = state.data_root.clone();
     let deployment_id = deployment.id.clone();
     let action = name.to_owned();
@@ -1324,6 +1325,11 @@ async fn process(state: &AppState, job: Claimed) -> Result<()> {
         let attempt = Attempt { error: Some("app-gone"), ..Default::default() };
         return finish(&data_root, &job.id, &attempt, None);
     };
+    if crate::modules::require_on(&deployment.modules, "calls").is_err() {
+        let attempt = Attempt { error: Some("module.off"), ..Default::default() };
+        finish(&data_root, &job.id, &attempt, None)?;
+        return Ok(());
+    }
     if super::maintenance::pause(&data_root, &deployment.id).is_some() {
         return release(&data_root, &job.id, PAUSE_WAIT_MS, false, &Attempt::default());
     }
@@ -1486,6 +1492,9 @@ async fn run_then(
     input: &Value,
     attempt: &Attempt,
 ) -> (&'static str, Option<String>) {
+    if let Err(refused) = crate::modules::require_on(&deployment.modules, "calls") {
+        return ("failed", Some(refused.message));
+    }
     let Some(mutation) = program.actions.get(&then.action) else {
         return ("failed", Some(format!("Action {} is not declared.", then.action)));
     };
@@ -1874,6 +1883,31 @@ mod tests {
         let waiting = connection(&root).unwrap().query_row(
             "SELECT state, attempts FROM calls ORDER BY rowid DESC LIMIT 1", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).unwrap();
         assert_eq!(waiting, ("pending".to_owned(), 0));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn queued_calls_retries_and_then_refuse_when_calls_is_off() {
+        let root = std::env::temp_dir().join(format!("konae-calls-module-off-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = test_state(&root, "https://editor.example.org");
+        let mut app = publish(&state, call_action("https://hooks.invalid/send"), "CREATE TABLE IF NOT EXISTS log (status INTEGER, error TEXT);").await.unwrap();
+        assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::OK);
+        assert_eq!(run_once(&state).await.unwrap(), 1, "the first failed send remains in the outbox for retry");
+        connection(&root).unwrap().execute("UPDATE calls SET next_attempt_at = 0", []).unwrap();
+        app.modules.get_mut("calls").unwrap()["on"] = json!(false);
+        state.deployments.write().await.insert(app.hostname.clone(), app.clone());
+        assert_eq!(enqueue(&state, &app, "hook.send", &json!({})).await.status(), StatusCode::BAD_REQUEST, "new calls refuse before entering the outbox");
+        assert_eq!(run_once(&state).await.unwrap(), 1, "a queued retry is retired without sending");
+        let (state_name, error, attempts): (String, Option<String>, i64) = connection(&root).unwrap().query_row(
+            "SELECT state, error, attempts FROM calls", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!((state_name.as_str(), error.as_deref(), attempts), ("failed", Some("module.off"), 2));
+        let program: ActionProgram = serde_json::from_value(call_action("https://hooks.invalid/send")).unwrap();
+        let then = Then { action: "hook.logged".into(), inputs: Vec::new() };
+        let (then_state, message) = run_then(&state, &app, &program, &then, &json!({}), &Attempt::default()).await;
+        assert_eq!(then_state, "failed");
+        assert_eq!(message.as_deref(), Some("Module calls is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."));
         let _ = std::fs::remove_dir_all(&root);
     }
 

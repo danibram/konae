@@ -515,9 +515,9 @@ export const sdkContract = {
     },
     {
       name: "calls",
-      title: "Calls to other services",
+      title: "Outgoing calls",
       summary: "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
-      switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json kind=call"],
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: ["actions"], uses: ["actions.json kind=call"],
       calls: [],
       declarations: [
         {
@@ -590,9 +590,9 @@ export const sdkContract = {
     },
     {
       name: "http",
-      title: "HTTP routes",
+      title: "Incoming routes",
       summary: "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
-      switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json http"],
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: ["actions"], uses: ["actions.json http"],
       calls: [],
       declarations: [
         {

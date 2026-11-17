@@ -1580,6 +1580,7 @@ async fn admin_call(
         "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
             let id = a["projectId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
+            if name == "api_keys_create" { kernel::modules::require_on(&deployment.modules, "http")?; }
             super::http::api_keys_call(state, &deployment, name, &a).await
         }
         "notices_read" => {
@@ -2544,6 +2545,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_key_creation_requires_http_but_list_and_revoke_do_not() {
+        let root = std::env::temp_dir().join(format!("konae-api-key-http-module-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
+        let body = json!({"project":{"id":"api_key_http","name":"API key HTTP","slug":"api-key-http","manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Keys</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('api_key_http','o','{}')", []).unwrap();
+        for module in ["actions", "http"] {
+            let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":module,"on":true,"expected":before["modules"][module]["state"]})).await.unwrap();
+        }
+        let created = admin_call(&state, &owner, "owner:o", "api_keys_create", json!({"projectId":"api_key_http","name":"Files key","actions":[],"files":["public"]})).await.unwrap();
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"http","on":false,"expected":current["modules"]["http"]["state"]})).await.unwrap();
+        let refused = admin_call(&state, &owner, "owner:o", "api_keys_create", json!({"projectId":"api_key_http","name":"Blocked","files":["public"]})).await.unwrap_err();
+        assert!(refused.to_string().contains("Module http is off."));
+        assert_eq!(admin_call(&state, &owner, "owner:o", "api_keys_list", json!({"projectId":"api_key_http"})).await.unwrap()["keys"].as_array().unwrap().len(), 1);
+        admin_call(&state, &owner, "owner:o", "api_keys_revoke", json!({"projectId":"api_key_http","keyId":created["keyId"]})).await.unwrap();
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn actions_cannot_be_turned_off_while_an_action_feature_is_declared() {
         let root = std::env::temp_dir().join(format!("konae-actions-in-use-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
@@ -2621,16 +2645,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_release_persists_inferred_actions_state_in_memory_and_on_disk() {
+    async fn first_release_persists_inferred_module_state_in_memory_and_on_disk() {
         use base64::Engine;
         use sha2::Digest;
         let root = std::env::temp_dir().join(format!("konae-first-actions-release-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = Konae::for_test(AppState::for_test(&root));
         let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
-        for (id, actions, schema, expected_on) in [
-            ("app_first_actions_on", r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}"#, "", true),
-            ("app_first_actions_off", r#"{"version":1,"actions":{}}"#, "", false),
+        for (id, actions, schema, expected_actions, expected_http, expected_calls) in [
+            ("app_first_actions_on", r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}"#, "", true, false, false),
+            ("app_first_actions_off", r#"{"version":1,"actions":{}}"#, "", false, false, false),
+            ("app_first_http_on", r#"{"version":1,"actions":{"hooks.receive":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO events (name) VALUES (?1)","bindings":[{"source":"input","key":"name","type":"string"}],"http":{"method":"POST","path":"/hooks/events"}}}}"#, "CREATE TABLE IF NOT EXISTS events(name TEXT);", true, true, false),
+            ("app_first_calls_on", r#"{"version":1,"actions":{"notice.send":{"kind":"call","access":"anonymous","bindings":[],"method":"POST","url":"https://example.test/hooks/events"}}}"#, "", true, false, true),
         ] {
             admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"First actions release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
             let payload = json!({
@@ -2645,13 +2671,18 @@ mod tests {
             transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
             let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
             admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
-            assert_eq!(state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_on, "memory {id}");
-            assert_eq!(crate::Settings::read(&state.data_root, id).unwrap().modules["actions"]["on"], expected_on, "disk {id}");
+            assert_eq!(state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_actions, "memory actions {id}");
+            assert_eq!(crate::Settings::read(&state.data_root, id).unwrap().modules["actions"]["on"], expected_actions, "disk actions {id}");
             let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
-            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_on, "reload {id}");
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_actions, "reload actions {id}");
+            for (module, expected) in [("http", expected_http), ("calls", expected_calls)] {
+                assert_eq!(state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().modules[module]["on"], expected, "memory {module} {id}");
+                assert_eq!(crate::Settings::read(&state.data_root, id).unwrap().modules[module]["on"], expected, "disk {module} {id}");
+                assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules[module]["on"], expected, "reload {module} {id}");
+            }
             let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
             let expected = read["modules"]["actions"]["state"].clone();
-            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"actions","on":expected_on,"expected":expected})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"actions","on":expected_actions,"expected":expected})).await.unwrap();
         }
         let _ = tokio::fs::remove_dir_all(root).await;
     }

@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseFiles } from "./module-use";
+import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "./module-use";
 
-const cases = JSON.parse(readFileSync("kernel-rs/kernel/src/module-use-cases.json", "utf8")) as Array<{ case: string; sources: string[]; sourceFiles?: Record<string, string>; artifact: string[]; usesFiles?: boolean; usesAuth?: boolean }>;
+const cases = JSON.parse(readFileSync("kernel-rs/kernel/src/module-use-cases.json", "utf8")) as Array<{ case: string; sources: string[]; sourceFiles?: Record<string, string>; artifact: string[]; usesFiles?: boolean; usesAuth?: boolean; usesHttp?: boolean; usesCalls?: boolean }>;
 
 test("file module source detection matches the Kernel cases", () => {
   for (const item of cases) if (item.usesFiles !== undefined) {
@@ -15,6 +15,13 @@ test("actions module use detection matches the Kernel cases", () => {
   for (const item of cases) if (item.usesActions !== undefined) {
     expect(sourcesUseActions(item.sourceFiles ?? item.sources), `${item.case} in sources`).toBe(item.usesActions);
     if (item.artifact.length) expect(sourcesUseActions(item.artifact), `${item.case} in artifact`).toBe(item.artifact.some((source) => source.includes("miniapp.actions")));
+  }
+});
+
+test("http and calls use detection matches the Kernel cases", () => {
+  for (const item of cases) {
+    if (item.usesHttp !== undefined) expect(sourcesUseHttp(item.sourceFiles ?? item.sources), item.case).toBe(item.usesHttp);
+    if (item.usesCalls !== undefined) expect(sourcesUseCalls(item.sourceFiles ?? item.sources), item.case).toBe(item.usesCalls);
   }
 });
 

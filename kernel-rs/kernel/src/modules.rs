@@ -32,7 +32,7 @@ pub fn auth_enabled_defaults() -> BTreeMap<String, Value> {
     modules
 }
 
-pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files: bool, uses_auth: bool) -> BTreeMap<String, Value> {
+pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files: bool, uses_auth: bool, uses_http: bool, uses_calls: bool) -> BTreeMap<String, Value> {
     let mut modules = initial.cloned().unwrap_or_else(defaults);
     complete(&mut modules);
     if initial.is_none_or(|state| !state.contains_key("files")) && uses_files {
@@ -41,6 +41,8 @@ pub fn initial_for_release(initial: Option<&BTreeMap<String, Value>>, uses_files
     if initial.is_none_or(|state| !state.contains_key("auth")) && (uses_auth || uses_files) {
         modules.get_mut("auth").expect("auth is switchable")["on"] = json!(true);
     }
+    if initial.is_none_or(|state| !state.contains_key("http")) && uses_http { modules.get_mut("http").expect("http is switchable")["on"] = json!(true); }
+    if initial.is_none_or(|state| !state.contains_key("calls")) && uses_calls { modules.get_mut("calls").expect("calls is switchable")["on"] = json!(true); }
     modules
 }
 
@@ -57,6 +59,18 @@ fn named_sources_use_actions<'a>(files: impl IntoIterator<Item = (&'a str, &'a [
         "schema.sql" => creates_schema_object(bytes),
         "actions.json" => sources_use_actions([bytes]),
         _ => contains(bytes, b"miniapp.actions"),
+    })
+}
+
+pub fn sources_use_http<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
+    files.into_iter().filter(|(name, _)| *name == "actions.json").any(|(_, bytes)| {
+        serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(|action| action["http"].is_object()))).unwrap_or(false)
+    })
+}
+
+pub fn sources_use_calls<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
+    files.into_iter().filter(|(name, _)| *name == "actions.json").any(|(_, bytes)| {
+        serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(|action| action["kind"] == "call"))).unwrap_or(false)
     })
 }
 
@@ -362,7 +376,12 @@ pub async fn set(
                     check_requires(dependent, module, false)?;
                 }
             }
-            require_not_in_use(module, published_app_uses_module(root, id, module, &current))?;
+            let used = published_app_uses_module(root, id, module, &current);
+            if module == "http" && used {
+                let action = released_action_name(root, id, |action| action["http"].is_object()).unwrap_or_else(|| "a published action".to_owned());
+                return Err(crate::refusal::refuse("module.in-use", format!("Module http is in use by action {action}, which declares an HTTP route. Remove its route before turning it off.")).into());
+            }
+            require_not_in_use(module, used)?;
         }
         current["on"] = json!(on);
     }
@@ -397,8 +416,48 @@ fn published_app_uses_module(root: &std::path::Path, id: &str, module: &str, sta
         "files" => uses_files(root, id, state),
         "auth" => uses_auth(root, id),
         "actions" => uses_actions(root, id),
+        "http" => uses_http(root, id),
+        "calls" => uses_calls(root, id),
         _ => false,
     }
+}
+
+fn released_action_use(root: &std::path::Path, id: &str, predicate: impl Fn(&Value) -> bool) -> bool {
+    if let Ok(bytes) = std::fs::read(crate::layout::record(root, id)) {
+        if let Ok(installed) = serde_json::from_slice::<Value>(&bytes) {
+            let actions = installed.get("actions").and_then(Value::as_str).unwrap_or("");
+            return serde_json::from_str::<Value>(actions).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(&predicate))).unwrap_or(true);
+        }
+        return true;
+    }
+    let actions = std::fs::read(crate::layout::sources(root, id).join("actions.json")).unwrap_or_default();
+    serde_json::from_slice::<Value>(&actions).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(predicate))).unwrap_or(true)
+}
+
+pub fn uses_http(root: &std::path::Path, id: &str) -> bool {
+    released_action_use_or_false_when_source_is_missing(root, id, |action| action["http"].is_object())
+}
+
+pub fn uses_calls(root: &std::path::Path, id: &str) -> bool {
+    released_action_use_or_false_when_source_is_missing(root, id, |action| action["kind"] == "call")
+}
+
+fn released_action_use_or_false_when_source_is_missing(root: &std::path::Path, id: &str, predicate: impl Fn(&Value) -> bool) -> bool {
+    let record = crate::layout::record(root, id);
+    if record.exists() { return released_action_use(root, id, predicate); }
+    match std::fs::read(crate::layout::sources(root, id).join("actions.json")) {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(&predicate))).unwrap_or(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
+fn released_action_name(root: &std::path::Path, id: &str, predicate: impl Fn(&Value) -> bool) -> Option<String> {
+    let bytes = std::fs::read(crate::layout::record(root, id)).ok()?;
+    let installed = serde_json::from_slice::<Value>(&bytes).ok()?;
+    let actions = installed.get("actions")?.as_str()?;
+    let program = serde_json::from_str::<Value>(actions).ok()?;
+    program["actions"].as_object()?.iter().find_map(|(name, action)| predicate(action).then(|| name.clone()))
 }
 
 pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
@@ -483,9 +542,29 @@ mod tests {
     }
 
     #[test]
+    fn http_and_calls_use_cases_match_the_kernel_rule() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("module-use-cases.json")).unwrap();
+        for case in cases {
+            let Some(files) = case.get("sourceFiles").and_then(Value::as_object) else { continue };
+            let files = files.iter().map(|(name, value)| (name.as_str(), value.as_str().unwrap().as_bytes())).collect::<Vec<_>>();
+            if let Some(expected) = case.get("usesHttp") { assert_eq!(sources_use_http(files.iter().copied()), *expected, "{}", case["case"]); }
+            if let Some(expected) = case.get("usesCalls") { assert_eq!(sources_use_calls(files.iter().copied()), *expected, "{}", case["case"]); }
+        }
+    }
+
+    #[test]
+    fn missing_actions_sources_do_not_make_a_static_app_use_http_or_calls() {
+        let root = std::env::temp_dir().join(format!("konae-missing-actions-use-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(crate::layout::sources(&root, "app")).unwrap();
+        assert!(!uses_http(&root, "app"));
+        assert!(!uses_calls(&root, "app"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn only_modules_with_switches_have_default_state() {
         let modules = defaults();
-        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "files", "seo"]);
+        assert_eq!(modules.keys().map(String::as_str).collect::<Vec<_>>(), ["actions", "auth", "calls", "files", "http", "seo"]);
         assert!(modules.values().all(|state| state["on"] == false));
         let mut partial = BTreeMap::from([("seo".to_owned(), json!({"on":true,"canonical":"path","image":null}))]);
         complete(&mut partial);
@@ -538,17 +617,19 @@ mod tests {
 
     #[test]
     fn a_first_release_turns_on_undecided_modules_the_capsule_uses() {
-        let inferred = initial_for_release(None, true, false);
+        let inferred = initial_for_release(None, true, false, false, false);
         assert_eq!(inferred["files"]["on"], true);
         assert_eq!(inferred["auth"]["on"], true);
         let seo_only = BTreeMap::from([("seo".to_owned(), json!({"on":false}))]);
-        assert_eq!(initial_for_release(Some(&seo_only), true, false)["files"]["on"], true);
-        assert_eq!(initial_for_release(Some(&seo_only), false, true)["auth"]["on"], true);
+        assert_eq!(initial_for_release(Some(&seo_only), true, false, false, false)["files"]["on"], true);
+        assert_eq!(initial_for_release(Some(&seo_only), false, true, false, false)["auth"]["on"], true);
         let explicit = BTreeMap::from([("files".to_owned(), json!({"on":false,"fileAccess":null}))]);
-        assert_eq!(initial_for_release(Some(&explicit), true, false)["files"]["on"], false);
+        assert_eq!(initial_for_release(Some(&explicit), true, false, false, false)["files"]["on"], false);
         let explicit_auth = BTreeMap::from([("auth".to_owned(), json!({"on":false,"signupPolicy":null,"signInMethods":["password"]}))]);
-        assert_eq!(initial_for_release(Some(&explicit_auth), false, true)["auth"]["on"], false);
-        assert_eq!(initial_for_release(None, false, false)["files"]["on"], false);
+        assert_eq!(initial_for_release(Some(&explicit_auth), false, true, false, false)["auth"]["on"], false);
+        assert_eq!(initial_for_release(None, false, false, false, false)["files"]["on"], false);
+        assert!(initial_for_release(None, false, false, true, false)["http"]["on"] == true);
+        assert!(initial_for_release(None, false, false, false, true)["calls"]["on"] == true);
         assert!(artifact_uses_files([b"miniapp.files.upload".as_slice()]));
         assert!(!artifact_uses_files([b"/_konae/files/id".as_slice()]));
         assert!(sources_use_files([b"/_konae/files/id".as_slice()]));
@@ -639,6 +720,26 @@ mod tests {
         let refusal = value.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.option-invalid");
         assert!(refusal.message.contains("domain, hostname, path"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn http_cannot_turn_off_while_a_published_route_is_in_use() {
+        let root = std::env::temp_dir().join(format!("konae-http-module-in-use-{}", uuid::Uuid::new_v4()));
+        let mut settings = Settings::new("app", "App", "app", &json!({"visibility":"public"}));
+        settings.modules.insert("actions".into(), defaults()["actions"].clone());
+        settings.modules.insert("http".into(), defaults()["http"].clone());
+        settings.modules.get_mut("actions").unwrap()["on"] = json!(true);
+        settings.modules.get_mut("http").unwrap()["on"] = json!(true);
+        settings.write(&root).await.unwrap();
+        std::fs::create_dir_all(crate::layout::private(&root, "app")).unwrap();
+        let actions = r#"{"version":1,"actions":{"hooks.receive":{"kind":"mutation","http":{"method":"POST","path":"/hooks"}}}}"#;
+        let installed = crate::Installed { hostname:"app.example.test".into(), created_at:0, released_at:Some(1), source_digest:None, actions:actions.into(), artifact_version:"v1".into(), released:None };
+        std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&installed).unwrap()).unwrap();
+        let error = set(&root, "app", "http", Some(false), None, None).await.unwrap_err();
+        let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(refusal.code, "module.in-use");
+        assert!(refusal.message.contains("hooks.receive"));
         let _ = std::fs::remove_dir_all(root);
     }
 

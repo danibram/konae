@@ -1500,8 +1500,14 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
           ],
           "signupPolicy": null
         },
+        "calls": {
+          "on": false
+        },
         "files": {
           "fileAccess": null,
+          "on": true
+        },
+        "http": {
           "on": true
         },
         "seo": {

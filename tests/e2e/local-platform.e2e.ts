@@ -704,12 +704,12 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
   await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
-  await expect(settings.locator(".module-settings-card")).toHaveCount(4);
+  await expect(settings.locator(".module-settings-card")).toHaveCount(6);
   await expect(settings.locator(".module-settings-card").filter({ hasText: "Data and actions" })).toContainText("actions");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "File storage" })).toContainText("files");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "App accounts" })).toContainText("auth");
   await expect(settings.locator(".module-settings-card").filter({ hasText: "Search listing" })).toContainText("seo");
-  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(3);
+  await expect(settings.locator(".module-settings-fixed-item")).toHaveCount(1);
   await settings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await publish(page);
   await fromMore(page, "App settings");
@@ -901,7 +901,7 @@ test("an editor publish keeps the SDK when a published module uses bracket acces
   const source = JSON.parse(new TextDecoder().decode(await client.download(sourceRead.transfer))) as { files: Record<string, string>; manifest: Record<string, unknown>; modules?: Record<string, { on: boolean }>; [key: string]: unknown };
   source.files = { "index.html": '<!doctype html><html><head><title>Static browser call</title></head><body><main>Ready</main><script type="module" src="/app.js"></script></body></html>', "app.js": "document.body.dataset.ready = 'yes';" };
   source.manifest = { ...source.manifest, visibility: "public" };
-  source.modules = { auth: { on: false }, actions: { on: false }, files: { on: false } };
+  source.modules = { auth: { on: false }, actions: { on: false }, files: { on: false }, http: { on: false }, calls: { on: false } };
   const sourceTransfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
   await client.call("project_sources_save", { projectId, transferId: sourceTransfer.transferId, expectedRevision: sourceRead.revision });
   await client.cancel(sourceRead.transfer.transferId);
@@ -911,6 +911,8 @@ test("an editor publish keeps the SDK when a published module uses bracket acces
   await fromMore(page, "App settings");
   const settings = page.getByRole("dialog", { name: "App settings", exact: true });
   await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "Incoming routes" }).getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  await expect(settings.locator(".module-settings-card").filter({ hasText: "Outgoing calls" }).getByRole("switch")).toHaveAttribute("aria-checked", "false");
   const auth = settings.locator(".module-settings-card").filter({ hasText: "App accounts" });
   const authSwitch = auth.getByRole("switch");
   if (await authSwitch.getAttribute("aria-checked") !== "true") {
@@ -1462,6 +1464,12 @@ test("a private Invitation only app admits the person the owner invites from the
   const url = (await link.getAttribute("href"))!;
   await expect(page.getByText("New app accounts: Invitation only.")).toBeVisible();
   await page.getByRole("button", { name: "Invite people", exact: true }).click();
+  await fromMore(page, "App settings");
+  const moduleSettings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await moduleSettings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await moduleSettings.getByRole("switch", { name: "Turn Incoming routes on", exact: true }).click();
+  await expect(moduleSettings.getByRole("switch", { name: "Turn Incoming routes off", exact: true })).toHaveAttribute("aria-checked", "true");
+  await moduleSettings.getByRole("button", { name: "Close App settings", exact: true }).click();
 
   const app = await context.newPage();
   await app.goto(url);

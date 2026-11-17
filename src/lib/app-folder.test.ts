@@ -3,8 +3,10 @@ import { defaultModuleStates, generatedFiles, type AppSettings } from "./app-fol
 
 test("module defaults preserve only module choices that already exist", () => {
   expect(defaultModuleStates()).toEqual({});
-  expect(defaultModuleStates({ seo: { on: true, canonical: "path", image: "social.png" }, actions: { on: false } })).toEqual({
+  expect(defaultModuleStates({ seo: { on: true, canonical: "path", image: "social.png" }, actions: { on: false }, http: { on: false }, calls: { on: false } })).toEqual({
     actions: { on: false },
+    calls: { on: false },
+    http: { on: false },
     seo: { on: true, canonical: "path", image: "social.png" },
   });
   expect(defaultModuleStates({ files: { on: true } })).toEqual({ files: { on: true, fileAccess: null } });

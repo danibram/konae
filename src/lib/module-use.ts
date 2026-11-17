@@ -20,6 +20,24 @@ export function sourcesUseActions(sources: Iterable<string> | Record<string, str
   });
 }
 
+function actionEntries(sources: Iterable<string> | Record<string, string>): unknown[] {
+  const texts = Symbol.iterator in Object(sources) ? Array.from(sources as Iterable<string>) : Object.entries(sources as Record<string, string>).filter(([name]) => name === "actions.json").map(([, text]) => text);
+  return texts.flatMap((source) => {
+    try {
+      const actions = JSON.parse(source)?.actions;
+      return actions && typeof actions === "object" && !Array.isArray(actions) ? Object.values(actions) : [];
+    } catch { return []; }
+  });
+}
+
+export function sourcesUseHttp(sources: Iterable<string> | Record<string, string>): boolean {
+  return actionEntries(sources).some((action) => action && typeof action === "object" && !Array.isArray(action) && (action as { http?: unknown }).http !== null && typeof (action as { http?: unknown }).http === "object" && !Array.isArray((action as { http?: unknown }).http));
+}
+
+export function sourcesUseCalls(sources: Iterable<string> | Record<string, string>): boolean {
+  return actionEntries(sources).some((action) => action && typeof action === "object" && (action as { kind?: unknown }).kind === "call");
+}
+
 export function sdkRequired(modules: Record<string, { on?: boolean }> | undefined, sources: Iterable<string> | Record<string, string>, visibility?: string): boolean {
   const sourceFiles = Symbol.iterator in Object(sources) ? undefined : sources as Record<string, string>;
   const files = sourceFiles ? Object.values(sourceFiles) : Array.from(sources as Iterable<string>);
