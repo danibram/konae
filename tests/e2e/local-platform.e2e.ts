@@ -8,24 +8,16 @@ import { McpClient, type Transfer } from "../../src/mcp/client";
 import { publishProject } from "../../src/deployments/release";
 
 const runCommand = promisify(execFile);
-const platformUrl = (path: string) => new URL(path, process.env.KONAE_EDITOR_URL ?? "http://127.0.0.1:4176").href;
-
 async function signupOwner(page: Page, client: string, email: string, password = "Owner-test-password-2026") {
-  const url = platformUrl("/_konae/owner/signup");
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": client },
-    body: JSON.stringify({ email, password, setupKey: "local-development-key" }),
+  const response = await page.request.post("/_konae/owner/signup", {
+    headers: { "x-forwarded-for": client },
+    data: { email, password, setupKey: "local-development-key" },
   });
-  const cookie = response.headers.getSetCookie().find((value) => value.startsWith("konae_owner_session="));
-  if (cookie) await page.context().addCookies([{ name: "konae_owner_session", value: cookie.match(/^konae_owner_session=([^;]+)/)![1], url: platformUrl("/") }]);
-  return { ok: response.ok, status: response.status };
+  return { ok: response.ok(), status: response.status() };
 }
 
 async function logoutOwner(page: Page) {
-  const cookies = await page.context().cookies(platformUrl("/"));
-  const session = cookies.find((cookie) => cookie.name === "konae_owner_session");
-  await fetch(platformUrl("/_konae/owner/logout"), { method: "POST", headers: session ? { cookie: `${session.name}=${session.value}` } : {} });
+  await page.request.post("/_konae/owner/logout");
   await page.context().clearCookies();
 }
 
@@ -636,7 +628,9 @@ test("a stale contact email save shows the current value", async ({ page, contex
   await publish(page);
   await fromMore(page, "App settings");
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
-  await settings.getByRole("tab", { name: "Contact email" }).click();
+  const contactTab = settings.getByRole("tab", { name: "Contact email" });
+  await contactTab.click();
+  await expect(contactTab).toHaveAttribute("aria-selected", "true");
   await expect(settings.getByLabel("Email", { exact: true })).toHaveValue(email);
 
   const secondContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
@@ -650,7 +644,9 @@ test("a stale contact email save shows the current value", async ({ page, contex
     await expect(second).toHaveURL(new RegExp(`${projectPath}$`));
     await fromMore(second, "App settings");
     const otherSettings = second.getByRole("dialog", { name: "App settings", exact: true });
-    await otherSettings.getByRole("tab", { name: "Contact email" }).click();
+    const otherContactTab = otherSettings.getByRole("tab", { name: "Contact email" });
+    await otherContactTab.click();
+    await expect(otherContactTab).toHaveAttribute("aria-selected", "true");
     await otherSettings.getByLabel("Email", { exact: true }).fill("second@example.test");
     await otherSettings.getByRole("button", { name: "Change email", exact: true }).click();
     await expect(otherSettings.getByRole("status")).toContainText("Saved.");

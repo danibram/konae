@@ -16,14 +16,11 @@ test.afterEach(async () => {
 test("page files load scripts at host and path addresses", async ({ page, baseURL }) => {
   const email = `page-${crypto.randomUUID()}@example.test`;
   const password = "Owner-test-password-2026";
-  const response = await fetch(new URL("/_konae/owner/signup", baseURL).href, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.22" },
-    body: JSON.stringify({ email, password, setupKey: "local-development-key" }),
+  const response = await page.request.post(new URL("/_konae/owner/signup", baseURL).href, {
+    headers: { "x-forwarded-for": "198.51.100.22" },
+    data: { email, password, setupKey: "local-development-key" },
   });
-  expect(response.ok).toBe(true);
-  const cookieHeader = response.headers.getSetCookie().find((value) => value.startsWith("konae_owner_session="));
-  if (cookieHeader) await page.context().addCookies([{ name: "konae_owner_session", value: cookieHeader.match(/^konae_owner_session=([^;]+)/)![1], url: baseURL }]);
+  expect(response.ok()).toBe(true);
   const cookies = await page.context().cookies();
   const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
   const client = new McpClient(new URL("/mcp", baseURL).href, {
