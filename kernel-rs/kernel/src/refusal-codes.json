@@ -186,7 +186,7 @@
   "module.not-switch": { "fix": "owner", "remedy": "This module's switch is not available yet." },
   "module.option-invalid": { "fix": "owner", "remedy": "Set the module option to one of its allowed values." },
   "module.option-unknown": { "fix": "owner", "remedy": "Use an option listed by modules_read." },
-  "module.off": { "fix": "owner", "remedy": "Turn the module on with module_set before publishing its use.", "tool": "module_set" },
+  "module.off": { "fix": "owner", "remedy": "Turn the module on with module_set or App settings for a published app, or in the folder's konae.json for a local run.", "tool": "module_set" },
   "module.requires": { "fix": "owner", "remedy": "Turn on each required module before enabling this module.", "tool": "module_set" },
   "module.unknown": { "fix": "owner", "remedy": "Use a module listed by modules_read." },
 

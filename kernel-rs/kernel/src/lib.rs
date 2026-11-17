@@ -6012,7 +6012,7 @@ pub mod tests {
         drop(deployments);
         let deployment = state.deployments.read().await.values().next().cloned().unwrap();
         let (headers, _) = signed_in(&state, &deployment.id, &headers, "owner@example.test");
-        let expected = "Module files is off. Turn it on with module_set.";
+        let expected = "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.";
         let upload = Request::builder().body(Body::from(json!({"name":"a.txt","type":"text/plain","dataUrl":"data:text/plain;base64,aGk="}).to_string())).unwrap();
         for response in [
             upload_file(State(state.clone()), headers.clone(), upload).await,
@@ -6037,7 +6037,7 @@ pub mod tests {
         });
         let response = deploy(&state, body.to_string().as_bytes()).await;
         let refused = response_json(response).await;
-        assert_eq!(refused["error"], "Module files is off. Turn it on with module_set.");
+        assert_eq!(refused["error"], "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
         assert_eq!(refused["code"], "module.off");
     }
 

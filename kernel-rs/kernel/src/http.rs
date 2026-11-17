@@ -1536,7 +1536,7 @@ mod tests {
         let response = read_file_as_key(&state, &deployment, &key, "018f2b2c-4a10-7a01-8000-000000000001", &HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "Module files is off. Turn it on with module_set.");
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["error"], "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

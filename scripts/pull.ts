@@ -9,7 +9,7 @@ import { downloadToFile } from "./package-files";
 import { readTar } from "../src/lib/tar";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { sourceFilesFrom } from "../src/lib/source-files";
-import { settingsDigest } from "./settings-digest";
+import { settingsDigest, settingsMatchAfterLocalModuleDecision } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 
 export const PULL_DIRECTORY = ".konae/pull";
@@ -144,7 +144,10 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     try { localSettingsDigest = settingsDigest(JSON.parse(await readFile(path.join(root, SETTINGS_FILE), "utf8"))); } catch { localSettingsDigest = undefined; }
     const incomingDigest = pulled.sourceDigest;
     const cleanApp = localAppDigest !== undefined && (localAppDigest === marker?.sourceDigest || localAppDigest === incomingDigest);
-    const cleanSettings = localSettingsDigest !== undefined && (localSettingsDigest === marker?.settingsDigest || localSettingsDigest === remoteSettingsDigest);
+    let localSettings: unknown;
+    try { localSettings = JSON.parse(await readFile(path.join(root, SETTINGS_FILE), "utf8")); } catch { localSettings = undefined; }
+    const localModuleDecision = settingsMatchAfterLocalModuleDecision(localSettings, remoteSettings);
+    const cleanSettings = localSettingsDigest !== undefined && (localSettingsDigest === marker?.settingsDigest || localSettingsDigest === remoteSettingsDigest || localModuleDecision);
     const cleanToReplace = cleanApp && cleanSettings;
     pulled.sourcesInstalled = cleanToReplace;
     await writeFile(path.join(scratch, RECORD), JSON.stringify(pulled, null, 2), { mode: 0o600 });
