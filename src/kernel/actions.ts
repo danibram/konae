@@ -225,9 +225,15 @@ function selectedColumns(statement: string): Set<string> | null {
   const columns = new Set<string>();
   let start = 0;
   for (let end = 0; end <= projection.length; end += 1) {
-    if (end < projection.length && !(projection[end].kind === "symbol" && projection[end].depth === 0 && projection[end].text === ",")) continue;
+    const separator = projection[end];
+    if (separator && !(separator.kind === "symbol" && separator.depth === 0 && separator.text === ",")) continue;
     const expression = projection.slice(start, end);
-    const aliasAt = expression.findLastIndex((token) => token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "AS");
+    let aliasAt = expression.length - 1;
+    while (aliasAt >= 0) {
+      const token = expression[aliasAt];
+      if (token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "AS") break;
+      aliasAt -= 1;
+    }
     const column = aliasAt >= 0 ? expression[aliasAt + 1] : expression.at(-1);
     if (column && (column.kind === "word" || column.kind === "identifier")) columns.add(column.text.toLowerCase());
     start = end + 1;
@@ -249,8 +255,9 @@ function assertPageLists(actions: Record<string, ServerActionDefinition>) {
       if (earlier) throw refusal("page.duplicate", `Actions ${earlier} and ${name} both bind page path ${action.page.path}.`);
       paths.push([name, action.page.path]);
     }
-    const listName = action.page?.list;
-    if (!listName) continue;
+    const page = action.page;
+    const listName = page?.list;
+    if (!page || !listName) continue;
     const list = actions[listName];
     if (!list) throw refusal("page.list-undeclared", `Action ${name} names ${listName} as its page list, which is not declared.`);
     if (list.kind !== "query" || list.access !== "anonymous" || list.bindings.some((binding) => binding.source === "input")) {
@@ -258,7 +265,7 @@ function assertPageLists(actions: Record<string, ServerActionDefinition>) {
     }
     const columns = selectedColumns(list.statement);
     if (!columns) continue;
-    const expected = new Set((action.page.path.match(/:[A-Za-z][A-Za-z0-9_]*/g) ?? []).map((part) => part.slice(1)));
+    const expected = new Set((page.path.match(/:[A-Za-z][A-Za-z0-9_]*/g) ?? []).map((part) => part.slice(1)));
     if (columns.has("updated")) expected.add("updated");
     if (columns.size !== expected.size || [...columns].some((column) => !expected.has(column))) {
       throw refusal("page.list-columns", `Action ${name} names ${listName} as its page list, whose columns must match the page parameters and optional updated.`);
