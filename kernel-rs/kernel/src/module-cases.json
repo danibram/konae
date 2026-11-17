@@ -1,7 +1,7 @@
 [
   {"case":"module state matches expected","rule":"expected","module":"seo","state":{"on":false,"canonical":null,"image":null},"expected":{"on":false,"canonical":null,"image":null},"error":null},
   {"case":"stale module state is refused","rule":"expected","module":"seo","state":{"on":true,"canonical":null,"image":null},"expected":{"on":false,"canonical":null,"image":null},"code":"module.changed","error":"Module seo changed since it was read. Read modules_read and try again."},
-  {"case":"an off module cannot be used","rule":"on","module":"files","state":{"on":false},"code":"module.off","error":"Module files is off. Turn it on with module_set."},
+  {"case":"an off module cannot be used","rule":"on","module":"files","state":{"on":false},"code":"module.off","error":"Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."},
   {"case":"a non-switch module cannot be changed","rule":"switch","module":"actions","switch":false,"code":"module.not-switch","error":"Module actions cannot be changed yet."},
   {"case":"an unknown module is refused","rule":"known","module":"missing","known":false,"code":"module.unknown","error":"Unknown module missing."},
   {"case":"a required module must be on","rule":"requires","module":"http","required":"actions","requiredState":{"on":false},"code":"module.requires","error":"Module http requires actions, which is off. Turn actions on first."},

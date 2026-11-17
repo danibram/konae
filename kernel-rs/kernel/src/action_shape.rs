@@ -60,6 +60,9 @@ fn check_types(name: &str, action: &Value) -> Result<(), Refusal> {
     if !matches!(kind, "query" | "mutation" | "signal" | "call") {
         return Err(refuse("action.kind-invalid", format!(r#"Action {name} has an invalid kind. Use "query", "mutation", "signal" or "call"."#)));
     }
+    if action.contains_key("page") && kind != "query" {
+        return Err(refuse("page.query", format!("Action {name} declares a page path, so it must be an anonymous query.")));
+    }
     let Some(bindings) = action.get("bindings").and_then(Value::as_array) else {
         return Err(refuse("action.bindings-missing", format!("Action {name} requires a bindings array.")));
     };

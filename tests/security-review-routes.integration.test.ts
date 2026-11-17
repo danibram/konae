@@ -116,7 +116,7 @@ describe("route-only actions and API keys", () => {
       .toEqual({ error: "This API key may not call events.receive." });
     const file = await hostFetch(lab, inbox.hostname, `/_konae/files/${crypto.randomUUID()}`, { headers: bearer });
     expect(file.status).toBe(403);
-    expect(await file.json()).toEqual({ error: "Module files is off. Turn it on with module_set." });
+    expect(await file.json()).toEqual({ error: "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
     for (const app of [habits, gallery]) {
       expect(await (await hostFetch(lab, app.hostname, app === habits ? "/api/habits" : "/feed.json", { headers: bearer })).json()).toEqual({ error: "invalid-api-key" });
     }

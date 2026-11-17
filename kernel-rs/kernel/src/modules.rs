@@ -190,7 +190,7 @@ pub fn require_on(modules: &BTreeMap<String, Value>, module: &str) -> std::resul
     if is_on(modules, module) {
         return Ok(());
     }
-    Err(crate::refusal::refuse("module.off", format!("Module {module} is off. Turn it on with module_set.")))
+    Err(crate::refusal::refuse("module.off", format!("Module {module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.")))
 }
 
 pub fn require_not_in_use(module: &str, used: bool) -> std::result::Result<(), crate::refusal::Refusal> {

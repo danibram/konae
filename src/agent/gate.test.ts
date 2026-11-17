@@ -43,7 +43,7 @@ describe("validation gate", () => {
     expect((await validator.validate(files)).ok).toBe(true);
     expect((await validator.validate(files, { state: "absent" }, { modules: {} })).ok).toBe(true);
     const result = await validator.validate(files, { state: "absent" }, { modules: { files: { on: false } } });
-    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set." });
+    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
     expect((await validator.validate(files, { state: "absent" }, { modules: { files: { on: true } } })).ok).toBe(true);
   });
   test("requires auth when actions name an authenticated caller or actor binding", async () => {
