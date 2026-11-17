@@ -6,8 +6,11 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-17
+
 ### Changed
 
+- Installation copies are incremental. A directory copy hard-links each file that did not change since the previous copy, so every copy folder stays complete while unchanged bytes take disk space once. An S3 copy uploads only changed files, and its version 2 manifest names the earlier copy that holds each unchanged object. Pruning keeps every object a retained manifest names. A copy skips reading a file blob from the file store when its size and modification time match the previous copy. Restore reads version 1 and version 2 copies. An installation that holds version 2 copies needs 0.10.0 or later to restore and prune them.
 - The installation home is redesigned. The hero shows the editor building an example app, then the page covers how an app is made, what every app has, the move to another server, the example apps, the developer paths and the questions people ask before asking for an invitation. Layouts name their columns at each width, and the Spanish and English texts are written together.
 
 ## [0.9.0] - 2026-11-16

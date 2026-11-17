@@ -68,7 +68,7 @@ The published image carries Konae, its Kernel and the editor, so a machine with 
 ```sh
 docker run -d --name konae -p 127.0.0.1:8787:8787 -v konae-data:/data \
   -e KONAE_SETUP_KEY='your-setup-key' -e KONAE_PUBLIC_ORIGIN=http://localhost:8787 \
-  ghcr.io/danibram/konae:0.9.0
+  ghcr.io/danibram/konae:0.10.0
 ```
 
 Open [http://localhost:8787](http://localhost:8787), press **Create owner account** and give that key. The data stays in the `konae-data` volume. The image is built for `linux/amd64` and `linux/arm64`. Without `KONAE_MAIL_TRANSPORT` the container sends no email, so invitations to app users are refused; `KONAE_MAIL_TRANSPORT=development` writes them to `mailbox.jsonl` in the volume instead. [Operate an installation](./docs/operate.md) covers the rest. The `0.6.0` image reads the key as `KONAE_ADMIN_KEY` and is built for `linux/amd64` only, so on Apple Silicon add `--platform linux/amd64`.
