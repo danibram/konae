@@ -161,7 +161,15 @@ test("the Konae home builds and publishes with only Search listing on", async ()
 
 test("a held database backup restores while actions are off", async () => {
   const id = "static_restore_backup";
-  await release(id, { version: 1, entrypoint: "index.html", files: { "index.html": "<title>Static</title>" } });
+  const project = { id, name: id, slug: id, manifest: { version: 1, visibility: "public" }, files: {} };
+  await owner.call("project_create", { projectId: id, name: id, slug: id, manifest: project.manifest });
+  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<title>Static</title>" } } })), id);
+  try {
+    const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
+    const receipt = await owner.call<{ hostname: string }>("release_apply", { planId: plan.planId });
+    hosts[id] = receipt.hostname;
+  } finally { await owner.cancel(transfer.transferId); }
   const app = path.join(root, "data", "apps", id);
   const live = path.join(app, "data/database.sqlite");
   await mkdir(path.dirname(live), { recursive: true });

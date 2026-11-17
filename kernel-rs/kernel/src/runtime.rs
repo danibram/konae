@@ -621,6 +621,9 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     if let Some(initial_modules) = input.initial_modules.as_ref() {
         crate::modules::validate_state(initial_modules).map_err(anyhow::Error::new)?;
     }
+    if let Some(initial_package) = input.initial_package.as_ref() {
+        crate::modules::validate_state(&initial_package.manifest.modules).map_err(anyhow::Error::new)?;
+    }
     anyhow::ensure!(
         input.artifact.version == 1
             && input.artifact.entrypoint == "index.html"
@@ -651,7 +654,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         || input.project.manifest["fileAccess"] == "app-users";
     let uses_auth = super::modules::sources_use_auth(input.project.files.values().map(String::as_bytes))
         || super::modules::artifact_uses_auth(artifact.values().map(Vec::as_slice));
-    let uses_actions = super::modules::sources_use_actions(input.project.files.values().map(String::as_bytes));
+    let uses_actions = super::modules::named_sources_use_actions(input.project.files.iter().map(|(name, source)| (name.as_str(), source.as_bytes())));
     if uses_files {
         let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
         let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public"));

@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_deployments_keeps_a_legacy_database_when_empty_actions_are_decided_off() {
+    async fn load_deployments_keeps_a_legacy_database_and_turns_actions_on_when_its_schema_is_unknown() {
         let root = scratch();
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-actions-empty-0.9.0");
         for relative in ["konae.json", "app/actions.json", "app/schema.sql"] {
@@ -467,9 +467,9 @@ mod tests {
 
         let mut state = AppState::for_test(&root);
         state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(crate::load_deployments(&root, "http://localhost").await.unwrap()));
-        assert!(!state.deployments.read().await["legacy-empty-actions.localhost"].modules["actions"]["on"].as_bool().unwrap());
+        assert!(state.deployments.read().await["legacy-empty-actions.localhost"].modules["actions"]["on"].as_bool().unwrap());
         let deployment = open(&state, "legacy_empty_actions", None).await.unwrap();
-        assert!(!crate::modules::is_on(&deployment.modules, "actions"));
+        assert!(crate::modules::is_on(&deployment.modules, "actions"));
         let page = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
         assert!(String::from_utf8(page).unwrap().contains("Still here"));
         let kept: String = Connection::open(&database).unwrap().query_row("SELECT value FROM old_rows", [], |row| row.get(0)).unwrap();

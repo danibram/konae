@@ -6,6 +6,7 @@ import { encodeBase64, type Transfer } from "../mcp/client";
 
 const settings = { id: "app_1", name: "Notes", slug: "notes", visibility: "private", signupPolicy: { mode: "closed", allowlist: [] }, signInMethods: ["password"], kernel: "0.7.0", manifest: {} };
 const folder = createTar([{ path: SETTINGS_FILE, contents: JSON.stringify(settings) }, { path: "app/actions.json", contents: JSON.stringify({ version: 1, actions: {} }) }]);
+const staticFolder = createTar([{ path: SETTINGS_FILE, contents: JSON.stringify(settings) }, { path: "app/index.html", contents: "<main>Home</main>" }]);
 const mcp = {
   call: async <T>() => ({ manifest: { contents: [] }, downloads: {}, folder: { transferId: "folder" }, sourcesAhead: false }) as T,
   download: async (_transfer: Transfer) => folder,
@@ -20,6 +21,17 @@ test("a published app exports its folder even when the editor's draft does not b
   expect(builds).toBe(0);
   const paths = readTar(new Uint8Array(await result.blob.arrayBuffer())).map((entry) => entry.path);
   expect(paths).toContain(`notes/${SETTINGS_FILE}`);
+});
+
+test("a published static app exports without actions.json", async () => {
+  const staticMcp = {
+    ...mcp,
+    download: async (_transfer: Transfer) => staticFolder,
+  } as never;
+  const result = await createProjectExport(draft, "app_1", { mcp: staticMcp, build: async () => { throw Error("the draft is not built"); } });
+  const paths = readTar(new Uint8Array(await result.blob.arrayBuffer())).map((entry) => entry.path);
+  expect(paths).toContain("notes/app/index.html");
+  expect(paths).not.toContain("notes/app/actions.json");
 });
 
 test("a draft is built for its export, and a draft that does not build says why", async () => {

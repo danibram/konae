@@ -290,9 +290,11 @@ describe("refusals", () => {
       'pages/index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.');
   });
 
-  test("a whole document with only the SDK tag does not count the tag as its entry", async () => {
-    await expect(assemble({ "index.html": page("App", '<script src="/runtime.js"></script>'), "app.js": "document.body.textContent = 'app';" }, { sdk: false })).rejects.toThrow(
-      'index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.');
+  test("a whole document without a browser SDK call publishes without an entry script", async () => {
+    const artifact = await assemble({ "index.html": page("App", '<script src="/runtime.js"></script>'), "app.js": "document.body.textContent = 'app';" }, { sdk: false });
+    expect(artifact.files["index.html"]).toContain("<title>App</title>");
+    expect(artifact.files["index.html"]).not.toContain("data-konae-runtime");
+    expect(artifact.files[runtimeFile]).toBeUndefined();
   });
 
   test("a whole document with no script passes while the app runs elsewhere, or when there is no app", async () => {
@@ -413,7 +415,7 @@ describe("the CLI and the editor build the same artifact", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  test("both run src/main.tsx in a fragment page, and refuse a whole document that never loads it with the same words", async () => {
+  test("both run src/main.tsx in a fragment page, and accept a whole document without browser calls", async () => {
     const typed = { "index.html": "<div id=root></div>", "src/main.tsx": "const count: number = 2;\ndocument.title = String(count);\n" };
     const root = await onDisk(typed);
     try {
@@ -426,9 +428,10 @@ describe("the CLI and the editor build the same artifact", () => {
     const blank = { ...typed, "index.html": page("App", '<div id="root"></div>') };
     const broken = await onDisk(blank);
     try {
-      const message = "index.html is a whole document that loads no script, so src/main.tsx never runs and the page stays empty.";
-      await expect(buildLocal(broken)).rejects.toThrow(message);
-      await expect(buildProjectInBrowser(project(blank))).rejects.toThrow(message);
+      const cli = await buildLocal(broken);
+      const editor = await buildProjectInBrowser(project(blank));
+      expect(cli.artifact.files["index.html"]).not.toContain("runtime.js");
+      expect(editor.files["index.html"]).not.toContain("runtime.js");
     } finally { await rm(broken, { recursive: true, force: true }); }
   });
 
@@ -484,6 +487,17 @@ describe("a path address finds its base path, and the SDK loader writes its tag 
 });
 
 describe("the Validation Gate refuses a page that never runs the app, as the build does", () => {
+  test("a static whole document passes when no SDK module is on", async () => {
+    const { default: initSqlJs } = await import("sql.js");
+    const { createCapsuleValidator } = await import("../agent/gate");
+    const validator = createCapsuleValidator(() => initSqlJs());
+    const files = { "index.html": page("Static"), "app.js": "document.body.dataset.ready = 'yes';" };
+    const modules = { actions: { on: false }, auth: { on: false }, files: { on: false } };
+    const result = await validator.validate(files, undefined, { modules, visibility: "public" });
+    expect(result.ok).toBe(true);
+    await expect(assemble(files, { sdk: false })).resolves.toBeDefined();
+  });
+
   test("a whole-document index.html with no script beside app.js fails the Gate with the build's sentence", async () => {
     const { default: initSqlJs } = await import("sql.js");
     const { createCapsuleValidator } = await import("../agent/gate");

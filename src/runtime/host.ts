@@ -139,6 +139,7 @@ export type RuntimeDiagnostics = {
 };
 
 const emptyActionProgram: ServerActionProgram = { version: 1, actions: {} };
+const emptyActionSource = '{"version":1,"actions":{}}';
 
 export class MiniAppRuntimeHost {
   private previewActor: PreviewActor = "guest";
@@ -159,7 +160,7 @@ export class MiniAppRuntimeHost {
   constructor(
     private readonly appId: string,
     schema: string,
-    actions: string,
+    actions?: string,
     options: RuntimeHostOptions = {},
   ) {
     this.fileAccess = options.fileAccess;
@@ -183,9 +184,9 @@ export class MiniAppRuntimeHost {
     );
   }
 
-  setActions(actions: string) {
+  setActions(actions?: string) {
     try {
-      this.actionProgram = parseServerActionSource(actions);
+      this.actionProgram = parseServerActionSource(actions ?? emptyActionSource);
       this.setDiagnostics({ actionsError: null });
     } catch (error) {
       this.setDiagnostics({ actionsError: describeError(error) });
@@ -279,7 +280,7 @@ export class MiniAppRuntimeHost {
     return (await this.dbPromise).export();
   }
 
-  async cloneForProposal(appId: string, schema: string, actions: string, fileAccess?: "app-users") {
+  async cloneForProposal(appId: string, schema: string, actions?: string, fileAccess?: "app-users") {
     const db = await this.dbPromise;
     const database = db.export();
     const files = this.getFiles();

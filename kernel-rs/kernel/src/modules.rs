@@ -52,7 +52,7 @@ pub fn sources_use_actions<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> boo
     files.into_iter().any(|bytes| contains(bytes, b"miniapp.actions") || serde_json::from_slice::<Value>(bytes).ok().and_then(|value| value["actions"].as_object().map(|actions| !actions.is_empty())).unwrap_or(false))
 }
 
-fn named_sources_use_actions<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
+pub fn named_sources_use_actions<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> bool {
     files.into_iter().any(|(name, bytes)| match name {
         "schema.sql" => creates_schema_object(bytes),
         "actions.json" => sources_use_actions([bytes]),
@@ -62,7 +62,7 @@ fn named_sources_use_actions<'a>(files: impl IntoIterator<Item = (&'a str, &'a [
 
 fn creates_schema_object(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes);
-    let words = text.split_whitespace().map(|word| word.trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '_')).collect::<Vec<_>>();
+    let words = text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_').filter(|word| !word.is_empty()).collect::<Vec<_>>();
     words.windows(2).any(|words| words[0].eq_ignore_ascii_case("CREATE") && (words[1].eq_ignore_ascii_case("TABLE") || words[1].eq_ignore_ascii_case("INDEX")))
         || words.windows(3).any(|words| words[0].eq_ignore_ascii_case("CREATE") && (words[1].eq_ignore_ascii_case("TEMP") || words[1].eq_ignore_ascii_case("TEMPORARY") || words[1].eq_ignore_ascii_case("UNIQUE")) && (words[2].eq_ignore_ascii_case("TABLE") || words[2].eq_ignore_ascii_case("INDEX")))
 }
@@ -405,12 +405,18 @@ pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
     if let Ok(bytes) = std::fs::read(crate::layout::record(root, id)) {
         if let Ok(installed) = serde_json::from_slice::<Value>(&bytes) {
             let actions = installed.get("actions").and_then(Value::as_str).unwrap_or("");
-            let schema = installed.pointer("/released/schemaSql").and_then(Value::as_str).filter(|schema| !schema.is_empty()).map(str::to_owned).or_else(|| {
+            let record_schema = installed.pointer("/released/schemaSql").and_then(Value::as_str);
+            let settings_schema = record_schema.is_none().then(|| {
                 std::fs::read(crate::layout::settings(root, id)).ok()
                     .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
                     .and_then(|settings| settings.pointer("/released/schemaSql").and_then(Value::as_str).map(str::to_owned))
-            }).unwrap_or_default();
-            return named_sources_use_actions([("actions.json", actions.as_bytes()), ("schema.sql", schema.as_bytes())]);
+            }).flatten();
+            let schema_snapshot = record_schema.or(settings_schema.as_deref());
+            let schema = schema_snapshot.unwrap_or("");
+            if crate::action_shape::read(actions).is_err() { return true; }
+            if named_sources_use_actions([("actions.json", actions.as_bytes()), ("schema.sql", schema.as_bytes())]) { return true; }
+            if walk(&crate::layout::dist(root, id), &|bytes| contains(bytes, b"miniapp.actions")) { return true; }
+            return schema_snapshot.is_none() && database_has_tables(&crate::layout::database(root, id));
         }
         return true;
     }
@@ -418,6 +424,19 @@ pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
     let actions = std::fs::read(sources.join("actions.json")).unwrap_or_default();
     let schema = std::fs::read(sources.join("schema.sql")).unwrap_or_default();
     named_sources_use_actions([("actions.json", actions.as_slice()), ("schema.sql", schema.as_slice())])
+}
+
+fn database_has_tables(path: &std::path::Path) -> bool {
+    if !path.is_file() { return false; }
+    let connection = match rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(connection) => connection,
+        Err(_) => return true,
+    };
+    match connection.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1", [], |_| Ok(())) {
+        Ok(()) => true,
+        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -519,12 +538,39 @@ mod tests {
     }
 
     #[test]
+    fn action_use_keeps_the_module_on_when_the_installed_page_mentions_actions() {
+        let root = std::env::temp_dir().join(format!("konae-actions-artifact-use-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(crate::layout::private(&root, "app")).unwrap();
+        std::fs::create_dir_all(crate::layout::dist(&root, "app")).unwrap();
+        std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&json!({"actions":"{\"version\":1,\"actions\":{}}","released":{"schemaSql":""}})).unwrap()).unwrap();
+        std::fs::write(crate::layout::dist(&root, "app").join("index.html"), "<p>miniapp.actions is the SDK name</p>").unwrap();
+        assert!(uses_actions(&root, "app"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn action_use_reads_released_schema_from_settings_for_older_records() {
         let root = std::env::temp_dir().join(format!("konae-legacy-released-schema-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(crate::layout::private(&root, "app")).unwrap();
         std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&json!({"actions":"{\"version\":1,\"actions\":{}}"})).unwrap()).unwrap();
         std::fs::write(crate::layout::settings(&root, "app"), serde_json::to_vec(&json!({"released":{"schemaSql":"CREATE TABLE notes(id INTEGER PRIMARY KEY);"}})).unwrap()).unwrap();
         assert!(uses_actions(&root, "app"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn action_use_is_conservative_for_unreadable_installed_sources_and_database_tables() {
+        let root = std::env::temp_dir().join(format!("konae-actions-uncertain-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(crate::layout::private(&root, "malformed")).unwrap();
+        std::fs::write(crate::layout::record(&root, "malformed"), serde_json::to_vec(&json!({"actions":"{"})).unwrap()).unwrap();
+        assert!(uses_actions(&root, "malformed"));
+        std::fs::create_dir_all(crate::layout::private(&root, "tables")).unwrap();
+        std::fs::create_dir_all(crate::layout::data(&root, "tables")).unwrap();
+        std::fs::write(crate::layout::record(&root, "tables"), serde_json::to_vec(&json!({"actions":"{\"version\":1,\"actions\":{}}"})).unwrap()).unwrap();
+        let db = rusqlite::Connection::open(crate::layout::database(&root, "tables")).unwrap();
+        db.execute_batch("CREATE TABLE notes(id INTEGER PRIMARY KEY);").unwrap();
+        drop(db);
+        assert!(uses_actions(&root, "tables"));
         let _ = std::fs::remove_dir_all(root);
     }
 
