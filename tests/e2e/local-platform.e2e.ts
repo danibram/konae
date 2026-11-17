@@ -8,11 +8,31 @@ import { McpClient, type Transfer } from "../../src/mcp/client";
 import { publishProject } from "../../src/deployments/release";
 
 const runCommand = promisify(execFile);
+const platformUrl = (path: string) => new URL(path, process.env.KONAE_EDITOR_URL ?? "http://127.0.0.1:4176").href;
+
+async function signupOwner(page: Page, client: string, email: string, password = "Owner-test-password-2026") {
+  const url = platformUrl("/_konae/owner/signup");
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": client },
+    body: JSON.stringify({ email, password, setupKey: "local-development-key" }),
+  });
+  const cookie = response.headers.getSetCookie().find((value) => value.startsWith("konae_owner_session="));
+  if (cookie) await page.context().addCookies([{ name: "konae_owner_session", value: cookie.match(/^konae_owner_session=([^;]+)/)![1], url: platformUrl("/") }]);
+  return { ok: response.ok, status: response.status };
+}
+
+async function logoutOwner(page: Page) {
+  const cookies = await page.context().cookies(platformUrl("/"));
+  const session = cookies.find((cookie) => cookie.name === "konae_owner_session");
+  await fetch(platformUrl("/_konae/owner/logout"), { method: "POST", headers: session ? { cookie: `${session.name}=${session.value}` } : {} });
+  await page.context().clearCookies();
+}
 
 test.beforeEach(async ({ page }) => {
   const client = `198.51.100.${1 + Math.floor(Math.random() * 254)}`;
-  const response = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email: `owner-${crypto.randomUUID()}@example.test`, password: "Owner-test-password-2026", setupKey: "local-development-key" } });
-  expect(response.ok()).toBe(true);
+  const response = await signupOwner(page, client, `owner-${crypto.randomUUID()}@example.test`);
+  expect(response.ok).toBe(true);
 });
 
 function sourceReadRequest(body: string): { projectId?: string; requestId?: string; cancelRequestId?: string; metadataOnly?: boolean } | undefined {
@@ -32,10 +52,10 @@ test("platform pages require an owner session and return to the requested page a
   const email = `owner-${crypto.randomUUID()}@example.test`;
   const password = "Owner-test-password-2026";
   const client = `203.0.113.${1 + Math.floor(Math.random() * 254)}`;
-  const signup = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
-  expect(signup.ok()).toBe(true);
+  const signup = await signupOwner(page, client, email, password);
+  expect(signup.ok).toBe(true);
   const projectPath = await createProject(page, `Return here ${Date.now()}`);
-  await page.request.post("/_konae/owner/logout");
+  await logoutOwner(page);
 
   for (const path of ["/", projectPath]) {
     await page.goto(path);
@@ -610,8 +630,8 @@ test("a stale contact email save shows the current value", async ({ page, contex
   const email = `owner-${crypto.randomUUID()}@example.test`;
   const password = "Owner-test-password-2026";
   const client = `192.0.2.${1 + Math.floor(Math.random() * 254)}`;
-  const signup = await page.request.post("/_konae/owner/signup", { headers: { "x-forwarded-for": client }, data: { email, password, setupKey: "local-development-key" } });
-  expect(signup.ok()).toBe(true);
+  const signup = await signupOwner(page, client, email, password);
+  expect(signup.ok).toBe(true);
   const projectPath = await createProject(page, `Email conflict ${Date.now()}`);
   await publish(page);
   await fromMore(page, "App settings");
@@ -702,7 +722,10 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   await page.reload();
   await fromMore(page, "App settings");
   let settings = page.getByRole("dialog", { name: "App settings", exact: true });
-  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  let modulesTab = settings.getByRole("tab", { name: "Modules", exact: true });
+  await modulesTab.click();
+  await expect(modulesTab).toHaveAttribute("aria-selected", "true");
+  await expect(settings.locator("#app-settings-modules")).toBeVisible();
   await expect(settings.getByText("This project is not published yet. Module settings travel with the first release.")).toBeVisible();
   await expect(settings.locator(".module-settings-card")).toHaveCount(6);
   await expect(settings.locator(".module-settings-card").filter({ hasText: "Data and actions" })).toContainText("actions");
@@ -714,7 +737,10 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   await publish(page);
   await fromMore(page, "App settings");
   settings = page.getByRole("dialog", { name: "App settings", exact: true });
-  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  modulesTab = settings.getByRole("tab", { name: "Modules", exact: true });
+  await modulesTab.click();
+  await expect(modulesTab).toHaveAttribute("aria-selected", "true");
+  await expect(settings.locator("#app-settings-modules")).toBeVisible();
   const filesCard = settings.locator(".module-settings-card").filter({ hasText: "File storage" });
   await settings.getByLabel("Who can read every file", { exact: true }).selectOption("app-users");
   await filesCard.getByRole("button", { name: "Save changes", exact: true }).click();
@@ -745,7 +771,10 @@ test("Modules settings show auth and read back seo after reload", async ({ page 
   await page.reload();
   await fromMore(page, "App settings");
   settings = page.getByRole("dialog", { name: "App settings", exact: true });
-  await settings.getByRole("tab", { name: "Modules", exact: true }).click();
+  modulesTab = settings.getByRole("tab", { name: "Modules", exact: true });
+  await modulesTab.click();
+  await expect(modulesTab).toHaveAttribute("aria-selected", "true");
+  await expect(settings.locator("#app-settings-modules")).toBeVisible();
   await expect(settings.locator(".module-settings-card").filter({ hasText: "seo" }).getByText("On", { exact: true })).toBeVisible();
 });
 
