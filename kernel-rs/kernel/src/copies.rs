@@ -2051,7 +2051,15 @@ mod tests {
         assert_eq!(std::fs::read(crate::layout::files(&restored, &deployment.id).join(format!("{blob_id}.blob"))).unwrap(), b"new attachment bytes");
         for file in &manifest.files {
             if file.path.ends_with(".sqlite") { continue; }
+            let source_file = source.join(&file.path);
             let restored_file = restored.join(&file.path);
+            if file.path.ends_with("/index.json") {
+                let source_index: Value = serde_json::from_slice(&std::fs::read(source_file).unwrap()).unwrap();
+                let restored_index: Value = serde_json::from_slice(&std::fs::read(restored_file).unwrap()).unwrap();
+                assert_eq!(source_index, restored_index, "{}", file.path);
+                continue;
+            }
+            assert_eq!(checksum_file(&source_file).unwrap(), (file.size, file.sha256.clone()), "source {}", file.path);
             assert_eq!(checksum_file(&restored_file).unwrap(), (file.size, file.sha256.clone()), "{}", file.path);
         }
         let mut tampered = manifest.clone();
