@@ -20,7 +20,7 @@ export function isDocument(html: string): boolean;
 export const appEntries: string[];
 export function appEntry(paths: Iterable<string>): string | null;
 export function entryNeverRunsMessage(paths: Iterable<string>, pages: Record<string, string>, sdk?: boolean): string | null;
-export function renderCapsuleDocument(input: { body: string; styles: string; script: string; runtime: string; head?: string }): string;
+export function renderCapsuleDocument(input: { body: string; styles: string; script: string; runtime: string; reporter?: string; head?: string }): string;
 export function splitFragmentHead(fragment: string): { head: string; body: string };
 export function basePath(pathname: string): string;
 export function runtimeLoaderScript(): string;
