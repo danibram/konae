@@ -23,10 +23,14 @@ export function sourcesUseActions(sources: Iterable<string> | Record<string, str
 export function sdkRequired(modules: Record<string, { on?: boolean }> | undefined, sources: Iterable<string> | Record<string, string>, visibility?: string): boolean {
   const sourceFiles = Symbol.iterator in Object(sources) ? undefined : sources as Record<string, string>;
   const files = sourceFiles ? Object.values(sourceFiles) : Array.from(sources as Iterable<string>);
+  const sdkMentions = sourceFiles
+    ? Object.entries(sourceFiles).some(([name, source]) => name !== "actions.json" && name !== "schema.sql" && /\bminiapp\b/.test(source))
+    : files.some((source) => /\bminiapp\b/.test(source));
   const browserCall = (name: string) => files.some((source) => new RegExp(`(?:miniapp\\s*\\.\\s*${name}\\b|miniapp\\s*\\[\\s*["']${name}["']\\s*\\]|window\\s*\\[\\s*["']miniapp["']\\s*\\]\\s*\\.\\s*${name}\\b|window\\s*\\[\\s*["']miniapp["']\\s*\\]\\s*\\[\\s*["']${name}["']\\s*\\])`).test(source));
   const on = (name: string, inferred: boolean) => modules?.[name] ? modules[name].on === true : inferred;
+  const moduleUsesSdk = on("actions", sourcesUseActions(sourceFiles ?? files))
+    || on("auth", visibility === "private" || sourcesUseAuth(files))
+    || on("files", sourcesUseFiles(files));
   return browserCall("page")
-    || (on("actions", sourcesUseActions(sourceFiles ?? files)) && browserCall("actions"))
-    || (on("auth", visibility === "private" || sourcesUseAuth(files)) && browserCall("auth"))
-    || (on("files", sourcesUseFiles(files)) && browserCall("files"));
+    || (moduleUsesSdk && sdkMentions);
 }

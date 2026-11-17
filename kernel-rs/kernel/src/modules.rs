@@ -405,7 +405,11 @@ pub fn uses_actions(root: &std::path::Path, id: &str) -> bool {
     if let Ok(bytes) = std::fs::read(crate::layout::record(root, id)) {
         if let Ok(installed) = serde_json::from_slice::<Value>(&bytes) {
             let actions = installed.get("actions").and_then(Value::as_str).unwrap_or("");
-            let schema = installed.pointer("/released/schemaSql").and_then(Value::as_str).unwrap_or("");
+            let schema = installed.pointer("/released/schemaSql").and_then(Value::as_str).filter(|schema| !schema.is_empty()).map(str::to_owned).or_else(|| {
+                std::fs::read(crate::layout::settings(root, id)).ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .and_then(|settings| settings.pointer("/released/schemaSql").and_then(Value::as_str).map(str::to_owned))
+            }).unwrap_or_default();
             return named_sources_use_actions([("actions.json", actions.as_bytes()), ("schema.sql", schema.as_bytes())]);
         }
         return true;
@@ -511,6 +515,16 @@ mod tests {
         std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&json!({"actions":"{\"version\":1,\"actions\":{\"notes.list\":{\"kind\":\"query\"}}}","released":{"schemaSql":"CREATE TABLE notes(id INTEGER PRIMARY KEY);"}})).unwrap()).unwrap();
         assert!(uses_actions(&root, "app"));
         let _ = std::fs::remove_dir_all(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn action_use_reads_released_schema_from_settings_for_older_records() {
+        let root = std::env::temp_dir().join(format!("konae-legacy-released-schema-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(crate::layout::private(&root, "app")).unwrap();
+        std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&json!({"actions":"{\"version\":1,\"actions\":{}}"})).unwrap()).unwrap();
+        std::fs::write(crate::layout::settings(&root, "app"), serde_json::to_vec(&json!({"released":{"schemaSql":"CREATE TABLE notes(id INTEGER PRIMARY KEY);"}})).unwrap()).unwrap();
+        assert!(uses_actions(&root, "app"));
         let _ = std::fs::remove_dir_all(root);
     }
 

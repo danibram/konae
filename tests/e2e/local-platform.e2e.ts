@@ -926,6 +926,37 @@ test("an editor publish keeps the SDK when a published module uses bracket acces
   expect(await pageResponse.text()).toContain("runtime.js");
 }, 90_000);
 
+test("a published action works when the page destructures the SDK", async ({ page, context }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("textbox", { name: "Project name", exact: true }).fill("Destructured action SDK");
+  await page.getByText("Start from a template instead", { exact: true }).click();
+  await page.getByRole("radio", { name: /No template/ }).check();
+  await page.getByRole("button", { name: /^Create/ }).click();
+  await expect(page).toHaveURL(/\/app\/[^/]+$/);
+  await waitForKernelSave(page);
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const cookie = (await page.context().cookies()).map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+  const sourceRead = await client.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const source = JSON.parse(new TextDecoder().decode(await client.download(sourceRead.transfer))) as { files: Record<string, string>; manifest: Record<string, unknown>; [key: string]: unknown };
+  source.files = {
+    "index.html": '<!doctype html><html><head><title>Destructured action</title></head><body><main id="answer">Loading</main><script type="module" src="/app.js"></script></body></html>',
+    "app.js": 'const { actions } = window.miniapp; actions.call("notes.list").then((rows) => { document.querySelector("#answer").textContent = rows[0].value; });',
+    "actions.json": JSON.stringify({ version: 1, actions: { "notes.list": { kind: "query", access: "anonymous", statement: "SELECT 'rows arrived' AS value LIMIT 1", bindings: [] } } }),
+  };
+  source.manifest = { ...source.manifest, visibility: "public" };
+  const sourceTransfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
+  await client.call("project_sources_save", { projectId, transferId: sourceTransfer.transferId, expectedRevision: sourceRead.revision });
+  await client.cancel(sourceRead.transfer.transferId);
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  const url = await publish(page);
+  const app = await context.newPage();
+  await app.goto(url);
+  await expect(app.locator("#answer")).toHaveText("rows arrived", { timeout: 15_000 });
+}, 90_000);
+
 test("files module cannot be turned off while the app has an uploaded file", async ({ page, context }) => {
   const projectPath = await createProject(page, "Files module in use");
   const publishedUrl = await publish(page);

@@ -23,6 +23,9 @@ test("the SDK follows decided modules or the modules a new app uses", () => {
   expect(sdkRequired(undefined, ["<main>Static</main>"])).toBe(false);
   expect(sdkRequired({ actions: { on: true } }, { "actions.json": '{"version":1,"actions":{"notes.list":{"kind":"query"}}}' }, "public")).toBe(false);
   expect(sdkRequired({ actions: { on: true } }, { "app.js": 'miniapp.actions.call("notes.list")' }, "public")).toBe(true);
+  expect(sdkRequired({ actions: { on: true }, auth: { on: true }, files: { on: true } }, { "app.js": 'const { actions } = window.miniapp; actions.call("notes.list");' }, "public")).toBe(true);
+  expect(sdkRequired({ actions: { on: true }, auth: { on: true }, files: { on: true } }, { "app.js": 'const api = window.miniapp; api.actions.call("notes.list");' }, "public")).toBe(true);
+  expect(sdkRequired({ actions: { on: true }, auth: { on: true }, files: { on: true } }, { "app.js": 'window.miniapp?.actions.call("notes.list");' }, "public")).toBe(true);
   expect(sdkRequired({ auth: { on: true } }, { "app.js": 'window["miniapp"].auth.session()' }, "public")).toBe(true);
   expect(sdkRequired({ actions: { on: false }, auth: { on: false }, files: { on: false } }, { "actions.json": '{"version":1,"actions":{"notes.list":{"kind":"query"}}}' }, "public")).toBe(false);
   expect(sdkRequired(undefined, ["miniapp.page.url('/about')"], "public")).toBe(true);
