@@ -188,7 +188,7 @@ pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &P
     .await;
     let _ = tokio::fs::remove_dir_all(&stage).await;
     let change = result?;
-    if let Some(modules) = crate::folder::decide_app_modules(&state.data_root, &deployment.id).await? {
+    if let Some(modules) = crate::folder::decide_app_modules(&state.data_root, &deployment.id, crate::folder::ModuleSource::Installed).await? {
         let mut deployments = state.deployments.write().await;
         if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
             current.modules = modules;

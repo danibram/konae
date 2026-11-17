@@ -1464,13 +1464,6 @@ test("a private Invitation only app admits the person the owner invites from the
   const url = (await link.getAttribute("href"))!;
   await expect(page.getByText("New app accounts: Invitation only.")).toBeVisible();
   await page.getByRole("button", { name: "Invite people", exact: true }).click();
-  await fromMore(page, "App settings");
-  const moduleSettings = page.getByRole("dialog", { name: "App settings", exact: true });
-  await moduleSettings.getByRole("tab", { name: "Modules", exact: true }).click();
-  await moduleSettings.getByRole("switch", { name: "Turn Incoming routes on", exact: true }).click();
-  await expect(moduleSettings.getByRole("switch", { name: "Turn Incoming routes off", exact: true })).toHaveAttribute("aria-checked", "true");
-  await moduleSettings.getByRole("button", { name: "Close App settings", exact: true }).click();
-
   const app = await context.newPage();
   await app.goto(url);
   await expect(app.getByRole("heading", { name: "Sign in to this app" })).toBeVisible();
@@ -1523,6 +1516,12 @@ test("a private Invitation only app admits the person the owner invites from the
   await expect(integrations).not.toContainText("a-long-enough-secret-2026");
   await expect(integrations.getByLabel("Secret value")).toHaveValue("");
   await expect(integrations.getByLabel("Secret name")).toHaveValue("");
+  await fromMore(page, "App settings");
+  const moduleSettings = page.getByRole("dialog", { name: "App settings", exact: true });
+  await moduleSettings.getByRole("tab", { name: "Modules", exact: true }).click();
+  await moduleSettings.getByRole("switch", { name: "Turn File storage on", exact: true }).click();
+  await expect(moduleSettings.getByRole("switch", { name: "Turn File storage off", exact: true })).toHaveAttribute("aria-checked", "true");
+  await moduleSettings.getByRole("button", { name: "Close App settings", exact: true }).click();
   await integrations.getByLabel("Key name").fill("Nightly backup");
   await integrations.getByLabel("Private files").check();
   await integrations.getByRole("button", { name: "Create API key" }).click();

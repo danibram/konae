@@ -658,16 +658,6 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     let uses_actions = super::modules::named_sources_use_actions(action_files.iter().copied());
     let uses_http = super::modules::sources_use_http(action_files.iter().copied());
     let uses_calls = super::modules::sources_use_calls(action_files.iter().copied());
-    if uses_files {
-        let current = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
-        let mut modules = current.unwrap_or_else(|| super::modules::initial_for_release(input.initial_modules.as_ref(), uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
-        if input.project.manifest["fileAccess"] == "app-users" {
-            let files = modules.get_mut("files").expect("files is switchable");
-            files["on"] = serde_json::json!(true);
-            files["fileAccess"] = serde_json::json!("app-users");
-        }
-        if let Err(refused) = super::modules::require_on(&modules, "files") { return Err(anyhow::Error::new(refused)); }
-    }
     super::artifact::check_routing(&input.project.manifest).map_err(anyhow::Error::msg)?;
     super::calls::check_connects(&input.project.manifest)?;
     let artifact = super::artifact::decode(&input.artifact).map_err(anyhow::Error::msg)?;
@@ -680,13 +670,19 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
     let package_modules = input.initial_package.as_ref().map(|package| &package.manifest.modules);
     let initial_modules = input.initial_modules.as_ref().or(package_modules);
     let mut candidate_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone()).unwrap_or_else(|| super::modules::initial_for_release(initial_modules, uses_files, uses_auth || input.visibility != "public", uses_http, uses_calls));
+    if input.project.manifest["fileAccess"] == "app-users" {
+        let files = candidate_modules.get_mut("files").expect("files is switchable");
+        files["on"] = serde_json::json!(true);
+        files["fileAccess"] = serde_json::json!("app-users");
+    }
     if state.deployments.read().await.values().all(|deployment| deployment.id != input.project.id)
         && initial_modules.is_none_or(|modules| !modules.contains_key("actions")) && uses_actions {
         candidate_modules.get_mut("actions").expect("actions is switchable")["on"] = json!(true);
     }
-    if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
-    if uses_http { super::modules::require_on(&candidate_modules, "http").map_err(anyhow::Error::new)?; }
-    if uses_calls { super::modules::require_on(&candidate_modules, "calls").map_err(anyhow::Error::new)?; }
+    for module in super::modules::release_use_order() {
+        let used = match module.as_str() { "files" => uses_files, "actions" => uses_actions, "http" => uses_http, "calls" => uses_calls, _ => false };
+        if used { super::modules::require_on(&candidate_modules, &module).map_err(anyhow::Error::new)?; }
+    }
     let program = super::action_shape::read(actions_source)?;
     let existing_modules = state.deployments.read().await.values().find(|deployment| deployment.id == input.project.id).map(|deployment| deployment.modules.clone());
     candidate_modules = existing_modules.unwrap_or(candidate_modules);
@@ -996,6 +992,39 @@ mod tests {
             })).unwrap();
             let error = super::validate_release(&state, &input, None).await.unwrap_err();
             assert_eq!(error.to_string(), format!("Module {module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run."));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_release_uses_the_shared_module_check_order() {
+        let root = std::env::temp_dir().join(format!("konae-release-module-order-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+            "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{
+                "actions.json":"{\"version\":1,\"actions\":{\"hooks.receive\":{\"kind\":\"mutation\",\"access\":\"anonymous\",\"statement\":\"SELECT 1\",\"bindings\":[],\"http\":{\"method\":\"POST\",\"path\":\"/hooks\"}}}}",
+                "schema.sql":""
+            }},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>","app.js":"await miniapp.files.list();"}},
+            "initialModules":{"actions":{"on":false},"files":{"on":false},"http":{"on":false},"calls":{"on":false}}
+        })).unwrap();
+        let error = super::validate_release(&state, &input, None).await.unwrap_err();
+        assert_eq!(error.to_string(), "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_release_refuses_http_and_calls_when_actions_is_off() {
+        let root = std::env::temp_dir().join(format!("konae-release-module-requires-{}", uuid::Uuid::new_v4()));
+        let state = crate::AppState::for_test(&root);
+        for module in ["http", "calls"] {
+            let input: crate::DeployInput = serde_json::from_value(serde_json::json!({
+                "project":{"id":"app","name":"App","slug":"app","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>App</main>"}},
+                "initialModules":{"actions":{"on":false},"http":{"on":false},"calls":{"on":false},(module):{"on":true}}
+            })).unwrap();
+            let error = super::validate_release(&state, &input, None).await.unwrap_err();
+            assert_eq!(error.to_string(), format!("Module {module} requires actions, which is off. Turn actions on first."));
         }
         let _ = std::fs::remove_dir_all(root);
     }

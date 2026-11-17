@@ -310,6 +310,8 @@ describe("the MCP walkthrough", () => {
     const settings = JSON.parse(await readFile(settingsPath, "utf8"));
     settings.modules.http = { on: true };
     await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    r.step("http-module");
+    r.add("json", JSON.stringify({ modules: { http: settings.modules.http } }, null, 2));
     r.step("publish-refused");
     const refused = await cli(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);

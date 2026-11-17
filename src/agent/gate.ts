@@ -5,7 +5,7 @@ import { contractFromProgram } from "../lib/action-contract";
 import { entryNeverRunsMessage, rootRelativeWarnings } from "../lib/static-artifact.js";
 import { releaseRefusal, type ReleaseFacts } from "./release-check";
 import { hintOf, ownerFixes, refusalOf } from "../kernel/refusal";
-import { checkModuleChange } from "../lib/module-state";
+import { checkModuleChange, moduleCheckOrder } from "../lib/module-state";
 import { sdkRequired, sourcesUseActions, sourcesUseAuth, sourcesUseCalls, sourcesUseFiles, sourcesUseHttp } from "../lib/module-use";
 import { checkSourceFiles } from "../lib/source-rules";
 import { SCHEMA_TRANSFORMS_FILE, schemaTransformsRefusal } from "./schema-transforms";
@@ -63,21 +63,22 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     const schemaSource = files["schema.sql"] ?? "";
     const actionsSource = files["actions.json"] ?? `{"version":1,"actions":{}}`;
     const filesCall = sourcesUseFiles(Object.values(files));
-    const filesState = facts.modules?.files;
-    const filesOff = filesState ? checkModuleChange({ rule: "on", module: "files", state: filesState }) : null;
-    if (filesCall && filesOff) {
-      return failure({ stage: "actions", message: filesOff.message, code: filesOff.code as "module.off", hint: hintOf(filesOff.code as "module.off") }, ["sources"]);
-    }
-    const actionsState = facts.modules?.actions;
-    const actionsOff = actionsState ? checkModuleChange({ rule: "on", module: "actions", state: actionsState }) : null;
-    if (sourcesUseActions(files) && actionsOff) {
-      return failure({ stage: "actions", message: actionsOff.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
-    }
-    for (const [module, used] of [["http", sourcesUseHttp(files)], ["calls", sourcesUseCalls(files)]] as const) {
+    const used = { files: filesCall, actions: sourcesUseActions(files), http: sourcesUseHttp(files), calls: sourcesUseCalls(files) };
+    for (const module of moduleCheckOrder) {
+      if (!used[module as keyof typeof used]) continue;
       const state = facts.modules?.[module];
       const off = state ? checkModuleChange({ rule: "on", module, state }) : null;
-      if (used && off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
+      if (off) return failure({ stage: "actions", message: off.message, code: "module.off", hint: hintOf("module.off") }, ["sources"]);
     }
+    const actionsState = facts.modules?.actions;
+    for (const module of ["http", "calls"] as const) {
+      const state = facts.modules?.[module];
+      if (state?.on === true) {
+        const required = checkModuleChange({ rule: "requires", module, required: "actions", requiredState: actionsState });
+        if (required) return failure({ stage: "actions", message: required.message, code: "module.requires", hint: hintOf("module.requires") }, ["sources"]);
+      }
+    }
+    const filesState = facts.modules?.files;
     const authState = facts.modules?.auth;
     if (facts.visibility === "private" && authState && authState.on !== true) {
       const required = checkModuleChange({ rule: "private-auth", module: "auth", requiredState: authState });

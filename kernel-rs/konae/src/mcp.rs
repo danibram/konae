@@ -1580,7 +1580,6 @@ async fn admin_call(
         "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
             let id = a["projectId"].as_str().unwrap();
             let deployment = owned_deployment(state, owner, id, if name == "api_keys_list" { "read" } else { "publish" }).await?;
-            if name == "api_keys_create" { kernel::modules::require_on(&deployment.modules, "http")?; }
             super::http::api_keys_call(state, &deployment, name, &a).await
         }
         "notices_read" => {
@@ -2545,23 +2544,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_key_creation_requires_http_but_list_and_revoke_do_not() {
+    async fn file_api_key_creation_requires_files_but_not_http() {
         let root = std::env::temp_dir().join(format!("konae-api-key-http-module-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
         let state = Konae::for_test(AppState::for_test(&root));
-        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into(),"manage_users".into()], projects:vec![], session:false };
         let body = json!({"project":{"id":"api_key_http","name":"API key HTTP","slug":"api-key-http","manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Keys</title>"}}});
         assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
         store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('api_key_http','o','{}')", []).unwrap();
-        for module in ["actions", "http"] {
-            let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
-            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":module,"on":true,"expected":before["modules"][module]["state"]})).await.unwrap();
-        }
+        let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"auth","on":true,"expected":before["modules"]["auth"]["state"]})).await.unwrap();
+        let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"files","on":true,"expected":before["modules"]["files"]["state"]})).await.unwrap();
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        assert_eq!(current["modules"]["http"]["state"]["on"], false);
         let created = admin_call(&state, &owner, "owner:o", "api_keys_create", json!({"projectId":"api_key_http","name":"Files key","actions":[],"files":["public"]})).await.unwrap();
         let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
-        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"http","on":false,"expected":current["modules"]["http"]["state"]})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"files","on":false,"expected":current["modules"]["files"]["state"]})).await.unwrap();
         let refused = admin_call(&state, &owner, "owner:o", "api_keys_create", json!({"projectId":"api_key_http","name":"Blocked","files":["public"]})).await.unwrap_err();
-        assert!(refused.to_string().contains("Module http is off."));
+        assert!(refused.to_string().contains("Module files is off."));
         assert_eq!(admin_call(&state, &owner, "owner:o", "api_keys_list", json!({"projectId":"api_key_http"})).await.unwrap()["keys"].as_array().unwrap().len(), 1);
         admin_call(&state, &owner, "owner:o", "api_keys_revoke", json!({"projectId":"api_key_http","keyId":created["keyId"]})).await.unwrap();
         let _ = tokio::fs::remove_dir_all(root).await;

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import initSqlJs, { type SqlJsStatic } from "sql.js";
 import { withPrivateNotes } from "../lib/private-notes";
 import { cloneStarter, starterProject } from "../lib/starter";
@@ -59,12 +61,30 @@ describe("validation gate", () => {
       expect(result.errors[0]).toMatchObject({ code: "module.off", message: `Module ${module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.` });
     }
   });
+  test("a module that requires actions refuses an invalid first-release state", async () => {
+    for (const module of ["http", "calls"] as const) {
+      const result = await validator.validate(capsule({ "actions.json": JSON.stringify({ version: 1, actions: {} }), "schema.sql": "", "app.js": "" }), { state: "absent" }, { modules: { actions: { on: false }, [module]: { on: true } } });
+      expect(result.errors[0]).toMatchObject({ code: "module.requires", message: `Module ${module} requires actions, which is off. Turn actions on first.` });
+    }
+  });
   test("checks files before actions when both modules are off", async () => {
     const files = capsule({
       "actions.json": JSON.stringify({ version: 1, actions: { "notes.list": { kind: "query" } } }),
       "app.js": "await miniapp.files.list();",
     });
     const result = await validator.validate(files, undefined, { modules: { actions: { on: false }, files: { on: false } } });
+    expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
+  });
+  test("module use refusals follow the shared release check order", async () => {
+    const cases = JSON.parse(readFileSync(path.resolve(import.meta.dir, "../../kernel-rs/kernel/src/module-cases.json"), "utf8")) as Array<{ rule: string; order?: string[] }>;
+    const order = cases.find((item) => item.rule === "release-order")?.order;
+    expect(order).toEqual(["files", "actions", "http", "calls"]);
+    const files = capsule({
+      "app.js": "await miniapp.files.list();",
+      "actions.json": JSON.stringify({ version: 1, actions: { "hooks.receive": { kind: "mutation", http: { method: "POST", path: "/hooks" } } } }),
+    });
+    const modules = Object.fromEntries(order!.map((module) => [module, { on: false }]));
+    const result = await validator.validate(files, { state: "absent" }, { modules });
     expect(result.errors[0]).toMatchObject({ code: "module.off", message: "Module files is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run." });
   });
   test("a static capsule can omit actions.json and schema.sql when actions are off", async () => {

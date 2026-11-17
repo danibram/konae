@@ -1,4 +1,7 @@
 export type ModuleRefusal = { code: string; message: string };
+import moduleCases from "../../kernel-rs/kernel/src/module-cases.json";
+
+export const moduleCheckOrder = (moduleCases as Array<{ rule: string; order?: string[] }>).find((item) => item.rule === "release-order")?.order ?? [];
 
 type ModuleCase = {
   rule: string;
@@ -9,6 +12,9 @@ type ModuleCase = {
   known?: boolean;
   required?: string;
   requiredState?: { on?: boolean };
+  dependent?: string;
+  dependentState?: { on?: boolean };
+  action?: string;
   used?: boolean;
   option?: string;
   value?: unknown;
@@ -37,6 +43,9 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
   if (input.rule === "requires" && input.requiredState?.on !== true) {
     return { code: "module.requires", message: `Module ${input.module} requires ${input.required}, which is off. Turn ${input.required} on first.` };
   }
+  if (input.rule === "dependent-requires" && input.dependentState?.on === true) {
+    return { code: "module.requires", message: `Module ${input.module} is required by ${input.dependent}, which is on. Turn ${input.dependent} off first.` };
+  }
   if (input.rule === "private-auth" && input.requiredState?.on !== true) {
     return { code: "module.requires", message: "A private app requires auth, which is off. Turn auth on first." };
   }
@@ -44,6 +53,12 @@ export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
     const message = input.module === "actions"
       ? "Module actions is in use by actions.json, which declares Server Actions, HTTP routes, calls, schedules, notices, Signals or page paths, or by schema.sql or miniapp.actions. Remove those uses before turning it off."
       : `Module ${input.module} is in use by the published app. Remove its use before turning it off.`;
+    return { code: "module.in-use", message };
+  }
+  if (input.rule === "in-use-action") {
+    const message = input.module === "http"
+      ? `Module http is in use by action ${input.action}, which declares an HTTP route. Remove its route before turning it off.`
+      : `Module calls is in use by action ${input.action}, which sends an outgoing call. Remove its call before turning it off.`;
     return { code: "module.in-use", message };
   }
   if (input.rule === "option-unknown" || input.rule === "option-invalid") {

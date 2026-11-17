@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 pub const USAGE_DATABASE: &str = "usage.sqlite";
@@ -81,6 +81,7 @@ enum Message {
 static QUEUE_SENDER: OnceLock<SyncSender<Message>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
+static OPEN_LOCK: Mutex<()> = Mutex::new(());
 
 fn sender() -> &'static SyncSender<Message> {
     QUEUE_SENDER.get_or_init(|| {
@@ -263,11 +264,12 @@ fn writer(receiver: Receiver<Message>) {
 }
 
 fn open(path: &Path) -> Result<Connection> {
+    let _opening = OPEN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
+    super::use_wal(&connection);
     connection.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS usage_daily(
+        "CREATE TABLE IF NOT EXISTS usage_daily(
            day TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL,
            PRIMARY KEY(day, kind, name));
          CREATE TABLE IF NOT EXISTS signals(

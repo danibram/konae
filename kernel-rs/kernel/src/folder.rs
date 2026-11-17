@@ -18,6 +18,9 @@ use crate::{
 /// `release_plan`'s confirmation does in Konae.
 pub const CONFIRM_SCHEMA: &str = "KONAE_CONFIRM_SCHEMA";
 
+#[derive(Clone, Copy)]
+pub enum ModuleSource { Installed, Folder }
+
 /// Opens every folder under `apps/` and answers, for each, the app or why
 /// the Kernel does not serve it. One folder that fails leaves the others
 /// served.
@@ -49,7 +52,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let mut settings = Settings::read(root, id).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?;
     ensure!(settings.id == id, "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", settings.id);
-    decide_app_modules(root, id).await?;
+    decide_app_modules(root, id, ModuleSource::Folder).await?;
     settings = Settings::read(root, id)?;
     let sources = layout::sources(root, id);
     let stored = match tokio::fs::read(layout::record(root, id)).await {
@@ -194,7 +197,7 @@ pub async fn open(state: &AppState, id: &str, confirmation: Option<&str>) -> Res
     Ok(deployment)
 }
 
-pub async fn decide_app_modules(root: &Path, id: &str) -> Result<Option<std::collections::BTreeMap<String, Value>>> {
+pub async fn decide_app_modules(root: &Path, id: &str, source: ModuleSource) -> Result<Option<std::collections::BTreeMap<String, Value>>> {
     ensure!(runtime::valid_app_id(id), "apps/{id} is not named after an app ID. An app ID uses lowercase letters, digits, \"_\" and \"-\".");
     let raw_settings: Value = serde_json::from_slice(&std::fs::read(layout::settings(root, id)).with_context(|| format!("apps/{id}/konae.json is missing or not readable"))?)?;
     ensure!(raw_settings["id"].as_str() == Some(id), "apps/{id}/konae.json names the app {}. Name the folder after the app's ID.", raw_settings["id"].as_str().unwrap_or(""));
@@ -223,19 +226,22 @@ pub async fn decide_app_modules(root: &Path, id: &str) -> Result<Option<std::col
             }
             "actions" => {
                 if raw_settings["modules"]["actions"].is_null() {
-                    settings.modules.get_mut("actions").expect("actions is switchable")["on"] = json!(crate::modules::uses_actions(root, id));
+                    let used = match source { ModuleSource::Installed => crate::modules::uses_actions(root, id), ModuleSource::Folder => crate::modules::folder_uses_actions(root, id) };
+                    settings.modules.get_mut("actions").expect("actions is switchable")["on"] = json!(used);
                     changed = true;
                 }
             }
             "http" => {
                 if raw_settings["modules"]["http"].is_null() {
-                    settings.modules.get_mut("http").expect("http is switchable")["on"] = json!(crate::modules::uses_http(root, id));
+                    let used = match source { ModuleSource::Installed => crate::modules::uses_http(root, id), ModuleSource::Folder => crate::modules::folder_uses_http(root, id) };
+                    settings.modules.get_mut("http").expect("http is switchable")["on"] = json!(used);
                     changed = true;
                 }
             }
             "calls" => {
                 if raw_settings["modules"]["calls"].is_null() {
-                    settings.modules.get_mut("calls").expect("calls is switchable")["on"] = json!(crate::modules::uses_calls(root, id));
+                    let used = match source { ModuleSource::Installed => crate::modules::uses_calls(root, id), ModuleSource::Folder => crate::modules::folder_uses_calls(root, id) };
+                    settings.modules.get_mut("calls").expect("calls is switchable")["on"] = json!(used);
                     changed = true;
                 }
             }
@@ -378,10 +384,50 @@ mod tests {
             settings.write(&root).await.unwrap();
             std::fs::create_dir_all(layout::private(&root, id)).unwrap();
             std::fs::write(layout::record(&root, id), serde_json::to_vec(&json!({"actions":actions})).unwrap()).unwrap();
-            decide_app_modules(&root, id).await.unwrap();
+            decide_app_modules(&root, id, ModuleSource::Installed).await.unwrap();
             let saved: Value = serde_json::from_slice(&std::fs::read(layout::settings(&root, id)).unwrap()).unwrap();
             assert_eq!(saved["modules"]["http"]["on"], expected_http, "{id}");
             assert_eq!(saved["modules"]["calls"]["on"], expected_calls, "{id}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn folder_open_decides_legacy_actions_http_and_calls_from_the_folder_sources() {
+        let root = scratch();
+        for (id, actions, module) in [
+            ("legacy_action_source", r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}"#, "actions"),
+            ("legacy_http_source", r#"{"version":1,"actions":{"hooks.receive":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[],"http":{"method":"GET","path":"/hooks"}}}}"#, "http"),
+            ("legacy_call_source", r#"{"version":1,"actions":{"notify.send":{"kind":"call","access":"anonymous","method":"POST","url":"https://example.test/hook","bindings":[]}}}"#, "calls"),
+        ] {
+            let folder = layout::folder(&root, id);
+            std::fs::create_dir_all(folder.join("app")).unwrap();
+            std::fs::create_dir_all(folder.join("dist")).unwrap();
+            std::fs::write(folder.join("app/actions.json"), actions).unwrap();
+            std::fs::write(folder.join("app/schema.sql"), "").unwrap();
+            std::fs::write(folder.join("dist/index.html"), "<!doctype html><title>Legacy</title>").unwrap();
+            let mut settings = Settings::new(id, "Legacy", id, &json!({"visibility":"public"}));
+            if module != "actions" { settings.modules.insert("actions".into(), crate::modules::defaults()["actions"].clone()); settings.modules.get_mut("actions").unwrap()["on"] = json!(true); }
+            settings.modules.remove("http");
+            settings.modules.remove("calls");
+            if module == "actions" { settings.modules.remove("actions"); }
+            let released = crate::ReleasedSettings {
+                name: "Legacy".into(), slug: id.into(), visibility: "public".into(), signup_policy: crate::SignupPolicy::initial("public"),
+                sign_in_methods: crate::default_sign_in_methods(), contact_email: None, manifest: json!({"visibility":"public"}),
+                actions: r#"{"version":1,"actions":{}}"#.into(), schema_sql: String::new(), schema_transforms: None, source_digest: None,
+                artifact_digest: Some("v0.9.0-artifact".into()), released_at: Some(2),
+            };
+            settings.released = Some(released.clone());
+            settings.write(&root).await.unwrap();
+            std::fs::create_dir_all(layout::private(&root, id)).unwrap();
+            let installed = Installed { hostname: format!("{id}.localhost"), created_at: 1, released_at: Some(2), source_digest: None, actions: released.actions.clone(), artifact_version: "v0.9.0".into(), released: Some(released) };
+            std::fs::write(layout::record(&root, id), serde_json::to_vec(&installed).unwrap()).unwrap();
+        }
+        let mut state = AppState::for_test(&root);
+        state.execution_mode = crate::execution::ExecutionMode::Live;
+        for (id, module) in [("legacy_action_source", "actions"), ("legacy_http_source", "http"), ("legacy_call_source", "calls")] {
+            let deployment = open(&state, id, None).await.unwrap();
+            assert!(crate::modules::is_on(&deployment.modules, module), "{id} {module}");
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -735,11 +781,11 @@ mod tests {
         let mut copied: Value = serde_json::from_slice(&std::fs::read(&copied_path).unwrap()).unwrap();
         copied["id"] = json!("shop");
         std::fs::write(&copied_path, serde_json::to_vec(&copied).unwrap()).unwrap();
-        assert!(decide_app_modules(&root, "shop_test").await.is_err());
+        assert!(decide_app_modules(&root, "shop_test", ModuleSource::Installed).await.is_err());
         assert_eq!(std::fs::read(shop_path).unwrap(), shop_before);
 
         let outside = root.join("x").join("konae.json");
-        assert!(decide_app_modules(&root, "../../x").await.is_err());
+        assert!(decide_app_modules(&root, "../../x", ModuleSource::Installed).await.is_err());
         assert!(!outside.exists());
         let _ = std::fs::remove_dir_all(root);
     }

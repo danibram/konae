@@ -477,7 +477,6 @@ fn key_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 /// `api_keys_create`, `api_keys_list` and `api_keys_revoke`. The caller has
 /// checked that the owner may act on `deployment`.
 pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
-    if name == "api_keys_create" { crate::modules::require_on(&deployment.modules, "http").map_err(anyhow::Error::new)?; }
     let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
     let db = identity_connection(state, deployment)?;
     match name {
@@ -500,6 +499,7 @@ pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str
                 "A key's files are \"public\", \"private\" or both."
             );
             anyhow::ensure!(!actions.is_empty() || !files.is_empty(), "Name at least one action or file visibility for the key.");
+            require_api_key_modules(&deployment.modules, &actions, &files)?;
             let program: ActionProgram = serde_json::from_str(&deployment.actions)?;
             for action in &actions {
                 let definition = program
@@ -539,6 +539,15 @@ pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str
         }
         _ => anyhow::bail!("Unknown tool."),
     }
+}
+
+fn require_api_key_modules(modules: &std::collections::BTreeMap<String, Value>, actions: &[String], files: &[String]) -> Result<()> {
+    if !files.is_empty() { crate::modules::require_on(modules, "files").map_err(anyhow::Error::new)?; }
+    if !actions.is_empty() {
+        crate::modules::require_on(modules, "actions").map_err(anyhow::Error::new)?;
+        crate::modules::require_on(modules, "http").map_err(anyhow::Error::new)?;
+    }
+    Ok(())
 }
 
 
@@ -1289,6 +1298,19 @@ async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_key_scope_requires_only_the_modules_it_uses() {
+        let mut modules = crate::modules::defaults();
+        modules.get_mut("files").unwrap()["on"] = json!(true);
+        assert!(require_api_key_modules(&modules, &[], &["public".into()]).is_ok());
+        modules.get_mut("actions").unwrap()["on"] = json!(true);
+        let refused = require_api_key_modules(&modules, &["hooks.receive".into()], &[]).unwrap_err();
+        assert_eq!(refused.to_string(), "Module http is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+        modules.get_mut("http").unwrap()["on"] = json!(true);
+        modules.get_mut("actions").unwrap()["on"] = json!(false);
+        assert_eq!(require_api_key_modules(&modules, &["hooks.receive".into()], &[]).unwrap_err().to_string(), "Module actions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+    }
 
     fn program(actions: &Value) -> ActionProgram {
         serde_json::from_value(json!({"version": 1, "actions": actions})).unwrap()

@@ -3789,7 +3789,7 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(bytes) = tokio::fs::read(layout::record(root, &id)).await else { continue };
         let installed: Installed = serde_json::from_slice(&bytes).with_context(|| format!("{} is not a Deployment record.", layout::record(root, &id).display()))?;
-        if let Err(error) = crate::folder::decide_app_modules(root, &id).await {
+        if let Err(error) = crate::folder::decide_app_modules(root, &id, crate::folder::ModuleSource::Installed).await {
             eprintln!("konae: skipping apps/{id}: {error:#}");
             continue;
         }

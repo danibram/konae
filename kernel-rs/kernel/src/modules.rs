@@ -199,6 +199,28 @@ pub fn check_requires(module: &str, required: &str, on: bool) -> std::result::Re
     Ok(())
 }
 
+pub fn check_dependent_requires(module: &str, dependent: &str, dependent_on: bool) -> std::result::Result<(), crate::refusal::Refusal> {
+    if dependent_on {
+        return Err(crate::refusal::refuse("module.requires", format!("Module {module} is required by {dependent}, which is on. Turn {dependent} off first.")));
+    }
+    Ok(())
+}
+
+pub fn check_in_use_action(module: &str, action: &str) -> std::result::Result<(), crate::refusal::Refusal> {
+    let message = match module {
+        "http" => format!("Module http is in use by action {action}, which declares an HTTP route. Remove its route before turning it off."),
+        "calls" => format!("Module calls is in use by action {action}, which sends an outgoing call. Remove its call before turning it off."),
+        _ => return Err(crate::refusal::refuse("module.unknown", format!("Unknown module {module}."))),
+    };
+    Err(crate::refusal::refuse("module.in-use", message))
+}
+
+pub fn release_use_order() -> Vec<String> {
+    let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).expect("module cases are valid JSON");
+    cases.into_iter().find(|case| case["rule"] == "release-order").and_then(|case| case["order"].as_array().cloned())
+        .unwrap_or_default().into_iter().filter_map(|module| module.as_str().map(str::to_owned)).collect()
+}
+
 pub fn check_private_auth(on: bool) -> std::result::Result<(), crate::refusal::Refusal> {
     if !on { return Err(crate::refusal::refuse("module.requires", "A private app requires auth, which is off. Turn auth on first.")); }
     Ok(())
@@ -373,13 +395,17 @@ pub async fn set(
             for (dependent, description) in registry()["modules"].as_object().into_iter().flatten() {
                 let depends_on_module = description["switch"] == true && description["requires"].as_array().into_iter().flatten().any(|required| required == module);
                 if depends_on_module && is_on(&settings.modules, dependent) {
-                    check_requires(dependent, module, false)?;
+                    check_dependent_requires(module, dependent, true)?;
                 }
             }
             let used = published_app_uses_module(root, id, module, &current);
             if module == "http" && used {
                 let action = released_action_name(root, id, |action| action["http"].is_object()).unwrap_or_else(|| "a published action".to_owned());
-                return Err(crate::refusal::refuse("module.in-use", format!("Module http is in use by action {action}, which declares an HTTP route. Remove its route before turning it off.")).into());
+                check_in_use_action(module, &action)?;
+            }
+            if module == "calls" && used {
+                let action = released_action_name(root, id, |action| action["kind"] == "call").unwrap_or_else(|| "a published action".to_owned());
+                check_in_use_action(module, &action)?;
             }
             require_not_in_use(module, used)?;
         }
@@ -440,6 +466,44 @@ pub fn uses_http(root: &std::path::Path, id: &str) -> bool {
 
 pub fn uses_calls(root: &std::path::Path, id: &str) -> bool {
     released_action_use_or_false_when_source_is_missing(root, id, |action| action["kind"] == "call")
+}
+
+pub fn folder_uses_actions(root: &std::path::Path, id: &str) -> bool {
+    let sources = crate::layout::sources(root, id);
+    let actions = match std::fs::read(sources.join("actions.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => b"{\"version\":1,\"actions\":{}}".to_vec(),
+        Err(_) => return true,
+    };
+    let schema = match std::fs::read(sources.join("schema.sql")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => return true,
+    };
+    if crate::action_shape::read(std::str::from_utf8(&actions).unwrap_or("")).is_err() { return true; }
+    named_sources_use_actions([("actions.json", actions.as_slice()), ("schema.sql", schema.as_slice())])
+        || walk(&crate::layout::dist(root, id), &|bytes| contains(bytes, b"miniapp.actions"))
+        || database_has_tables(&crate::layout::database(root, id))
+}
+
+pub fn folder_uses_http(root: &std::path::Path, id: &str) -> bool {
+    folder_action_use(root, id, |action| action["http"].is_object())
+}
+
+pub fn folder_uses_calls(root: &std::path::Path, id: &str) -> bool {
+    folder_action_use(root, id, |action| action["kind"] == "call")
+}
+
+fn folder_action_use(root: &std::path::Path, id: &str, predicate: impl Fn(&Value) -> bool) -> bool {
+    let path = crate::layout::sources(root, id).join("actions.json");
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    serde_json::from_slice::<Value>(&bytes).ok()
+        .and_then(|value| value["actions"].as_object().map(|actions| actions.values().any(&predicate)))
+        .unwrap_or(true)
 }
 
 fn released_action_use_or_false_when_source_is_missing(root: &std::path::Path, id: &str, predicate: impl Fn(&Value) -> bool) -> bool {
@@ -507,6 +571,7 @@ mod tests {
         let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).unwrap();
         assert!(cases.len() >= 6);
         for case in cases {
+            if case["rule"] == "release-order" { continue; }
             let module = case["module"].as_str().unwrap();
             let outcome = match case["rule"].as_str().unwrap() {
                 "expected" => check_expected(module, &case["state"], Some(&case["expected"])),
@@ -515,12 +580,22 @@ mod tests {
                 "on" => require_on(&BTreeMap::from([(module.to_owned(), case["state"].clone())]), module),
                 "private-auth" => check_private_auth(case["requiredState"]["on"] == true),
                 "requires" => check_requires(module, case["required"].as_str().unwrap(), case["requiredState"]["on"] == true),
+                "dependent-requires" => check_dependent_requires(module, case["dependent"].as_str().unwrap(), case["dependentState"]["on"] == true),
+                "in-use-action" => check_in_use_action(module, case["action"].as_str().unwrap()),
+                "release-order" => Ok(()),
                 "in-use" => require_not_in_use(module, case["used"] == true),
                 "option-unknown" | "option-invalid" => check_option(module, &json!({"options":case["options"]}), case["option"].as_str().unwrap(), &case["value"]),
                 _ => panic!("unknown module case {}", case["case"]),
             };
             crate::refusal::assert_case(&case, outcome);
         }
+    }
+
+    #[test]
+    fn release_module_use_order_matches_the_shared_case() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("module-cases.json")).unwrap();
+        let order = cases.into_iter().find(|case| case["rule"] == "release-order").unwrap()["order"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(release_use_order(), order);
     }
 
     #[test]
@@ -785,7 +860,27 @@ mod tests {
         let error = set(&root, "app", "http", Some(false), None, None).await.unwrap_err();
         let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
         assert_eq!(refusal.code, "module.in-use");
-        assert!(refusal.message.contains("hooks.receive"));
+        assert_eq!(refusal.message, "Module http is in use by action hooks.receive, which declares an HTTP route. Remove its route before turning it off.");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn calls_cannot_turn_off_while_a_published_call_is_in_use() {
+        let root = std::env::temp_dir().join(format!("konae-calls-module-in-use-{}", uuid::Uuid::new_v4()));
+        let mut settings = Settings::new("app", "App", "app", &json!({"visibility":"public"}));
+        settings.modules.insert("actions".into(), defaults()["actions"].clone());
+        settings.modules.insert("calls".into(), defaults()["calls"].clone());
+        settings.modules.get_mut("actions").unwrap()["on"] = json!(true);
+        settings.modules.get_mut("calls").unwrap()["on"] = json!(true);
+        settings.write(&root).await.unwrap();
+        std::fs::create_dir_all(crate::layout::private(&root, "app")).unwrap();
+        let actions = r#"{"version":1,"actions":{"notify.send":{"kind":"call","method":"POST","url":"https://example.test/hook","bindings":[]}}}"#;
+        let installed = crate::Installed { hostname:"app.example.test".into(), created_at:0, released_at:Some(1), source_digest:None, actions:actions.into(), artifact_version:"v1".into(), released:None };
+        std::fs::write(crate::layout::record(&root, "app"), serde_json::to_vec(&installed).unwrap()).unwrap();
+        let error = set(&root, "app", "calls", Some(false), None, None).await.unwrap_err();
+        let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(refusal.code, "module.in-use");
+        assert_eq!(refusal.message, "Module calls is in use by action notify.send, which sends an outgoing call. Remove its call before turning it off.");
         let _ = std::fs::remove_dir_all(root);
     }
 

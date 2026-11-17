@@ -63,8 +63,8 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   const id = "carried_app";
   await konae.owner.call("project_create", { projectId: id, name: "Carried" });
   const { receipt } = await release(konae.owner, payload(id), id);
-  const modules = await konae.owner.call<{ modules: Record<string, { state: { on: boolean } }> }>("modules_read", { projectId: id });
-  await konae.owner.call("module_set", { projectId: id, module: "http", on: true, expected: modules.modules.http.state });
+  const moduleState = await konae.owner.call<{ modules: Record<string, { state: { on: boolean } }> }>("modules_read", { projectId: id });
+  await konae.owner.call("module_set", { projectId: id, module: "files", on: true, expected: moduleState.modules.files.state });
   const ana = await account(konae, receipt.hostname, "signup", "ana@carried.test");
   expect(await runtime(konae, receipt.hostname, ana).call("actions_invoke", { name: "notes.add", input: { body: "written on Konae" } })).toMatchObject({ changes: 1 });
   const entries = await exportFolder(konae, receipt.id);

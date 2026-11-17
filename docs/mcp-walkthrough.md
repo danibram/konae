@@ -583,6 +583,20 @@ Wrote the Action Contract for 4 actions to /tmp/orders/action-contract.json, wit
 
 ## 7. Set the signing secret, then publish
 
+The first `dev` run wrote `http` as off because the folder had no route yet. The source now declares signed routes, so turn `http` on in `konae.json` before publishing.
+
+<!-- walkthrough:http-module -->
+```json
+{
+  "modules": {
+    "http": {
+      "on": true
+    }
+  }
+}
+```
+<!-- /walkthrough:http-module -->
+
 `orders.receive` signs with `orders_webhook`, which the project does not have yet, so the first publish is refused with what to do:
 
 <!-- walkthrough:publish-refused -->

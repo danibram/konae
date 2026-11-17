@@ -24,7 +24,7 @@ The editor preview opens one `srcDoc` document without an app URL or page histor
 
 ## HTTP routes
 
-An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
+Turn on `http` with `module_set` before a route runs. A first release also needs `actions` on. An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
 
 ```json
 "orders.receive": {
@@ -185,6 +185,7 @@ api_keys_revoke { "projectId", "keyId" }
 ```
 
 `api_keys_create` returns the key once. A key belongs to one Deployment, grants no owner tool, and works only on HTTP routes and the file read path. The runtime endpoint refuses it with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` A key names actions that have an HTTP route and the file visibilities `public` and `private`; a key that names `private` reads every private file of its Deployment. A Deployment holds at most 50 live keys. The Kernel keeps the key's SHA-256 hash in `identity.sqlite`.
+Creating a key needs the modules of its scopes. An action scope needs `actions` and `http`. A files-only key needs `files`, and it works while `http` is off. `api_keys_list` and `api_keys_revoke` remain available while `http` is off.
 
 An export carries each key's name, actions, file visibilities and hash, and an import marks every live key revoked. `api_keys_list` on the destination shows those with `revokedReason: "import"`, and Access > Integrations lists them under "Revoked at import", so the owner knows which programs need a new key. A key the owner revoked has `revokedReason: null`. A restore keeps keys live. Access > Integrations in the editor also sets and deletes secrets and shows a new key once with a curl for each route it names.
 
@@ -196,7 +197,7 @@ A person reads by the [file rules](./actions.md#runtime-endpoint). With the `fil
 
 ## Calls between apps
 
-An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, so a signing secret or an API key the request needs stays in the Kernel. `kernel-rs/kernel/src/calls.rs` implements it.
+Turn on `calls` with `module_set` before an outgoing call runs. A first release also needs `actions` on. An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, so a signing secret or an API key the request needs stays in the Kernel. `kernel-rs/kernel/src/calls.rs` implements it.
 
 ```json
 "tasks.escalate": {

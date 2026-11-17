@@ -25,6 +25,7 @@ Every app carries a database, accounts, files and routes whether it uses them or
 - Turning a module off is refused with `module.in-use` while the published app uses it.
 - Turning a module on is refused with `module.requires` while a module it requires is off. `http`, `calls` and a page route (ADR-0017) require `actions`. A private app requires `auth`.
 - `http` is in use when the installed release declares an HTTP route. `calls` is in use when the installed release declares a call action. A source save after release does not change either decision.
+- An API key needs the modules of its scopes. A key with action scopes needs `actions` and `http`. A key scoped only to files needs `files`. Listing and revoking keys remain available while `http` is off.
 
 ### Two tools change every module
 

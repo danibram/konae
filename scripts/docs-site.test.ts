@@ -28,6 +28,18 @@ function links(markdown: string) {
 }
 
 describe("the docs site", () => {
+  test("the pieces page and AGENTS use the same module setup rows", () => {
+    const rows = (file: string) => readFileSync(path.join(repo, file), "utf8").split("\n").filter((line) => line.startsWith("| Another service calls this app |") || line.startsWith("| This app calls another host |"));
+    expect(rows("docs/pieces.md")).toEqual(rows("AGENTS.md"));
+  });
+
+  test("the routes reference explains module choices for routes, calls and API keys", () => {
+    const reference = readFileSync(path.join(docsRoot, "reference/routes-and-calls.md"), "utf8");
+    expect(reference).toContain("Turn on `http` with `module_set` before a route runs");
+    expect(reference).toContain("Turn on `calls` with `module_set` before an outgoing call runs");
+    expect(reference).toContain("An action scope needs `actions` and `http`. A files-only key needs `files`");
+  });
+
   test("generated pages ship their body and a description from the first paragraph", () => {
     for (const page of site.pages) {
       const html = renderPage(template, site, page, "test");
