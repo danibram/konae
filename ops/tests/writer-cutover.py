@@ -132,6 +132,16 @@ class Receipt(unittest.TestCase):
         r["publicationJournal"]["s3"] = expected[-2:]
         self.assertIn("s3 publication journal has a gap beyond RPO", gate["check_receipt"](r, "retire", NOW))
 
+    def test_no_point_after_failed_usual_writer_cut(self):
+        r = example()
+        r.update(completeCut={"directory": False, "s3": False}, drills=[], remoteCopy=None, remoteCutMs=None,
+                 publicationJournal={"directory": [], "s3": []})
+        holds = gate["check_receipt"](r, "promote", NOW)
+        self.assertIn("usual writer cut incomplete", holds)
+        self.assertIn("no identified complete remote cut", holds)
+        self.assertIn("s3 has no confirmed publication", holds)
+        self.assertIn("missing targets for rollback", holds)
+
     def test_publication_during_endpoint_restores(self):
         r = example()
         newer = point(NOW - 400)

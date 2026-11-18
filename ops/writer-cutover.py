@@ -150,6 +150,9 @@ def check_receipt(r, request, now):
                 inventory["oldest"] < inventory["latest"], target + " missing retained range")
         journal = r["publicationJournal"][target]
         retained = sorted(inventory["points"])
+        if not journal:
+            failures.append(target + " has no confirmed publication")
+            continue
         expected = retained_at(journal, prune, now)
         require(retained == expected and [inventory["oldest"], inventory["latest"]] == [expected[0], expected[-1]],
                 target + " retained inventory differs from the publication journal")
