@@ -5,7 +5,7 @@ import { join } from "node:path";
 export const fixtureEnvironment = Object.fromEntries(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"].flatMap((name) => process.env[name] === undefined ? [] : [[name, process.env[name]]]));
 export async function testInstallation(binary, settings = {}) {
   const root = settings.root ?? await mkdtemp(join(tmpdir(), "konae-gate27-"));
-  const portAllocator = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+  const portAllocator = Bun.serve({ port: settings.port ?? 0, hostname: "127.0.0.1", fetch: () => new Response() });
   const port = portAllocator.port;
   portAllocator.stop(true);
   const origin = `http://127.0.0.1:${port}`;

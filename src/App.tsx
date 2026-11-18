@@ -73,6 +73,8 @@ import { ProjectDashboard } from "./components/ProjectDashboard";
 import { NotFound } from "./components/NotFound";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import { McpError, platformMcp } from "./mcp/client";
+import type { DurableEffectReceipt } from "./agent/durable-storage";
+import { isBoundedReadOnlySelect } from "./agent/platform-tools";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { parseServerActionSource } from "./kernel/actions";
@@ -249,6 +251,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const stagedRestoreSeedRef = useRef<{ messages: unknown[]; candidate: Record<string, string>; encodings?: Record<string, "base64">; sourceRevision: number; provenance: { parentConversationId: string; parentCheckpointId: string; parentSequence: number } } | null>(null);
   const restoreInFlightRef = useRef(false);
   const projectRef = useRef(project);
+  const ownerSessionRef = useRef(ownerSession);
+  ownerSessionRef.current = ownerSession;
   const hostLifecycleRef = useRef<{ projectId: string; lifecycle: ProposalHostLifecycle } | null>(null);
   if (hostLifecycleRef.current?.projectId !== project.id) {
     hostLifecycleRef.current = {
@@ -1273,6 +1277,60 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setDurableApplyBlocked(false);
       setPendingDurableContinue(conversationId);
     }).catch((error) => setOperationError(error instanceof Error ? error.message : String(error)));
+  };
+
+  const prepareDurableEffectRead = async (conversationId: string, effect: DurableEffectReceipt, sql: string | undefined, isCurrent: () => boolean) => {
+    const current = () => isCurrent() && projectRef.current.id === project.id && ownerSessionRef.current.ownerId === ownerSession.ownerId;
+    if (!current()) throw new Error("The selected owner, project or conversation changed. Choose the effect again before reading it.");
+    if (effect.state !== "unknown") throw new Error("The effect is still running or has already been resolved. Refresh history before continuing.");
+    const session = await platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect", {});
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No read-back was sent.");
+    if (session.can?.read !== true) throw new Error("Current session_inspect.can.read permission is not granted. No read-back was sent.");
+    const guide = await platformMcp.call<{ readBack?: { map?: Record<string, unknown> } }>("platform_guide", { topic: "rules" });
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No read-back was sent.");
+    const expectedRead = guide.readBack?.map?.[effect.tool];
+    if (typeof expectedRead !== "string") throw new Error("platform_guide rules does not document a read-back for this effect. Its outcome remains unresolved.");
+    if (expectedRead === "project_sources_read") throw new Error("Source Apply keeps its existing source-based reconciliation flow. Use Check saved source outcome for that effect.");
+    const supported = new Set(["app_invitations_list", "database_execute", "project_inspect", "modules_read", "path_read", "domain_read"]);
+    if (!supported.has(expectedRead)) throw new Error(`The documented ${expectedRead} read-back is not available in this owner action. Its outcome remains unresolved.`);
+    if (expectedRead === "app_invitations_list" && session.can?.manage_users !== true) throw new Error("Current session_inspect.can.manage_users permission is not granted for app_invitations_list. No read-back was sent.");
+    let args: Record<string, unknown>;
+    if (expectedRead === "database_execute") {
+      if (typeof sql !== "string" || !isBoundedReadOnlySelect(sql)) throw new Error("Enter one read-only SELECT with a numeric LIMIT from 1 to 1000 that inspects the affected rows.");
+      if (session.can?.write !== true) throw new Error("Current session_inspect.can.write permission is not granted for database_execute SQL. No read-back was sent.");
+      args = { projectId: project.id, operation: "sql", input: { sql } };
+    } else {
+      args = expectedRead === "auth_session" ? {} : { projectId: project.id };
+    }
+    const evidence = await platformMcp.call(expectedRead, args);
+    if (!current()) throw new Error("The selected owner, project or conversation changed while the read was in progress. Its evidence is not attached to the new selection.");
+    return { tool: expectedRead, args, evidence };
+  };
+
+  const confirmDurableEffectRead = async (conversationId: string, effect: DurableEffectReceipt, read: { tool: string; args: Record<string, unknown> }, isCurrent: () => boolean) => {
+    const current = () => isCurrent() && projectRef.current.id === project.id && ownerSessionRef.current.ownerId === ownerSession.ownerId;
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No observation was recorded.");
+    if (effect.state !== "unknown") throw new Error("The receipt is no longer awaiting observation. Refresh history before confirming.");
+    const session = await platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect", {});
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No observation was recorded.");
+    if (session.can?.read !== true) throw new Error("Current session_inspect.can.read permission is not granted. No observation was recorded.");
+    if (read.tool === "database_execute" && session.can?.write !== true) throw new Error("Current session_inspect.can.write permission is not granted for database_execute SQL. No observation was recorded.");
+    const guide = await platformMcp.call<{ readBack?: { map?: Record<string, unknown> } }>("platform_guide", { topic: "rules" });
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No observation was recorded.");
+    if (guide.readBack?.map?.[effect.tool] !== read.tool) throw new Error("platform_guide rules changed. Refresh the evidence before confirming this observation.");
+    if (read.tool === "app_invitations_list" && session.can?.manage_users !== true) throw new Error("Current session_inspect.can.manage_users permission is not granted. No observation was recorded.");
+    const expectedProjectId = project.id;
+    if (read.args.projectId !== expectedProjectId) throw new Error("The read-back arguments no longer target the open project.");
+    const result = await platformMcp.callForAgent(read.tool, read.args, {
+      projectId: project.id,
+      conversationId,
+      executorId: effect.executorId,
+      generation: effect.generation,
+      callId: crypto.randomUUID(),
+      observesCallId: effect.callId,
+    });
+    if (!current()) throw new Error("The selected owner, project or conversation changed while recording the observation. Reopen its history to inspect the receipt.");
+    return result;
   };
 
   useEffect(() => {
@@ -2392,7 +2450,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
 
-      {durableHistoryAvailable && durableHistoryOpen && <Suspense fallback={null}><DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} onRestore={durableRecoveryStaging ? restoreDurableCheckpoint : undefined} canContinue={durableRecoveryStaging} /></Suspense>}
+      {durableHistoryAvailable && durableHistoryOpen && <Suspense fallback={null}><DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} onReadEffect={prepareDurableEffectRead} onConfirmEffectRead={confirmDurableEffectRead} onRestore={durableRecoveryStaging ? restoreDurableCheckpoint : undefined} canContinue={durableRecoveryStaging} /></Suspense>}
       {localAttachment !== null && <Suspense fallback={null}><LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
         sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
       }} /></Suspense>}

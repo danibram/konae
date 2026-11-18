@@ -67,8 +67,18 @@ export function databaseCallWrites(args: Record<string, unknown>): boolean {
   if (operation !== "sql") return true;
   const sql = (args.input as { sql?: unknown } | undefined)?.sql;
   if (typeof sql !== "string") return true;
-  const statement = sql.trim().replace(/;\s*$/, "");
-  return !/^select\b/i.test(statement) || statement.includes(";");
+  return !isReadOnlySelect(sql);
+}
+
+export function isReadOnlySelect(sql: string): boolean {
+  const statement = sql.trim().replace(/;\s*$/, "").trim();
+  return /^select\s/i.test(statement) && !statement.includes(";");
+}
+
+export function isBoundedReadOnlySelect(sql: string): boolean {
+  if (!isReadOnlySelect(sql)) return false;
+  const limit = sql.trim().replace(/;\s*$/, "").match(/\blimit\s+(\d+)\b/i)?.[1];
+  return limit !== undefined && Number(limit) >= 1 && Number(limit) <= 1000;
 }
 
 function needsConfirmation(name: string, args: Record<string, unknown>): boolean {
@@ -234,7 +244,7 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
           result = await (binding.callAgent ? binding.callAgent(tool.name, args, _id, signal) : binding.call(tool.name, args, signal));
         } catch (error) {
           if (tool.name === "module_set" && (error as { refusal?: { code?: string } } | null)?.refusal?.code === "module.changed") {
-            const current = await (binding.callAgent ? binding.callAgent("modules_read", { projectId }, `${_id}-readback`, signal, _id) : binding.call("modules_read", { projectId }, signal)).catch(() => null);
+            const current = await (binding.callAgent ? binding.callAgent("modules_read", { projectId }, `${_id}-readback`, signal) : binding.call("modules_read", { projectId }, signal)).catch(() => null);
             throw new Error(`${explain(error).message}${current ? ` Current modules_read state: ${text(current)}` : ""}`);
           }
           const transport = error as { status?: number; refusal?: unknown } | null;

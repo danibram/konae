@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createPlatformTools, databaseCallWrites, platformToolPolicy, type AgentPlatformBinding, type McpToolDefinition, type PlatformConfirmation } from "./platform-tools";
+import { createPlatformTools, databaseCallWrites, isBoundedReadOnlySelect, platformToolPolicy, type AgentPlatformBinding, type McpToolDefinition, type PlatformConfirmation } from "./platform-tools";
 
 const text = { type: "string", minLength: 1 };
 const listed: McpToolDefinition[] = [
@@ -40,6 +40,15 @@ async function toolsFor(platform: AgentPlatformBinding, isCurrent = () => true) 
 const run = (tool: { execute: (...args: any[]) => Promise<any> } | undefined, params: Record<string, unknown> = {}) => tool!.execute("call", params, undefined);
 
 describe("the build agent's tools from the owner's MCP", () => {
+  test("classifies a single SELECT with an optional trailing semicolon as a read", () => {
+    expect(databaseCallWrites({ operation: "sql", input: { sql: " SELECT id FROM tasks LIMIT 5;  " } })).toBe(false);
+    expect(databaseCallWrites({ operation: "sql", input: { sql: "SELECT id FROM tasks LIMIT 5; DELETE FROM tasks" } })).toBe(true);
+    expect(databaseCallWrites({ operation: "sql", input: { sql: "WITH rows AS (SELECT 1) SELECT * FROM rows LIMIT 1" } })).toBe(true);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 50; ")).toBe(true);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1001")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks")).toBe(false);
+  });
+
   test("only the allowlisted tools reach the model, never source saves, credentials, secrets or transfers", async () => {
     const tools = await toolsFor(binding().value);
     expect(Object.keys(tools).sort()).toEqual(["database_execute", "domain_read", "domain_set", "module_set", "modules_read", "path_clear", "path_read", "path_set", "platform_guide", "project_inspect"]);

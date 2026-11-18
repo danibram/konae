@@ -109,6 +109,30 @@ pub(super) fn routes() -> Router<Konae> {
         )
 }
 
+#[cfg(test)]
+mod agent_sql_classification_tests {
+    use super::agent_sql_is_read_only;
+
+    #[test]
+    fn accepts_a_single_select_with_a_trailing_semicolon() {
+        assert!(agent_sql_is_read_only(" SELECT id FROM notes LIMIT 10;  "));
+    }
+
+    #[test]
+    fn refuses_multiple_statements_and_non_select_sql() {
+        assert!(!agent_sql_is_read_only("SELECT id FROM notes LIMIT 10; DELETE FROM notes"));
+        assert!(!agent_sql_is_read_only("WITH rows AS (SELECT 1) SELECT * FROM rows LIMIT 1"));
+        assert!(!agent_sql_is_read_only("DELETE FROM notes"));
+    }
+
+    #[test]
+    fn effect_read_back_requires_a_numeric_bounded_limit() {
+        assert!(super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 50;"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 1001"));
+    }
+}
+
 pub(super) fn schema(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
         "PRAGMA foreign_keys=ON;
@@ -708,10 +732,17 @@ async fn list_effects(
         Ok(v) => v,
         Err(e) => return e,
     };
+    let active = match active_agent_effects().lock() {
+        Ok(value) => value,
+        Err(_) => return fail(StatusCode::SERVICE_UNAVAILABLE, "Project effect registry is unavailable."),
+    };
     match db.prepare("SELECT call_id,executor_id,generation,tool,effect_class,state,observation_call_id,created_at,updated_at,intent,refusal FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 ORDER BY created_at DESC,call_id DESC LIMIT 50") {
         Ok(mut q)=>match q.query_map(params![owner,project,conversation],|r| {
+            let call_id: String = r.get(0)?;
             let intent: Option<String> = r.get(9)?;
-            Ok(json!({"callId":r.get::<_,String>(0)?,"executorId":r.get::<_,String>(1)?,"generation":r.get::<_,i64>(2)?,"tool":r.get::<_,String>(3)? ,"effectClass":r.get::<_,String>(4)? ,"state":r.get::<_,String>(5)? ,"observationCallId":r.get::<_,Option<String>>(6)? ,"createdAt":r.get::<_,i64>(7)? ,"updatedAt":r.get::<_,i64>(8)? ,"intent":intent.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"refusal":r.get::<_,Option<String>>(10)?}))
+            let stored_state: String = r.get(5)?;
+            let visible_state = if stored_state == "running" && !active.contains(&effect_key(&owner, &project, &call_id)) { "unknown" } else { &stored_state };
+            Ok(json!({"callId":call_id,"executorId":r.get::<_,String>(1)?,"generation":r.get::<_,i64>(2)? ,"tool":r.get::<_,String>(3)? ,"effectClass":r.get::<_,String>(4)? ,"state":visible_state,"observationCallId":r.get::<_,Option<String>>(6)? ,"createdAt":r.get::<_,i64>(7)? ,"updatedAt":r.get::<_,i64>(8)? ,"intent":intent.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"refusal":r.get::<_,Option<String>>(10)?}))
         }) {
             Ok(rows)=>match rows.collect::<rusqlite::Result<Vec<_>>>() {Ok(items)=>json_response(json!({"items":items,"limit":50})),Err(e)=>internal(e)},Err(e)=>internal(e)
         },Err(e)=>internal(e)
@@ -736,7 +767,15 @@ async fn read_effect(
         Ok(v) => v,
         Err(e) => return e,
     };
-    match db.query_row("SELECT tool,effect_class,state,result,refusal,observation_call_id,created_at,updated_at FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4",params![owner,project,conversation,call_id],|r|Ok(json!({"callId":call_id,"tool":r.get::<_,String>(0)?,"effectClass":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"result":r.get::<_,Option<String>>(3)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"refusal":r.get::<_,Option<String>>(4)?,"observationCallId":r.get::<_,Option<String>>(5)?,"createdAt":r.get::<_,i64>(6)?,"updatedAt":r.get::<_,i64>(7)?}))) { Ok(v)=>json_response(v),Err(_)=>fail(StatusCode::NOT_FOUND,"Effect receipt is not available.") }
+    let active = match active_agent_effects().lock() {
+        Ok(value) => value,
+        Err(_) => return fail(StatusCode::SERVICE_UNAVAILABLE, "Project effect registry is unavailable."),
+    };
+    match db.query_row("SELECT tool,effect_class,state,result,refusal,observation_call_id,created_at,updated_at FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4",params![owner,project,conversation,call_id],|r|{
+        let stored_state: String = r.get(2)?;
+        let visible_state = if stored_state == "running" && !active.contains(&effect_key(&owner, &project, &call_id)) { "unknown" } else { &stored_state };
+        Ok(json!({"callId":call_id,"tool":r.get::<_,String>(0)? ,"effectClass":r.get::<_,String>(1)? ,"state":visible_state,"result":r.get::<_,Option<String>>(3)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"refusal":r.get::<_,Option<String>>(4)? ,"observationCallId":r.get::<_,Option<String>>(5)? ,"createdAt":r.get::<_,i64>(6)? ,"updatedAt":r.get::<_,i64>(7)?}))
+    }) { Ok(v)=>json_response(v),Err(_)=>fail(StatusCode::NOT_FOUND,"Effect receipt is not available.") }
 }
 async fn settle_effect(
     State(state): State<Konae>,
@@ -1893,6 +1932,19 @@ async fn remove(
     if !found {
         return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
     }
+    let unresolved: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND state IN ('running','unknown'))",
+            params![owner, project, conversation],
+            |r| r.get(0),
+        )
+        .unwrap_or(true);
+    if unresolved {
+        return fail(
+            StatusCode::CONFLICT,
+            "This conversation has a running or unresolved external effect. Read it back through its documented MCP rule before deleting the conversation.",
+        );
+    }
     if let Err(e)=tx.execute("INSERT OR REPLACE INTO conversation_tombstones(owner,project,conversation,deleted_at) VALUES(?1,?2,?3,?4)",params![owner,project,conversation,now_ms()]){return internal(e)}
     for table in [
         "conversation_live_authority",
@@ -2022,38 +2074,55 @@ pub(super) fn authorize_agent_mcp_call(
     }
     let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_execution_leases WHERE owner=?1 AND project=?2 AND conversation=?3 AND executor_id=?4 AND generation=?5 AND expires_at>?6)",params![owner,project,conversation,executor,generation,now],|r|r.get(0)).unwrap_or(false);
     let is_write = agent_tool_writes(tool, args);
-    if !live {
-        let observed_write:Option<(String,String)>=observes.and_then(|original|tx.query_row("SELECT tool,state FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state IN ('unknown','running')",params![owner,project,conversation,original],|r|Ok((r.get(0)?,r.get(1)?))).optional().ok().flatten());
-        if let (Some(original), Some((_, "running"))) = (
-            observes,
-            observed_write
-                .as_ref()
-                .map(|(tool, state)| (tool, state.as_str())),
-        ) {
+    let observed_write: Option<(String, String)> = if let Some(original) = observes {
+        tx.query_row(
+            "SELECT tool,state FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state IN ('unknown','running')",
+            params![owner, project, conversation, original],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    let authorized_observation = if let (Some(original), Some((original_tool, state))) = (observes, observed_write.as_ref()) {
+        let documented_read = super::guide::READ_BACK
+            .iter()
+            .find(|(write, _)| *write == original_tool)
+            .map(|(_, read)| *read);
+        let read_project = args["projectId"].as_str();
+        if documented_read != Some(tool)
+            || is_write
+            || read_project.is_some_and(|id| id != project)
+            || (read_tool_requires_project(tool) && read_project != Some(project))
+        {
+            return Err("This is not the documented read-back for the selected effect and project.".into());
+        }
+        if original_tool == "database_execute"
+            && (args["operation"].as_str() != Some("sql")
+                || !agent_sql_is_bounded_read(args["input"]["sql"].as_str().unwrap_or("")))
+        {
+            return Err("A database effect read-back needs one bounded, read-only SELECT against this project.".into());
+        }
+        if state == "running" {
             if active_agent_effects()
                 .lock()
                 .map_err(|_| "Agent effect registry is unavailable.".to_owned())?
                 .contains(&effect_key(owner, project, original))
             {
-                return Err(
-                    "The original MCP write is still running; read-back is not available yet."
-                        .into(),
-                );
+                return Err("The original MCP write is still running; read-back is not available yet.".into());
             }
             tx.execute("UPDATE conversation_effects SET state='unknown',updated_at=?5 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='running'",params![owner,project,conversation,original,now]).map_err(|e|e.to_string())?;
         }
-        let authorized_observation = observed_write.as_ref().and_then(|(name, _)| {
-            super::guide::READ_BACK
-                .iter()
-                .find(|(write, _)| *write == name)
-                .map(|(_, read)| *read)
-        }) == Some(tool)
-            && !is_write;
-        if !authorized_observation {
-            return Err(
-                "Agent MCP call refused: project execution lease is expired or fenced.".into(),
-            );
-        }
+        true
+    } else {
+        false
+    };
+    if observes.is_some() && !authorized_observation {
+        return Err("The original effect is not awaiting its documented read-back.".into());
+    }
+    if !live && !authorized_observation {
+        return Err("Agent MCP call refused: project execution lease is expired or fenced.".into());
     }
     if is_write {
         let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_effects WHERE owner=?1 AND project=?2 AND state IN ('running','unknown'))",params![owner,project],|r|r.get(0)).unwrap_or(true);
@@ -2136,6 +2205,10 @@ pub(super) fn finish_agent_mcp_call(
 fn effect_key(owner: &str, project: &str, call_id: &str) -> String {
     format!("{owner}\u{1f}{project}\u{1f}{call_id}")
 }
+
+fn read_tool_requires_project(tool: &str) -> bool {
+    !matches!(tool, "auth_session" | "mail_status" | "projects_list" | "tokens_list" | "transfer_status" | "transfer_read")
+}
 fn active_agent_effects() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     static ACTIVE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
         std::sync::OnceLock::new();
@@ -2173,15 +2246,7 @@ fn agent_tool_writes(tool: &str, args: &Value) -> bool {
             return false;
         }
         if operation == "sql" {
-            let sql = args["input"]["sql"]
-                .as_str()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_lowercase();
-            return !sql.starts_with("select ")
-                && !sql.starts_with("select\n")
-                && !sql.starts_with("select\t")
-                || sql.contains(';');
+            return !agent_sql_is_read_only(args["input"]["sql"].as_str().unwrap_or(""));
         }
         return true;
     }
@@ -2200,6 +2265,31 @@ fn agent_tool_writes(tool: &str, args: &Value) -> bool {
             | "app_invitations_list"
             | "hostname_read"
     )
+}
+
+pub(super) fn agent_sql_is_read_only(sql: &str) -> bool {
+    let statement = sql.trim().strip_suffix(';').unwrap_or(sql.trim()).trim();
+    let lower = statement.to_ascii_lowercase();
+    let select = lower
+        .strip_prefix("select")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(char::is_whitespace);
+    select && !statement.contains(';')
+}
+
+fn agent_sql_is_bounded_read(sql: &str) -> bool {
+    if !agent_sql_is_read_only(sql) {
+        return false;
+    }
+    let statement = sql.trim().strip_suffix(';').unwrap_or(sql.trim()).trim();
+    let words = statement.split_whitespace().collect::<Vec<_>>();
+    words.windows(2).any(|pair| {
+        pair[0].eq_ignore_ascii_case("limit")
+            && pair[1]
+                .trim_end_matches(|character: char| !character.is_ascii_digit())
+                .parse::<u32>()
+                .is_ok_and(|limit| (1..=1000).contains(&limit))
+    })
 }
 
 #[cfg(test)]
@@ -2465,6 +2555,14 @@ mod tests {
         )
         .unwrap();
         assert!(admitted);
+        assert!(authorize_agent_mcp_call(
+            &konae, alice_id, "project_alice", "exec_one", "fixture-device-a", generation,
+            "wrong-read-tool", "project_inspect", &json!({"projectId":"project_alice"}), Some("write-1")
+        ).is_err(), "a linked receipt refuses a read method other than its documented one");
+        assert!(authorize_agent_mcp_call(
+            &konae, alice_id, "project_alice", "exec_one", "fixture-device-a", generation,
+            "wrong-read-project", "modules_read", &json!({"projectId":"project_bob"}), Some("write-1")
+        ).is_err(), "a linked receipt refuses a read bound to another project");
         let db = super::super::mcp::store(&konae).unwrap();
         db.execute(
             "UPDATE conversation_execution_leases SET expires_at=?3 WHERE owner=?1 AND project=?2",
@@ -2511,6 +2609,7 @@ mod tests {
             "module_set",
         )
         .unwrap();
+        db.execute("UPDATE conversation_effects SET state='running' WHERE owner=?1 AND project=?2 AND call_id='write-1'",params![alice_id,"project_alice"]).unwrap();
         let late_read = authorize_agent_mcp_call(
             &konae,
             alice_id,
@@ -2542,6 +2641,20 @@ mod tests {
         assert_eq!(next.status(), StatusCode::OK);
         let next_generation = json(next).await["generation"].as_i64().unwrap();
         assert_eq!(next_generation, generation + 1);
+        assert!(authorize_agent_mcp_call(
+            &konae, alice_id, "project_alice", "exec_two", "fixture-device-b", next_generation,
+            "write-2", "module_set", &json!({"projectId":"project_alice","module":"files","on":false}), None
+        ).unwrap());
+        finish_agent_mcp_call(&konae, alice_id, "project_alice", "exec_two", "write-2", true, true, false, None, "module_set").unwrap();
+        db.execute("UPDATE conversation_effects SET state='running' WHERE owner=?1 AND project=?2 AND call_id='write-2'",params![alice_id,"project_alice"]).unwrap();
+        let live_process_lost_read = authorize_agent_mcp_call(
+            &konae, alice_id, "project_alice", "exec_two", "fixture-device-b", next_generation,
+            "read-live-lost", "modules_read", &json!({"projectId":"project_alice"}), Some("write-2")
+        ).unwrap();
+        assert!(!live_process_lost_read, "a persisted running receipt with no live registry entry can be observed even while its lease remains live");
+        let drained: String = db.query_row("SELECT state FROM conversation_effects WHERE owner=?1 AND project=?2 AND call_id='write-2'",params![alice_id,"project_alice"],|r|r.get(0)).unwrap();
+        assert_eq!(drained, "unknown", "the explicit linked observation drains the stale running row");
+        finish_agent_mcp_call(&konae, alice_id, "project_alice", "exec_two", "read-live-lost", false, true, false, Some("write-2"), "modules_read").unwrap();
         assert!(authorize_agent_mcp_call(
             &konae,
             alice_id,

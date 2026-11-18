@@ -1830,6 +1830,75 @@ test("restore before schema proposal keeps deployed rows and invitation, exposes
   expect(rowsAfterApply.rows).toEqual(rowsBefore.rows);
 });
 
+test("production history offers an explicit receipt read-back without provider, lease claim, or repeated write", async ({ page }) => {
+  const name = `Effect read-back ${Date.now()}`;
+  const route = await createProject(page, name);
+  const projectId = route.split("/").at(-1)!;
+  const cookie = (await page.context().cookies()).map(({ name, value }) => `${name}=${value}`).join("; ");
+  const mcp = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+  const inspected = await mcp.call<{ sourcesRevision: number }>("project_inspect", { projectId });
+  await publishProject(mcp, { id: projectId, name, slug: projectId, manifest: { version: 1, visibility: "private" } }, async () => ({
+    project: { id: projectId, name, slug: projectId, manifest: { version: 1, visibility: "private" }, files: {
+      "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+      "actions.json": JSON.stringify({ version: 1, actions: {} }),
+    } },
+    visibility: "private",
+    artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Read-back browser fixture</main>" } },
+    initialModules: { auth: { on: true }, actions: { on: true } },
+  }), async () => true, () => {}, undefined, inspected.sourcesRevision);
+
+  const conversationId = crypto.randomUUID();
+  const base = `/_konae/projects/${projectId}/conversations`;
+  const created = await page.request.post(base, { data: { id: conversationId, title: "Lost invitation acknowledgement", formatVersion: 1, piVersion: "1.5.2", registryVersion: "1" } });
+  expect(created.ok()).toBe(true);
+  const claim = await page.request.post(`${base}/${conversationId}/claim`, { data: { expectedGeneration: 0, executorId: "browser-readback-fixture", continueExplicitly: true } });
+  expect(claim.ok()).toBe(true);
+  const email = `readback-${crypto.randomUUID()}@example.test`;
+  const callId = "browser-lost-invite-ack";
+  const write = await page.request.post("/mcp", {
+    headers: {
+      accept: "application/json, text/event-stream",
+      "x-konae-execution-project": projectId,
+      "x-konae-execution-conversation": conversationId,
+      "x-konae-execution-id": "browser-readback-fixture",
+      "x-konae-execution-generation": "1",
+      "x-konae-execution-call": callId,
+    },
+    data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "app_invitations_create", arguments: { projectId, emails: [email], idempotencyKey: "browser-lost-ack" } } },
+  });
+  expect(write.ok()).toBe(true);
+  expect((await (await page.request.get(`${base}/${conversationId}/effects/${callId}`)).json()).state).toBe("unknown");
+
+  const calls: string[] = [];
+  const requestPaths: string[] = [];
+  let providerRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().startsWith("https://api.anthropic.com/") || request.url().startsWith("https://api.openai.com/") || request.url().startsWith("https://openrouter.ai/")) providerRequests++;
+    requestPaths.push(new URL(request.url()).pathname);
+    if (new URL(request.url()).pathname === "/mcp" && request.method() === "POST") {
+      try { calls.push(JSON.parse(request.postData() ?? "{}").params?.name ?? ""); } catch { /* not a JSON-RPC request */ }
+    }
+  });
+  await showSection(page, "Describe");
+  await page.getByRole("button", { name: /Read saved conversations/ }).click();
+  const history = page.getByRole("dialog", { name: "Conversation history" });
+  await history.locator(".durable-conversation-choice").filter({ hasText: "Lost invitation acknowledgement" }).click();
+  expect(await page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith("konae:agent-key:")))).toBe(false);
+  await expect(history.getByRole("region", { name: /Read back app_invitations_create effect/ })).toBeVisible();
+  await expect(history.getByText(/Neither step starts a provider, claims a writer lease, or repeats the write/)).toBeVisible();
+  await history.getByRole("button", { name: "Read evidence (does not resolve receipt)", exact: true }).click();
+  await expect(history.getByText(email, { exact: false })).toBeVisible();
+  expect((await (await page.request.get(`${base}/${conversationId}/effects/${callId}`)).json()).state).toBe("unknown");
+  await history.getByRole("button", { name: "Confirm evidence and repeat this read-back", exact: true }).click();
+  await expect.poll(async () => (await (await page.request.get(`${base}/${conversationId}/effects/${callId}`)).json()).state).toBe("observed");
+  expect(calls.filter((name) => name === "app_invitations_create")).toHaveLength(0);
+  expect(calls.filter((name) => name === "app_invitations_list")).toHaveLength(2);
+  expect(requestPaths.filter((path) => path.endsWith("/claim"))).toHaveLength(0);
+  expect(providerRequests).toBe(0);
+  const invitations = await mcp.call<{ invitations: Array<{ email: string }> }>("app_invitations_list", { projectId });
+  expect(invitations.invitations.filter((item) => item.email === email)).toHaveLength(1);
+});
+
 for (const mode of ["manual-staged", "legacy-tool"] as const) {
   test(`existing Deploy flow remains usable with ${mode}`, async ({ page }) => {
     const app = await createProject(page, `Local Deploy fixture ${mode}`);

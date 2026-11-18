@@ -7,21 +7,25 @@ import {
   readDurableCheckpoints,
   type DurableConversationCursor, type DurableConversationInfo, type DurableRecordCursor,
   type DurableRecordSummaryItem,
+  type DurableEffectReceipt,
 } from "../agent/durable-storage";
+import { isBoundedReadOnlySelect } from "../agent/platform-tools";
 import "./durable-history.css";
 import { inspectCheckpointCandidate } from "../agent/durable-checkpoints";
 
-type Props = { projectId: string; ownerId: string; open: boolean; onClose: () => void; onContinue: (conversationId: string) => void; onRestore?: (conversationId: string, checkpointId: string, sequence: number) => void; canContinue?: boolean };
+type Props = { projectId: string; ownerId: string; open: boolean; onClose: () => void; onContinue: (conversationId: string) => void; onReadEffect?: (conversationId: string, effect: DurableEffectReceipt, sql: string | undefined, isCurrent: () => boolean) => Promise<EffectRead>; onConfirmEffectRead?: (conversationId: string, effect: DurableEffectReceipt, read: EffectRead, isCurrent: () => boolean) => Promise<unknown>; onRestore?: (conversationId: string, checkpointId: string, sequence: number) => void; canContinue?: boolean };
+type EffectRead = { tool: string; args: Record<string, unknown>; evidence: unknown };
 type PageState = { items: DurableRecordSummaryItem[]; nextCursor: DurableRecordCursor | null };
 type Expanded = { loading: boolean; value?: Record<string, unknown>; error?: string };
 
-export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onContinue, onRestore, canContinue = true }: Props) {
+export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onContinue, onReadEffect, onConfirmEffectRead, onRestore, canContinue = true }: Props) {
   const [conversations, setConversations] = useState<DurableConversationInfo[]>([]);
   const [conversationCursor, setConversationCursor] = useState<DurableConversationCursor | null>(null);
   const [selected, setSelected] = useState<DurableConversationInfo | null>(null);
   const [records, setRecords] = useState<PageState | null>(null);
   const [lease, setLease] = useState<Awaited<ReturnType<typeof readDurableLease>> | null>(null);
   const [effects, setEffects] = useState<Awaited<ReturnType<typeof readDurableEffects>>>([]);
+  const [activeObservationId, setActiveObservationId] = useState<string | null>(null);
   const [effectsState, setEffectsState] = useState<{ kind: "available" | "unknown"; message?: string }>({ kind: "available" });
   const [checkpoint, setCheckpoint] = useState<{ checkpointId: string; sequence: number; status: string; sourcesRevision?: number; candidateId?: string; inspectionOnly?: boolean } | null>(null);
   const [checkpoints, setCheckpoints] = useState<Array<{ checkpointId: string; sequence: number; status: string; sourcesRevision?: number; createdAt: number; candidateId?: string; inspectionOnly?: boolean }>>([]);
@@ -44,7 +48,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
     let active = true;
     selectionToken.current += 1;
     checkpointSelectionToken.current += 1;
-    setError(""); setSelected(null); setRecords(null); setLoadingOlderRecords(false); setExpanded({}); setConfirmDelete(false); setCheckpoint(null); setCheckpoints([]); setBrowsingCheckpoints(false); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setCheckpointError(""); setWaitingForRelease(false);
+    setError(""); setSelected(null); setRecords(null); setLoadingOlderRecords(false); setExpanded({}); setConfirmDelete(false); setCheckpoint(null); setCheckpoints([]); setBrowsingCheckpoints(false); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setCheckpointError(""); setWaitingForRelease(false); setActiveObservationId(null);
     void listDurableConversations(projectId, ownerId).then((page) => {
       if (active) { setConversations(page.items); setConversationCursor(page.nextCursor); }
     }).catch((cause) => { if (active) setError(message(cause)); });
@@ -58,7 +62,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
     setCheckpoints([]);
     setBrowsingCheckpoints(false);
     setLoadingOlderRecords(false);
-    setSelected(item); setRecords(null); setExpanded({}); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setError(""); setCheckpointError(""); setLease(null); setEffects([]); setEffectsState({ kind: "available" }); setConfirmDelete(false); setWaitingForRelease(false); setBusy(false);
+    setSelected(item); setRecords(null); setExpanded({}); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setError(""); setCheckpointError(""); setLease(null); setEffects([]); setActiveObservationId(null); setEffectsState({ kind: "available" }); setConfirmDelete(false); setWaitingForRelease(false); setBusy(false);
     try {
       const [page, currentLease, effectsResult, checkpointSummary] = await Promise.all([
         readDurableRecords(projectId, item.id, ownerId), readDurableLease(projectId, item.id, ownerId), readDurableEffects(projectId, item.id, ownerId).then((value) => ({ value, error: "" })).catch((cause) => ({ value: null, error: message(cause) })), readDurableCheckpointSummary(projectId, item.id, ownerId).then((value) => ({ value, error: "" })).catch((cause) => ({ value: null, error: message(cause) })),
@@ -218,6 +222,26 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
           </header>
           {lease?.live && <div className="durable-status" role="status">Another browser holds the active writer lease (generation {lease.generation}, executor {lease.executorId ?? "unknown"}). <Button variant="secondary" onClick={() => void stopWriter()} disabled={busy}>Ask it to stop and release</Button></div>}
           {lease && !lease.live && lease.unresolvedEffects && <div className="durable-status" role="alert">A write outcome is unresolved. Continue stays blocked until its documented read-back reconciles it.</div>}
+          {effectsState.kind === "available" && effects.filter((effect) => ["unknown", "running"].includes(effect.state) || effect.callId === activeObservationId).map((effect) => <EffectReadback key={effect.callId} effect={effect} disabled={busy} onRead={async (sql) => {
+            if (!onReadEffect || !selected) throw new Error("The owner read-back action is unavailable.");
+            const conversationId = selected.id;
+            const token = selectionToken.current;
+            const isCurrent = () => token === selectionToken.current && selected?.id === conversationId && open;
+            const read = await onReadEffect(conversationId, effect, sql, isCurrent);
+            if (!isCurrent()) throw new Error("The selected conversation changed. The evidence was not attached to this view.");
+            setActiveObservationId(effect.callId);
+            return read;
+          }} onConfirmRead={async (read) => {
+            if (!onConfirmEffectRead || !selected) throw new Error("The owner observation action is unavailable.");
+            const conversationId = selected.id;
+            const token = selectionToken.current;
+            const isCurrent = () => token === selectionToken.current && selected?.id === conversationId && open;
+            const linkedResult = await onConfirmEffectRead(conversationId, effect, read, isCurrent);
+            if (!isCurrent()) throw new Error("The selected conversation changed. Reopen its history to inspect the receipt.");
+            const [refreshedEffects, refreshedLease] = await Promise.all([readDurableEffects(projectId, conversationId, ownerId), readDurableLease(projectId, conversationId, ownerId)]);
+            if (isCurrent()) { setEffects(refreshedEffects); setLease(refreshedLease); }
+            return linkedResult;
+          }} />)}
           {lease && !lease.live && !lease.unresolvedEffects && <div className="durable-status">No active writer. Saved source changes are checked again when you choose Continue.</div>}
           {checkpoints.length > 0 && <div className="durable-status"><strong>{browsingCheckpoints ? "Coherent checkpoints" : "Latest coherent checkpoint"}</strong>{browsingCheckpoints ? <div className="durable-checkpoint-list">{checkpoints.map((item) => <Button key={item.checkpointId} variant={checkpoint?.checkpointId === item.checkpointId ? "primary" : "secondary"} onClick={() => chooseCheckpoint(item)} disabled={busy}>{item.status} · sequence {item.sequence}</Button>)}</div> : <Button variant="secondary" onClick={() => void browseEarlierCheckpoints()} disabled={busy}>Browse earlier checkpoints</Button>}</div>}
           {checkpoint && <div className="durable-status"><strong>Selected checkpoint:</strong> {safeText(checkpoint.status)} · sequence {checkpoint.sequence}{checkpoint.sourcesRevision !== undefined ? ` · source revision ${checkpoint.sourcesRevision}` : ""}{checkpoint.candidateId ? ` · candidate ${checkpoint.candidateId}` : ""}{checkpoint.inspectionOnly ? ". This local attachment is inspection-only because some native continuation details were not preserved." : ". Candidate files load only when requested."} <Button variant="secondary" onClick={() => void inspectCandidate()} disabled={inspectingCandidate}>{inspectingCandidate ? "Loading candidate files…" : "Inspect candidate files"}</Button></div>}
@@ -263,6 +287,44 @@ function HistoryEntry({ item, expanded, onExpand, effects, projectId, conversati
       {expanded?.value && <EntryDetails value={expanded.value} projectId={projectId} conversationId={conversationId} ownerId={ownerId} />}
     </details>}
   </li>;
+}
+
+function EffectReadback({ effect, disabled, onRead, onConfirmRead }: { effect: DurableEffectReceipt; disabled: boolean; onRead: (sql?: string) => Promise<EffectRead>; onConfirmRead: (read: EffectRead) => Promise<unknown> }) {
+  const [sql, setSql] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [read, setRead] = useState<EffectRead | null>(null);
+  const [linkedEvidence, setLinkedEvidence] = useState<unknown>(null);
+  const sqlReadback = effect.tool === "database_execute";
+  const readEffect = async () => {
+    setError("");
+    if (effect.state !== "unknown") { setError("The write is still running. Wait for it to finish before reading it back."); return; }
+    if (sqlReadback && !isBoundedReadOnlySelect(sql)) {
+      setError("Use one read-only SELECT with a numeric LIMIT from 1 to 1000 to inspect the affected rows.");
+      return;
+    }
+    setBusy(true);
+    try { setRead(await onRead(sqlReadback ? sql : undefined)); }
+    catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  };
+  const confirmRead = async () => {
+    if (!read || effect.state !== "unknown") return;
+    setError(""); setBusy(true);
+    try { setLinkedEvidence(await onConfirmRead(read)); }
+    catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  };
+  return <section className="durable-status durable-effect-readback" aria-label={`Read back ${effect.tool} effect ${effect.callId}`}>
+    <strong>{effect.state === "observed" ? "Observed " : "Unresolved "}{safeText(effect.tool)} effect</strong>
+    <p>Receipt {safeText(effect.callId)} · {safeText(effect.state)}. First read its documented MCP door and inspect the evidence. If it establishes the intended outcome, a separate confirmation repeats the same read and links it to this receipt. Neither step starts a provider, claims a writer lease, or repeats the write.</p>
+    {effect.state === "running" && <p role="status">The server still reports this write as running. Read-back is refused until it finishes.</p>}
+    {sqlReadback && <label>Bounded SQL read-back for the affected rows<textarea value={sql} onChange={(event) => setSql(event.currentTarget.value)} rows={4} maxLength={4000} placeholder="SELECT id, email, status FROM invitations WHERE … LIMIT 50" disabled={disabled || busy || Boolean(read) || effect.state !== "unknown"} /></label>}
+    {!read && <Button variant="secondary" onClick={() => void readEffect()} disabled={disabled || busy || effect.state !== "unknown"}>{busy ? "Reading…" : "Read evidence (does not resolve receipt)"}</Button>}
+    {read && <div><strong>Unlinked read evidence · {safeText(read.tool)}</strong><pre>{inertJson(read.evidence)}</pre>{!linkedEvidence && <><p>Review whether this result shows the intended change. If it is empty or mismatched, leave the fence pending.</p><Button variant="primary" onClick={() => void confirmRead()} disabled={disabled || busy || effect.state !== "unknown"}>{busy ? "Confirming…" : "Confirm evidence and repeat this read-back"}</Button></>}</div>}
+    {linkedEvidence !== null && <div><strong>Linked read-back recorded</strong><pre>{inertJson(linkedEvidence)}</pre></div>}
+    {error && <p role="alert">{safeText(error)}</p>}
+  </section>;
 }
 
 function EntryDetails({ value, projectId, conversationId, ownerId }: { value: Record<string, unknown>; projectId: string; conversationId: string; ownerId: string }) {
