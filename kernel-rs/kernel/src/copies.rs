@@ -21,7 +21,6 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::collections::HashSet;
-#[cfg(test)]
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
