@@ -145,6 +145,9 @@ pub(super) fn checkpoint(step: &str) {
     }
 }
 
+#[cfg(feature = "s3")]
+mod retention;
+
 #[tokio::test]
 async fn a_reader_holds_the_expiring_point_until_it_closes() -> Result<()> {
     let scratch = std::env::temp_dir().join(format!("block-prune-{}", uuid::Uuid::new_v4()));

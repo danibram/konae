@@ -14,6 +14,8 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
+from readonly_replica import mirror
+
 cut = runpy.run_path(str(Path(__file__).with_name("common-cut.py")))
 server, wait = cut["server"], cut["wait"]
 FIRST = "synthetic-first-block-data-secret-for-the-lab"
@@ -100,6 +102,12 @@ def exercise(args, root, remote):
                 proc.wait(timeout=10)
             assert not remote.list("points")
 
+            # The dead writer was uploading a block and never sent a point PUT.
+            reservation, = remote.list("users")
+            remote.command("rm", "users/"+reservation)
+            assert not remote.list("users")
+            print("PASS interrupted writer left one S3 reservation", flush=True)
+
     directory = root / "copies-v3" / uuid.uuid4().hex
     legacy = root / "legacy"
     env.update(KONAE_COPY_V3_DIR=str(directory), KONAE_COPY_DIR=str(legacy))
@@ -176,6 +184,15 @@ def exercise(args, root, remote):
             assert cut["number"](output/"apps/probe/data/database.sqlite","SELECT count(*) FROM notes") == count
             assert (output/"apps/probe/app/sample.bin").read_bytes() == sample
             subprocess.run([sys.executable,args.deleted_secret,"verify",output/db_secret],check=True,stdout=subprocess.DEVNULL)
+        if kind == "s3-v3":
+            prefix = remote.source.removeprefix("s3://konae-test/")+"/"
+            replica = root/"emergency"/prefix
+            mirror(remote.mc, prefix, replica)
+            offline = {k:v for k,v in env.items() if not k.startswith(("KONAE_S3_", "KONAE_COPY_S3", "KONAE_COPY_V3_S3"))}
+            output = restore(binary, offline, root, replica, first, witness)
+            assert cut["number"](output/"owners.sqlite", "SELECT count(*) FROM app_users WHERE state='suspended'") == 1
+            assert (output/"apps/probe/app/sample.bin").read_bytes() == sample
+            print("PASS offline installation restore from read-only replica with post-cut revocation", flush=True)
         if kind.endswith("v3"):
             def replace_record(data):
                 if kind == "directory-v3":
