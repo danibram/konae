@@ -14,7 +14,7 @@ Generate a separate random 128-bit ID for each new repository, for example with 
 | `KONAE_COPY_V3_SECRET` | The active data secret, at least 32 bytes. It defaults to the installation copy secret |
 | `KONAE_COPY_V3_PREVIOUS_SECRETS` | A JSON array of earlier data secrets. Supply these from custody to read points made before a rotation |
 
-The ordinary `KONAE_COPY_DIR` and `KONAE_COPY_S3` settings still select the original writers. Setting the v3 destinations alongside them writes all configured targets from one capture, including its pending-operation check and blob verification. Each target reports its own result under `/_konae/health`. The v3 names are `directory-v3` and `s3-v3`. The v3 writer leaves all points and objects in place until a v3 collector is available.
+The ordinary `KONAE_COPY_DIR` and `KONAE_COPY_S3` settings still select the original writers. Setting the v3 destinations alongside them writes all configured targets from one capture, including its pending-operation check and blob verification. Each target reports its own result under `/_konae/health`. The v3 names are `directory-v3` and `s3-v3`. After publication the worker prunes expired points and collects unreachable blocks. [Pruning and recovery permissions](../recovery-drill.md#pruning-v3-copies)
 
 On a clean volume, set `KONAE_DATA_DIR`, supply the keys, and select the repository root and the point. For S3 also supply the normal copy bucket connection settings. Both operator binaries use the same reader.
 
@@ -31,6 +31,7 @@ The optional witness is the SHA-256 of a specific signed revocation entry in tha
 | --- | --- |
 | `points/<UTC copy ID>` | Four ASCII bytes `KCP3`, a random 12-byte nonce, then AES-256-GCM ciphertext and its 16-byte tag. The whole envelope must fit in 4 MiB |
 | `objects/<address>` | AES-256-GCM ciphertext and its 16-byte tag. The address contains 64 lowercase hexadecimal digits |
+| `users/<UUID>` and `collectors/<UUID>` | S3 reservation keys. Their presence protects active operations until release |
 | `revocations/started.json` and `revocations/<entry name>` | JSON with a hexadecimal HMAC. The MAC covers the repository ID, file name and record |
 
 The manifest plaintext is UTF-8 JSON. It carries `version: 3`, `repository`, `copyId`, `createdAt` in Unix milliseconds, `pagesPerObject` and `files`. Each file supplies its relative `path`, byte `size`, hexadecimal plaintext `sha256`, nullable `pageSize` and an ordered `objects` array. The writer sorts files by path. A reference names the entire object in the same repository. Its array index determines its byte offset. Restoring a point requires its own manifest and those objects.
@@ -50,6 +51,6 @@ The installation derives the format secret from the UTF-8 string `v3/<ledger key
 
 Rotate the data secret in place. Keep the previous value in custody until every point that needs it has expired. If the first epoch used the default, its historical data secret is the original value of `KONAE_COPY_SECRET`. Supply old values through `KONAE_COPY_V3_PREVIOUS_SECRETS` while the current value remains active. New objects use the new epoch. Reading an old manifest selects its authenticating key for every referenced object. The stable revocation key verifies suspensions recorded after rotation on both destinations.
 
-A collector can call `Repository::points`, authenticate each retained root with `open`, and enumerate its direct references with `VerifiedPoint::objects`. A missing data key or a failed authentication returns an error. The collector must stop deletion on that error. Rotating the installation revocation secret requires a separate ledger transition. The v3 data rotation described here keeps that secret in service.
+The collector authenticates every listed root before deleting expired manifests. Keep a historical key available until the last manifest from its epoch has been removed. An unreadable root stops pruning for that destination. Rotating the installation revocation secret requires a separate ledger transition. The v3 data rotation described here keeps that secret in service.
 
 [Executable format vectors](../../kernel-rs/backup/src/blocks/tests.rs) · [Format measurements](../../kernel-rs/backup/block-measure.py) · [Installation and rotation trial](../../tests/smoke/block-copies.py)
