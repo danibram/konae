@@ -51,7 +51,9 @@ def example():
         at = START + day * DAY
         record("daily", gate["TARGETS"][day % 2], at + 1000, at)
         if day % 7 == 0:
-            record("weekly", gate["TARGETS"][(day // 7) % 2], at + 2000, START, oldestRetained=point(START))
+            oldest = gate["retained_at"](journal, at, NOW)[0]
+            record("weekly", gate["TARGETS"][(day // 7) % 2], at + 2000, gate["point_ms"](oldest),
+                   oldestRetained=oldest, listedAtMs=at)
     for target in gate["TARGETS"]:
         record("reader-first", target, START - 1000, START - 2000)
         record("before-prune", target, START + 30_000, START)
@@ -131,6 +133,13 @@ class Receipt(unittest.TestCase):
                       gate["check_receipt"](r, "retire", NOW))
         r["publicationJournal"]["s3"] = expected[-2:]
         self.assertIn("s3 publication journal has a gap beyond RPO", gate["check_receipt"](r, "retire", NOW))
+
+    def test_recent_point_labelled_oldest_at_the_weekly_drill(self):
+        r = example()
+        weekly = next(d for d in r["drills"] if d["kind"] == "weekly" and d["listedAtMs"] > START)
+        newest = point(weekly["listedAtMs"])
+        weekly.update(copy=newest, oldestRetained=newest)
+        self.assertIn("weekly restore missed the oldest retained point", gate["check_receipt"](r, "retire", NOW))
 
     def test_no_point_after_failed_usual_writer_cut(self):
         r = example()

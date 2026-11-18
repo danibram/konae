@@ -2,6 +2,7 @@
 """Review a restricted installation-copy receipt. Exit 1 means hold the writer."""
 import argparse
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -20,6 +21,7 @@ def point(p):
     return isinstance(p, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z", p)
 
 
+@lru_cache(maxsize=4096)
 def point_ms(p):
     if not point(p):
         raise ValueError("invalid copy ID")
@@ -31,11 +33,9 @@ def retained_at(journal, prune, reviewed):
     if len(journal) != len(set(journal)):
         raise ValueError("duplicate publication")
     dated = sorted((point_ms(p), p) for p in journal)
-    if not dated or dated[-1][0] > reviewed:
-        raise ValueError("empty or future publication journal")
+    if dated and dated[-1][0] > reviewed:
+        raise ValueError("future publication")
     cuts = [p for at, p in dated if at <= prune]
-    if not cuts:
-        raise ValueError("no confirmed cut before prune")
     daily = {}
     for copy in cuts:
         at = point_ms(copy)
@@ -102,7 +102,11 @@ def check_receipt(r, request, now):
         day(d["atMs"])
         require(point(d["copy"]) and point_ms(d["copy"]) <= d["atMs"], "restore predates its cut")
         if d["kind"] == "weekly":
-            require(d["copy"] == d["oldestRetained"], "weekly restore missed the oldest retained point")
+            listed = d["listedAtMs"]
+            day(listed)
+            roots = retained_at(r["publicationJournal"][target], listed, now)
+            require(roots and listed <= d["atMs"] and d["copy"] == d["oldestRetained"] == roots[0],
+                    "weekly restore missed the oldest retained point")
         if d["kind"] == "daily":
             require(point(d["copy"]) and d["atMs"] - point_ms(d["copy"]) <= r["limits"]["rpoMs"],
                     "daily restore used a stale cut")
@@ -154,7 +158,7 @@ def check_receipt(r, request, now):
             failures.append(target + " has no confirmed publication")
             continue
         expected = retained_at(journal, prune, now)
-        require(retained == expected and [inventory["oldest"], inventory["latest"]] == [expected[0], expected[-1]],
+        require(expected and retained == expected and [inventory["oldest"], inventory["latest"]] == [expected[0], expected[-1]],
                 target + " retained inventory differs from the publication journal")
         require(inventory["repository"] == repos[target + "-v3"], target + " prune repository mismatch")
         if request == "retire":

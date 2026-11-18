@@ -211,7 +211,9 @@ def exercise(args, root, report, traffic, remote):
             i = (day // 7 - 1) % 2
             phase("weekly-" + TARGETS[i])
             listed = sorted(p.name for p in (local / "points").iterdir()) if i == 0 else store.files(prefix + "points/")
-            restore("weekly", i, v3_src[i], listed[0])["oldestRetained"] = listed[0]
+            observed = now()
+            weekly = restore("weekly", i, v3_src[i], listed[0])
+            weekly.update(oldestRetained=listed[0], listedAtMs=observed)
     phase("post-prune")
     kept = sorted(p.name for p in (local / "points").iterdir())
     assert kept == store.files(prefix + "points/") and len(kept) < len(published) and kept[-1] == point
