@@ -1,0 +1,60 @@
+$ vitest run tests/storage.test.ts && bun test tests/native-storage.bun.test.ts tests/unsafe-recovery.test.ts
+3:54:48 AM [vite] warning: `esbuild` option was specified by "vite:react-babel" plugin. This option is deprecated, please use `oxc` instead.
+3:54:48 AM [vite] warning: `optimizeDeps.esbuildOptions` option was specified by "vite:react-babel" plugin. This option is deprecated, please use `optimizeDeps.rolldownOptions` instead.
+Both esbuild and oxc options were set. oxc options will be used and esbuild options will be ignored. The following esbuild options were set: `{ jsx: 'automatic', jsxImportSource: undefined }`
+
+ RUN  v4.1.12 /Users/dbr/.bb-machines/danibram.getbb.app/plugins/environment-git-worktree/host-data/worktrees/thr_mf5x35vyve-1/konae/spikes/pi-durable-1.5.2
+
+
+ Test Files  1 passed (1)
+      Tests  33 passed (33)
+   Start at  03:54:48
+   Duration  1.24s (transform 111ms, setup 0ms, import 248ms, tests 665ms, environment 0ms)
+
+bun test v1.3.11 (af24e281)
+
+tests/native-storage.bun.test.ts:
+(pass) SQLite-backed native Pi batch projection > reserves ID 1 for the immutable root conversation [22.03ms]
+(pass) SQLite-backed native Pi batch projection > receives a durable commit once before resolving, and never a refused one [21.23ms]
+(pass) SQLite-backed native Pi batch projection > commits mixed table writes atomically and rolls all of them back on failure [4.46ms]
+(pass) SQLite-backed native Pi batch projection > detaches retained writes and every returned record [2.48ms]
+(pass) SQLite-backed native Pi batch projection > detaches prototype-like JSON keys without changing object prototypes [3.31ms]
+(pass) SQLite-backed native Pi batch projection > indexes entries committed out of ID order [3.72ms]
+(pass) SQLite-backed native Pi batch projection > continues an entry cursor below its last item after a newer commit [3.11ms]
+(pass) SQLite-backed native Pi batch projection > paginates conversations by opaque cursor in ascending ID order [2.99ms]
+(pass) SQLite-backed native Pi batch projection > filters and pages conversations by durable owner edges [2.58ms]
+(pass) SQLite-backed native Pi batch projection > scans deep fork history newest-first through every ancestor cap [9.56ms]
+(pass) SQLite-backed native Pi batch projection > scans tables in either ID order and continues a cursor in its order [24.69ms]
+(pass) SQLite-backed native Pi batch projection > replaces complete task records and pages filtered task scans [3.30ms]
+(pass) SQLite-backed native Pi batch projection > stores owners and scans waiting and completing tasks by status [3.10ms]
+(pass) SQLite-backed native Pi batch projection > stores and scans sleeping tasks by status [1.88ms]
+(pass) SQLite-backed native Pi batch projection > indexes request IDs per conversation and replaces complete submission records [3.96ms]
+(pass) SQLite-backed native Pi batch projection > stores passive write submissions without input-only lifecycle states [2.28ms]
+(pass) SQLite-backed native Pi batch projection > stores continue submissions, which have no entry and are never queued [1.91ms]
+(pass) SQLite-backed native Pi batch projection > reconstructs rewindable documents and preserves half-open incarnations [8.40ms]
+(pass) SQLite-backed native Pi batch projection > streams long document tails across root replacement deltas [46.70ms]
+(pass) SQLite-backed native Pi batch projection > copies stored document bases independently and rejects ambiguous sources [24.40ms]
+(pass) SQLite-backed native Pi batch projection > uses bases for version transitions and rejects historical reads of current-only documents [11.53ms]
+(pass) SQLite-backed native Pi batch projection > indexes logical addresses and exact-scope scans independently [4.13ms]
+(pass) SQLite-backed native Pi batch projection > keeps document lifecycle failures atomic and gives create-plus-retire an empty lifetime [2.13ms]
+(pass) SQLite-backed native Pi batch projection > refuses a creation and a change of one document in one commit, in either order [1.90ms]
+(pass) SQLite-backed native Pi batch projection > rolls back record tables and secondary indexes when a document command fails [2.81ms]
+(pass) SQLite-backed native Pi batch projection > keeps indexed string identities lossless [4.52ms]
+(pass) SQLite-backed native Pi batch projection > keeps one global record ID namespace and rejects exhausted ID minting [2.42ms]
+(pass) SQLite-backed native Pi batch projection > commits batches in order, each with its seq, checked against the earlier ones [20.31ms]
+(pass) SQLite-backed native Pi batch projection > stores the batches before the first one refused, and none after it [2.01ms]
+(pass) SQLite-backed native Pi batch projection > refuses a later batch its own malformed actions fail, keeping the batches before it [2.67ms]
+(pass) SQLite-backed native Pi batch projection > resolves a batched copy against the state the earlier batches left [3.26ms]
+(pass) SQLite-backed native Pi batch projection > rejects every operation after close [1.32ms]
+(pass) checks receipt on lost response and restores the same immutable entry without a duplicate [2.58ms]
+(pass) commits an actual built-in tool result with an immutable scratch delta and reopens the same model context read-only [293.94ms]
+(pass) unsupported task versions stay inspectable and are not executed [12.08ms]
+(pass) storage commit failure closes the Harness and refuses new shared work [6.20ms]
+
+tests/unsafe-recovery.test.ts:
+(pass) kills the writer during an external unsafe tool and recovers without replay [985.33ms]
+
+ 37 pass
+ 0 fail
+ 750 expect() calls
+Ran 37 tests across 2 files. [1.89s]
