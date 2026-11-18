@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
 import { IndexedDbStorage } from "@earendil-works/pi-durable/storage/indexeddb";
