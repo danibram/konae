@@ -50,6 +50,14 @@ pub(super) fn targets(data: &Path, s3: bool, keyed: bool) -> Result<Vec<Target>>
         );
         let data = effective(data)?;
         let actual = effective(&path)?;
+        for component in actual.components() {
+            if let Some(name) = component.as_os_str().to_str() {
+                ensure!(
+                    !name.starts_with(".partial-") && super::parse_copy_id(name).is_none(),
+                    "A legacy cleaner can remove the ancestor {name} of this v3 directory."
+                );
+            }
+        }
         ensure!(
             identity(&actual) == Some(id),
             "The resolved v3 directory must retain its repository ID."

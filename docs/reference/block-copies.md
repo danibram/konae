@@ -56,15 +56,16 @@ A collector can call `Repository::points`, authenticate each retained root with 
 
 ## Repeat the lab
 
-On mbpd, run these commands from the checkout root. The format trial uses macOS `time -lp` for peak RSS, Darwin's per-process disk counters, Python 3.11 or later with SQLite, and two local executables built with Rust 1.91.0. Cargo needs its locked dependencies available offline. The installation and compatibility trials also need the two operator binaries and the `catalog` example.
+Run these commands from the checkout root on macOS. Set `LAB` to the directory holding the disposable MinIO helpers and `BASELINE` to the directory containing the released af1a897 binaries. The format trial uses macOS `time -lp` for peak RSS, Darwin's per-process disk counters, Python 3.11 or later with SQLite, and two local executables built with Rust 1.91.0. Cargo needs its locked dependencies available offline. The installation and compatibility trials also need the two operator binaries and the `catalog` example.
 
 ```sh
 export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 TOKIO_WORKER_THREADS=2
 export CARGO_TARGET_DIR="$PWD/kernel-rs/target"
-export LAB=/Users/dbr/.bb-machines/danibram.getbb.app/thread-storage/thr_dur4bcq2ia/lab-bin
 cargo build --manifest-path kernel-rs/Cargo.toml --offline --locked --bins --examples
-cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked --workspace
-"$LAB/with-minio" python3 kernel-rs/backup/compatibility.py --bin-dir "$CARGO_TARGET_DIR/debug" --baseline-bin-dir "$LAB/../baseline" --mc "$LAB/bin/mc" --require-s3
+cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked -p konae-backup --features s3
+"$LAB/with-minio" cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked -p kernel --lib copies::
+"$LAB/with-minio" cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked -p kernel --lib recovery::
+"$LAB/with-minio" python3 kernel-rs/backup/compatibility.py --bin-dir "$CARGO_TARGET_DIR/debug" --baseline-bin-dir "$BASELINE" --mc "$LAB/bin/mc" --require-s3
 marker_dir=$(mktemp -d)
 "$LAB/with-minio" "$LAB/slow-s3" --kib-per-second 128 --marker "$marker_dir/transfer" python3 tests/smoke/block-copies.py --binary "$CARGO_TARGET_DIR/debug/konae" --mc "$LAB/bin/mc" --marker "$marker_dir/transfer" --require-s3
 unlink "$marker_dir/transfer" && rmdir "$marker_dir"

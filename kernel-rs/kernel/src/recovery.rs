@@ -190,7 +190,14 @@ async fn append_record(target: &Target, s3: Option<&S3Client>, bucket: &str, key
 }
 
 /// Marks a target as keeping a revocation record.
-pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>) -> Result<()> {
+pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str) -> Result<()> {
+    let key = if matches!(target, Target::BlocksDirectory(_) | Target::BlocksS3 { .. }) {
+        CopyKey::from_env()?
+    } else { None };
+    start_with_key(target, s3, bucket, key.as_ref()).await
+}
+
+pub(crate) async fn start_with_key(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>) -> Result<()> {
     let bytes = serde_json::to_vec(&json!({"version": 1}))?;
     match target {
         Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => {
@@ -397,18 +404,21 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
                 serde_json::from_slice::<Hold>(&std::fs::read(path)?)?.key_check
             } else { None };
             let key = copies::CopyKey::from_env()?;
-            let source = copies::record_source(&args[2]).await?;
-            if let Some(required) = &key_check {
-                let actual = copies::ledger_binding(&source, key.as_ref());
-                if required.starts_with("v3/") {
-                    ensure!(actual.as_ref() == Some(required),
-                        "Use the selected v3 repository and its revocation key to reconcile.");
-                } else {
-                    ensure!(actual.as_ref() == Some(required),
-                        "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET.");
+            let record = match copies::record_source(&args[2]).await {
+                Err(error) => Err(error),
+                Ok(source) => {
+                    if let Some(required) = &key_check {
+                        let actual = copies::ledger_binding(&source, key.as_ref());
+                        let reason = if required.starts_with("v3/") {
+                            "Use the selected v3 repository and its revocation key to reconcile."
+                        } else {
+                            "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET."
+                        };
+                        ensure!(actual.as_ref() == Some(required), "{reason}");
+                    }
+                    copies::read_source_record(&source, key.as_ref()).await
                 }
-            }
-            let record = copies::read_source_record(&source, key.as_ref()).await;
+            };
             match apply_or_hold_for_key(&root, installation, record, key_check.as_deref())? {
                 Ok(changed) => {
                     clear_hold(&root)?;
@@ -438,7 +448,7 @@ mod tests {
     async fn entries_reach_every_directory_target_and_parse_back() {
         let (one, two) = (scratch(), scratch());
         let targets = [Target::Directory(one.clone()), Target::Directory(two.clone())];
-        start(&targets[0], None, "data", None).await.unwrap();
+        start(&targets[0], None, "data").await.unwrap();
         let entry = Entry::new("app-user", Some("app-1"), "user-1", "suspended");
         write(&targets, None, "data", &entry, None).await.unwrap();
         for root in [&one, &two] {
