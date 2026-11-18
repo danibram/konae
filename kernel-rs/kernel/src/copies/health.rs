@@ -37,13 +37,13 @@ pub(crate) fn status_directory(root: &Path) -> PathBuf {
 
 fn target_file(directory: &Path, target: &Target, endpoint: &str, bucket: &str) -> PathBuf {
     let identity = match target {
-        Target::Directory(path) => {
+        Target::Directory(path) | Target::BlocksDirectory(path) => {
             let path = if path.as_os_str().is_empty() { Path::new(".") } else { path.as_path() };
             let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
             let identity: PathBuf = absolute.components().collect();
             json!(["directory", identity])
         }
-        Target::S3 { prefix } => json!(["s3", endpoint.trim_end_matches('/'), bucket, normalize_prefix(prefix)]),
+        Target::S3 { prefix } | Target::BlocksS3 { prefix } => json!(["s3", endpoint.trim_end_matches('/'), bucket, normalize_prefix(prefix)]),
     };
     let hash = hex::encode(Sha256::digest(identity.to_string().as_bytes()));
     directory.join(format!("{}-{hash}", target.kind()))
@@ -156,7 +156,7 @@ impl CopyStatus {
             alerts.extend(problems.iter().cloned());
             json!({
                 "kind": kind,
-                "encrypted": kind == "s3" && self.key.is_some(),
+                "encrypted": matches!(kind, "s3" | "directory-v3" | "s3-v3") && self.key.is_some(),
                 "lastAttemptAt": report.last_attempt_at,
                 "lastCutAt": report.last_cut_at,
                 "lastSuccessAt": report.last_success_at,
@@ -181,10 +181,18 @@ impl CopyStatus {
 pub(super) async fn record_restore(source: &Source, directory: &Path, copy_id: &str) -> Result<()> {
     let path = match source {
         Source::Directory(root) => {
-            let root = if root.join(super::MANIFEST).is_file() { root.parent().unwrap_or(Path::new(".")) } else { root };
-            target_file(directory, &Target::Directory(root.to_owned()), "", "")
+            let target = if super::blocks::source_identity(source).is_some() {
+                Target::BlocksDirectory(super::blocks::effective(root)?)
+            } else {
+                let root = if root.join(super::MANIFEST).is_file() { root.parent().unwrap_or(Path::new(".")) } else { root };
+                Target::Directory(root.to_owned())
+            };
+            target_file(directory, &target, "", "")
         }
-        Source::S3 { bucket, prefix, .. } => target_file(directory, &Target::S3 { prefix: prefix.clone() }, &crate::file_store::env_var("KONAE_S3_ENDPOINT").unwrap_or_default(), bucket),
+        Source::S3 { bucket, prefix, .. } => {
+            let target = if super::blocks::source_identity(source).is_some() { Target::BlocksS3 { prefix: prefix.clone() } } else { Target::S3 { prefix: prefix.clone() } };
+            target_file(directory, &target, &crate::file_store::env_var("KONAE_S3_ENDPOINT").unwrap_or_default(), bucket)
+        }
     }.with_extension("restore.json");
     let receipt = RestoreReceipt { copy_id: copy_id.to_owned(), verified_at: now_ms() };
     crate::write_atomic(&path, &serde_json::to_vec(&receipt)?).await

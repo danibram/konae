@@ -106,6 +106,9 @@ pub async fn write(targets: &[Target], s3: Option<&S3Client>, bucket: &str, entr
     let bytes = serde_json::to_vec(entry)?;
     for target in targets {
         match target {
+            Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => {
+                append_record(target, s3, bucket, key, &entry.file_name(), serde_json::to_value(entry)?).await?;
+            }
             Target::Directory(directory) => {
                 let (directory, name, bytes) = (directory.join(LEDGER_DIR), entry.file_name(), bytes.clone());
                 tokio::task::spawn_blocking(move || write_file(&directory, &name, &bytes)).await??;
@@ -162,7 +165,7 @@ pub async fn record(state: &AppState, entry: Entry) -> Result<()> {
 /// Kernel. Reads the copy settings from the environment.
 pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
-    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3").is_none() {
+    if ["KONAE_COPY_DIR", "KONAE_COPY_S3", "KONAE_COPY_V3_DIR", "KONAE_COPY_V3_S3"].iter().all(|name| read(name).is_none()) {
         return Ok(());
     }
     let run = async {
@@ -178,10 +181,21 @@ pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     result.context("The change holds on this server, but it could not be recorded at the copy target, so a restore could undo it. Run the command again")
 }
 
-/// Marks a target as keeping a record. Every copy writes it again.
-pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str) -> Result<()> {
+async fn append_record(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>, name: &str, mut value: Value) -> Result<()> {
+    let source = copies::blocks::source(target, s3, bucket)?;
+    let repository = copies::blocks::source_identity(&source).context("Invalid v3 repository.")?;
+    let mac = key.context("Set KONAE_COPY_SECRET for the revocation record.")?.record_mac(repository, name, &value)?;
+    value["mac"] = Value::String(mac);
+    konae_backup::blocks::append_record(&source, LEDGER_DIR, name, &serde_json::to_vec(&value)?).await
+}
+
+/// Marks a target as keeping a revocation record.
+pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>) -> Result<()> {
     let bytes = serde_json::to_vec(&json!({"version": 1}))?;
     match target {
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => {
+            append_record(target, s3, bucket, key, LEDGER_START, json!({"version":1})).await
+        }
         Target::Directory(directory) => {
             let directory = directory.join(LEDGER_DIR);
             tokio::task::spawn_blocking(move || write_file(&directory, LEDGER_START, &bytes)).await?
@@ -383,11 +397,18 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
                 serde_json::from_slice::<Hold>(&std::fs::read(path)?)?.key_check
             } else { None };
             let key = copies::CopyKey::from_env()?;
+            let source = copies::record_source(&args[2]).await?;
             if let Some(required) = &key_check {
-                ensure!(args[2].starts_with("s3://") && key.as_ref().map(|k| k.fingerprint()) == Some(required),
-                    "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET.");
+                let actual = copies::ledger_binding(&source, key.as_ref());
+                if required.starts_with("v3/") {
+                    ensure!(actual.as_ref() == Some(required),
+                        "Use the selected v3 repository and its revocation key to reconcile.");
+                } else {
+                    ensure!(actual.as_ref() == Some(required),
+                        "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET.");
+                }
             }
-            let record = copies::read_record(&args[2], key.as_ref()).await;
+            let record = copies::read_source_record(&source, key.as_ref()).await;
             match apply_or_hold_for_key(&root, installation, record, key_check.as_deref())? {
                 Ok(changed) => {
                     clear_hold(&root)?;
@@ -417,7 +438,7 @@ mod tests {
     async fn entries_reach_every_directory_target_and_parse_back() {
         let (one, two) = (scratch(), scratch());
         let targets = [Target::Directory(one.clone()), Target::Directory(two.clone())];
-        start(&targets[0], None, "data").await.unwrap();
+        start(&targets[0], None, "data", None).await.unwrap();
         let entry = Entry::new("app-user", Some("app-1"), "user-1", "suspended");
         write(&targets, None, "data", &entry, None).await.unwrap();
         for root in [&one, &two] {
