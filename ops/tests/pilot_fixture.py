@@ -198,6 +198,28 @@ def historical_indexes(root):
             for p in root.glob("apps/*/data/files/index.json")}
 
 
+def check_six_files(live, profile, oracle):
+    assets = json.loads((profile / "expected.json").read_bytes())
+    expected = {(a["app"], a["id"]): a for a in assets}
+    assert len(expected) == len(assets) == 255
+    assert len({app for app, _ in expected}) == 6
+    indexed = set()
+    blobs = {}
+    for index in live.glob("apps/*/data/files/index.json"):
+        app = index.parents[2].name
+        for item in json.loads(index.read_bytes()):
+            key = app, item["id"]
+            record = expected[key]
+            blob = index.parent / (item["id"] + ".blob")
+            assert key not in indexed and item["visibility"] == "private" and item["ownerId"]
+            assert blob.stat().st_size == item["size"] == record["size"]
+            indexed.add(key)
+            blobs[blob.relative_to(live)] = bytes.fromhex(record["sha256"])
+    assert indexed == expected.keys()
+    assert {p: digest for p, digest in oracle.items() if p.suffix == ".blob"} == blobs
+    return dict(privateFiles=len(assets), privateBytes=sum(a["size"] for a in assets))
+
+
 def compare_image(oracle, image, indexes):
     observed = inventory(image)
     expected = dict(oracle)
