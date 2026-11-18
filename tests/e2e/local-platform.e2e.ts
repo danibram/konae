@@ -472,6 +472,23 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await waitForKernelSave(page);
 });
 
+test("staging Durable KonaeAgent sends its Gate-approved proposal to the editor Preview iframe", async ({ page }) => {
+  const projectPath = await createProject(page, "Durable staging preview", "tasks");
+  const fixture = await installProposalFixture(page);
+  await page.goto(`${projectPath}?agent=durable-local`);
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  await connectProposalFixture(page);
+  fixture.setScenario("drift");
+  await askFixture(page, "Prepare a checked preview proposal.");
+
+  const preview = page.frameLocator('iframe[title="Mini-app preview"]');
+  await expect(preview.getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Validated. Sources, schema, preview rows and actions hold.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".agent-proposal").getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+  await expect(preview.locator("html")).toHaveAttribute("data-proposal", "ready");
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(1);
+});
+
 test("public image bytes stay with each proposal through Discard and Apply", async ({ page }) => {
   await page.addInitScript(() => {
     const active = new Set<string>();

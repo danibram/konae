@@ -36,7 +36,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEven
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
 import { applyProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
-import type { KonaeAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
+import type { KonaeAgentHandle, KonaeAgentOptions, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
 import { Alert, Button, Dialog, IconButton, LoadingBlock, Menu, TabBar, ToastRegion, type MenuItem, type TabBarItem, type ToastItem } from "./components/ui";
 import { AppStatus, UndeployedMarker } from "./components/AppStatus";
@@ -780,9 +780,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const ensureAgent = () => {
     if (agentRef.current) return Promise.resolve<KonaeAgentHandle | null>(agentRef.current);
     if (!agentLoad.current) {
+      const stagingDurable = (import.meta.env.DEV || import.meta.env.VITE_KONAE_DURABLE_STAGING === "true")
+        && new URLSearchParams(window.location.search).get("agent") === "durable-local";
       agentLoad.current = import("./agent/harness")
-        .then(({ createKonaeAgent }) => {
-          const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
+        .then(async ({ createKonaeAgent, createDurableKonaeAgent }) => {
+          const selectedProject = projectRef.current;
+          const projectId = selectedProject.id;
+          const selectedConfig = agentSession;
+          const current = () => projectRef.current.id === projectId;
+          const options: KonaeAgentOptions & { isCurrent: () => boolean } = {
+            isCurrent: current,
             liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
             sourceFiles: () => projectRef.current,
             previewErrors: () => hostLifecycleRef.current!.lifecycle.appliedHost.previewErrors(),
@@ -821,7 +828,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               }),
               onChanged: () => setDomainVersion((version) => version + 1),
             },
-          });
+          };
+          const handle = stagingDurable
+            ? createDurableKonaeAgent(selectedProject, selectedConfig, keyStore, {
+              ...options,
+              isCurrent: current,
+            })
+            : createKonaeAgent(selectedProject, selectedConfig, keyStore, options);
           agentRef.current = handle;
           setAgent(handle);
           return handle;

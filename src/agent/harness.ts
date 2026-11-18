@@ -34,6 +34,10 @@ export type KonaeAgentHandle = KonaeAgent & {
   dispose(): void;
 };
 
+// Durable 1.5.2 candidate entry points live behind the same lazy editor-agent
+// boundary. Shared writes are intentionally gated until the follow-up protocol work.
+export { createDurableKonaeAgent, openDurableHistory, openLocalDurableEngine, SHARED_DURABLE_ACTIVATION } from "./durable-engine";
+
 export type KonaeAgentOptions = {
   platform?: AgentPlatformBinding;
   loadSql?: SqlJsLoader;

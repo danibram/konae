@@ -1,5 +1,7 @@
 # pi API reference (`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` 0.84.2)
 
+> This is the rollback engine's reference. The browser Durable candidate is separately pinned to 1.5.2 below; its types and Pi AI runtime must not be mixed with these 0.84.2 types.
+
 Extracted from `node_modules/@earendil-works/*/dist/**/*.d.ts` and the shipped `.js`. Local `.d.ts` is the only truth; this file is a build-time crib sheet, not a spec.
 
 ## 0. What is actually implemented in 0.84.2 (read this first)
@@ -151,3 +153,15 @@ Other `SimpleStreamOptions` worth knowing: `reasoning?: "minimal"|"low"|"medium"
 - `utils/provider-env.js` contains a `require("node:fs")` inside a Bun-sandbox guard (`process.versions.bun` + empty `process.env`); unreachable in a browser and it bundles fine, but do not "fix" it by shimming `require`.
 - No shell: never register `createBashTool`.
 - Verified: `vite build` (Vite 6.4 / Rollup 4) bundles `Agent`, `InMemorySessionRepo`, the three provider factories and the file tools cleanly. JSON import attributes (`with { type: "json" }`) in the catalogs resolve. The provider API adapters are behind `lazyApi()` dynamic imports, so `anthropic-messages` (~186 kB) / `openai-completions` (~32 kB) / `openai-responses` (~26 kB) land in separate chunks loaded on first request.
+
+## 7. Browser Durable candidate (`@earendil-works/pi-durable` 1.5.2)
+
+Issue #28 adds a dormant browser adapter behind the editor's lazy agent entry. It does not change ADR-0007's accepted description of the running product and does not activate shared writable Durable conversations. The existing Agent 0.84.2 implementation remains selected as the rollback path until checkpoint, coordination and MVP validation are complete.
+
+Exact packages: `@earendil-works/pi-durable`, `@earendil-works/chord`, `@earendil-works/pi-schema` and scoped alias `@konae/pi-ai-durable` resolve to 1.5.2. The alias is necessary because rollback still imports `@earendil-works/pi-ai` 0.84.2. Pi Durable resolves its own 1.5.2 Pi AI; do not pass model or tool values across those boundaries without the explicit adapter.
+
+`src/agent/durable-storage.ts` uses the public `@earendil-works/pi-durable/storage/memory` `MemoryStorage.prepareCommit()` to materialize native ordered batches, the authenticated same-origin `/_konae/projects/{project}/conversations/...` API, and no private IndexedDB representation. Shared history opens read-only. Writer claim checks the native sequence again after claiming. Each remote batch has a stable request ID and exact serialized retry body; an ambiguous response reads `/receipts/{requestId}` before retry. Receipt request ID, count and ordered sequence are checked before local apply or Pi acknowledgement. Large structured tool details can live behind the immutable blob route, with a digest pointer in native records and the bounded model-visible text stored separately.
+
+`src/agent/durable-engine.ts` provides the candidate local-only engine and read-only history entry point. It resolves browser keys at provider dispatch, reuses the Capsule and allowlisted platform tool factories, marks tools unsafe to replay, and sets thinking off. Opening history does not resume tasks. The actual editor factory accepts `?agent=durable-local` only in a Vite development build or when `VITE_KONAE_DURABLE_STAGING=true` is explicitly supplied to a staging build. Default and production selection remains the 0.84.2 rollback engine, and shared activation remains held.
+
+**Route and release gate:** `/` and `/app/<id>` still pass through `PlatformGate`; a signed-out browser is redirected to owner sign-in. The local Durable engine itself has no owner-history/source/tool dependency, but the editor does not yet expose a credential-free browser-local entry point. #28 therefore verifies local agent + browser build + the same `proposalPreviewProject` / `createPreviewDocument` pipeline from an isolated browser fixture with owner routes intercepted, and verifies the actual staging App Preview with a fixture owner/project. Do not weaken `PlatformGate` or treat the staging URL as a local entry. Record the origin/main PRD divergence: its route behavior is protected, so #31/#32 must add and verify an explicit browser-local entry before shared Durable activation. The no-credential `konae init` + `dev` path remains available.

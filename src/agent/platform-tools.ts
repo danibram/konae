@@ -32,6 +32,7 @@ export type PlatformToolContext = {
   projectId: string;
   isCurrent(): boolean;
   binding: AgentPlatformBinding;
+  onCallBoundary?(callId: string, boundary: { arguments: Record<string, unknown>; effectiveArguments: Record<string, unknown>; confirmation: "not-required" | "requested" | "approved" | "declined" }): void;
 };
 
 type Policy = "read" | "confirm";
@@ -189,13 +190,19 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
             const module = sdkContract.modules.find((item) => item.name === String(given.module));
             if (!module || module.agentRule === "never") throw new Error(`The ${String(given.module)} module cannot be changed by the build agent.`);
           }
+          context.onCallBoundary?.(_id, { arguments: given, effectiveArguments: args, confirmation: "requested" });
           const approved = await binding.confirm({ projectId, tool: tool.name, summary: describeCall(tool.name, given), arguments: given });
           check(signal);
-          if (!approved) throw new Error(`The owner declined ${tool.name}. Nothing was changed.`);
+          if (!approved) {
+            context.onCallBoundary?.(_id, { arguments: given, effectiveArguments: args, confirmation: "declined" });
+            throw new Error(`The owner declined ${tool.name}. Nothing was changed.`);
+          }
+          context.onCallBoundary?.(_id, { arguments: given, effectiveArguments: args, confirmation: "approved" });
           if (needsDeployment && !binding.deploymentForProject(projectId)) {
             throw new Error("This project's deployment changed while waiting for the owner. Read it again before changing it.");
           }
         }
+        if (!confirm) context.onCallBoundary?.(_id, { arguments: given, effectiveArguments: args, confirmation: "not-required" });
         let result: unknown;
         try {
           result = await binding.call(tool.name, args, signal);
@@ -232,6 +239,7 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
         check(signal);
         const outcome = await publish(projectId);
         check(signal);
+        context.onCallBoundary?.(_id, { arguments: {}, effectiveArguments: { projectId }, confirmation: outcome.status === "published" ? "approved" : "declined" });
         if (outcome.status === "declined") throw new Error("The owner closed the Deploy dialog without publishing.");
         if (outcome.status === "failed") throw new Error(`Publishing was refused: ${outcome.error}`);
         binding.onChanged?.("publish");
