@@ -167,6 +167,17 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     for (const transferId of Object.values(exported.components)) await owner.cancel(transferId);
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toHaveLength(1);
     await expect(writer.call("files_read", { fileId: heldFile.id })).rejects.toThrow("File not found");
+    const saved = await owner.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+    const refusedDraft = JSON.parse(new TextDecoder().decode(await owner.download(saved.transfer)));
+    await owner.cancel(saved.transfer.transferId);
+    refusedDraft.directories = ["collision"];
+    refusedDraft.files.collision = "a file cannot also be a directory";
+    const invalid = await owner.upload(new TextEncoder().encode(JSON.stringify(refusedDraft)), projectId);
+    await expect(owner.call("project_sources_save", {
+      projectId, transferId: invalid.transferId, expectedRevision: saved.revision,
+    })).rejects.toThrow();
+    await owner.cancel(invalid.transferId);
+    expect((await savedSources(owner)).revision).toBe(saved.revision);
     const original = await savedSources(owner);
     const next = { artifact: payload.artifact, visibility: payload.visibility, project: { ...payload.project, files: { ...project, "history.txt": "second revision" } } };
     const release = await owner.upload(new TextEncoder().encode(JSON.stringify(next)), projectId);

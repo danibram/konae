@@ -3,6 +3,7 @@ import argparse
 from contextlib import contextmanager, closing
 from concurrent.futures import ThreadPoolExecutor
 import errno
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -177,6 +178,53 @@ def probe(binary, root, marker):
         assert number(restored / "apps/probe/data/usage.sqlite", "SELECT count(*) FROM signals WHERE name='note.added'") == 1
         assert (restored / "apps/probe/app/sample.bin").read_bytes() == (live / "apps/probe/app/sample.bin").read_bytes()
     print(f"{binary.name} restored {len(sources)} destination(s) at the selected cut", flush=True)
+
+
+def external_import(binary, root):
+    live = root / "live"
+    fixture(live)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("KONAE_", "AWS_"))}
+    env.update(setting(live), KONAE_COPY_DIR=str(root / "copies"), KONAE_COPY_INTERVAL_SECONDS="2")
+    imported = root / "export/data"
+    imported.mkdir(parents=True)
+    with closing(sqlite3.connect(imported / "database.sqlite")) as db:
+        db.executescript("CREATE TABLE notes(id INTEGER PRIMARY KEY); INSERT INTO notes VALUES(7);")
+    with server(binary, env) as (port, _proc):
+        wait(lambda: complete(port), "no pre-import point")
+        status = next((live / ".copy-health").glob("directory-*.json"))
+        volume = os.open(live, os.O_RDONLY)
+        apps = os.open(live / "apps", os.O_RDONLY)
+        def command_admitted():
+            try:
+                fcntl.flock(volume, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(volume, fcntl.LOCK_UN)
+            return False
+        try:
+            fcntl.flock(apps, fcntl.LOCK_EX)
+            with subprocess.Popen([binary, "import", imported.parent, "--app", "probe"], env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+                try:
+                    wait(command_admitted, "the importer did not take the data-directory permit")
+                    wait(lambda: json.loads(status.read_text())["running"], "no capture during the blocked import")
+                    assert proc.poll() is None
+                    assert number(live / "apps/probe/data/database.sqlite", "SELECT count(*) FROM notes") == 0
+                    fcntl.flock(apps, fcntl.LOCK_UN)
+                    out, err = proc.communicate(timeout=30)
+                    assert proc.returncode == 0, err.decode()
+                    assert json.loads(out)["imported"]
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+        finally:
+            os.close(apps)
+            os.close(volume)
+        assert app_count(port) == 1
+        report = wait(lambda: complete(port), "no complete post-import point")[0]
+        staged = root / "copies" / report["lastCopyId"] / "apps/probe/data/database.sqlite"
+        assert number(staged, "SELECT id FROM notes") == 7
+    print("kernel import held the volume across SQLite replacement and the next copy contained the new generation", flush=True)
 
 
 def low_disk(binary, root):
@@ -383,7 +431,8 @@ if __name__ == "__main__":
                                 "--binary", name, "--slow-marker", marker], check=True)
         sys.exit(0)
     if not args.slow_marker:
-        print("SKIP slow MinIO upload and S3 restore (no --slow-marker). Directory runs on both binaries.", flush=True)
+        selected = args.binary or "both binaries"
+        print(f"SKIP slow MinIO upload and S3 restore (no --slow-marker). Directory runs on {selected}.", flush=True)
     for name in ([args.binary] if args.binary else ["kernel", "konae"]):
         with tempfile.TemporaryDirectory(prefix="common-cut-") as root:
             probe((args.bin_dir / name).resolve(), Path(root), args.slow_marker)
@@ -392,6 +441,9 @@ if __name__ == "__main__":
                 read_restart((args.bin_dir / name).resolve(), Path(root))
             with tempfile.TemporaryDirectory(prefix="cut-action-") as root:
                 mutation_restart((args.bin_dir / name).resolve(), Path(root))
+    if args.binary != "konae" and not args.slow_marker:
+        with tempfile.TemporaryDirectory(prefix="cut-import-") as root:
+            external_import((args.bin_dir / "kernel").resolve(), Path(root))
     if args.binary != "kernel" and not args.slow_marker:
         with tempfile.TemporaryDirectory(prefix="cut-suspension-") as root:
             suspension((args.bin_dir / "konae").resolve(), Path(root))
