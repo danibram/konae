@@ -20,6 +20,15 @@ def save(report, path):
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
+def catalogue(binary, env, root):
+    result = subprocess.run([binary, "inventory"], env=dict(env, KONAE_DATA_DIR=str(root)),
+                            timeout=30, capture_output=True)
+    if result.returncode:
+        return {"certified": False, "exit": result.returncode, "reason": result.stderr.decode().strip().splitlines()[-1]}
+    components = json.loads(result.stdout)["components"]
+    return {"certified": True, "classes": len(components), "entries": sum(components.values())}
+
+
 def run(args, root, report):
     binary = args.binary.resolve(strict=True)
     assert binary.name == ("kernel" if args.profile == "standalone" else "konae")
@@ -54,6 +63,8 @@ def run(args, root, report):
     else:
         model = small_profile(binary, live, base)
     report["liveBytes"] = tree_bytes(live)
+    if not args.historical:
+        report["sourceCatalogue"] = catalogue(binary, base, live)
     oracle = inventory(live, source=True)
     report["inventory"] = compare(oracle, oracle)
     if args.profile == "six":
@@ -101,6 +112,8 @@ def run(args, root, report):
         observation = report["resources"] = {}
         online = set(targets) if live_s3 else {"directory", "directory-v3"}
         writer = env if live_s3 else {k: v for k, v in env.items() if not k.startswith("KONAE_S3_")}
+        if args.second_cut:
+            config["KONAE_COPY_INTERVAL_SECONDS"] = str(args.second_cut)
         with observed_server(binary, dict(writer, **config), cut["request"], observation) as port:
             def finished():
                 status = cut["targets"](port)
@@ -109,6 +122,19 @@ def run(args, root, report):
                 if all(s["lastAttemptAt"] and not s.get("inProgress") and (s["lastCopyId"] or s["lastError"]) for s in status):
                     return status
             statuses = cut["wait"](finished, "pilot capture did not finish", 900)
+            if args.second_cut:
+                assert all(s["lastCopyId"] for s in statuses)
+                first, = {s["lastCopyId"] for s in statuses}
+                phase("next-publish")
+                def second():
+                    records = finished()
+                    if records and all(s["lastCopyId"] != first or s["lastError"] for s in records):
+                        return records
+                following = cut["wait"](second, "No second complete cut", 900)
+                first_cut, = {s["lastCutAt"] for s in statuses}
+                report["ageBeforeNextPointMs"] = {s["kind"]: s["lastSuccessAt"] - first_cut for s in following
+                                                  if not s["lastError"]}
+                statuses = following
             phase("post-capture")
             if any(s["lastError"] for s in statuses):
                 if model is None:
@@ -200,20 +226,28 @@ def run(args, root, report):
                     result["restoreSeconds"] = round(restored - start, 3)
                     result["access"] = check_access(binary, base, dest, args.six, model)
                     result["rtoSeconds"] = round(time.monotonic() - start, 3)
+                    if not args.historical:
+                        result["catalogue"] = catalogue(binary, base, dest)
+                        if not result["catalogue"]["certified"]:
+                            failures.append((target, "restored catalogue", result["catalogue"]["reason"]))
                 except Exception as error:
                     failures.append((target, "access", str(error)))
                 phase("inspect-" + target)
                 image = temp / "image"
                 try:
                     command = [args.reader, "--exact", "copies::pilot::read_pilot_cut", "--ignored", "--nocapture"]
+                    started = time.monotonic()
                     read = subprocess.run(command, env=dict(env, PILOT_COPY=point, PILOT_IMAGE=str(image),
                         PILOT_BINARY=binary.name, PILOT_SOURCE=str(source)), capture_output=True, timeout=600)
                     assert read.returncode == 0 and b"1 passed" in read.stdout, read.stderr.decode()[-500:]
+                    result["imageSeconds"] = round(time.monotonic() - started, 3)
                     result["inventory"] = compare(oracle, inventory(image))
                 except Exception as error:
                     failures.append((target, "inventory", str(error)))
             save(report, args.report)
         phase("end")
+        if not args.historical and not report["sourceCatalogue"]["certified"]:
+            failures.append(("source", "catalogue", report["sourceCatalogue"]["reason"]))
         if failures:
             raise AssertionError(str(failures))
 
@@ -226,12 +260,18 @@ def main():
     parser.add_argument("--six", type=Path, help="synthetic six-apps fixture and external oracle")
     parser.add_argument("--store", choices=["local", "unversioned", "versioned", "replay"], required=True)
     parser.add_argument("--delay-file-get", action="store_true", help="hold the standalone fixture's live GET for 2.2 s")
+    parser.add_argument("--second-cut", type=int, metavar="SECONDS", help="observe age up to the next publication")
+    parser.add_argument("--historical", action="store_true", help="af1a897 predates the inventory command")
     parser.add_argument("--legacy-s3-only", action="store_true", help="isolate the v2 writer on a live S3 file store")
     parser.add_argument("--mc", default="mc")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     if args.profile == "six" and not args.six:
         parser.error("six needs --six")
+    if args.second_cut and (args.second_cut < 2 or args.historical or args.store == "replay"):
+        parser.error("choose an integrated live writer and an interval of at least two seconds")
+    if args.historical and not args.legacy_s3_only:
+        parser.error("the historical measurement requires --legacy-s3-only")
     if args.report.exists():
         parser.error("choose a new report path")
     os.umask(0o077)
