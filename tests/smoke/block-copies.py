@@ -123,19 +123,30 @@ def exercise(args, root, remote):
 
     def capture(writes=False):
         started_at = time.time_ns() // 1_000_000
-        if args.marker:
-            args.marker.unlink(missing_ok=True)
         with server(binary, env) as (port, _):
             if writes:
-                wait(args.marker.exists, "no slow upload", 60)
+                def local_point():
+                    report = next(r for r in cut["targets"](port) if r["kind"] == "directory-v3")
+                    point = report["lastCopyId"]
+                    if point and (directory / "points" / point).is_file():
+                        return point
+
+                # The interrupted connection can still touch the proxy marker.
+                pinned = wait(local_point, "retry did not publish its directory-v3 manifest", 60)
+                writer, = wait(lambda: remote.list("users"), "retry did not reserve s3-v3", 60)
+                args.marker.unlink(missing_ok=True)
+                wait(args.marker.exists, "no slow transfer during retry", 60)
+                assert not remote.list("points"), "s3-v3 published before the five writes"
                 started = time.monotonic()
                 for i in range(5):
                     cut["rpc"](port, "actions_invoke", {"name":"notes.add","input":{}})
                     assert cut["app_count"](port) == i+2
                 latency = time.monotonic()-started
-                assert not remote.list("points")
+                assert set(remote.list("users")) == {writer}, "s3-v3 released its writer during the five writes"
+                assert not remote.list("points"), "s3-v3 published during the five writes"
                 assert any(r["kind"] == "s3-v3" and r["inProgress"] for r in cut["targets"](port))
-                print(f"PASS five HTTP writes and five read-backs during v3 upload in {latency:.3f} s", flush=True)
+                print(f"PASS directory-v3 published {pinned} before five HTTP writes and read-backs "
+                      f"in {latency:.3f} s while s3-v3 held its writer reservation", flush=True)
             def finished():
                 reports = cut["targets"](port)
                 if any(r["inProgress"] or (r["lastAttemptAt"] or 0) < started_at for r in reports):
@@ -148,6 +159,8 @@ def exercise(args, root, remote):
             assert {r["kind"] for r in reports} == expected_targets
             ids = {r["lastCopyId"] for r in reports}
             assert len(ids) == 1
+            if writes:
+                assert ids == {pinned}, "destinations reported a different cut from the directory-v3 manifest"
             return ids.pop()
 
     first = capture(writes=bool(args.marker))
@@ -204,7 +217,11 @@ def exercise(args, root, remote):
             elapsed.append(time.monotonic() - started)
             assert cut["number"](output/"owners.sqlite","SELECT count(*) FROM app_users WHERE state='suspended'") == 1
             count = 6 if args.marker and point == second else 1
-            assert cut["number"](output/"apps/probe/data/database.sqlite","SELECT count(*) FROM notes") == count
+            actual = cut["number"](output/"apps/probe/data/database.sqlite","SELECT count(*) FROM notes")
+            cut_name = "first" if point == first else "second"
+            rows = f"{kind} {cut_name} cut {point} notes expected={count} restored={actual}"
+            print(rows, flush=True)
+            assert actual == count, rows
             assert (output/"apps/probe/app/sample.bin").read_bytes() == sample
             subprocess.run([sys.executable,args.deleted_secret,"verify",output/db_secret],check=True,stdout=subprocess.DEVNULL)
         if kind == "s3-v3":
