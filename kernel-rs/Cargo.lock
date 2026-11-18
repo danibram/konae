@@ -1392,6 +1392,7 @@ version = "0.10.0"
 dependencies = [
  "anyhow",
  "aws-sdk-s3",
+ "base64 0.22.1",
  "hex",
  "ring",
  "rusqlite",

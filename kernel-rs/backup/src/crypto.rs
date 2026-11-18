@@ -8,6 +8,7 @@ use ring::{
 
 /// Seals files and signs manifests with separate keys derived from the same secret.
 pub struct CopyKey {
+    pub(crate) blocks_root: hkdf::Prk,
     key: LessSafeKey,
     check: String,
     manifest_mac: hmac::Key,
@@ -27,7 +28,8 @@ impl CopyKey {
         let mut check = [0u8; 32];
         prk.expand(&[b"key check"], HkdfLength(32)).expect("HKDF output fits 32 bytes").fill(&mut check).expect("32 bytes");
         let manifest_mac = prk.expand(&[b"manifest mac"], hmac::HMAC_SHA256).expect("HKDF output fits HMAC-SHA256");
-        Self { key, check: hex::encode(check), manifest_mac: hmac::Key::from(manifest_mac) }
+        let blocks_root = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-copy-v3").extract(secret.as_bytes());
+        Self { blocks_root, key, check: hex::encode(check), manifest_mac: hmac::Key::from(manifest_mac) }
     }
 
     pub(crate) fn sign_manifest(&self, copy: &str, manifest: &Manifest) -> String {

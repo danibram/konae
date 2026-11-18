@@ -1,4 +1,5 @@
 
+pub(crate) mod blocks;
 mod cut;
 pub(crate) mod operation;
 pub use operation::Pending;
@@ -38,6 +39,12 @@ use konae_backup::{DAY_MS, MAX_MANIFEST_BYTES, manifest_cache_key, encode_manife
 
 impl PathScope for Installation {
     fn allows(&self, path: &str) -> bool { self.holds(path) || path.starts_with("apps/") }
+
+    fn sqlite_image(&self, path: &str) -> bool {
+        let mut parts = path.split('/');
+        self.holds(path) || matches!((parts.next(), parts.next(), parts.next(), parts.next(), parts.next()),
+            (Some("apps"), Some(_), Some("data"), Some(name), None) if DEPLOYMENT_DATABASES.contains(&name))
+    }
 }
 
 pub(crate) const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
@@ -49,6 +56,8 @@ const DEFAULT_INTERVAL_SECONDS: u64 = 3600;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Directory(PathBuf),
+    BlocksDirectory(PathBuf),
+    BlocksS3 { prefix: String },
     S3 { prefix: String },
 }
 
@@ -56,6 +65,8 @@ impl Target {
     fn kind(&self) -> &'static str {
         match self {
             Target::Directory(_) => "directory",
+            Target::BlocksDirectory(_) => "directory-v3",
+            Target::BlocksS3 { .. } => "s3-v3",
             Target::S3 { .. } => "s3",
         }
     }
@@ -71,9 +82,11 @@ impl CopyConfig {
     /// `s3_configured` says whether `KONAE_S3_BUCKET` names a bucket.
     pub fn from_env(data_root: &Path, s3_configured: bool) -> Result<Option<Self>> {
         // Refuses a short secret at startup rather than at the first copy.
-        CopyKey::from_env()?;
+        let key = CopyKey::from_env()?;
         let get = crate::file_store::env_var;
+        let blocks = blocks::targets(data_root, s3_configured, key.is_some())?;
         Self::parse(
+            blocks,
             get("KONAE_COPY_DIR").as_deref(),
             get("KONAE_COPY_S3").as_deref(),
             get("KONAE_COPY_INTERVAL_SECONDS").as_deref(),
@@ -83,13 +96,13 @@ impl CopyConfig {
     }
 
     fn parse(
+        mut targets: Vec<Target>,
         directory: Option<&str>,
         copy_s3: Option<&str>,
         interval: Option<&str>,
         data_root: &Path,
         s3_configured: bool,
     ) -> Result<Option<Self>> {
-        let mut targets = Vec::new();
         if let Some(directory) = directory {
             let directory = std::path::absolute(directory)?;
             let data_root = std::path::absolute(data_root)?;
@@ -97,6 +110,13 @@ impl CopyConfig {
                 !directory.starts_with(&data_root) && !data_root.starts_with(&directory),
                 "KONAE_COPY_DIR must be outside KONAE_DATA_DIR, on another disk."
             );
+            for target in &targets {
+                if let Target::BlocksDirectory(v3) = target {
+                    let legacy = blocks::effective(&directory)?;
+                    ensure!(!legacy.starts_with(v3) && !v3.starts_with(&legacy),
+                        "Choose separate directory trees for legacy and v3 copies.");
+                }
+            }
             targets.push(Target::Directory(directory));
         }
         match copy_s3 {
@@ -186,7 +206,7 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
         let kind = target.kind();
         let outcome = match &staged {
             Err(error_value) => Err(anyhow::anyhow!("the snapshot failed: {error_value:#}")),
-            Ok(staged) => match recovery::start(target, state.s3.as_ref(), &state.data_bucket).await {
+            Ok(staged) => match recovery::start(target, state.s3.as_ref(), &state.data_bucket, state.copies.key()).await {
                 Ok(()) => send(state, target, &staging, staged, &id, &mut cache).await,
                 Err(error_value) => Err(error_value.context("the revocation record could not be started")),
             },
@@ -233,6 +253,7 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
 
 async fn send(state: &AppState, target: &Target, staging: &Path, staged: &StagedCopy, id: &str, cache: &mut ManifestCache) -> Result<()> {
     match target {
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => blocks::publish(state, target, staging, staged).await,
         Target::Directory(directory) => {
             let (staging, directory, id, manifest) = (staging.to_owned(), directory.clone(), id.to_owned(), staged.manifest.clone());
             let legacy = staged.legacy_blobs.clone();
@@ -249,6 +270,7 @@ async fn send(state: &AppState, target: &Target, staging: &Path, staged: &Staged
 
 async fn prune(state: &AppState, target: &Target, id: &str, cache: &mut ManifestCache) -> Result<usize> {
     match target {
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => Ok(0),
         Target::Directory(directory) => {
             let directory = directory.clone();
             tokio::task::spawn_blocking(move || prune_directory(&directory, now_ms())).await?
@@ -406,12 +428,28 @@ async fn restore_with_receipt(source: &Source, copy: Option<&str>, destination: 
 /// Reads the revocation record next to the copies at `from`, for
 /// The `reconcile` command. `None` when the source keeps no record.
 pub async fn read_record(from: &str, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
-    let source = source_for(from).await?;
-    let source = match source {
-        Source::Directory(path) if path.join(MANIFEST).is_file() => Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
-        other => other,
-    };
+    let source = record_source(from).await?;
     read_source_record(&source, key).await
+}
+
+pub(crate) async fn record_source(from: &str) -> Result<Source> {
+    let source = source_for(from).await?;
+    Ok(match source {
+        Source::Directory(path) if blocks::identity(&path).is_none() && path.join(MANIFEST).is_file() =>
+            Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
+        other => other,
+    })
+}
+
+pub(crate) fn ledger_binding(source: &Source, key: Option<&CopyKey>) -> Option<String> {
+    let key = key?;
+    if let Some(repo) = blocks::source_identity(source) {
+        Some(format!("v3/{repo}/{}", key.fingerprint()))
+    } else if matches!(source, Source::S3 { .. }) {
+        Some(key.fingerprint().to_owned())
+    } else {
+        None
+    }
 }
 
 async fn source_for(from: &str) -> Result<Source> {
@@ -427,21 +465,32 @@ async fn source_for(from: &str) -> Result<Source> {
     })
 }
 
-async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
+pub(crate) async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
     let dir = recovery::LEDGER_DIR;
     let start = recovery::LEDGER_START;
+    let check = |name: &str, bytes: &[u8]| -> Result<()> {
+        if let Some(repository) = blocks::source_identity(source) {
+            key.context("A v3 revocation record needs KONAE_COPY_SECRET.")?.check_record_mac(repository, name, bytes)?;
+        } else if name != start && matches!(source, Source::S3 { .. }) && let Some(key) = key {
+            recovery::check_signed(key, name, bytes)?;
+        }
+        if name == start { check_record_start(bytes)?; }
+        Ok(())
+    };
     match source {
         Source::Directory(root) => {
             let folder = root.join(dir);
             if !folder.join(start).is_file() {
                 return Ok(None);
             }
-            check_record_start(&tokio::fs::read(folder.join(start)).await?)?;
+            check(start, &tokio::fs::read(folder.join(start)).await?)?;
             let mut files = Vec::new();
             for entry in std::fs::read_dir(&folder)? {
                 let name = entry?.file_name().to_string_lossy().into_owned();
                 if name.ends_with(".json") && name != start && !name.starts_with('.') {
-                    files.push(tokio::fs::read(folder.join(&name)).await?);
+                    let bytes = tokio::fs::read(folder.join(&name)).await?;
+                    check(&name, &bytes)?;
+                    files.push(bytes);
                 }
             }
             Ok(Some(files))
@@ -452,13 +501,11 @@ async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Op
             if !keys.iter().any(|key| key[base.len()..] == *start) {
                 return Ok(None);
             }
-            check_record_start(&read_s3_bytes(client, bucket, &format!("{base}{start}")).await?)?;
+            check(start, &read_s3_bytes(client, bucket, &format!("{base}{start}")).await?)?;
             let mut files = Vec::new();
             for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
                 let bytes = read_s3_bytes(client, bucket, object).await?;
-                if let Some(key) = key {
-                    recovery::check_signed(key, &object[base.len()..], &bytes)?;
-                }
+                check(&object[base.len()..], &bytes)?;
                 files.push(bytes);
             }
             Ok(Some(files))
@@ -501,33 +548,39 @@ async fn restore_with_witness(
 ) -> Result<RestoreSummary> {
     let _volume = crate::file_store::hold_while_stopped(destination, "restore")?;
     ensure_empty(destination)?;
-    let direct;
-    let (source, copy) = match (source, copy) {
-        (Source::Directory(path), None) if path.join(MANIFEST).is_file() => {
-            let name = path.file_name().and_then(|name| name.to_str()).context("The copy directory has no name.")?;
-            direct = Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned());
-            (&direct, name.to_owned())
-        }
-        (source, Some(copy)) => (source, copy.to_owned()),
-        (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
-            let key = key.expect("checked by the guard");
-            (source, newest_authentic_copy(source, key, &mut |line| println!("{line}")).await?)
-        }
-        (source, None) => {
-            let latest = source.complete_copies().await?.pop();
-            (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
-        }
-    };
-    let reader = CopyReader::open(source, &copy, key.map(CopyKey::files), installation).await.map_err(|error| {
-        if error.is::<konae_backup::UnencryptedS3Copy>() {
-            anyhow::anyhow!("{error} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.", crate::program())
-        } else {
-            error
-        }
-    })?;
-    let manifest = reader.manifest();
     let staging = destination.join(format!(".restore-{}", uuid::Uuid::new_v4()));
-    reader.restore(&staging).await?;
+    let direct;
+    let (source, manifest) = if let Some(identity) = blocks::source_identity(source) {
+        let manifest = blocks::restore(source, identity, key, copy, installation, &staging).await?;
+        (source, manifest)
+    } else {
+        let (source, copy) = match (source, copy) {
+            (Source::Directory(path), None) if path.join(MANIFEST).is_file() => {
+                let name = path.file_name().and_then(|name| name.to_str()).context("The copy directory has no name.")?;
+                direct = Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned());
+                (&direct, name.to_owned())
+            }
+            (source, Some(copy)) => (source, copy.to_owned()),
+            (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
+                let key = key.expect("checked by the guard");
+                (source, newest_authentic_copy(source, key, &mut |line| println!("{line}")).await?)
+            }
+            (source, None) => {
+                let latest = source.complete_copies().await?.pop();
+                (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
+            }
+        };
+        let reader = CopyReader::open(source, &copy, key.map(CopyKey::files), installation).await.map_err(|error| {
+            if error.is::<konae_backup::UnencryptedS3Copy>() {
+                anyhow::anyhow!("{error} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.", crate::program())
+            } else {
+                error
+            }
+        })?;
+        reader.restore(&staging).await?;
+        (source, reader.manifest().clone())
+    };
+    let copy = manifest.copy_id.clone();
     let staged = async {
         let root = staging.clone();
         let stores = installation.clone();
@@ -544,9 +597,7 @@ async fn restore_with_witness(
         let record = read_source_record(source, key).await;
         let witness = witness.map(str::to_owned);
         let cut = manifest.created_at;
-        let key_check = if matches!(source, Source::S3 { .. }) {
-            key.map(|k| k.fingerprint().to_owned())
-        } else { None };
+        let key_check = ledger_binding(source, key);
         let root = staging.clone();
         let stores = installation.clone();
         let reconciled = tokio::task::spawn_blocking(move || match witness {
@@ -991,11 +1042,11 @@ mod tests {
     #[test]
     fn copy_settings_refuse_unsafe_targets() {
         let data = Path::new("/srv/konae/data");
-        assert!(CopyConfig::parse(None, None, None, data, false).unwrap().is_none());
-        let config = CopyConfig::parse(Some("/mnt/second"), Some("1"), None, data, true).unwrap().unwrap();
+        assert!(CopyConfig::parse(Vec::new(), None, None, None, data, false).unwrap().is_none());
+        let config = CopyConfig::parse(Vec::new(), Some("/mnt/second"), Some("1"), None, data, true).unwrap().unwrap();
         assert_eq!(config.targets, vec![Target::Directory("/mnt/second".into()), Target::S3 { prefix: "copies/".into() }]);
         assert_eq!(config.interval, Duration::from_secs(3600));
-        let refuse = |dir, copy_s3, interval, s3| CopyConfig::parse(dir, copy_s3, interval, data, s3).unwrap_err().to_string();
+        let refuse = |dir, copy_s3, interval, s3| CopyConfig::parse(Vec::new(), dir, copy_s3, interval, data, s3).unwrap_err().to_string();
         assert!(refuse(Some("/srv/konae/data/copies"), None, None, false).contains("outside"));
         assert_eq!(refuse(None, Some("1"), None, false), "KONAE_COPY_S3=1 needs KONAE_S3_BUCKET.");
         assert_eq!(refuse(None, Some("copies/"), None, true), "KONAE_COPY_S3 must be 1 when set.");
@@ -1488,7 +1539,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(&std::fs::read(copy.join(MANIFEST)).unwrap()).unwrap();
         let mut cache = ManifestCache::new();
         send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key: key.map(CopyKey::files) }, copy, &manifest, id, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
-        recovery::start(&s3_target(), Some(client), "data").await.unwrap();
+        recovery::start(&s3_target(), Some(client), "data", None).await.unwrap();
     }
 
     async fn plain_copy(label: &str) -> (PathBuf, PathBuf, String, Deployment) {
@@ -1503,7 +1554,7 @@ mod tests {
         let (source, copies, id, _) = plain_copy("planted").await;
         let client = fake_s3_client().await;
         upload_plain(&client, &copies.join(&id), &id).await;
-        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
+        recovery::start(&s3_target(), Some(&client), "data", None).await.unwrap();
         let key = CopyKey::derive(TEST_SECRET);
         let restored = scratch("planted-restored");
         let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
@@ -1574,7 +1625,7 @@ mod tests {
         let key = CopyKey::derive(TEST_SECRET);
         upload_plain(&client, &copies.join(&id), &id).await;
         upload_plain(&client, &copies.join(&id), LATER_ID).await;
-        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
+        recovery::start(&s3_target(), Some(&client), "data", None).await.unwrap();
         let (installed, outcome) = restored_notes(&s3_source(&client), None, "planted-only-restored", &deployment, &key).await;
         let refused = outcome.err().expect("no copy can be authenticated").to_string();
         assert!(refused.contains("2 skipped") && refused.contains("Nothing was installed"), "{refused}");
