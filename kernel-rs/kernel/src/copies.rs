@@ -2153,3 +2153,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod pilot;

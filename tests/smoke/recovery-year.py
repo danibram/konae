@@ -37,6 +37,7 @@ class Model:
     users: dict = field(default_factory=dict)
     files: dict = field(default_factory=dict)
     projects: set = field(default_factory=set)
+    published: set = field(default_factory=set)
 
 
 class Divergence(AssertionError):
@@ -75,7 +76,7 @@ def check_projects(port, cookie, model):
     for project in sorted(model.projects):
         inspected = cut["rpc"](port, "project_inspect", {"projectId": project}, cookie)
         equal(inspected["project"]["id"], project, "owner opens project")
-        equal(inspected["deployment"] is not None, project == "probe", "draft or published project")
+        equal(inspected["deployment"] is not None, project in model.published, "draft or published project")
 
 
 def action(port, cookie, name, args):
@@ -270,6 +271,7 @@ def campaign(args, root, report):
             owner, can = owner_session(port, env, signup=True)
             equal(can["write"], True, "owner project write access")
             model.projects.add("probe")
+            model.published.add("probe")
             check_projects(port, owner, model)
             report["operation"] = "create draft"
             cut["rpc"](port, "project_create", {"projectId": "draft", "name": "Draft"}, owner)

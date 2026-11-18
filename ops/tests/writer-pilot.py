@@ -1,0 +1,196 @@
+"""Compare installation writers on one cut. Run one case per empty MinIO bucket."""
+import argparse
+from contextlib import nullcontext
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import tempfile
+import time
+import uuid
+
+from pilot_fixture import check_access, compare, cut, inventory, small_profile, year
+from pilot_observation import observed_server, Traffic, tree_bytes
+
+
+def save(report, path):
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+
+
+def run(args, root, report):
+    binary = args.binary.resolve(strict=True)
+    assert binary.name == ("kernel" if args.profile == "standalone" else "konae")
+    check = subprocess.run([args.reader, "--list"], env=dict(cut["setting"](root / "reader-probe"),
+                           KONAE_KERNEL_PORT="0"), capture_output=True, timeout=5, check=True)
+    if b"copies::pilot::read_pilot_cut: test" not in check.stdout:
+        raise ValueError("--reader must be the release kernel --lib test executable")
+    remote = args.store != "local"
+    live_s3 = remote and args.store != "replay"
+    if remote:
+        settings = year["remote_settings"](args.mc)
+    else:
+        settings = {}
+        print("SKIP s3 and s3-v3: local file store selected; this runtime shares its S3 setting with copies.",
+              flush=True)
+    report["omitted"] = [] if remote else ["s3", "s3-v3"]
+    live = root / "live"
+    base = dict(cut["setting"](live), PATH=os.defpath, AWS_EC2_METADATA_DISABLED="true", TOKIO_WORKER_THREADS="2")
+    env = dict(base, **settings, KONAE_COPY_SECRET=secrets.token_hex(32))
+    model = None
+    if args.profile == "six":
+        shutil.copytree(args.six / "live", live)
+        # Open the historical fixture once to run this binary's startup migrations.
+        with cut["server"](binary, base):
+            pass
+    else:
+        model = small_profile(binary, live, base)
+    report["liveBytes"] = tree_bytes(live)
+    oracle = inventory(live, source=True)
+    report["inventory"] = compare(oracle, oracle)
+    if args.profile == "six":
+        assets = json.loads((args.six / "expected.json").read_bytes())
+        expected = {Path("apps") / a["app"] / "data/files" / (a["id"] + ".blob"):
+                    bytes.fromhex(a["sha256"]) for a in assets}
+        assert {p: v for p, v in oracle.items() if p.suffix == ".blob"} == expected
+        report.update(privateFiles=len(expected), privateBytes=sum(a["size"] for a in assets))
+    blocks = root / "copies-v3" / uuid.uuid4().hex
+    targets = {"directory": root / "directory", "directory-v3": blocks}
+    config = dict(KONAE_COPY_DIR=str(targets["directory"]), KONAE_COPY_V3_DIR=str(blocks),
+                  KONAE_COPY_STAGE_BYTES=str(1024**3), KONAE_COPY_READERS="512")
+    if remote:
+        rid = uuid.uuid4().hex
+        if live_s3:
+            config.update(KONAE_COPY_S3="1", KONAE_COPY_V3_S3=rid)
+        targets.update({"s3": "s3://konae-test/copies/", "s3-v3": "s3://konae-test/copies-v3/" + rid})
+
+    def mc(*args_, **kwargs):
+        return subprocess.run([args.mc, *args_], check=True, capture_output=True, timeout=120, **kwargs).stdout
+
+    with Traffic(args.mc) if remote else nullcontext() as traffic:
+        def phase(name):
+            report["phase"] = name
+            save(report, args.report)
+            if traffic:
+                traffic.boundary(name)
+        if live_s3:
+            if args.store == "versioned":
+                mc("version", "enable", "lab/konae-test")
+            phase("migration")
+            subprocess.run([binary, "files-migrate", "--to", "s3"], env=env, check=True, capture_output=True)
+        phase("publish")
+        observation = report["resources"] = {}
+        online = set(targets) if live_s3 else {"directory", "directory-v3"}
+        writer = env if live_s3 else {k: v for k, v in env.items() if not k.startswith("KONAE_S3_")}
+        with observed_server(binary, dict(writer, **config), cut["request"], observation) as port:
+            def finished():
+                status = cut["targets"](port)
+                kinds = {s["kind"] for s in status}
+                assert kinds == online, f"Missing targets {online - kinds}; unexpected {kinds - online}"
+                if all(s["lastAttemptAt"] and not s["inProgress"] for s in status):
+                    return status
+            statuses = cut["wait"](finished, "pilot capture did not finish", 900)
+        phase("storage")
+        report["publication"] = {s["kind"]: dict(error=s["lastError"], point=s["lastCopyId"],
+            cutMs=s["lastCutAt"], lagMs=s["lastSuccessAt"] - s["lastCutAt"] if s["lastCutAt"] else None)
+            for s in statuses}
+        if traffic:
+            report["traffic"] = traffic.stats
+        if any(s["lastError"] for s in statuses):
+            raise AssertionError("A destination refused the capture; see publication in the report")
+        point, = {s["lastCopyId"] for s in statuses}
+        at, = {s["lastCutAt"] for s in statuses}
+        assert point and at
+        if args.store == "replay":
+            for target in ["s3", "s3-v3"]:
+                phase("replay-" + target)
+                replay_env = dict(env, PILOT_COPY=point, PILOT_BINARY=binary.name,
+                                  PILOT_DIRECTORY=str(targets["directory"]), PILOT_TARGET="s3" if target == "s3" else rid)
+                start = time.monotonic()
+                replay = subprocess.run([args.reader, "--exact", "copies::pilot::replay_pilot_cut", "--ignored"],
+                                        env=replay_env, capture_output=True, timeout=900)
+                assert replay.returncode == 0 and b"1 passed" in replay.stdout, replay.stdout[-800:]
+                report["publication"][target] = dict(point=point, cutMs=at, replay=True,
+                    replaySeconds=round(time.monotonic() - start, 3), lagMs=time.time_ns() // 1_000_000 - at)
+        phase("storage")
+        report["stored"] = {}
+        for target, source in targets.items():
+            if isinstance(source, Path):
+                report["stored"][target] = tree_bytes(source)
+            else:
+                prefix = source.removeprefix("s3://konae-test/").rstrip("/")
+                entries = mc("ls", "--recursive", "--versions", "--json", "lab/konae-test/" + prefix + "/")
+                report["stored"][target] = sum(json.loads(line)["size"] for line in entries.splitlines())
+        phase("remove-source")
+        shutil.rmtree(live)
+        if live_s3:
+            args_ = ["--versions"] if args.store == "versioned" else []
+            mc("rm", "--force", "--recursive", *args_, "lab/konae-test/files/")
+            assert not mc("ls", "--recursive", "--versions", "--json", "lab/konae-test/files/").strip()
+        report["restores"] = {}
+        failures = []
+        for target, source in targets.items():
+            result = report["restores"][target] = {}
+            with tempfile.TemporaryDirectory(dir=root) as tmp:
+                temp = Path(tmp)
+                dest = temp / "restored"
+                phase("restore-" + target)
+                start = time.monotonic()
+                try:
+                    command = [binary, "restore", "--from", source, "--copy", point]
+                    output = subprocess.run(command, env=dict(env, KONAE_DATA_DIR=str(dest)), check=True,
+                                            capture_output=True, timeout=1800)
+                    assert b"Applied the revocation record" in output.stdout
+                    restored = time.monotonic()
+                    result["restoreSeconds"] = round(restored - start, 3)
+                    result["access"] = check_access(binary, base, dest, args.six, model)
+                    result["rtoSeconds"] = round(time.monotonic() - start, 3)
+                except Exception as error:
+                    failures.append((target, "access", str(error)))
+                phase("inspect-" + target)
+                image = temp / "image"
+                try:
+                    command = [args.reader, "--exact", "copies::pilot::read_pilot_cut", "--ignored", "--nocapture"]
+                    read = subprocess.run(command, env=dict(env, PILOT_COPY=point, PILOT_IMAGE=str(image),
+                        PILOT_BINARY=binary.name, PILOT_SOURCE=str(source)), capture_output=True, timeout=600)
+                    assert read.returncode == 0 and b"1 passed" in read.stdout, read.stderr.decode()[-500:]
+                    result["inventory"] = compare(oracle, inventory(image))
+                except Exception as error:
+                    failures.append((target, "inventory", str(error)))
+            save(report, args.report)
+        phase("end")
+        if failures:
+            raise AssertionError(str(failures))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--reader", type=Path, required=True, help="release kernel --lib test executable")
+    parser.add_argument("--profile", choices=["draft", "standalone", "six"], required=True)
+    parser.add_argument("--six", type=Path, help="synthetic six-apps fixture and external oracle")
+    parser.add_argument("--store", choices=["local", "unversioned", "versioned", "replay"], required=True)
+    parser.add_argument("--mc", default="mc")
+    parser.add_argument("--report", type=Path, required=True)
+    args = parser.parse_args()
+    if args.profile == "six" and not args.six:
+        parser.error("six needs --six")
+    if args.report.exists():
+        parser.error("choose a new report path")
+    os.umask(0o077)
+    report = dict(profile=args.profile, store=args.store, result="failed")
+    try:
+        with tempfile.TemporaryDirectory(prefix="writer-pilot-") as tmp:
+            run(args, Path(tmp).resolve(), report)
+        report["result"] = "passed"
+    except Exception as error:
+        report["failure"] = str(error)
+        raise
+    finally:
+        save(report, args.report)
+        print(f"{args.profile} {args.store}: {report['result']} ({args.report})")
+
+
+if __name__ == "__main__":
+    main()
