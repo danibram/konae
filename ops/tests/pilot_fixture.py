@@ -37,7 +37,8 @@ def small_profile(binary, live, env):
             assert can["write"]
             cut["rpc"](port, "project_create", {"projectId": "draft", "name": "Draft"}, cookie)
             assert cut["rpc"](port, "project_inspect", {"projectId": "draft"}, cookie)["deployment"] is None
-            model.projects.update(["probe", "public-a", "public-b", "draft"])
+            model.published.update(["probe", "public-a", "public-b"])
+            model.projects.update(model.published | {"draft"})
             year["check_projects"](port, cookie, model)
         for email in year["MEMBERS"][:2]:
             model.users[email], cookie = year["account"](port, email, "signup")
