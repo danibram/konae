@@ -205,7 +205,9 @@ def verify(binary, env, dest, model, suspended, counts):
 def capture(binary, env, previous, kinds):
     def finished():
         reports = cut["targets"](port)
-        equal({r["kind"] for r in reports}, kinds, "configured destinations")
+        observed = {r["kind"] for r in reports}
+        if observed != kinds:
+            raise Divergence(f"Missing destinations {sorted(kinds - observed)}; unexpected {sorted(observed - kinds)}")
         for r in reports:
             if r["lastError"] and not r["inProgress"]:
                 raise AssertionError(r["lastError"])

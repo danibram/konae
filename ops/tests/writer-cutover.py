@@ -2,7 +2,10 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 import runpy
+import subprocess
+import sys
 import tempfile
 
 import unittest
@@ -158,6 +161,16 @@ class Receipt(unittest.TestCase):
         r = example()
         next(d for d in r["drills"] if d["kind"] == "rollback" and d["target"] == "s3")["format"] = 1
         self.assertIn("restore format or repository mismatch", gate["check_receipt"](r, "retire", NOW))
+
+    def test_missing_destination_exits_before_startup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            result = subprocess.run([sys.executable, "-B", Path(__file__).with_name("writer-rollback.py"),
+                                     "--binary", "kernel", "--build-commit", COMMIT, "--baseline", tmp,
+                                     "--mc", "mc", "--report", report], env={"PATH": os.defpath}, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"SKIP directory and S3", result.stderr)
+            self.assertEqual(json.loads(report.read_bytes())["omitted"], ["directory", "s3"])
 
     def test_detached_signatures_and_restricted_output(self):
         with tempfile.TemporaryDirectory() as temp:
