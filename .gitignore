@@ -17,12 +17,11 @@ playwright-report/
 .konae-owner.env
 examples/architecture-map/konae.json
 
-examples/docs-site/index.html
-examples/docs-site/pages/
-examples/docs-site/public/content/
-examples/docs-site/public/vendor/
-examples/docs-site/public/llms.txt
-examples/docs-site/seed.sql
-examples/docs-site/konae.json
-examples/home/konae.json
+examples/site/pages/docs/
+examples/site/pages/docs.html
+examples/site/public/docs/content/
+examples/site/public/docs/vendor/
+examples/site/public/llms.txt
+examples/site/seed.sql
+examples/site/konae.json
 examples/kamynando/

@@ -7,24 +7,24 @@
   <meta name="description" content="{{description}}">
   <link rel="icon" href="data:,">
   <link rel="alternate" type="text/markdown" href="{{root}}content/{{route}}.md" title="This page as markdown">
-  <link rel="stylesheet" href="{{root}}styles.css?v={{v}}">
-  <link rel="stylesheet" href="{{root}}site.css?v={{v}}">
+  <link rel="stylesheet" href="{{assets}}styles.css?v={{v}}">
+  <link rel="stylesheet" href="{{assets}}site.css?v={{v}}">
 </head>
 <body data-root="{{root}}" data-route="{{route}}" data-v="{{v}}">
   <a class="skip" href="#main">Skip to content</a>
   <header class="top">
     <button class="menu" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">Menu</button>
-    <a class="brand" href="{{home}}">Konae <span>docs</span></a>
+    <a class="brand" href="{{docs}}">Konae <span>docs</span></a>
     <div class="search" role="search">
       <input id="search" type="search" placeholder="Search the docs" aria-label="Search the docs" autocomplete="off" spellcheck="false">
       <kbd aria-hidden="true">/</kbd>
       <div id="results" class="results" hidden></div>
     </div>
-    <nav class="links" aria-label="Elsewhere"><a href="{{home}}" data-installation-home hidden>Home</a><a href="https://github.com/danibram/konae">GitHub</a><a href="{{root}}llms.txt">llms.txt</a></nav>
+    <nav class="links" aria-label="Elsewhere"><a href="{{assets}}">Home</a><a href="https://github.com/danibram/konae">GitHub</a><a href="{{assets}}llms.txt">llms.txt</a></nav>
   </header>
   <div class="layout">
     <nav id="sidebar" class="sidebar" aria-label="Documentation">
-      <a class="drawer-home" href="{{home}}" data-installation-home hidden>Konae home</a>
+      <a class="drawer-home" href="{{assets}}">Konae home</a>
 {{nav}}
     </nav>
     <main id="main" class="main" tabindex="-1">
@@ -33,6 +33,6 @@
     <aside class="toc" aria-label="On this page"><div id="toc"></div></aside>
   </div>
   <div id="scrim" class="scrim" hidden></div>
-  <script type="module" src="{{root}}shell.js?v={{v}}"></script>
+  <script type="module" src="{{assets}}shell.js?v={{v}}"></script>
 </body>
 </html>

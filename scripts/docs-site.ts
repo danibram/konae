@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { slug } from "../examples/docs-site/slug.js";
-import { descriptionOf, renderMarkdown } from "../examples/docs-site/render.js";
+import { slug } from "../examples/site/slug.js";
+import { descriptionOf, renderMarkdown } from "../examples/site/render.js";
 import { McpClient } from "../src/mcp/client";
 
 const repo = path.resolve(import.meta.dir, "..");
 export const docsRoot = path.join(repo, "docs");
 const dirFlag = process.argv.indexOf("--dir");
-export const appRoot = dirFlag > 0 ? path.resolve(process.argv[dirFlag + 1]) : path.join(repo, "examples/docs-site");
+export const appRoot = dirFlag > 0 ? path.resolve(process.argv[dirFlag + 1]) : path.join(repo, "examples/site");
 
 type NavEntry = string | { page: string; label: string };
 type SiteConfig = { title: string; summary: string; repository: string; nav: { section: string; pages: NavEntry[] }[]; include: string[]; unlisted?: string[]; routes?: Record<string, string> };
@@ -50,12 +50,11 @@ const hrefOf = (root: string, route: string) => (route === "index" ? root || "./
 
 async function assetsVersion() {
   const hash = new Bun.CryptoHasher("sha256");
-  for (const file of ["shell.js", "slug.js", "render.js", "site.css", "public/styles.css", "package.json"]) hash.update(await readFile(path.join(appRoot, file)));
+  for (const file of ["shell.js", "slug.js", "render.js", "site.css", "styles.css", "package.json"]) hash.update(await readFile(path.join(appRoot, file)));
   return hash.digest("hex").slice(0, 10);
 }
 
-export function renderPage(template: string, site: Site, page: Page, v: string) {
-  const root = rootOf(page.route);
+export function renderPage(template: string, site: Site, page: Page, v: string, root = rootOf(page.route)) {
   const bySource = new Map(site.pages.map((entry) => [entry.source, entry]));
   const nav = site.config.nav.map(({ section, pages }) => {
     const items = pages.map((entry) => {
@@ -65,7 +64,7 @@ export function renderPage(template: string, site: Site, page: Page, v: string) 
     });
     return `      <h2>${esc(section)}</h2>\n      <ul>${items.join("")}</ul>`;
   }).join("\n");
-  const values: Record<string, string> = { title: esc(page.title), description: esc(descriptionOf(page.markdown)), body: renderMarkdown(page.markdown), root, route: page.route, home: hrefOf(root, "index"), nav, v };
+  const values: Record<string, string> = { title: esc(page.title), description: esc(descriptionOf(page.markdown)), body: renderMarkdown(page.markdown), root, assets: `${root}../`, route: page.route, docs: hrefOf(root, "index"), nav, v };
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key]);
 }
 
@@ -137,7 +136,7 @@ function llms(site: Site) {
     for (const entry of pages) {
       const page = bySource.get(typeof entry === "string" ? entry : entry.page)!;
       const lead = plain(/^# .+\n+([^\n#|`-][^\n]*)/m.exec(page.markdown)?.[1] ?? "");
-      lines.push(`- [${page.label}](content/${page.route}.md)${lead ? `: ${lead.split(/(?<=\.)\s/)[0]}` : ""}`);
+      lines.push(`- [${page.label}](docs/content/${page.route}.md)${lead ? `: ${lead.split(/(?<=\.)\s/)[0]}` : ""}`);
     }
     lines.push("");
   }
@@ -145,18 +144,19 @@ function llms(site: Site) {
 }
 
 export async function writeSite(site: Site) {
-  const template = await readFile(path.join(appRoot, "page.template"), "utf8");
+  const template = await readFile(path.join(appRoot, "docs.template"), "utf8");
   const v = await assetsVersion();
-  for (const generated of ["pages", "public/content", "public/vendor", "index.html", "public/llms.txt", "seed.sql"]) await rm(path.join(appRoot, generated), { recursive: true, force: true });
+  for (const generated of ["pages/docs", "pages/docs.html", "public/docs/content", "public/docs/vendor", "public/llms.txt", "seed.sql"]) await rm(path.join(appRoot, generated), { recursive: true, force: true });
   const write = async (relative: string, contents: string) => {
     await mkdir(path.dirname(path.join(appRoot, relative)), { recursive: true });
     await writeFile(path.join(appRoot, relative), contents);
   };
   for (const page of site.pages) {
-    await write(`public/content/${page.route}.md`, page.markdown);
-    await write(page.route === "index" ? "index.html" : `pages/${page.route}.html`, renderPage(template, site, page, v));
+    await write(`public/docs/content/${page.route}.md`, page.markdown);
+    await write(`pages/docs/${page.route}.html`, renderPage(template, site, page, v));
+    if (page.route === "index") await write("pages/docs.html", renderPage(template, site, page, v, "docs/"));
   }
-  await write("public/content/site.json", JSON.stringify({
+  await write("public/docs/content/site.json", JSON.stringify({
     repository: site.config.repository.replace(/\/$/, ""),
     pages: Object.fromEntries(site.pages.map((page) => [page.route, { title: page.title, source: page.source }])),
     routes: Object.fromEntries(site.pages.map((page) => [page.source, page.route])),
@@ -164,16 +164,16 @@ export async function writeSite(site: Site) {
   await write("public/llms.txt", llms(site));
   if (site.pages.some((page) => /^```mermaid$/m.test(page.markdown))) {
     const renderer = path.join(appRoot, "node_modules/@mermaid-js/tiny/dist/mermaid.tiny.js");
-    await mkdir(path.join(appRoot, "public/vendor"), { recursive: true });
-    await copyFile(renderer, path.join(appRoot, "public/vendor/mermaid.js")).catch(() => {
-      throw Error(`The docs hold a diagram and ${path.relative(repo, renderer)} is missing. Run bun install in examples/docs-site.`);
+    await mkdir(path.join(appRoot, "public/docs/vendor"), { recursive: true });
+    await copyFile(renderer, path.join(appRoot, "public/docs/vendor/mermaid.js")).catch(() => {
+      throw Error(`The docs hold a diagram and ${path.relative(repo, renderer)} is missing. Run bun install in examples/site.`);
     });
   }
   await write("seed.sql", `-- The search rows, one per section. bun run docs:site --seed loads them.\n${seedStatements(site).join(";\n")};\n`);
 }
 
 async function seed(site: Site, folder: string) {
-  const missing = () => { throw Error(`The docs are not published from ${folder} yet. examples/docs-site/README.md has the commands.`); };
+  const missing = () => { throw Error(`The docs are not published from ${folder} yet. examples/site/README.md has the commands.`); };
   const deployment = JSON.parse(await readFile(path.join(folder, ".konae/published.json"), "utf8").catch(missing));
   const saved = JSON.parse(await readFile(path.join(folder, ".konae/credentials.json"), "utf8").catch(missing)) as { url: string; token: string };
   const token = process.env.KONAE_MCP_TOKEN ?? saved.token;
@@ -191,7 +191,7 @@ if (import.meta.main) {
   const seedAt = process.argv.indexOf("--seed");
   if (seedAt >= 0) {
     const folder = process.argv[seedAt + 1];
-    if (!folder) throw Error("Name the app folder the docs publish from: bun run docs:site --seed /tmp/konae-docs");
+    if (!folder) throw Error("Name the app folder the docs publish from: bun run docs:site --seed /tmp/konae-site");
     await seed(site, path.resolve(folder));
   }
 }

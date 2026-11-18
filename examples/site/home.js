@@ -5,11 +5,10 @@ import { words } from "./i18n.js";
 const { protocol, hostname, port, pathname } = location;
 const lang = document.documentElement.lang === "es" ? "es" : "en";
 if (pathname === "/" && new URLSearchParams(location.search).get("lang") === "es") location.replace("/es/");
-const labels = hostname.split(".");
-const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
-const domain = ownHostname ? labels.slice(1).join(".") : hostname;
-const at = (host, path) => `${protocol}//${host}${port ? `:${port}` : ""}${path}`;
-const docs = (page) => at(domain, `/p/docs/${page}`);
+const domain = hostname;
+const apps = document.documentElement.dataset.apps || domain;
+const at = (host, path) => `${protocol}//${host}${port && (host !== apps || apps === domain) ? `:${port}` : ""}${path}`;
+const docs = (page) => at(domain, `/docs/${page}`);
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -18,7 +17,7 @@ const links = {
   mcp: at(`app.${domain}`, "/mcp"),
   "editor-origin": at(`app.${domain}`, ""),
   docs: docs(""),
-  llms: docs("llms.txt"),
+  llms: at(domain, "/llms.txt"),
   "first-app": docs("guides/first-app-from-the-editor"),
   move: docs("guides/take-the-app-elsewhere"),
   checks: docs("gate-and-kernel"),
@@ -26,9 +25,9 @@ const links = {
   operate: docs("operate"),
   "mcp-guide": docs("reference"),
   pieces: docs("pieces"),
-  invite: at(domain, "/p/invitation/"),
-  privacy: at(domain, "/p/politica-de-privacidad/"),
-  terms: at(domain, "/p/terminos-y-condiciones/"),
+  invite: at(apps, "/p/invitation/"),
+  privacy: at(apps, "/p/politica-de-privacidad/"),
+  terms: at(apps, "/p/terminos-y-condiciones/"),
   examples: docs("examples"),
 };
 const point = () => {
@@ -411,8 +410,9 @@ if (heroCta && barCta && "IntersectionObserver" in window) {
   new IntersectionObserver((entries) => barCta.classList.toggle("quiet", entries.some((entry) => entry.isIntersecting))).observe(heroCta);
 }
 
-if (!ownHostname) for (const element of document.querySelectorAll("[data-legal]")) {
-  fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
+for (const element of document.querySelectorAll("[data-legal]")) {
+  if (apps !== domain) element.hidden = false;
+  else fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
 }
 
 for (const draw of redraw) draw();

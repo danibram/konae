@@ -954,7 +954,7 @@ test("the CLI-published Konae home opens in the editor without an actions file",
     await runCommand("bun", ["run", "scripts/konae.ts", "init", "--dir", folder, "--name", "Konae home"]);
     const localSettings = JSON.parse(await readFile(path.join(folder, "konae.json"), "utf8"));
     await rm(path.join(folder, "app"), { recursive: true, force: true });
-    await cp(path.resolve("examples/home"), path.join(folder, "app"), { recursive: true });
+    await cp(path.resolve("examples/site"), path.join(folder, "app"), { recursive: true });
     await rm(path.join(folder, "app/actions.json"), { force: true });
     await rm(path.join(folder, "app/schema.sql"), { force: true });
     const settingsPath = path.join(folder, "konae.json");

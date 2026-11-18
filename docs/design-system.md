@@ -66,9 +66,9 @@ Use links for navigation and buttons for actions. Set `type="submit"` explicitly
 
 ## In published apps
 
-A published app gets the design system as one stylesheet, with the components as `.ui-*` classes, such as `.ui-actions` for `Actions` and `.ui-list.ui-steps` for `Steps`. A page that stands on its own, such as the installation's home in `examples/home`, also uses `.ui-skip` for its skip link, `.ui-bar` for a top bar with the name and a few links, `.ui-page-wide` on the bar and the page when it needs room beside its text, and `.ui-pre`, a `figure` with an optional `figcaption` and a `pre`, for code or a message the reader should see whole.
+A published app gets the design system as one stylesheet, with the components as `.ui-*` classes, such as `.ui-actions` for `Actions` and `.ui-list.ui-steps` for `Steps`. A page that stands on its own, such as the installation's home in `examples/site`, also uses `.ui-skip` for its skip link, `.ui-bar` for a top bar with the name and a few links, `.ui-page-wide` on the bar and the page when it needs room beside its text, and `.ui-pre`, a `figure` with an optional `figcaption` and a `pre`, for code or a message the reader should see whole.
 
-`bun run ui:render` writes those stylesheets from `src/design-system.css` and `src/components/ui`: `src/lib/templates/app-ui.generated.ts`, with one stylesheet per variant for the templates, and `examples/home/styles.css` and `examples/docs-site/public/styles.css` in the default variant. It also copies `query-bound.ts` and `sql-tokens.ts` into `examples/home`. `src/lib/templates/app-ui.test.ts` fails when a written file drifts from its source, so run it after changing a token or a component's CSS.
+`bun run ui:render` writes those stylesheets from `src/design-system.css` and `src/components/ui`: `src/lib/templates/app-ui.generated.ts`, with one stylesheet per variant for the templates, and `examples/site/styles.css` in the default variant. It also copies `query-bound.ts` and `sql-tokens.ts` into `examples/site`. `src/lib/templates/app-ui.test.ts` fails when a written file drifts from its source, so run it after changing a token or a component's CSS.
 
 ## Where the editor uses it
 

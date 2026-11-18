@@ -75,7 +75,7 @@ Run from the repository root. The storage tests use temporary directories. The a
 export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0
 cargo test --locked --offline --manifest-path kernel-rs/Cargo.toml --workspace --test inventory
 cargo test --locked --offline --manifest-path kernel-rs/Cargo.toml -p kernel a_declared_store_or_module
-bun install --cwd examples/docs-site --offline --frozen-lockfile
+bun install --cwd examples/site --offline --frozen-lockfile
 bun test --timeout 120000 scripts/inventory-policy.test.ts scripts/docs-site.test.ts
 cargo test --locked --offline --manifest-path kernel-rs/Cargo.toml --workspace
 ```

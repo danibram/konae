@@ -196,16 +196,6 @@ if (route) enhance().catch((error) => {
   content.removeAttribute("aria-busy");
 });
 
-{
-  const labels = location.hostname.split(".");
-  const own = !location.pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
-  const domain = own ? labels.slice(1).join(".") : location.hostname;
-  for (const link of document.querySelectorAll("[data-installation-home]")) {
-    link.href = `${location.protocol}//${domain}${location.port ? `:${location.port}` : ""}/`;
-    link.hidden = false;
-  }
-}
-
 const menu = $(".menu");
 const scrim = $("#scrim");
 const closeNav = () => { document.body.classList.remove("nav-open"); scrim.hidden = true; menu.setAttribute("aria-expanded", "false"); menu.textContent = "Menu"; };

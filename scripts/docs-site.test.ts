@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { slug } from "../examples/docs-site/slug.js";
-import { descriptionOf, renderMarkdown } from "../examples/docs-site/render.js";
+import { slug } from "../examples/site/slug.js";
+import { descriptionOf, renderMarkdown } from "../examples/site/render.js";
 import { docsRoot, readSite, renderPage, sections, seedStatements } from "./docs-site";
 
 const repo = path.resolve(import.meta.dir, "..");
 const site = await readSite();
-const template = readFileSync(path.join(repo, "examples/docs-site/page.template"), "utf8");
+const template = readFileSync(path.join(repo, "examples/site/docs.template"), "utf8");
 const htmlEscape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
 function anchors(markdown: string) {
@@ -54,7 +54,7 @@ describe("the docs site", () => {
   });
 
   test("each docs app card image exists and stays under the size limit", () => {
-    const image = readFileSync(path.join(repo, "examples/docs-site/public/card.png"));
+    const image = readFileSync(path.join(repo, "examples/site/public/docs/card.png"));
     expect(image.byteLength).toBeLessThan(600 * 1024);
     expect(image.readUInt32BE(16)).toBeGreaterThanOrEqual(300);
   });
@@ -81,7 +81,7 @@ describe("the docs site", () => {
 
   test("the repository's own README and the docs app's README link to files that exist", () => {
     const broken: string[] = [];
-    for (const source of ["README.md", "examples/docs-site/README.md"]) {
+    for (const source of ["README.md", "examples/site/README.md"]) {
       for (const link of links(readFileSync(path.join(repo, source), "utf8"))) {
         if (/^[a-z][a-z0-9+.-]*:/i.test(link) || link.startsWith("#")) continue;
         const [file, anchor] = link.split("#");

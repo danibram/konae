@@ -9,10 +9,9 @@ import { applyTemplate, templateChoices } from "./index";
 describe("the design system a published app carries", () => {
   test("the checked-in stylesheet is what the renderer writes (run `bun run ui:render`)", () => {
     expect(readFileSync(path.resolve(import.meta.dir, "app-ui.generated.ts"), "utf8")).toBe(renderAppUi());
-    expect(readFileSync(path.resolve(import.meta.dir, "../../../examples/home/styles.css"), "utf8")).toBe(renderBundles().brutal);
-    expect(readFileSync(path.resolve(import.meta.dir, "../../../examples/docs-site/public/styles.css"), "utf8")).toBe(renderBundles().brutal);
+    expect(readFileSync(path.resolve(import.meta.dir, "../../../examples/site/styles.css"), "utf8")).toBe(renderBundles().brutal);
     for (const file of ["query-bound.ts", "sql-tokens.ts"]) {
-      expect(readFileSync(path.resolve(import.meta.dir, "../../../examples/home", file), "utf8")).toBe(readFileSync(path.resolve(import.meta.dir, "..", file), "utf8"));
+      expect(readFileSync(path.resolve(import.meta.dir, "../../../examples/site", file), "utf8")).toBe(readFileSync(path.resolve(import.meta.dir, "..", file), "utf8"));
     }
   });
 

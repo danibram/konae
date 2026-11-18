@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-apps="konae.app">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,8 +15,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="../styles.css?v=2">
-<link rel="stylesheet" href="../home.css?v=24">
-<script type="module" src="../home.js?v=24"></script>
+<link rel="stylesheet" href="../home.css?v=25">
+<script type="module" src="../home.js?v=25"></script>
 </head>
 <body>
 <a class="ui-skip" href="#main" data-t="skip">Saltar al contenido</a>
@@ -27,12 +27,12 @@
       <a href="#how" data-t="nav.how">Cómo funciona</a>
       <a href="#examples" data-t="nav.examples">Ejemplos</a>
       <a href="#developers" data-t="nav.devs">Desarrolladores</a>
-      <a href="../p/docs/" data-link="docs" data-t="nav.docs">Docs</a>
+      <a href="../docs/" data-link="docs" data-t="nav.docs">Docs</a>
     </nav>
     <div class="bar-end">
       <a class="gh" href="https://github.com/danibram/konae" aria-label="GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.33.66.07-.52.28-.87.5-1.07-1.77-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"/></svg></a>
       <a class="lang" href="../" lang="en">English</a>
-      <a class="signin" href="../p/docs/" data-link="editor" data-t="cta.signin">Entrar</a>
+      <a class="signin" href="../docs/" data-link="editor" data-t="cta.signin">Entrar</a>
       <a class="ui-button ui-button-sm ui-button-primary bar-cta" href="../p/invitation/" data-link="invite" data-t="cta.bar"><span class="wide-only">Pide una invitación</span><span class="narrow-only">Invitación</span></a>
     </div>
   </div>
@@ -133,7 +133,7 @@
     <div class="wrap">
       <div class="head head-split" data-reveal>
         <div><p class="eyebrow" data-t="gets.eyebrow">En cada app</p><h2 class="h2" id="gets-title" data-t="gets.title">Cuentas, datos y correo ya vienen hechos.</h2></div>
-        <div><p class="lede" data-t="gets.lede">No montas servidor ni construyes página de acceso. La app tiene todo esto desde que se publica.</p><a class="more" href="../p/docs/pieces" data-link="pieces" data-t="gets.more">Todas las piezas, y cuándo usar cada una</a></div>
+        <div><p class="lede" data-t="gets.lede">No montas servidor ni construyes página de acceso. La app tiene todo esto desde que se publica.</p><a class="more" href="../docs/pieces" data-link="pieces" data-t="gets.more">Todas las piezas, y cuándo usar cada una</a></div>
       </div>
       <ul class="bento" role="list">
         <li class="tile tile-auth" data-reveal>
@@ -196,7 +196,7 @@
             <div class="again">
               <p class="again-t" data-t="move.renewed">Se configura de nuevo tras la mudanza</p>
               <p data-t="move.note">Dos cosas se quedan atrás a propósito: el acceso con Google y las claves de los servicios conectados. Las introduces otra vez en el servidor nuevo.</p>
-              <a class="more" href="../p/docs/guides/take-the-app-elsewhere" data-link="move" data-t="move.more">Cómo se muda una app</a>
+              <a class="more" href="../docs/guides/take-the-app-elsewhere" data-link="move" data-t="move.more">Cómo se muda una app</a>
             </div>
           </figure>
         </div>
@@ -241,15 +241,15 @@
     <div class="wrap">
       <div class="head head-split" data-reveal>
         <div><p class="eyebrow" data-t="ex.eyebrow">Ejemplos</p><h2 class="h2" id="examples-title" data-t="ex.title">Empieza con una app que ya funciona.</h2></div>
-        <div><p class="lede" data-t="ex.lede">Konae trae seis apps de ejemplo. Cada una tiene inicio de sesión, datos guardados y su propia dirección, y un script la publica en un servidor recién arrancado y recorre todos sus flujos.</p><a class="more" href="../p/docs/examples" data-link="examples" data-t="ex.more">Las apps de ejemplo</a></div>
+        <div><p class="lede" data-t="ex.lede">Konae trae seis apps de ejemplo. Cada una tiene inicio de sesión, datos guardados y su propia dirección, y un script la publica en un servidor recién arrancado y recorre todos sus flujos.</p><a class="more" href="../docs/examples" data-link="examples" data-t="ex.more">Las apps de ejemplo</a></div>
       </div>
       <ul class="ex-grid" role="list">
-        <li class="ex" data-reveal><div class="mini mini-tabs" aria-hidden="true"><span><b class="on"></b><b></b><b></b></span><i class="w80"></i><i class="w55"></i></div><h3 class="h3" data-t="ex.starter.t">Club con socios</h3><p data-t="ex.starter.p">Una portada pública, registro abierto con correo confirmado y zonas separadas para miembros, un equipo y administradores.</p><p class="tags"><span data-t="tag.signup">Registro abierto</span><span data-t="tag.roles">Administradores y miembros</span></p><a class="more ex-copy" href="../p/docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
-        <li class="ex" data-reveal><div class="mini mini-slots" aria-hidden="true"><b class="on"></b><b class="on"></b><b></b><b class="on"></b><b></b><b class="on"></b><b class="on"></b><b></b></div><h3 class="h3" data-t="ex.booking.t">Reserva de salas</h3><p data-t="ex.booking.p">El personal reserva salas en un tablero público. Dos personas no pueden quedarse la misma hora, y las reservas que nadie confirma se liberan solas.</p><p class="tags"><span data-t="tag.email">Correo</span><span data-t="tag.schedule">Se ejecuta con horario</span></p><a class="more ex-copy" href="../p/docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
-        <li class="ex" data-reveal><div class="mini mini-docs" aria-hidden="true"><b></b><b></b><b class="lock"></b><b></b><b class="lock"></b></div><h3 class="h3" data-t="ex.club.t">Club de lectura</h3><p data-t="ex.club.p">Solo entran los lectores invitados. Cada uno comparte algunos archivos con el club y guarda otros en privado.</p><p class="tags"><span data-t="tag.invites">Por invitación</span><span data-t="tag.files">Subida de archivos</span></p><a class="more ex-copy" href="../p/docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
-        <li class="ex" data-reveal><div class="mini mini-tiles" aria-hidden="true"><b></b><b class="on"></b><b></b></div><h3 class="h3" data-t="ex.gallery.t">Portafolio</h3><p data-t="ex.gallery.p">Una galería pública en tu propio dominio, con formulario de contacto y un feed que otras webs pueden leer.</p><p class="tags"><span data-t="tag.public">Pública</span><span data-t="tag.domain">Tu propio dominio</span></p><a class="more ex-copy" href="../p/docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
-        <li class="ex" data-reveal><div class="mini mini-week" aria-hidden="true"><b class="on"></b><b class="on"></b><b></b><b class="on"></b><b class="on"></b><b class="on"></b><b></b></div><h3 class="h3" data-t="ex.habits.t">Seguimiento de hábitos</h3><p data-t="ex.habits.p">Una persona con un móvil y un portátil. Cada entrada es de quien la escribió, y la app cierra cada día sola.</p><p class="tags"><span data-t="tag.private">Privado para cada persona</span></p><a class="more ex-copy" href="../p/docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
-        <li class="ex" data-reveal><div class="mini mini-rows" aria-hidden="true"><span><i class="w55"></i></span><span class="hot"><i class="w80"></i></span><span><i class="w45"></i></span></div><h3 class="h3" data-t="ex.inbox.t">Bandeja de avisos</h3><p data-t="ex.inbox.p">Los pagos y otros avisos de las herramientas que usas llegan a una lista privada, y los urgentes te llegan por correo.</p><p class="tags"><span data-t="tag.webhooks">Avisos de otros servicios</span></p><a class="more ex-copy" href="../p/docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
+        <li class="ex" data-reveal><div class="mini mini-tabs" aria-hidden="true"><span><b class="on"></b><b></b><b></b></span><i class="w80"></i><i class="w55"></i></div><h3 class="h3" data-t="ex.starter.t">Club con socios</h3><p data-t="ex.starter.p">Una portada pública, registro abierto con correo confirmado y zonas separadas para miembros, un equipo y administradores.</p><p class="tags"><span data-t="tag.signup">Registro abierto</span><span data-t="tag.roles">Administradores y miembros</span></p><a class="more ex-copy" href="../docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
+        <li class="ex" data-reveal><div class="mini mini-slots" aria-hidden="true"><b class="on"></b><b class="on"></b><b></b><b class="on"></b><b></b><b class="on"></b><b class="on"></b><b></b></div><h3 class="h3" data-t="ex.booking.t">Reserva de salas</h3><p data-t="ex.booking.p">El personal reserva salas en un tablero público. Dos personas no pueden quedarse la misma hora, y las reservas que nadie confirma se liberan solas.</p><p class="tags"><span data-t="tag.email">Correo</span><span data-t="tag.schedule">Se ejecuta con horario</span></p><a class="more ex-copy" href="../docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
+        <li class="ex" data-reveal><div class="mini mini-docs" aria-hidden="true"><b></b><b></b><b class="lock"></b><b></b><b class="lock"></b></div><h3 class="h3" data-t="ex.club.t">Club de lectura</h3><p data-t="ex.club.p">Solo entran los lectores invitados. Cada uno comparte algunos archivos con el club y guarda otros en privado.</p><p class="tags"><span data-t="tag.invites">Por invitación</span><span data-t="tag.files">Subida de archivos</span></p><a class="more ex-copy" href="../docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
+        <li class="ex" data-reveal><div class="mini mini-tiles" aria-hidden="true"><b></b><b class="on"></b><b></b></div><h3 class="h3" data-t="ex.gallery.t">Portafolio</h3><p data-t="ex.gallery.p">Una galería pública en tu propio dominio, con formulario de contacto y un feed que otras webs pueden leer.</p><p class="tags"><span data-t="tag.public">Pública</span><span data-t="tag.domain">Tu propio dominio</span></p><a class="more ex-copy" href="../docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
+        <li class="ex" data-reveal><div class="mini mini-week" aria-hidden="true"><b class="on"></b><b class="on"></b><b></b><b class="on"></b><b class="on"></b><b class="on"></b><b></b></div><h3 class="h3" data-t="ex.habits.t">Seguimiento de hábitos</h3><p data-t="ex.habits.p">Una persona con un móvil y un portátil. Cada entrada es de quien la escribió, y la app cierra cada día sola.</p><p class="tags"><span data-t="tag.private">Privado para cada persona</span></p><a class="more ex-copy" href="../docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
+        <li class="ex" data-reveal><div class="mini mini-rows" aria-hidden="true"><span><i class="w55"></i></span><span class="hot"><i class="w80"></i></span><span><i class="w45"></i></span></div><h3 class="h3" data-t="ex.inbox.t">Bandeja de avisos</h3><p data-t="ex.inbox.p">Los pagos y otros avisos de las herramientas que usas llegan a una lista privada, y los urgentes te llegan por correo.</p><p class="tags"><span data-t="tag.webhooks">Avisos de otros servicios</span></p><a class="more ex-copy" href="../docs/examples" data-link="examples" data-t="ex.copy">Copia esta app</a></li>
       </ul>
     </div>
   </section>
@@ -267,7 +267,7 @@
           <button class="tab" type="button" role="tab" id="tab-own" aria-controls="panel-own" data-t="dev.own.tab">Alojarlo tú</button>
         </div>
         <article class="tab-panel" id="panel-cli" role="tabpanel" aria-labelledby="tab-cli">
-          <div><h3 class="h3" data-t="dev.cli.t">Edita los archivos en tu máquina</h3><p data-t="dev.cli.p">Conecta la CLI desde el navegador, crea la carpeta de la app, ejecútala en un servidor local y publícala aquí. Los comandos se ejecutan con Bun desde una copia del repositorio, y el servidor local necesita además Rust. La carpeta son archivos normales que puedes guardar en Git.</p><a class="more" href="../p/docs/guides/edit-files-with-the-cli" data-link="cli" data-t="dev.cli.more">La guía de la CLI</a></div>
+          <div><h3 class="h3" data-t="dev.cli.t">Edita los archivos en tu máquina</h3><p data-t="dev.cli.p">Conecta la CLI desde el navegador, crea la carpeta de la app, ejecútala en un servidor local y publícala aquí. Los comandos se ejecutan con Bun desde una copia del repositorio, y el servidor local necesita además Rust. La carpeta son archivos normales que puedes guardar en Git.</p><a class="more" href="../docs/guides/edit-files-with-the-cli" data-link="cli" data-t="dev.cli.more">La guía de la CLI</a></div>
           <figure class="ui-pre code"><figcaption><span data-t="dev.terminal">Terminal</span><button class="ui-button ui-button-sm copy" type="button" data-copy aria-live="polite">Copy</button></figcaption><pre><span data-t="dev.c1"># Una vez, desde una copia del repositorio</span>
 git clone https://github.com/danibram/konae
 cd konae &amp;&amp; bun install
@@ -279,11 +279,11 @@ bun run konae -- dev --dir app
 bun run konae -- publish --dir app</pre></figure>
         </article>
         <article class="tab-panel" id="panel-mcp" role="tabpanel" aria-labelledby="tab-mcp">
-          <div><h3 class="h3" data-t="dev.mcp.t">Conecta un agente</h3><p data-t="dev.mcp.p">Un cliente MCP construye, comprueba y publica con las mismas reglas que el editor. Empieza por la herramienta <code class="ui-code">platform_guide</code>.</p><p class="dev-links"><a class="more" href="../p/docs/mcp-guide" data-link="mcp-guide" data-t="dev.mcp.more">La referencia</a> <a class="more" href="../p/docs/llms.txt" data-link="llms">llms.txt</a></p></div>
+          <div><h3 class="h3" data-t="dev.mcp.t">Conecta un agente</h3><p data-t="dev.mcp.p">Un cliente MCP construye, comprueba y publica con las mismas reglas que el editor. Empieza por la herramienta <code class="ui-code">platform_guide</code>.</p><p class="dev-links"><a class="more" href="../docs/mcp-guide" data-link="mcp-guide" data-t="dev.mcp.more">La referencia</a> <a class="more" href="../llms.txt" data-link="llms">llms.txt</a></p></div>
           <figure class="ui-pre code"><figcaption><span data-t="dev.endpoint">Endpoint MCP</span><button class="ui-button ui-button-sm copy" type="button" data-copy aria-live="polite">Copy</button></figcaption><pre data-text="mcp">https://app.example.com/mcp</pre></figure>
         </article>
         <article class="tab-panel" id="panel-own" role="tabpanel" aria-labelledby="tab-own">
-          <div><h3 class="h3" data-t="dev.own.t">Monta tu propia instalación</h3><p data-t="dev.own.p">El editor, el servidor y el almacenamiento en un solo despliegue. El editor abre en app.localhost:8080, y el primer propietario se registra con la clave de configuración de la instalación. En el despliegue local esa clave es <code class="ui-code">local-development-key</code>. Pon la tuya con <code class="ui-code">KONAE_SETUP_KEY</code> antes de que nadie más pueda llegar al servidor.</p><a class="more" href="../p/docs/operate" data-link="operate" data-t="dev.own.more">Operar una instalación</a></div>
+          <div><h3 class="h3" data-t="dev.own.t">Monta tu propia instalación</h3><p data-t="dev.own.p">El editor, el servidor y el almacenamiento en un solo despliegue. El editor abre en app.localhost:8080, y el primer propietario se registra con la clave de configuración de la instalación. En el despliegue local esa clave es <code class="ui-code">local-development-key</code>. Pon la tuya con <code class="ui-code">KONAE_SETUP_KEY</code> antes de que nadie más pueda llegar al servidor.</p><a class="more" href="../docs/operate" data-link="operate" data-t="dev.own.more">Operar una instalación</a></div>
           <figure class="ui-pre code"><figcaption><span data-t="dev.terminal">Terminal</span><button class="ui-button ui-button-sm copy" type="button" data-copy aria-live="polite">Copy</button></figcaption><pre>git clone https://github.com/danibram/konae
 cd konae
 docker compose up --build</pre></figure>
@@ -294,7 +294,7 @@ docker compose up --build</pre></figure>
         <div class="check-copy">
           <h3 class="h3" id="check-title" data-t="check.title">Las mismas reglas en cada servidor</h3>
           <p data-t="check.lede">El editor comprueba la app antes de publicarla. Cada servidor que la ejecuta la comprueba otra vez y rechaza los mismos errores con las mismas palabras, así que una app que el editor acepta sigue funcionando después de mudarse. Prueba una regla. Una lectura tiene que decir cuántas filas devuelve, para que siga siendo rápida cuando crece la tabla.</p>
-          <a class="more" href="../p/docs/gate-and-kernel" data-link="checks" data-t="check.more">Cómo se mantienen iguales las dos comprobaciones</a>
+          <a class="more" href="../docs/gate-and-kernel" data-link="checks" data-t="check.more">Cómo se mantienen iguales las dos comprobaciones</a>
         </div>
         <div class="check-demo dropped" data-check>
           <figure class="ui-pre statement">
@@ -339,8 +339,8 @@ docker compose up --build</pre></figure>
       </ol>
       <div class="actions" data-reveal>
         <a class="ui-button btn-lg btn-ink" href="../p/invitation/" data-link="invite" data-t="cta.invite">Pide una invitación</a>
-        <a class="more" href="../p/docs/guides/first-app-from-the-editor" data-link="first-app" data-t="cta.guide">Leer la guía de la primera app</a>
-        <a class="more" href="../p/docs/" data-link="editor" data-t="cta.have">Ya tengo cuenta</a>
+        <a class="more" href="../docs/guides/first-app-from-the-editor" data-link="first-app" data-t="cta.guide">Leer la guía de la primera app</a>
+        <a class="more" href="../docs/" data-link="editor" data-t="cta.have">Ya tengo cuenta</a>
       </div>
     </div>
   </section>
@@ -350,8 +350,8 @@ docker compose up --build</pre></figure>
   <div class="wrap foot-in">
     <div class="foot-brand"><a class="logo" href="../">Konae</a><p data-t="foot">Esta página es una app de Konae, publicada igual que cualquier otra. Konae es código abierto con <a href="https://github.com/danibram/konae/blob/main/LICENSE">licencia MIT</a>. La documentación está en inglés.</p></div>
     <nav class="foot-col" aria-label="Producto" data-t-label="foot.product"><p data-t="foot.product.t">Producto</p><a href="#how" data-t="nav.how">Cómo funciona</a><a href="#built-in" data-t="foot.builtin">Lo que trae cada app</a><a href="#examples" data-t="nav.examples">Ejemplos</a><a href="#faq" data-t="foot.faq">Preguntas</a></nav>
-    <nav class="foot-col" aria-label="Desarrolladores" data-t-label="foot.devs"><p data-t="nav.devs">Desarrolladores</p><a href="../p/docs/" data-link="docs" data-t="nav.docs">Docs</a><a href="https://github.com/danibram/konae">GitHub</a><a href="../p/docs/guides/edit-files-with-the-cli" data-link="cli" data-t="foot.cli">Guía de la CLI</a><a href="../p/docs/llms.txt" data-link="llms">llms.txt</a></nav>
-    <nav class="foot-col" aria-label="Este sitio" data-t-label="foot.site"><p data-t="foot.site.t">Este sitio</p><a href="../p/invitation/" data-link="invite" data-t="cta.invite">Pide una invitación</a><a href="../p/docs/" data-link="editor" data-t="cta.signin">Entrar</a><a href="../p/politica-de-privacidad/" data-link="privacy" data-legal hidden data-t="nav.privacy">Política de privacidad</a><a href="../p/terminos-y-condiciones/" data-link="terms" data-legal hidden data-t="nav.terms">Términos</a></nav>
+    <nav class="foot-col" aria-label="Desarrolladores" data-t-label="foot.devs"><p data-t="nav.devs">Desarrolladores</p><a href="../docs/" data-link="docs" data-t="nav.docs">Docs</a><a href="https://github.com/danibram/konae">GitHub</a><a href="../docs/guides/edit-files-with-the-cli" data-link="cli" data-t="foot.cli">Guía de la CLI</a><a href="../llms.txt" data-link="llms">llms.txt</a></nav>
+    <nav class="foot-col" aria-label="Este sitio" data-t-label="foot.site"><p data-t="foot.site.t">Este sitio</p><a href="../p/invitation/" data-link="invite" data-t="cta.invite">Pide una invitación</a><a href="../docs/" data-link="editor" data-t="cta.signin">Entrar</a><a href="../p/politica-de-privacidad/" data-link="privacy" data-legal hidden data-t="nav.privacy">Política de privacidad</a><a href="../p/terminos-y-condiciones/" data-link="terms" data-legal hidden data-t="nav.terms">Términos</a></nav>
   </div>
 </footer>
 </body>

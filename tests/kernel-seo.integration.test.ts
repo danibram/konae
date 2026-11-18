@@ -119,15 +119,15 @@ test("seo controls listing, cards, discovery files and canonical validators", as
 }, 120_000);
 
 test("module_set accepts each public app card file and serves its image URL", async () => {
-  const homeHtml = await readFile(path.resolve(import.meta.dir, "../examples/home/index.html"), "utf8");
-  const spanishHomeHtml = await readFile(path.resolve(import.meta.dir, "../examples/home/pages/es/index.html"), "utf8");
-  const docsApp = path.resolve(import.meta.dir, "../examples/docs-site");
-  const docsTemplate = await readFile(path.join(docsApp, "page.template"), "utf8");
+  const homeHtml = await readFile(path.resolve(import.meta.dir, "../examples/site/index.html"), "utf8");
+  const spanishHomeHtml = await readFile(path.resolve(import.meta.dir, "../examples/site/pages/es/index.html"), "utf8");
+  const docsApp = path.resolve(import.meta.dir, "../examples/site");
+  const docsTemplate = await readFile(path.join(docsApp, "docs.template"), "utf8");
   const docs = await readSite();
   const docsHtml = renderPage(docsTemplate, docs, docs.pages.find((page) => page.route === "index")!, "test");
   for (const app of [
-    { id: "issue10_home", name: "Konae home", html: homeHtml, spanishHtml: spanishHomeHtml, cardPath: "../examples/home/public/card.png" },
-    { id: "issue10_docs", name: "Konae docs", html: docsHtml, cardPath: "../examples/docs-site/public/card.png" },
+    { id: "issue10_home", name: "Konae home", html: homeHtml, spanishHtml: spanishHomeHtml, cardPath: "../examples/site/public/card.png" },
+    { id: "issue10_docs", name: "Konae docs", html: docsHtml, cardPath: "../examples/site/public/docs/card.png" },
   ]) {
     const card = encodeBase64(await readFile(path.resolve(import.meta.dir, app.cardPath)));
     await kernel.owner.call("project_create", { projectId: app.id, name: app.name });
@@ -143,7 +143,7 @@ test("module_set accepts each public app card file and serves its image URL", as
     expect(html).toContain(app.id === "issue10_home" ? "Describe an app." : "Konae");
     if (app.spanishHtml) {
       const spanishHtml = await curlApp(receipt.hostname, "/es/");
-      expect(spanishHtml).toContain('<html lang="es">');
+      expect(spanishHtml).toContain('<html lang="es"');
       expect(spanishHtml).toContain("Describe una app.");
     }
     const image = await appFetch(kernel, receipt.hostname, "/card.png");

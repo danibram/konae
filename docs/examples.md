@@ -52,11 +52,11 @@ bun run examples/probes/replay-all.ts
 
 ## The docs site
 
-`examples/docs-site/` is the app that serves these docs. It publishes the markdown under `docs/` as static files, renders it in the browser with an npm package, and searches it with one anonymous Server Action. Its `README.md` has the commands to publish it.
+`examples/site/` is the home, these docs and `llms.txt` in one app. It publishes the markdown under `docs/` as static files at `/docs/`, renders it with an npm package, and searches it with one anonymous Server Action. Its `README.md` has the commands to publish it.
 
 ## The home and the architecture map
 
-`examples/home/` is the page an installation answers on its bare domain once an app's path address holds the name `konae-home`. `examples/invitation/` is the form the home sends a visitor to for an invitation code, with one table, one anonymous action, a guard and a notice to the owner. `examples/politica-de-privacidad/` and `examples/terminos-y-condiciones/` are the installation's legal pages, in Spanish, at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`. `examples/architecture-map/` is a static map of the system. Each has a `README.md` with the commands to publish it.
+`examples/invitation/` is the form the home sends a visitor to for an invitation code, with one table, one anonymous action, a guard and a notice to the owner. `examples/politica-de-privacidad/` and `examples/terminos-y-condiciones/` are the installation's legal pages, in Spanish, at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`, where `<domain>` is `KONAE_DOMAIN`. `examples/architecture-map/` is a static map of the system. Each has a `README.md` with the commands to publish it.
 
 ## Read next
 

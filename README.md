@@ -151,7 +151,7 @@ Either way the Kernel checks the folder as Konae checks a release, prints `Servi
 
 ## Documentation
 
-The documentation is markdown under [`docs/`](./docs/README.md). The docs site is itself a Konae app, [`examples/docs-site`](./examples/docs-site/README.md), which publishes those files.
+The documentation is markdown under [`docs/`](./docs/README.md). The docs site is itself a Konae app, [`examples/site`](./examples/site/README.md), which publishes those files under `/docs/` beside the home.
 
 | To | Read |
 | --- | --- |
@@ -171,8 +171,7 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 - [`examples/showcase`](./examples/showcase/README.md) has six complete apps, each with a replay that publishes it and runs every flow. `starter` is the one to copy first.
 - [`examples/product-fit`](./examples/product-fit/README.md) has eight smaller apps and a smoke run.
 - [`examples/probes`](./examples/probes/README.md) has small Capsules that each prove one capability.
-- [`examples/docs-site`](./examples/docs-site/README.md) is the docs site.
-- [`examples/home`](./examples/home/README.md) is the page an installation answers on its bare domain once an app's path address is named `konae-home`.
+- [`examples/site`](./examples/site/README.md) is the home, the docs and `llms.txt` in one app.
 - [`examples/invitation`](./examples/invitation/README.md) is the public form where a visitor asks the operator for an invitation code, at `<domain>/p/invitation/`.
 - [`examples/politica-de-privacidad`](./examples/politica-de-privacidad/README.md) and [`examples/terminos-y-condiciones`](./examples/terminos-y-condiciones/README.md) are the legal pages at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`.
 - [`examples/architecture-map`](./examples/architecture-map/README.md) is a map of the system.

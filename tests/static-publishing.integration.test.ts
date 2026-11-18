@@ -114,11 +114,12 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
-test("the Konae home builds and publishes with only Search listing on", async () => {
+test("the Konae home without its docs builds and publishes with only Search listing on", async () => {
   const folder = path.join(root, "konae-home-folder");
   const settings = await initLocal(folder, { name: "Konae home" });
   await rm(path.join(folder, "app"), { recursive: true, force: true });
-  await cp(path.resolve(import.meta.dir, "../examples/home"), path.join(folder, "app"), { recursive: true });
+  await cp(path.resolve(import.meta.dir, "../examples/site"), path.join(folder, "app"), { recursive: true });
+  for (const docs of ["actions.json", "schema.sql", "seed.sql", "shell.js", "pages/docs", "pages/docs.html", "public/docs", "public/llms.txt", "node_modules"]) await rm(path.join(folder, "app", docs), { recursive: true, force: true });
   const settingsPath = path.join(folder, "konae.json");
   const localSettings = JSON.parse(await readFile(settingsPath, "utf8"));
   localSettings.visibility = "public";

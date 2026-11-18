@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { es, words } from "../examples/home/i18n.js";
+import { es, words } from "../examples/site/i18n.js";
 
-const home = path.resolve(import.meta.dir, "../examples/home");
+const home = path.resolve(import.meta.dir, "../examples/site");
 
 export function spanishHome(html: string) {
-  let page = html.replace('<html lang="en">', '<html lang="es">');
+  let page = html.replace(/<html lang="en"/, '<html lang="es"');
   page = page.replace('<link rel="alternate" hreflang="en" href="./">', '<link rel="alternate" hreflang="en" href="../">');
   page = page.replace('<link rel="alternate" hreflang="es" href="es/">', '<link rel="alternate" hreflang="es" href="./">');
   page = page.replace('<a class="lang" href="es/" lang="es">Español</a>', '<a class="lang" href="../" lang="en">English</a>');
@@ -53,5 +53,5 @@ if (import.meta.main) {
   const target = path.join(home, "pages/es/index.html");
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, spanishHome(source));
-  console.log("Wrote examples/home/pages/es/index.html from examples/home/index.html and i18n.js.");
+  console.log("Wrote examples/site/pages/es/index.html from examples/site/index.html and i18n.js.");
 }

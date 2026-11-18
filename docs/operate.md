@@ -70,11 +70,12 @@ The defaults suit one machine. Before another machine can reach the installation
 
 - On `konae`, set `KONAE_SETUP_KEY` to a long random value. It creates the first owner and nothing else. Konae refuses to start on a non-loopback address while the setup key is unset or the development default. The `kernel` binary has no setup key.
 - Set `KONAE_DOMAIN` to the installation's domain, such as `example.com`. Both binaries read it. Apps then answer under `example.com`, at `<slug>.example.com`, or `<slug>-<six random characters>.example.com` when another app holds the slug, and path addresses at `example.com/p/<name>`. On `konae`, the editor and the owner's MCP answer at `app.example.com`.
+- To keep apps off the domain of the editor, put them on a domain of their own. With `KONAE_DOMAIN=example.app` and `KONAE_PUBLIC_ORIGIN=https://app.example.com`, apps and path addresses answer under `example.app`, while the editor and the owner's MCP stay at `app.example.com`. An app can then take `example.com` itself as its custom domain. konae.es runs this way, with konae.app for apps.
 - Put a proxy in front that terminates TLS for the domain, for `*.<domain>` and for every custom domain, and forwards `Host` unchanged. The Kernel issues no certificate. `ops/nginx.local.conf` is the local stack's proxy, without TLS.
 - List the proxy's address in `KONAE_TRUSTED_PROXIES`, or every visitor shares one rate-limit bucket.
 - Set `KONAE_ACCOUNT_VERIFICATION=required` and a mail transport, so nobody holds an account for an email they did not prove. On `konae`, set `KONAE_MAIL_SECRET` as well.
 - Set `KONAE_COPY_DIR` or `KONAE_COPY_S3=1`, with `KONAE_COPY_SECRET` for S3. The data directory is the only place the apps live.
-- To serve an app at the domain's root, give its path address the name `konae-home`. Without an app on that name, the root answers not found. [`examples/home`](../examples/home/README.md) is a home ready to publish.
+- To serve an app at the domain's root, give its path address the name `konae-home`. Without an app on that name, the root answers not found. [`examples/site`](../examples/site/README.md) is a home ready to publish, with the docs inside it.
 
 ## Environment variables
 
