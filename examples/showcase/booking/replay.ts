@@ -29,6 +29,10 @@ let address = 0;
 const freshAddress = () => `198.18.${Math.floor(++address / 250)}.${(address % 250) + 1}`;
 const check = (scenario: string, result: string) => { findings.push({ scenario, result }); console.log(`PASS ${scenario}. ${result}`); };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+async function setSignupPolicy(owner: McpClient, projectId: string, policy: { mode: string; allowlist: string[] }) {
+  const before = await owner.call<any>("modules_read", { projectId });
+  await owner.call("module_set", { projectId, module: "auth", options: { signupPolicy: policy }, expected: before.modules.auth.state });
+}
 async function refusal(promise: Promise<unknown>): Promise<string> {
   try { await promise; } catch (error) { return message(error); }
   throw Error("Expected a refusal.");
@@ -100,7 +104,7 @@ try {
   await owner.call("secret_set", { projectId: "showcase_booking", name: "panel_hook", value: panelSecret });
   const receipt = await publishWithCli("showcase_booking", "booking", { mode: "allowlist", allowlist: ["@office.example"] });
   const deploymentId = receipt.id;
-  const policy = await owner.call<{ mode: string; allowlist: string[] }>("signup_policy_read", { deploymentId });
+  const policy = (await owner.call<any>("modules_read", { projectId: deploymentId })).modules.auth.state.signupPolicy;
   assert.equal(policy.mode, "allowlist");
   assert.deepEqual(policy.allowlist, ["@office.example"]);
   const sql = (statement: string) => owner.call<any>("database_execute", { deploymentId, operation: "sql", input: { sql: statement } });
@@ -121,13 +125,13 @@ try {
   assert.equal(benSignup.status, 200, JSON.stringify(benSignup.body));
   const outsider = await signup("pat@elsewhere.example");
   const subdomain = await signup("sam@sub.office.example");
-  await owner.call("signup_policy_set", { deploymentId, mode: "closed" });
+  await setSignupPolicy(owner, deploymentId, { mode: "closed", allowlist: [] });
   const closed = await signup("cara@office.example");
   const loginWhileClosed = await fetch(`${url}/_konae/auth/login`, {
     method: "POST", headers: { host, "content-type": "application/json", "x-forwarded-for": freshAddress() },
     body: JSON.stringify({ email: "ana@office.example", password }),
   });
-  await owner.call("signup_policy_set", { deploymentId, mode: "allowlist", allowlist: ["@office.example"] });
+  await setSignupPolicy(owner, deploymentId, { mode: "allowlist", allowlist: ["@office.example"] });
   assert.equal(outsider.status, 403);
   assert.deepEqual(outsider, closed, "An address outside the domain must get the same answer as Closed.");
   assert.deepEqual(subdomain, closed, "A subdomain must not match a domain entry.");
@@ -446,8 +450,8 @@ async function publishWithCli(projectId: string, slug: string, signupPolicy?: { 
   const root = await copyOf(`cli-${projectId}-${crypto.randomUUID()}`);
   const owner = new McpClient(`${url}/mcp`, { fetch: ownerFetch });
   const { token } = await owner.call<{ token: string }>("token_create", { scopes: ["read", "write", "publish"], ttlSeconds: 600 });
-  const project = { id: projectId, name: projectId, slug, manifest: { version: 1, visibility: "public", ...(signupPolicy ? { signupPolicy } : {}) } };
-  return await publishLocal(root, { url, project }, token) as { id: string; hostname: string; url: string };
+  const project = { id: projectId, name: projectId, slug, manifest: { version: 1, visibility: "public" } };
+  return await publishLocal(root, { url, project, ...(signupPolicy ? { modules: { auth: { on: true, signupPolicy } } } : {}) }, token) as { id: string; hostname: string; url: string };
 }
 
 function ownerFetch(input: RequestInfo | URL, init?: RequestInit) {

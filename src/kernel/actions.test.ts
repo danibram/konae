@@ -173,6 +173,16 @@ describe("http bindings", () => {
   });
 });
 
+describe("page paths", () => {
+  test("refuse the same declarations as the Kernel with the same messages", async () => {
+    const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =
+      await Bun.file(new URL("../../kernel-rs/kernel/src/page-cases.json", import.meta.url)).json();
+    for (const item of cases) {
+      expect(outcomeOf(() => parseServerActionSource(JSON.stringify({ version: 1, actions: item.actions }))), item.case).toEqual(expectedOutcome(item));
+    }
+  });
+});
+
 describe("signals", () => {
   test("refuse the same declarations as the Kernel, with the same messages", async () => {
     const cases: { case: string; actions: Record<string, unknown>; error: string | null; code?: string }[] =

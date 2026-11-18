@@ -17,6 +17,11 @@ const password = "pull-integration-password";
 let nextClient = 0;
 const freshClient = () => { nextClient++; return `198.19.${Math.floor(nextClient / 250)}.${nextClient % 250 + 1}`; };
 
+async function setSignupPolicy(client: McpClient, projectId: string, mode: string) {
+  const before = await client.call<any>("modules_read", { projectId });
+  await client.call("module_set", { projectId, module: "auth", options: { signupPolicy: { mode, allowlist: [] } }, expected: before.modules.auth.state });
+}
+
 async function start(name: string, port: number): Promise<Kernel> {
   const url = `http://127.0.0.1:${port}`;
   const setupKey = `pull-integration-${name}-setup-secret`;
@@ -140,7 +145,7 @@ describe("init, publish, pull, dev --reset", () => {
 
     const published = await publishLocal(app, { ...config, url: origin.url }, origin.token);
     expect(published.first).toBe(true);
-    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    await setSignupPolicy(origin.owner, published.id, "open");
     const ana = await member(origin, hostOf(published), "signup");
     await ana.call("actions_invoke", { name: "notes.create", input: { title: "Written on the origin" } });
 
@@ -173,12 +178,31 @@ describe("init, publish, pull, dev --reset", () => {
     expect((await readPulled(app))?.manifest.projectId).toBe(config.project.id);
   }, 60_000);
 
+  test("pull accepts a static Deployment whose exported app has no actions.json", async () => {
+    const folder = path.join(root, "static-pull");
+    const born = configOf(await initLocal(folder, { name: "Static pull" }));
+    await rm(path.join(folder, "app/actions.json"), { force: true });
+    await rm(path.join(folder, "app/schema.sql"), { force: true });
+    await rm(path.join(folder, "app/app.js"), { force: true });
+    await writeFile(path.join(folder, "app/index.html"), "<!doctype html><title>Static pull</title><main>Static</main>");
+    born.project.manifest.visibility = "public";
+    const published = await publishLocal(folder, { ...born, url: origin.url }, origin.token);
+    const pulled = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
+    expect(pulled.manifest.projectId).toBe(published.id);
+    expect(await readFile(path.join(folder, "app/index.html"), "utf8")).toContain("<title>Static pull</title>");
+    expect(await readdir(path.join(folder, "app"))).not.toContain("actions.json");
+    const pulledData = await pullLocal(folder, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id, { dataOnly: true });
+    expect(pulledData.manifest.contents.map((content) => content.name)).not.toContain("database");
+    await importPulled(folder, pulledData);
+    expect(await readdir(path.join(folder, "data")).catch(() => [])).not.toContain("database.sqlite");
+  }, 120_000);
+
   test("a folder whose schema.sql is ahead of the exported data runs on it, and the Kernel adds the column with every row kept", async () => {
     const next = path.join(root, "next");
     const born = configOf(await initLocal(next, { name: "Next version" }));
     await provideLocalAppDependencies(next);
     const published = await publishLocal(next, { ...born, url: origin.url }, origin.token);
-    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    await setSignupPolicy(origin.owner, published.id, "open");
     await (await member(origin, hostOf(published), "signup")).call("actions_invoke", { name: "notes.create", input: { title: "Before the column" } });
     const pulled = await pullLocal(next, new McpClient(`${origin.url}/mcp`, { token: origin.token }), origin.url, born.project.id);
 
@@ -248,7 +272,7 @@ describe("a file of app/ that is not text", () => {
     await mkdir(path.join(folder, "app/public"), { recursive: true });
     await writeFile(path.join(folder, "app/public/logo.png"), png);
     const published = await publishLocal(folder, { ...settings, url: origin.url }, origin.token, () => {});
-    await origin.owner.call("signup_policy_set", { projectId: published.id, mode: "open" });
+    await setSignupPolicy(origin.owner, published.id, "open");
     const ana = await member(origin, hostOf(published), "signup");
     await ana.call("actions_invoke", { name: "notes.create", input: { title: "Kept through source changes" } });
 

@@ -1,12 +1,5 @@
 import { checkConnects } from "../kernel/calls";
 export type DeploymentVisibility = "public" | "private";
-export const fileAccessMessage = 'manifest.fileAccess must be "app-users" when set.';
-
-export function checkFileAccess(value: object): void {
-  if (Object.hasOwn(value, "fileAccess") && (value as { fileAccess?: unknown }).fileAccess !== "app-users") {
-    throw new Error(fileAccessMessage);
-  }
-}
 export type RuntimeActionAccess = "anonymous" | "authenticated" | "granted";
 export type RuntimeActionKind = "query" | "mutation" | "signal" | "call";
 export type RuntimeActionDeclaration = { name: string; kind: RuntimeActionKind; access: RuntimeActionAccess };
@@ -15,7 +8,6 @@ export type CapsuleManifest = {
   version: 1;
   visibility: DeploymentVisibility;
   routing?: "pages" | "spa";
-  fileAccess?: "app-users";
   connects?: string[];
 };
 
@@ -60,12 +52,10 @@ export function normalizeManifest(value: unknown): CapsuleManifest {
   const candidate = value as Partial<CapsuleManifest>;
   const visibility = candidate.visibility === "public" ? "public" : "private";
   const connects = checkConnects(candidate.connects);
-  checkFileAccess(candidate);
   return {
     version: 1,
     visibility,
     ...(candidate.routing === "pages" || candidate.routing === "spa" ? { routing: candidate.routing } : {}),
     ...(connects ? { connects } : {}),
-    ...(candidate.fileAccess ? { fileAccess: candidate.fileAccess } : {}),
   };
 }

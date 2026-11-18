@@ -14,15 +14,18 @@ The Deployment whose path address holds the name `konae-home` answers `<domain>/
 | `styles.css` | The design system in the editor's variant, written by `bun run ui:render`. Do not edit it. |
 | `home.css` | The few rules of this page, on the same tokens. |
 | `home.js` | Points the editor, MCP and docs links at this installation from `location`, because the page answers on `<domain>/`, `<domain>/p/konae-home/` and its own hostname. On a custom domain it cannot tell the installation's domain and treats the custom domain as one. |
+| `pages/es/index.html` | Generated Spanish page at `/es/`. `bun run home:site` reads the English page and the translations in `i18n.js`, so each sentence has one source. |
+| `public/card.png` | The home card image. `public/card.svg` is its editable source. Run `bash scripts/render-card-images.sh` to rebuild both app cards. Set the `seo` module's `image` option to `card.png`. |
 | `?v=` on `home.css` and `home.js` | A proxy in front of the installation may let browsers keep CSS and JavaScript for hours, while the Kernel serves the page itself with `no-cache`. Raise the number in `index.html` when either file changes, so a returning visitor does not get the new page with the old files. |
-| `i18n.js` | The page's Spanish text, keyed by each element's `data-t`, and the text the script writes in both languages. The English text is the markup. `?lang=es` or `?lang=en` picks a language, then the visitor's last choice, then the browser's. |
+| `i18n.js` | The page's Spanish text, keyed by each element's `data-t`, and the text the script writes in both languages. The English text is the markup. |
 | `query-bound.ts`, `sql-tokens.ts` | Copies of `src/lib/query-bound.ts` and `src/lib/sql-tokens.ts`, so the row-limit box runs the editor's own check. `bun run ui:render` writes them, and `src/lib/templates/app-ui.test.ts` fails when they drift. |
 
 ## Publish it
 
-Run these from the repository root, with an owner account on the installation.
+Run these from the repository root, with an owner account on the installation. Generate the Spanish page before copying the app folder.
 
 ```sh
+bun run home:site
 KONAE_EMAIL=you@example.com KONAE_PASSWORD=... bun run konae -- login --dir /tmp/konae-home --url https://app.<domain>
 bun run konae -- init --dir /tmp/konae-home --name "Konae home"
 rm -rf /tmp/konae-home/app && cp -R examples/home /tmp/konae-home/app
@@ -35,8 +38,8 @@ bun run konae -- publish --dir /tmp/konae-home
 ```
 
 ```text
-path_set  { deploymentId, enabled: true, name: "konae-home" }
-path_read { deploymentId }
+bun run konae -- tool path_set '{"projectId":"<home id>","enabled":true,"name":"konae-home"}' --dir /tmp/konae-home
+bun run konae -- tool path_read '{"projectId":"<home id>"}' --dir /tmp/konae-home
 ```
 
-The app has no accounts, so `path_set` needs no `acceptSharedOrigin`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect, and [the invitation requests](../invitation/README.md) with the name `invitation`.
+The app has no database, accounts or file store. Turn on `seo` with `module_set` and set its image to `card.png`. Publish [the docs](../docs-site/README.md) the same way and give them the name `docs`, which the links on this page expect, and [the invitation requests](../invitation/README.md) with the name `invitation`.

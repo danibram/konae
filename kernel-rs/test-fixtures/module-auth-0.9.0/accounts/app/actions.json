@@ -1,0 +1,1 @@
+{"version":1,"actions":{"read":{"kind":"query","access":"authenticated","statement":"SELECT 1","bindings":[{"source":"actor","field":"id"}]}}}

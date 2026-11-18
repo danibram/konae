@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { readTar } from "../src/lib/tar";
-import { checkFiles, stageData } from "./push";
+import { checkFiles, pushData, stageData } from "./push";
 
 const limits = { quotaBytes: 20 * 1024 * 1024, maxFileBytes: 2 * 1024 * 1024 };
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -37,6 +37,46 @@ describe("konae push", () => {
     expect(staged.files).toEqual({ count: 2, bytes: 603 });
     const entries = readTar(new Uint8Array(await readFile(path.join(scratch, "files.tar"))));
     expect(entries.map((entry) => entry.path)).toEqual(["index.json", `${id(2)}.blob`, `${id(1)}.blob`]);
+  });
+
+  test("stages accounts and files without requiring a database for an actions-off app", async () => {
+    const root = await folder();
+    const scratch = await folder();
+    await mkdir(path.join(root, "data"), { recursive: true });
+    const identity = new Database(path.join(root, "data/identity.sqlite"));
+    identity.run("CREATE TABLE app_users(id TEXT PRIMARY KEY)");
+    identity.run("INSERT INTO app_users(id) VALUES ('user-1')");
+    identity.close();
+    const staged = await stageData(root, scratch, limits, false);
+    expect(staged.components.map((component) => component.name)).toEqual(["identity"]);
+    expect(staged.tables).toEqual([]);
+  });
+
+  test("pushes an actions-off app without inspecting or sending a database", async () => {
+    const root = await folder();
+    await mkdir(path.join(root, "data"), { recursive: true });
+    const identity = new Database(path.join(root, "data/identity.sqlite"));
+    identity.run("CREATE TABLE app_users(id TEXT PRIMARY KEY)");
+    identity.run("INSERT INTO app_users(id) VALUES ('user-1')");
+    identity.close();
+    const calls: string[] = [];
+    const client = {
+      call: async (name: string, args?: { operation?: string }) => {
+        calls.push(args?.operation ? `${name} ${args.operation}` : name);
+        if (name === "project_inspect") return { deployment: { id: "dep_1", projectId: "project_1", modules: { actions: { on: false } }, manifest: { visibility: "public" } } };
+        if (name === "platform_describe") return { files: limits };
+        if (name === "maintenance_read") return { maintenance: false };
+        if (name === "transfer_begin") return { transferId: "transfer_1", chunkBytes: 4096, size: 0, sha256: "" };
+        if (name === "project_import") return { imported: true, backup: { id: "backup_1" } };
+        if (name === "database_execute") return [{ id: "backup_1" }];
+        return {};
+      },
+      cancel: async () => {},
+    };
+    const result = await pushData(root, client as never, { id: "project_1", name: "Static app", visibility: "public" }, { yes: true, log: () => {} });
+    expect(result.backupId).toBe("backup_1");
+    expect(calls).not.toContain("database_execute inspect");
+    expect(calls).toContain("project_import");
   });
 
   test("refuses a file over the per-file limit, naming the largest and the totals", async () => {

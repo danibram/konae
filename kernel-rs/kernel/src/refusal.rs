@@ -13,6 +13,28 @@ pub fn refuse(code: &'static str, message: impl Into<String>) -> Refusal {
     Refusal { code, message: message.into() }
 }
 
+pub fn check_setting_expected(expected: Option<&Value>, current: Value) -> std::result::Result<(), Refusal> {
+    if expected.is_some_and(|expected| expected != &current) {
+        return Err(refuse(
+            "setting.changed",
+            format!("The setting changed since you read it. Its current value is {current}. Read it again before changing it."),
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_setting_expected_read(expected: Option<&Value>, current: Value, can_read: bool) -> std::result::Result<(), Refusal> {
+    if expected.is_some_and(|expected| expected != &current) {
+        let message = if can_read {
+            format!("The setting changed since you read it. Its current value is {current}. Read it again before changing it.")
+        } else {
+            "The setting changed since you read it. Read it again before changing it.".to_owned()
+        };
+        return Err(refuse("setting.changed", message));
+    }
+    Ok(())
+}
+
 impl Refusal {
     /// Several refusals named at once, such as every wrong key of a route's
     /// signature, are one refusal: their sentences joined by a space, under
@@ -87,8 +109,8 @@ mod tests {
     use serde_json::Value;
 
     const GROUPS: &[&str] = &[
-        "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
-        "secret", "signal", "signature", "signin", "sources", "statement",
+        "action", "call", "connects", "domain", "guard", "hostname", "mutation", "notify", "page", "path", "query", "release", "route", "schedule", "schema", "schema-transform",
+        "secret", "setting", "signal", "signature", "signin", "sources", "statement", "module",
     ];
 
     fn refusal_cases() -> Vec<(String, String, Option<String>)> {
@@ -158,6 +180,17 @@ mod tests {
             }
         }
         assert!(named > 100);
+    }
+
+    #[test]
+    fn expected_setting_conflicts_match_the_shared_cases() {
+        let cases: Value = serde_json::from_str(include_str!("setting-cases.json")).unwrap();
+        for case in cases["cases"].as_array().unwrap() {
+            let expected = case["expected"].clone();
+            let refused = super::check_setting_expected(Some(&expected), case["current"].clone()).unwrap_err();
+            assert_eq!(refused.code, case["code"].as_str().unwrap());
+            assert_eq!(refused.message, case["error"].as_str().unwrap());
+        }
     }
 
     #[test]

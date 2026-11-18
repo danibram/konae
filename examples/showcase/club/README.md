@@ -43,7 +43,7 @@ rm -rf /tmp/club/app && mkdir /tmp/club/app
 cp examples/showcase/club/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/club/app/
 ```
 
-Before the first publish, set `"visibility": "private"` and `"signupPolicy": { "mode": "invitation" }` in `/tmp/club/konae.json`, then run `bun run konae -- publish --dir /tmp/club`. A project published from a folder does not open in the editor, so invite people over MCP with `app_invitations_create`, which needs the `manage_users` that `--manage-users` adds. To make someone an organizer, join the club as them, then run `bun run konae -- sql --dir /tmp/club --prod "UPDATE members SET role = 'organizer' WHERE user_id = '<their account ID>'"`. `app_users_list` shows the account ID.
+Before the first publish, set `"visibility": "private"`, `"signupPolicy": { "mode": "invitation", "allowlist": [] }` and `"modules": { "auth": { "on": true } }` in `/tmp/club/konae.json`, then run `bun run konae -- publish --dir /tmp/club`. A project published from a folder does not open in the editor, so invite people over MCP with `app_invitations_create`, which needs the `manage_users` that `--manage-users` adds. To make someone an organizer, join the club as them, then run `bun run konae -- sql --dir /tmp/club --prod "UPDATE members SET role = 'organizer' WHERE user_id = '<their account ID>'"`. `app_users_list` shows the account ID.
 
 ## What worked
 
@@ -75,8 +75,8 @@ The predicate holds on both Kernels. Nobody without the role changed a row.
 
 | Area | Request | Answer |
 | --- | --- | --- |
-| Signup Policy | A republish whose `konae.json` names Open on an app that is Invitation only | `konae publish` prints a warning that names Access > Users and `signup_policy_set`, and changes nothing. A publish sets the policy only on the first release. |
-| Signup Policy | `signup_policy_set` with the publish token | `Unknown tool or insufficient permission. signup_policy_set needs a credential with manage_users. Run konae login with --manage-users, or use a token from token_create that includes it.` Changing an existing app's policy needs `manage_users`, which the CLI's publish token lacks. |
+| Signup Policy | A republish whose `konae.json` names Open on an app that is Invitation only | `konae publish` prints a warning that names the Users view and `module_set`, and changes nothing. A publish sets the policy only on the first release. |
+| Signup Policy | `module_set` on `auth` with the publish token | The tool refuses because the token lacks `manage_users`. Changing an existing app's policy needs that permission, which the CLI's publish token lacks. |
 | Invitation only | `POST /_konae/auth/signup` from an uninvited address | 403 `{"error":"This app is not accepting new accounts for this email address."}` |
 | Private file | Ben's `files_read` of Ana's note | `File not found.` |
 | Private file | Ben's `GET /_konae/files/<note>` with his session | 404 `{"error":"File not found."}` |

@@ -1,6 +1,6 @@
 import { Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { readMaintenance, setMaintenance, type MaintenanceState } from "../deployments/client";
+import { isSettingChanged, readMaintenance, setMaintenance, type MaintenanceState } from "../deployments/client";
 import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, LoadingBlock } from "./ui";
@@ -30,10 +30,16 @@ export function AppMaintenance({ deploymentId, onSignedOut }: { deploymentId: st
     setBusy(true);
     setError("");
     try {
-      const next = await setMaintenance(deploymentId, on);
+      const next = await setMaintenance(deploymentId, on, state?.maintenance ?? false);
       if (alive.current) setState(next);
     } catch (cause) {
       if (!alive.current) return;
+      if (isSettingChanged(cause)) {
+        try {
+          const readBack = await readMaintenance(deploymentId);
+          if (alive.current) setState(readBack);
+        } catch { /* Keep the refusal visible if the read-back fails. */ }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) onSignedOut();
     } finally { if (alive.current) setBusy(false); }

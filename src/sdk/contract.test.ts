@@ -4,6 +4,7 @@ import path from "node:path";
 import { sdkPromptSection } from "../agent/sdk-section.generated";
 import { buildSystemPrompt } from "../agent/system-prompt";
 import { cloneStarter } from "../lib/starter";
+import { checkModuleChange } from "../lib/module-state";
 import { runtimeClient } from "../runtime/preview";
 import { contractCalls, sdkContract, type SdkContract, type SdkError } from "./contract";
 import { renderAll, renderedPaths, renderPromptSection } from "./render";
@@ -16,7 +17,7 @@ function exposedCalls(source: string): string[] {
   const window: { miniapp?: Record<string, Record<string, unknown>> } = {};
   new Function("window", "location", "addEventListener", "parent", "document", source)(window, { pathname: "/" }, () => {}, undefined, undefined);
   return Object.entries(window.miniapp ?? {}).flatMap(([module, calls]) =>
-    Object.entries(calls).filter(([, value]) => typeof value === "function").map(([call]) => `${module}.${call}`));
+    Object.entries(calls).filter(([call, value]) => typeof value === "function" || module === "page" && call === "params" && Boolean(value && typeof value === "object")).map(([call]) => `${module}.${call}`));
 }
 
 function drift(named: string[], contract: SdkContract = sdkContract) {
@@ -40,15 +41,54 @@ function withExtraCall(): SdkContract {
 }
 
 describe("the SDK contract", () => {
+  test("describes module settings and renders the Kernel reader", () => {
+    const seo = sdkContract.modules.find((module) => module.name === "seo");
+    expect(seo).toMatchObject({
+      permission: "publish",
+      switch: true,
+      agentRule: "after-owner-confirms",
+      requires: [],
+      options: [
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], default: null },
+        { key: "image", type: "path", default: null },
+      ],
+    });
+    expect(seo?.uses).toBeDefined();
+    expect(sdkContract.modules.map((module) => module.title)).toEqual(["App accounts", "Data and actions", "Page address values", "File storage", "Outgoing calls", "Incoming routes", "Search listing"]);
+    expect(seo?.options[0].valueLabels).toEqual({ domain: "Custom domain", hostname: "Generated hostname", path: "Path address" });
+    expect(sdkContract.modules.filter((module) => module.switch).map((module) => module.name)).toEqual(["auth", "actions", "files", "calls", "http", "seo"]);
+    const files = sdkContract.modules.find((module) => module.name === "files");
+    expect(files).toMatchObject({ title: "File storage", switch: true, requires: ["auth"], options: [{ key: "fileAccess", label: "Who can read every file", valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader" }] });
+    expect(Object.keys(renderAll())).toContain("kernel-rs/kernel/src/modules.json");
+    const modules = JSON.parse(renderAll()["kernel-rs/kernel/src/modules.json"]);
+    expect(modules.modules.actions.switch).toBe(true);
+    expect(modules.modules.files.switch).toBe(true);
+    expect(modules.modules.seo.switch).toBe(true);
+    expect(modules.modules.seo.options).toEqual(seo?.options);
+  });
+
+  test("renders owner-facing module titles and enum labels in the generated docs", () => {
+    const docs = renderAll()["docs/sdk.md"];
+    expect(docs).toContain("### Search listing (`seo`)");
+    expect(docs).toContain("`path` (Path address)");
+  });
+
+  test("the shared module cases keep editor answers aligned with the Kernel", () => {
+    const cases = JSON.parse(read("kernel-rs/kernel/src/module-cases.json")) as Array<Record<string, any>>;
+    for (const item of cases) {
+      expect(checkModuleChange(item), item.case).toEqual(item.error === null ? null : { code: item.code, message: item.error });
+    }
+  });
+
   test("lists each module and call once, with a signature and an example that name it", () => {
     const calls = contractCalls();
     expect(new Set(calls).size).toBe(calls.length);
-    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
+    expect(calls).toEqual(["auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "actions.call", "page.params", "page.url", "files.list", "files.upload", "files.url", "files.update", "files.delete"]);
     for (const module of sdkContract.modules) {
       for (const call of module.calls) {
         const name = `miniapp.${module.name}.${call.name}`;
-        expect(call.signature.startsWith(`${name}(`)).toBe(true);
-        expect(call.examples.some((example) => example.code.includes(`${name}(`))).toBe(true);
+        expect(call.signature === name || call.signature.startsWith(`${name}(`)).toBe(true);
+        expect(call.examples.some((example) => example.code.includes(name) && (call.signature === name || example.code.includes(`${call.name}(`)))).toBe(true);
       }
     }
   });
@@ -69,6 +109,18 @@ describe("runtime.js and the preview client expose exactly the contract", () => 
 
   test("the editor preview client exposes the same calls", () => {
     expect(drift(exposedCalls(runtimeClient))).toEqual(agreed);
+  });
+
+  test("page.url keeps the path address prefix on both SDK doors", () => {
+    const paths = ["/", "/p/spring-menu/posts/hello"];
+    for (const source of [publishedSdk, runtimeClient]) {
+      for (const pathname of paths) {
+        const window: Record<string, any> = {};
+        new Function("window", "location", "addEventListener", "parent", "document", source)(window, { pathname }, () => {}, { postMessage: () => {} }, { querySelector: () => undefined });
+        const expected = source === runtimeClient || !pathname.startsWith("/p/") ? "/posts/next" : "/p/spring-menu/posts/next";
+        expect(window.miniapp.page.url("/posts/next")).toBe(expected);
+      }
+    }
   });
 
   test("the published SDK calls exactly the runtime tools the contract lists", () => {
@@ -133,10 +185,14 @@ describe("the rendered readers", () => {
   test("editing the contract changes every reader", () => {
     const before = renderAll();
     const after = renderAll(withExtraCall());
-    for (const file of Object.values(renderedPaths)) {
+    for (const file of Object.values(renderedPaths).filter((file) => file !== renderedPaths.modules)) {
       expect(after[file]).not.toBe(before[file]);
       expect(after[file]).toContain("miniapp.auth.refresh()");
     }
+    expect(after[renderedPaths.modules]).toBe(before[renderedPaths.modules]);
+    const changedMetadata = structuredClone(sdkContract) as unknown as SdkContract;
+    changedMetadata.modules.find((module) => module.name === "seo")!.permission = "manage_users";
+    expect(renderAll(changedMetadata)[renderedPaths.modules]).not.toBe(before[renderedPaths.modules]);
   });
 
   test("the build agent's prompt carries the rendered section and names no other call", () => {
@@ -144,6 +200,21 @@ describe("the rendered readers", () => {
     expect(sdkPromptSection).toBe(renderPromptSection());
     expect(prompt).toContain(sdkPromptSection);
     expect(drift(namedCalls(prompt))).toEqual(agreed);
+  });
+
+  test("the prompt, guide and docs carry every module and the agent read-back rule", () => {
+    const prompt = buildSystemPrompt(cloneStarter());
+    for (const module of sdkContract.modules) {
+      expect(prompt).toContain(`- ${module.name}: ${module.summary}`);
+      expect(prompt).toContain(`Permission: ${module.permission}. Build agent rule: ${module.agentRule}.`);
+      expect(read("docs/sdk.md")).toContain(`### ${module.title} (\`${module.name}\`)`);
+    }
+    expect(prompt).toContain("module_set changes switchable modules or their options; read modules_read after each change.");
+    expect(read("docs/guides/manage-modules.md")).toContain("read `modules_read` to confirm the new state");
+    expect(read("docs/pieces.md")).toContain("Be listed in search | Turn on `seo` with `module_set`, after `modules_read`");
+    const guide = read("kernel-rs/konae/src/guide.rs");
+    expect(guide).toContain("modules_read answers every module's state");
+    expect(guide).toContain("Be listed in search");
   });
 
   test("platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls", () => {
@@ -163,9 +234,11 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
     const location = { pathname, assign: (url: string) => assigned.push(url) };
     const window: { miniapp?: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>> } = {};
     const original = globalThis.fetch;
-    globalThis.fetch = (async (url: string) => {
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
       requested.push(String(url));
-      return new Response("{}", { status: 500 });
+      const call = JSON.parse(String(init.body));
+      if (call.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: "2.0", id: call.id, result: { structuredContent: { result: {} }, isError: false } });
     }) as typeof fetch;
     try {
       new Function("window", "location", "addEventListener", publishedSdk)(window, location, () => {});
@@ -180,21 +253,25 @@ describe("the published SDK prefixes every Kernel URL with the page's base path"
 
   test("the home and a generated hostname use the root paths", async () => {
     const home = await sdkOn("/");
-    expect(home).toEqual({ fileUrl: "/_konae/files/file-1", requested: ["/_konae/mcp"], assigned: ["/_konae/login"] });
+    expect(home.fileUrl).toBe("/_konae/files/file-1");
+    expect(home.requested.length).toBeGreaterThan(0);
+    expect(home.requested.every((url) => url === "/_konae/mcp")).toBe(true);
+    expect(home.assigned).toEqual(["/_konae/login"]);
   });
 
   test("a path address uses its /p/<segment> prefix for the endpoint, the file address and sign-in", async () => {
     for (const pathname of ["/p/notes", "/p/notes/", "/p/notes/about/deep.html"]) {
       const onPath = await sdkOn(pathname);
       expect(onPath.fileUrl).toBe("/p/notes/_konae/files/file-1");
-      expect(onPath.requested).toEqual(["/p/notes/_konae/mcp"]);
+      expect(onPath.requested.length).toBeGreaterThan(0);
+      expect(onPath.requested.every((url) => url === "/p/notes/_konae/mcp")).toBe(true);
       expect(onPath.assigned).toEqual(["/p/notes/_konae/login"]);
     }
   });
 
   test("a path that only looks like a prefix keeps the root paths", async () => {
     expect((await sdkOn("/pages/notes")).fileUrl).toBe("/_konae/files/file-1");
-    expect((await sdkOn("/p/")).requested).toEqual(["/_konae/mcp"]);
+    expect((await sdkOn("/p/")).requested.every((url) => url === "/_konae/mcp")).toBe(true);
   });
 });
 

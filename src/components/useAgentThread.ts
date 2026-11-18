@@ -7,6 +7,7 @@ import type {
   KonaeAgent,
   ProviderConfig,
 } from "../agent/contracts";
+import { isAgentSubmissionNotAdmitted } from "../agent/contracts";
 import {
   agentThreadReducer,
   canSubmit,
@@ -26,12 +27,14 @@ export type AgentThreadInput = {
   keyStore: AgentKeyStore;
   threadResetToken: number;
   keyVersion: number;
-  onApply: (proposal: AgentProposal) => boolean | Promise<boolean>;
-  onDiscard: () => void;
+  onApply: (proposal: AgentProposal) => boolean | ProposalApplyResult | Promise<boolean | ProposalApplyResult>;
+  onDiscard: () => void | Promise<void>;
   providers?: readonly ProviderConfig[];
   draftKey?: string;
   draftStorage?: DraftStorage;
 };
+
+export type ProposalApplyResult = boolean | { applied: boolean; message?: string; preserveProposal?: boolean };
 
 export type DraftStorage = { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void; removeItem: (key: string) => void };
 
@@ -61,8 +64,10 @@ export type AgentThread = {
   running: boolean;
   canSend: boolean;
   submit: () => Promise<void>;
+  recover: () => Promise<void>;
+  recoveryAttempted: boolean;
   apply: () => Promise<void>;
-  discard: () => void;
+  discard: () => Promise<void>;
   dismissError: () => void;
   interrupt: () => void;
 };
@@ -81,7 +86,10 @@ export function useAgentThread({
   draftStorage,
 }: AgentThreadInput): AgentThread {
   const [state, dispatch] = useReducer(agentThreadReducer, initialAgentThreadState);
+  const [recoveryAttempted, setRecoveryAttempted] = useState(false);
   const [draft, setDraftState] = useState(() => readDraft(draftStorage, draftKey));
+  const submitting = useRef(false);
+  const pendingUnsentDraft = useRef<string | null>(null);
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
   const setDraft = (value: string) => {
@@ -102,10 +110,17 @@ export function useAgentThread({
     subscription.current?.off();
     subscription.current = {
       agent: next,
-      off: next.subscribe((event) =>
-        dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined }),
-      ),
+      off: next.subscribe((event) => {
+        if (event.type === "error" && event.submission === "not-admitted" && pendingUnsentDraft.current !== null) {
+          const unsent = pendingUnsentDraft.current;
+          pendingUnsentDraft.current = null;
+          setDraft(unsent);
+          dispatch({ type: "unsubmit", text: unsent });
+        }
+        dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined, keepBusy: submitting.current });
+      }),
     };
+    if (!submitting.current) dispatch({ type: "settled", snapshot: readSnapshot(next) });
   }
 
   useEffect(() => {
@@ -116,29 +131,71 @@ export function useAgentThread({
 
   useEffect(() => {
     dispatch({ type: "reset" });
+    setRecoveryAttempted(false);
     setDraftState(readDraft(draftStorage, draftKey));
   }, [threadResetToken, draftKey]);
 
   async function submit() {
-    const text = draft.trim();
-    if (!text || running || blocker) return;
-    setDraft("");
-    dispatch({ type: "prompt", text });
+    const submittedDraft = draft;
+    const text = submittedDraft.trim();
+    if (!text || running || submitting.current || blocker) return;
+    submitting.current = true;
+    let handle: KonaeAgent | null = null;
+    try {
+      handle = await ensureAgent();
+      if (!handle) {
+        dispatch({ type: "event", event: { type: "error", message: "The agent failed to load." }, keepBusy: true });
+        return;
+      }
+      attach(handle);
+      // Loading the shared agent includes the authoritative lease admission.
+      // Keep the composer intact until that succeeds; a standby that loses
+      // admission has not submitted this prompt and must not lose its draft.
+      setDraft("");
+      dispatch({ type: "prompt", text });
+      pendingUnsentDraft.current = submittedDraft;
+      await handle.send(text);
+      pendingUnsentDraft.current = null;
+    } catch (error) {
+      if (!handle || isAgentSubmissionNotAdmitted(error)) {
+        setDraft(submittedDraft);
+        dispatch({ type: "unsubmit", text });
+      }
+      dispatch({ type: "event", event: { type: "error", message: error instanceof Error ? error.message : String(error) }, keepBusy: true });
+    } finally {
+      submitting.current = false;
+      dispatch({ type: "settled", snapshot: handle ? readSnapshot(handle) : undefined });
+    }
+  }
 
+  async function recover() {
+    if (running || submitting.current || recoveryAttempted) return;
+    setRecoveryAttempted(true);
     const handle = await ensureAgent();
     if (!handle) {
-      dispatch({ type: "event", event: { type: "error", message: "The agent failed to load." } });
+      setRecoveryAttempted(false);
+      dispatch({ type: "event", event: { type: "error", message: "The saved proposal could not be recovered." } });
       return;
     }
     attach(handle);
-    await handle.send(text);
     dispatch({ type: "settled", snapshot: readSnapshot(handle) });
   }
 
   async function apply() {
-    if (!footer.canApply || !state.proposal?.validation?.ok) return;
+    if (submitting.current || running || !footer.canApply || !state.proposal?.validation?.ok) return;
     const files = state.proposal.changedFiles.join(", ");
-    if (!await onApply(state.proposal)) {
+    let result: Awaited<ReturnType<typeof onApply>>;
+    try { result = await onApply(state.proposal); }
+    catch (error) {
+      dispatch({ type: "note", text: error instanceof Error ? error.message : "Apply could not be confirmed. The proposal remains available." });
+      return;
+    }
+    const applied = typeof result === "boolean" ? result : result.applied;
+    if (!applied) {
+      if (typeof result !== "boolean" && result.preserveProposal) {
+        if (result.message) dispatch({ type: "note", text: result.message });
+        return;
+      }
       dispatch({ type: "discard" });
       dispatch({ type: "note", text: "The Capsule changed after this was validated, so nothing was applied. Ask again to redo it against the current files." });
       return;
@@ -147,10 +204,15 @@ export function useAgentThread({
     dispatch({ type: "note", text: `Applied ${files} to the project.` });
   }
 
-  function discard() {
+  async function discard() {
+    if (submitting.current || running) return;
+    try { await onDiscard(); }
+    catch (error) {
+      dispatch({ type: "event", event: { type: "error", message: error instanceof Error ? error.message : "Discard could not be saved." } });
+      return;
+    }
     dispatch({ type: "discard" });
     dispatch({ type: "note", text: "Discarded the pending changes." });
-    onDiscard();
   }
 
   return {
@@ -164,6 +226,8 @@ export function useAgentThread({
     running,
     canSend: canSubmit(state, draft, false, blocker),
     submit,
+    recover,
+    recoveryAttempted,
     apply,
     discard,
     dismissError: () => dispatch({ type: "dismiss-error" }),

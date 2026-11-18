@@ -30,6 +30,7 @@ export type PackageManifest = {
   deploymentId: string;
   projectId: string;
   visibility: "public" | "private";
+  modules?: Record<string, { on?: boolean; [option: string]: unknown }>;
   signupPolicy?: { mode: "open" | "allowlist" | "closed"; allowlist: string[] };
   signInMethods?: ("password" | "google")[];
   publishedRevision: number;
@@ -59,6 +60,6 @@ export function checkPackageManifest(value: unknown): PackageManifest {
     if (!Number.isSafeInteger(size) || size! <= 0 || size! > limit) throw new Error(`The ${name} component is ${String(size)} bytes; its limit is ${limit} bytes.`);
     if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) throw new Error(`The ${name} component has no valid SHA-256 in the manifest.`);
   }
-  if (!seen.has("database")) throw new Error("The package manifest lists no database.");
+  if (!seen.has("database") && manifest.modules?.actions?.on !== false) throw new Error("The package manifest lists no database. This Kernel requires a database component for apps with actions on.");
   return manifest as PackageManifest;
 }

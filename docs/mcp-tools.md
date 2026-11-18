@@ -46,10 +46,10 @@ The catalog of tools depends on the credential. A call to a tool the credential 
 | Permission | Tools |
 | --- | --- |
 | None | `platform_describe`, `platform_guide`, `session_inspect` and `mail_status` |
-| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `sign_in_methods_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `secrets_list`, `api_keys_list`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
+| `read` | `projects_list`, `project_inspect`, `project_sources_read`, `domain_read`, `path_read`, `maintenance_read`, `contact_email_read`, `modules_read`, `secrets_list`, `api_keys_list`, `signals_read`, `usage_summary`, `usage_overview`, `calls_read`, `notices_read`, and `database_execute` reads |
 | `write` | `project_create`, `project_sources_save`, `project_delete` and `database_execute` writes |
-| `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `project_import`, and `initialSignupPolicy` on a first release |
-| `manage_users` | `signup_policy_set`, `sign_in_methods_set`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
+| `publish` | `release_plan`, `release_apply`, `secret_set`, `secret_delete`, `api_keys_create`, `api_keys_revoke`, `hostname_set`, `domain_set`, `domain_clear`, `path_set`, `path_clear`, `maintenance_set`, `contact_email_set`, `module_set`, `project_import`, and `initialSignupPolicy` on a first release |
+| `manage_users` | `module_set` for `auth`, `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter` from the owner's browser session, and the `app_invitations` tools |
 | `export_data` | `project_export` and reading its downloads |
 | The owner's browser session | `tokens_list`, `token_create`, `token_revoke` and `app_user_enter` |
 
@@ -68,8 +68,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Owner data | `database_execute` |
 | App export and import | `project_export`, `project_import` |
 | Publishing | `release_plan`, `release_apply` |
-| Signup policy | `signup_policy_set`; read it through `project_inspect` under `deployment.signupPolicy` |
-| Sign-in methods | `sign_in_methods_read`, `sign_in_methods_set` |
+| Signup policy and sign-in methods | `modules_read`, `module_set` on `auth` |
 | Signing secrets | `secrets_list`, `secret_set`, `secret_delete` |
 | API keys | `api_keys_list`, `api_keys_create`, `api_keys_revoke` |
 | Generated hostname | `hostname_set` |
@@ -77,6 +76,7 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Path address | `path_read`, `path_set`, `path_clear` |
 | Maintenance | `maintenance_read`, `maintenance_set` |
 | Contact email | `contact_email_read`, `contact_email_set` |
+| Modules | `modules_read`, `module_set` |
 | Usage and Signals | `usage_summary`, `signals_read`, `usage_overview` |
 | Calls and notices | `calls_read`, `notices_read` |
 | App users and invitations | `app_users_list`, `app_user_suspend`, `app_user_resume`, `app_user_enter`, `app_invitations_create`, `app_invitations_list`, `app_invitation_resend`, `app_invitation_revoke` |
@@ -84,6 +84,8 @@ A delegated token cannot create tokens or add permissions to itself. Run `konae 
 | Credentials, owner session only | `tokens_list`, `token_create`, `token_revoke` |
 | App runtime, with an app session | `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_upload`, `files_read`, `files_update`, `files_delete` |
 | App accounts, before sign-in | `auth_signup`, `auth_verify`, `auth_recover`, `auth_reset` |
+
+Turn on incoming routes with `module_set` for `http`, and outgoing call actions with `module_set` for `calls`. Each requires `actions`. Read the current state with `modules_read` first and read it back after the change. API keys stay separate operations: creating a key requires `http`, while listing and revoking keys remain available with `http` off. `connects` stays in the Capsule manifest because it controls the page's `connect-src`.
 
 The app runtime's complete inventory has 18 tools: `auth_session`, `auth_logout`, `actions_invoke`, `files_list`, `files_read`, `files_upload`, `files_update`, `files_delete`, `transfer_read`, `transfer_status`, `transfer_cancel`, `transfer_begin`, `transfer_write`, `transfer_complete`, `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. A signed-in app user may call all 18. An unsigned visitor on a public Deployment may call 11: `auth_session`, `actions_invoke`, `files_list`, `files_read`, `transfer_read`, `transfer_status`, `transfer_cancel`, `auth_signup`, `auth_verify`, `auth_recover` and `auth_reset`. An unsigned visitor on a private Deployment may call only the four account tools. The runtime endpoint is `/_konae/mcp` on the app's host. These tools are distinct from the owner's operations MCP on `/mcp`.
 
@@ -106,8 +108,6 @@ Two writes answer with their own observation, so no second call follows them. `t
 | `api_keys_create` | `api_keys_list` |
 | `api_keys_revoke` | `api_keys_list` |
 | `release_apply` | `project_inspect` |
-| `signup_policy_set` | `project_inspect` |
-| `sign_in_methods_set` | `sign_in_methods_read` |
 | `app_invitations_create` | `app_invitations_list` |
 | `app_invitation_resend` | `app_invitations_list` |
 | `app_invitation_revoke` | `app_invitations_list` |
@@ -121,6 +121,7 @@ Two writes answer with their own observation, so no second call follows them. `t
 | `path_clear` | `path_read` |
 | `maintenance_set` | `maintenance_read` |
 | `contact_email_set` | `contact_email_read` |
+| `module_set` | `modules_read` |
 | `transfer_begin` | `transfer_status` |
 | `transfer_complete` | `transfer_status` |
 | `transfer_cancel` | `transfer_status` |

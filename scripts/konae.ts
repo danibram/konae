@@ -26,11 +26,13 @@ import {
 } from "../src/lib/action-contract";
 import { checkHostname, type DomainRules } from "../src/lib/domain-name";
 import { appEntry, assembleStaticArtifact, entryNeverRunsMessage } from "../src/lib/static-artifact.js";
+import { sdkRequired, sourcesUseCalls, sourcesUseHttp } from "../src/lib/module-use";
 import { sourceFilesFrom, textFiles, type SourceFiles } from "../src/lib/source-files";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { checkSourceFiles, skippedName } from "../src/lib/source-rules";
 import { checkArtifact, checkRelease } from "../src/lib/size";
 import { ACTION_TYPES_FILE, renderActionTypes } from "../src/lib/action-types";
+import { defaultModuleStates } from "../src/lib/app-folder";
 import { bundleModule } from "../src/lib/local-builder.js";
 import { settingsDigest } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
@@ -43,13 +45,17 @@ type EmbeddedResources = { templates: string; runtime: string; staticArtifact: s
 const embeddedResources = (globalThis as typeof globalThis & { __KONAE_RESOURCES__?: EmbeddedResources }).__KONAE_RESOURCES__;
 let shutdownSignalCode: number | undefined;
 type Project = { id: string; name: string; slug: string; manifest: Record<string, unknown>; files?: Record<string, string> };
-type Config = { url?: string; project: Project; contactEmail?: string };
+
+
+type Config = { url?: string; project: Project; contactEmail?: string; modules?: AppSettings["modules"] };
 type SignupMode = "open" | "invitation" | "closed" | "allowlist";
 export type SignupPolicy = { mode: SignupMode; allowlist: string[] };
 
 const SIGNUP_MODES: readonly SignupMode[] = ["open", "invitation", "closed", "allowlist"];
 const MODE_LABELS: Record<SignupMode, string> = { open: "Open", invitation: "Invitation only", closed: "Closed", allowlist: "Allowlist" };
+
 export const INIT_SIGNUP_POLICY = { mode: "invitation" } as const;
+
 
 export function manifestSignupPolicy(manifest: Record<string, unknown>): SignupPolicy | undefined {
   const value = manifest.signupPolicy as { mode?: unknown; allowlist?: unknown } | undefined;
@@ -68,11 +74,17 @@ function describePolicy(policy: SignupPolicy) {
   return policy.mode === "allowlist" ? `Allowlist (${policy.allowlist.join(", ") || "empty"})` : MODE_LABELS[policy.mode];
 }
 
+/**
+ * The warning a republish prints when konae.json names another policy
+ * than the Deployment has. A publish never changes who may join an app that
+ * exists (docs/reference/accounts.md, "Signup policy"), so the file and the app can differ.
+ */
 export function signupPolicyWarning(wanted: SignupPolicy, current: SignupPolicy): string | undefined {
   const entries = (policy: SignupPolicy) => policy.allowlist.map((entry) => entry.trim().toLowerCase()).filter(Boolean).sort().join("\n");
   if (wanted.mode === current.mode && (wanted.mode !== "allowlist" || entries(wanted) === entries(current))) return undefined;
-  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or call signup_policy_set with a credential that holds manage_users.`;
+  return `konae.json asks for signup ${describePolicy(wanted)}, but this app has ${describePolicy(current)}. A publish sets the policy only on the first release and never changes who may join afterwards. Change it in the editor's Access > Users view, or use module_set on auth with a credential that holds manage_users.`;
 }
+
 
 export function loginScopes(args: string[]) {
   return ["read", "write", "publish",
@@ -80,20 +92,27 @@ export function loginScopes(args: string[]) {
     ...(args.includes("--export-data") ? ["export_data"] : [])];
 }
 
+
 export const INIT_TEMPLATES = ["tasks", "notes", "members", "form", "webhook", "digest", "gallery"] as const;
+
 
 const DEV_SESSION = ".konae/dev.json";
 
+
 export const NO_INSTALLATION = "No installation to talk to. Pass --url <installation URL>, or run login in this folder, which saves the one it signed in to. login --browser signs in through the browser without a password.";
+
 
 export const DOMAIN_NEEDS_DEPLOYMENT = "Name the Deployment with --deployment <id>, or with --dir <folder> whose konae.json carries its id. project_inspect shows the ID.";
 
+
 export const SERVER_COMMANDS = ["owner-code-create", "owner-code-list", "owner-code-revoke", "owner-account-suspend", "owner-account-resume", "restore", "reconcile", "files-migrate", "files-reconcile"];
+
 
 export function serverCommandMessage(command: string) {
   return `${command} is a command of the konae server binary, not of this CLI. Run KONAE_DATA_DIR=data/kernel-local kernel-rs/target/debug/konae ${command} for bun run dev:local, or docker compose exec --user konae kernel konae ${command} under Compose.`;
 }
 
+/** What `konae help` prints: every command with its options, in the order a project meets them. */
 export const HELP = `Usage: konae <command> [options]
 
 login     --dir <folder> --url <installation URL> [--browser [--no-open]] [--manage-users] [--export-data]
@@ -206,12 +225,15 @@ http://app.localhost:8080 under Compose.`;
 function endpoint(url: string) { return new URL("/mcp", url).href; }
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")); }
 
+
 export const VERIFY_BY_LINK = "This installation verifies email, so the account waits for the link sent to your address. Open it, choose KONAE_PASSWORD as the password, then run login again with the same KONAE_EMAIL and KONAE_PASSWORD and without the code or key, which are used now. On a Kernel on this machine, run login with --verify-from <its data folder>/mailbox.jsonl to do both in one step.";
+
 
 export function isLoopbackUrl(url: string) {
   const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
   return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
 }
+
 
 export function creatorVerificationToken(mailbox: string, email: string, seen = 0): string | undefined {
   const lines = mailbox.split("\n").filter(Boolean).slice(seen);
@@ -225,12 +247,14 @@ async function mailboxLines(file: string) {
   return (await readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
 }
 
+
 export async function waitForMailbox<T>(file: string, pick: (mailbox: string) => T | undefined, seconds = 15): Promise<T | undefined> {
   for (const deadline = Date.now() + seconds * 1000; Date.now() < deadline; await Bun.sleep(200)) {
     const found = pick(await readFile(file, "utf8").catch(() => ""));
     if (found !== undefined) return found;
   }
 }
+
 
 async function verifyFromMailbox(url: string, file: string, email: string, password: string, seen: number) {
   const token = await waitForMailbox(file, (mailbox) => creatorVerificationToken(mailbox, email, seen));
@@ -240,8 +264,14 @@ async function verifyFromMailbox(url: string, file: string, email: string, passw
   throw Error(`No verification link for ${email} reached ${file} within 15 seconds. Check that this is the mailbox of the Kernel at ${url}, which writes one when KONAE_MAIL_TRANSPORT=development.`);
 }
 
+/** The address `dev` invites to try an app whose Signup Policy is not open. */
 export const TEST_ACCOUNT_EMAIL = "test@example.com";
 
+/**
+ * The newest invitation link for `email` among the development mailbox's
+ * lines past the first `seen`. Lines for owners, other addresses and other
+ * purposes are skipped.
+ */
 export function invitationLink(mailbox: string, email: string, seen = 0): string | undefined {
   return mailbox.split("\n").filter(Boolean).slice(seen)
     .map((line) => { try { return JSON.parse(line) as { to?: string; scope?: string; purpose?: string; link?: string }; } catch { return {}; } })
@@ -249,11 +279,18 @@ export function invitationLink(mailbox: string, email: string, seen = 0): string
     .at(-1)?.link;
 }
 
+/** Whether the local app holds an account, invited or active, as `kernel users` lists them. */
 export async function holdsAppAccounts(kernel: Pick<LocalKernel, "run">) {
   const listed = JSON.parse(await kernel.run(["users"])) as { users?: unknown[] };
   return (listed.users?.length ?? 0) > 0;
 }
 
+/**
+ * Invites the test account when the local app holds no account yet, waits for
+ * the link to reach the mailbox, and returns the line that says where to open
+ * it. It returns nothing when accounts exist, and the reason when the
+ * invitation or its link did not come.
+ */
 export async function inviteTestAccount(kernel: Pick<LocalKernel, "run">, mailbox: string, seconds = 15): Promise<{ line?: string; failed?: string }> {
   if (await holdsAppAccounts(kernel)) return {};
   const seen = await mailboxLines(mailbox);
@@ -264,6 +301,7 @@ export async function inviteTestAccount(kernel: Pick<LocalKernel, "run">, mailbo
     : { failed: `The invitation for ${TEST_ACCOUNT_EMAIL} did not reach ${mailbox} within ${seconds} seconds.` };
 }
 
+/** Signs in, or creates the account with an invitation code or, for the first owner, the setup key. */
 async function login(url: string, email: string, password: string, admission: { code?: string; setupKey?: string } = {}, scopes = ["read", "write", "publish"], verifyFrom?: string): Promise<string> {
   if (verifyFrom && !isLoopbackUrl(url)) throw Error(`--verify-from reads a development mailbox on this machine, so it works only with a Kernel on localhost or 127.0.0.1, not ${new URL(url).host}.`);
   let response = await fetch(new URL("/_konae/owner/login", url), {
@@ -287,17 +325,25 @@ async function login(url: string, email: string, password: string, admission: { 
   return token.token;
 }
 
+/** How long `login --browser` waits for the owner to finish in the browser. */
 export const BROWSER_LOGIN_TIMEOUT_MS = 5 * 60_000;
 
 function base64url(bytes: Uint8Array) {
   return Buffer.from(bytes).toString("base64url");
 }
 
+/** Opens `url` in the system browser. Failing to is fine: the URL is printed too. */
 function openBrowser(url: string) {
   const command = process.platform === "darwin" ? ["open", url] : process.platform === "win32" ? ["cmd", "/c", "start", "", url] : ["xdg-open", url];
   try { Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).exited.catch(() => {}); } catch { /* printed below */ }
 }
 
+/**
+ * Signs the owner in through the browser: the installation's OAuth code flow
+ * with PKCE, redirected to a port on 127.0.0.1 that this process listens on
+ * (RFC 8252). A loopback client's token lasts as long as one from password
+ * login. The code and the token never reach the terminal.
+ */
 export async function browserLogin(url: string, scopes: string[], options: { open?: boolean; timeoutMs?: number; print?: (line: string) => void; openUrl?: (url: string) => void } = {}): Promise<{ token: string; expiresIn: number }> {
   const print = options.print ?? console.log;
   const timeoutMs = options.timeoutMs ?? BROWSER_LOGIN_TIMEOUT_MS;
@@ -317,6 +363,7 @@ export async function browserLogin(url: string, scopes: string[], options: { ope
     fetch(request) {
       const callback = new URL(request.url);
       if (callback.pathname !== "/callback") return page(404, "Nothing here.");
+      // A request without this login's state is a stray one, so the login keeps waiting.
       if (callback.searchParams.get("state") !== state) return page(400, "This sign-in does not belong to the konae login waiting in the terminal. Start the sign-in from the address that login printed.");
       const iss = callback.searchParams.get("iss");
       if (iss && iss !== metadata.issuer) return page(400, `This answer came from ${iss}, not ${metadata.issuer}, so login ignored it.`);
@@ -362,12 +409,18 @@ export async function browserLogin(url: string, scopes: string[], options: { ope
   }
 }
 
+/** The uses secret_set takes. A Google client half defaults to google, any other name to route. */
 export const SECRET_USES = ["route", "call", "google"] as const;
 
+/** A secret's value from piped stdin, without the one line break `echo` or a file ends with. */
 export function pipedSecret(text: string) {
   return text.replace(/\r?\n$/, "");
 }
 
+/**
+ * Sets a project's secret through secret_set, then reads the names back
+ * through secrets_list. The value is never printed and never returned.
+ */
 export async function setSecret(client: Pick<McpClient, "call">, projectId: string, name: string, value: string, use?: string) {
   await client.call("secret_set", { projectId, name, value, ...(use ? { use } : {}) });
   const listed = await client.call<{ secrets: { name: string; use: string; updatedAt: number }[] }>("secrets_list", { projectId });
@@ -376,6 +429,7 @@ export async function setSecret(client: Pick<McpClient, "call">, projectId: stri
   return `Set ${name} on ${projectId} for use ${secret.use} at ${new Date(secret.updatedAt).toISOString()}. secrets_list lists it and never returns its value.`;
 }
 
+/** "24-hour" or "1-hour", from a token's lifetime in seconds. */
 function lifetimeLabel(seconds: number) {
   return seconds % 3600 === 0 ? `${seconds / 3600}-hour` : `${Math.round(seconds / 60)}-minute`;
 }
@@ -385,13 +439,16 @@ async function credentials(root: string) {
   return (await json<{ token: string }>(path.join(root, ".konae/credentials.json"))).token;
 }
 
+/** The folder's sources: `app/`. */
 export function appDir(root: string) { return path.join(root, SOURCES_FOLDER); }
 
+/** Every file of `app/`, which a release carries as the project's files, as text or as base64 that `encodings` names. */
 async function sources(root: string): Promise<SourceFiles> {
   const paths = await capsulePaths(root);
   return sourceFilesFrom(await Promise.all(paths.map(async (relative) => [relative, new Uint8Array(await readFile(path.join(appDir(root), relative)))] as const)));
 }
 
+/** Every file of `app/` the build may publish, text or binary. Dot folders and node_modules are skipped at any depth. */
 async function capsulePaths(root: string, prefix = ""): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(path.join(appDir(root), prefix), { withFileTypes: true })) {
@@ -413,6 +470,7 @@ async function appDirectories(root: string, prefix = ""): Promise<string[]> {
   return result;
 }
 
+/** Reads konae.json. */
 export async function readSettings(root: string): Promise<AppSettings> {
   try { return await json<AppSettings>(path.join(root, SETTINGS_FILE)); }
   catch (error) {
@@ -421,19 +479,23 @@ export async function readSettings(root: string): Promise<AppSettings> {
   }
 }
 
+/** The project a release names, from konae.json. The Signup Policy rides in the manifest until the release reads it. */
 export function configOf(settings: AppSettings, url?: string): Config {
   return {
     ...(url ? { url } : {}),
     ...(settings.contactEmail ? { contactEmail: settings.contactEmail } : {}),
+    modules: defaultModuleStates(settings.modules),
     project: { id: settings.id, name: settings.name, slug: settings.slug, manifest: { ...settings.manifest, visibility: settings.visibility, signupPolicy: settings.signupPolicy } },
   };
 }
 
+/** A file as text when it is UTF-8, else as bytes, which the artifact carries as base64. */
 async function readCapsuleFile(root: string, relative: string): Promise<string | Uint8Array> {
   const bytes = new Uint8Array(await readFile(path.join(appDir(root), relative)));
   try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return bytes; }
 }
 
+/** True when the app folder's package.json names a build script that writes dist/ and its packages are installed. */
 async function hasPackageBuild(root: string) {
   try {
     const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
@@ -445,6 +507,22 @@ async function hasPackageBuild(root: string) {
   return (await stat(path.join(root, "node_modules")).catch(() => undefined))?.isDirectory() ?? false;
 }
 
+async function refreshPageBuilder(root: string, sdk: boolean) {
+  const buildScript = (await folderFiles(root, await readSettings(root))).find((entry) => entry.path === "scripts/build.mjs")!.contents;
+  const resources = [
+    ["scripts/build.mjs", buildScript],
+    ["scripts/static-artifact.mjs", embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8")],
+    ...(sdk ? [["scripts/runtime.js", embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8")] as const] : []),
+  ] as const;
+  for (const [relative, contents] of resources) {
+    const target = path.join(root, relative);
+    if (await readFile(target, "utf8").catch(() => undefined) === contents) continue;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+}
+
+/** Packs an existing dist/ into the artifact shape a release uploads. */
 async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Record<string, string>; encodings: Record<string, string> }> {
   const files: Record<string, string> = {};
   const encodings: Record<string, string> = {};
@@ -469,6 +547,10 @@ async function artifactFromDist(root: string, prefix = ""): Promise<{ files: Rec
   return { files, encodings };
 }
 
+/**
+ * Runs an npm command in the app folder and shows its output only when it
+ * fails, so a command's answer, such as the published URL, is all it prints.
+ */
 async function quietly(command: string[], cwd: string) {
   const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -476,23 +558,37 @@ async function quietly(command: string[], cwd: string) {
   return code === 0;
 }
 
+/**
+ * Builds `app/` into `dist/` by the static publishing contract in
+ * src/lib/static-artifact.js, the rules the editor's build runs too.
+ * When the folder has package.json with a build script (from init) and a
+ * node_modules folder, that script writes dist/ and this packs it. Otherwise
+ * the built-in bundler runs, so a folder nobody ran npm install in builds too.
+ * `development` asks that script for an unminified build, which `dev` serves.
+ * Answers the artifact, `source`, every file of `app/` as a release carries
+ * it, and `files`, the text files of `app/` by path.
+ */
 export async function buildLocal(root: string, options: { development?: boolean } = {}) {
   const source = await sources(root);
   const files = textFiles(source);
+  const settings = await readSettings(root).catch(() => undefined);
+  const sdkEnabled = sdkRequired(settings?.modules, files, settings?.visibility ?? "private");
   await refreshActionTypes(root);
   const paths = await capsulePaths(root);
   if (paths.some((file) => file.startsWith("src/") && /\.(?:ts|tsx|mts|cts)$/.test(file) && !/\.d\.[mc]?ts$/.test(file))) typecheckApp(root);
   if (await hasPackageBuild(root)) {
-    const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files);
+    await refreshPageBuilder(root, sdkEnabled);
+    // A folder's own scripts/static-artifact.mjs may predate this refusal, so it runs here too.
+    const neverRuns = entryNeverRunsMessage(Object.keys(source.files), files, sdkEnabled);
     if (neverRuns) throw Error(neverRuns);
+    // The script type-checks against actions.d.ts, so it reads the actions.json of this build.
     if (!(await quietly(["npm", "run", "build", ...(options.development ? ["--", "--dev"] : [])], root))) throw Error("npm run build failed.");
     const packed = await artifactFromDist(root);
     if (!packed.files["index.html"]) throw Error("npm run build wrote no dist/index.html.");
     const artifact = { version: 1 as const, entrypoint: "index.html", files: packed.files, encodings: Object.keys(packed.encodings).length ? packed.encodings : undefined };
     return { artifact, source, files };
   }
-  const settings = await readSettings(root).catch(() => undefined);
-  const sdk = embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8");
+  const sdkRuntime = embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8");
   const entry = appEntry(Object.keys(files)) ?? "app.js";
   const artifact = await assembleStaticArtifact({
     paths,
@@ -502,7 +598,8 @@ export async function buildLocal(root: string, options: { development?: boolean 
       return { script, styles: [files["styles.css"] ?? "", styles].filter(Boolean).join("\n") };
     },
     bundle: (relative) => bundleModule(appDir(root), relative, options.development),
-    runtime: sdk,
+    runtime: sdkRuntime,
+    sdk: sdkEnabled,
     routing: settings?.manifest?.routing as "pages" | "spa" | undefined,
     warn: (message) => console.warn(`Warning: ${message}`),
   });
@@ -510,6 +607,7 @@ export async function buildLocal(root: string, options: { development?: boolean 
   return { artifact, source, files };
 }
 
+/** Checks app TypeScript with the same tsconfig used by the folder build script. */
 function typecheckApp(root: string) {
   if (!existsSync(path.join(root, "tsconfig.json"))) return;
   const configFile = ts.readConfigFile(path.join(root, "tsconfig.json"), ts.sys.readFile);
@@ -543,6 +641,11 @@ function typecheckApp(root: string) {
   }
 }
 
+/**
+ * Builds and publishes. On a first release `project.manifest.signupPolicy`
+ * goes as `initialSignupPolicy`; on a later one the Kernel keeps the app's
+ * policy and `warn` gets one line when konae.json names another.
+ */
 async function productionRequirements(root: string, confirmation?: string | null) {
   const requirements = confirmation ? [`Pass --confirm-schema ${confirmation} when applying this database change.`] : [];
   try {
@@ -559,8 +662,10 @@ async function productionRequirements(root: string, confirmation?: string | null
 
 export async function publishLocal(root: string, config: Config, token: string, warn: (message: string) => void = console.warn, confirm: ConfirmSchema = keepData, planOnly = false) {
   if (!config.url) throw Error(NO_INSTALLATION);
+  const initialModules = config.modules ?? defaultModuleStates();
   const client = new McpClient(endpoint(config.url), { token });
   const wanted = manifestSignupPolicy(config.project.manifest);
+  // The policy is not part of the Capsule manifest, so the Kernel's project record never holds an allowlist.
   const { signupPolicy: _, runtime: _runtime, ...manifest } = config.project.manifest;
   const project = { ...config.project, manifest };
   const prepared = await buildLocal(root);
@@ -573,7 +678,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
   checkArtifact(prepared.artifact);
   const identity = { id: project.id, name: project.name, slug: project.slug, manifest: project.manifest };
   const initialSignupPolicy = wanted ? { mode: wanted.mode, allowlist: wanted.allowlist } : undefined;
-  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}) })));
+  checkRelease(new TextEncoder().encode(JSON.stringify({ project: identity, visibility: manifest.visibility ?? "private", artifact: prepared.artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(config.contactEmail ? { contactEmail: config.contactEmail } : {}), initialModules })));
   let first = false;
   let observedSourcesRevision: number | undefined;
   let publishedSourceDigest = "";
@@ -593,6 +698,7 @@ export async function publishLocal(root: string, config: Config, token: string, 
     }
   }
   const result = await publishProject<{ id: string; url: string }>(client, project, async () => {
+    // project_inspect needs the project that project_create registers on a first publish.
     const remote = await client.call<{ deployment?: { id: string } | null; sourcesRevision: number }>("project_inspect", { projectId: project.id });
     first = !remote.deployment;
     const marker = await json<{ sourcesRevision: number; installation?: string; projectId?: string }>(path.join(root, ".konae/source-revision.json")).catch(() => undefined);
@@ -601,7 +707,8 @@ export async function publishLocal(root: string, config: Config, token: string, 
     const { artifact, source } = prepared;
     return {
       project: { ...project, ...source }, visibility: manifest.visibility ?? "private", artifact,
-      initialSignupPolicy: first ? wanted : undefined, contactEmail: config.contactEmail,
+      initialSignupPolicy: first ? wanted : undefined, contactEmail: first ? config.contactEmail : undefined,
+      initialModules: first ? initialModules : undefined,
     };
   }, confirm, (error) => warn(`Could not release the upload: ${error instanceof Error ? error.message : error}`), (plan) => {
     if (plan.firstRelease && plan.url) warn(firstReleaseAddress(plan.url, project.id));
@@ -629,24 +736,40 @@ export async function publishLocal(root: string, config: Config, token: string, 
   await writeFile(path.join(root, ".konae/source-revision.json"), JSON.stringify({ ...sourceRevisionScope(config.url, project.id), sourcesRevision: plan.expectedSourcesRevision + 1, sourceDigest: publishedSourceDigest, settingsDigest: settingsDigest(publishedSettings) }, null, 2), { mode: 0o600 });
   await writeFile(path.join(root, ".konae/release-plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(path.join(root, ".konae/published.json"), JSON.stringify(receipt, null, 2));
+  if (!first && Object.keys(config.modules ?? {}).length > 0) {
+    warn("konae.json modules apply only to the first publish. This release keeps the Deployment's module state. Read it with modules_read and change it with module_set.");
+  }
   if (!first && wanted) {
+    // Reading the policy needs only read. A Kernel that cannot answer leaves the publish as it is.
     const inspected = await client.call<{ deployment?: { signupPolicy?: { mode: SignupMode; allowlist?: string[] } } | null }>("project_inspect", { projectId: project.id }).catch(() => undefined);
     const current = inspected?.deployment?.signupPolicy;
     const warning = current?.mode && signupPolicyWarning(wanted, { mode: current.mode, allowlist: current.allowlist ?? [] });
     if (warning) warn(warning);
   }
+  if (!first && config.contactEmail) {
+    const current = await client.call<{ contactEmail: string | null }>("contact_email_read", { projectId: project.id }).catch((error) => {
+      warn(`Publish succeeded, but contact_email_read failed: ${error instanceof Error ? error.message : error}`);
+      return undefined;
+    });
+    if (current && current.contactEmail?.trim().toLowerCase() !== config.contactEmail.trim().toLowerCase()) {
+      warn(`The app folder asks for contact email ${config.contactEmail}, but this app has ${current.contactEmail ?? "none"}. A publish keeps the app's contact email after its first release. Change it with contact_email_set.`);
+    }
+  }
   return Object.assign(receipt, { first });
 }
+
 
 export const firstReleaseAddress = (url: string, id: string) =>
   `This first release names the app ${url}, and every later release keeps that name. To use another name under the same suffix, run konae hostname --deployment ${id} --set <name> before you register Google sign-in or share links.`;
 
+/** hostname_set, or domain_read without `set`. The Kernel checks the name, and its refusal reaches the caller unchanged. Returns the lines to print. */
 export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentId: string, set?: string): Promise<string[]> {
   if (set === undefined) {
     const { generatedUrl } = await client.call<{ generatedUrl: string }>("domain_read", { projectId: deploymentId });
     return [`This app answers at ${generatedUrl}.`];
   }
-  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set });
+  const current = await client.call<{ deployment?: { hostname: string } | null }>("project_inspect", { projectId: deploymentId });
+  const moved = await client.call<{ url: string; changed: boolean; previousHostnames: string[]; googleCallback: string }>("hostname_set", { projectId: deploymentId, name: set, expected: current.deployment?.hostname });
   if (!moved.changed) return [`This app already answers at ${moved.url}.`];
   return [
     `This app now answers at ${moved.url}. ${moved.previousHostnames.at(-1)} redirects there with a 308 and stays this app's.`,
@@ -654,8 +777,14 @@ export async function hostnameLocal(client: Pick<McpClient, "call">, deploymentI
   ];
 }
 
+/** Keeps the data, so a schema change that loses some is not applied. */
 async function keepData() { return false; }
 
+/**
+ * Asks on the terminal before a schema change that loses data. The plan is
+ * printed with its confirmation; `--confirm-schema <confirmation>` answers
+ * yes to that plan only, and without a terminal the answer is no.
+ */
 export function confirmOnTerminal(accepted?: string): ConfirmSchema {
   return async (change) => {
     for (const line of describeSchemaChange(change)) console.log(line);
@@ -669,11 +798,16 @@ export function confirmOnTerminal(accepted?: string): ConfirmSchema {
   };
 }
 
+/** The part of a terminal input stream the password prompt uses, so a test can stand in for it. */
 export type PromptInput = {
   isTTY?: boolean; setRawMode?(on: boolean): unknown; resume(): unknown; pause(): unknown; setEncoding?(encoding: string): unknown;
   on(event: "data", listener: (chunk: string) => void): unknown; off(event: "data", listener: (chunk: string) => void): unknown;
 };
 
+/**
+ * Reads a line with the typed characters not echoed: the input goes into raw
+ * mode, which is restored on Enter and on Ctrl-C, where the promise rejects.
+ */
 export function readSecret(question: string, input: PromptInput = process.stdin, output: { write(text: string): unknown } = process.stdout): Promise<string> {
   return new Promise((resolve, reject) => {
     let typed = "";
@@ -700,12 +834,18 @@ export function readSecret(question: string, input: PromptInput = process.stdin,
   });
 }
 
+/** Reads one line from the terminal, echoing it unless `secret`. */
 export async function askOnTerminal(question: string, secret: boolean): Promise<string> {
   if (secret) return readSecret(question);
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try { return await prompt.question(question); } finally { prompt.close(); }
 }
 
+/**
+ * The email and password `login` signs in with: the variables when set,
+ * otherwise a prompt when there is a terminal, so a script without one fails
+ * as before. The password is not echoed.
+ */
 export async function loginCredentials(env: Record<string, string | undefined>, terminal: { isTTY?: boolean }, ask: (question: string, secret: boolean) => Promise<string> = askOnTerminal) {
   let email = env.KONAE_EMAIL; let password = env.KONAE_PASSWORD;
   if (terminal.isTTY) {
@@ -716,6 +856,7 @@ export async function loginCredentials(env: Record<string, string | undefined>, 
   return { email, password };
 }
 
+/** Replaces `dist/` with the built artifact's files. */
 async function writeDist(root: string, artifact: { files: Record<string, string>; encodings?: Record<string, string> }) {
   const dist = path.join(root, DIST_FOLDER);
   await rm(dist, { recursive: true, force: true });
@@ -726,10 +867,11 @@ async function writeDist(root: string, artifact: { files: Record<string, string>
   }
 }
 
+/** The files beside app/, dist/ and data/ that every app folder carries. */
 async function folderFiles(root: string, settings: AppSettings) {
   const read = (file: string) => readFile(path.join(appDir(root), file), "utf8").catch(() => "");
   return generatedFiles({
-    settings, actionsSource: await read("actions.json"), schemaSource: await read("schema.sql"),
+    settings, actionsSource: await read("actions.json") || '{"version":1,"actions":{}}', schemaSource: await read("schema.sql"),
     runtime: embeddedResources?.runtime ?? await readFile(path.join(toolRoot!, "src/mcp/runtime.js"), "utf8"),
     staticArtifact: embeddedResources?.staticArtifact ?? await readFile(path.join(toolRoot!, "src/lib/static-artifact.js"), "utf8"),
     localBuilder: embeddedResources?.localBuilder ?? await readFile(path.join(toolRoot!, "src/lib/local-builder.js"), "utf8"),
@@ -746,6 +888,12 @@ async function writeEntries(root: string, entries: FolderEntry[]) {
   }
 }
 
+/**
+ * Exports the app folder into the empty folder `output`: konae.json, app/,
+ * a fresh dist/ and the files every app folder carries. With `remote`, a
+ * credential that holds export_data, it adds the published app's data/ from
+ * project_export. No secret and nothing of .konae/ goes with it.
+ */
 export async function exportLocal(root: string, output: string, remote?: { url: string; token: string }) {
   await assertEmptyFolder(output);
   const settings = await readSettings(root);
@@ -763,6 +911,11 @@ export async function exportLocal(root: string, output: string, remote?: { url: 
   return { output, data: true };
 }
 
+/**
+ * Writes the Action Contract of the Capsule in `root` into `out`: the JSON,
+ * its schema and the Markdown. The project's ID and name come from
+ * konae.json when there is one.
+ */
 export async function writeContract(root: string, out = root) {
   const read = async (file: string) => readFile(path.join(appDir(root), file), "utf8");
   let project: { id: string; name: string } | undefined;
@@ -784,12 +937,17 @@ export async function writeContract(root: string, out = root) {
   return { contract, warnings, file: path.join(out, ACTION_CONTRACT_FILE) };
 }
 
+/** Writes actions.d.ts into `out` when its text changed, so a watcher that sees the file sees a real change. */
 export async function writeActionTypes(out: string, contract: ActionContract) {
   const file = path.join(out, ACTION_TYPES_FILE);
   const text = renderActionTypes(contract);
   if (await readFile(file, "utf8").catch(() => undefined) !== text) await writeFile(file, text);
 }
 
+/**
+ * Writes actions.d.ts beside konae.json from app/actions.json and
+ * app/schema.sql, as dev does on each start and change. When they do not parse, the last one stays.
+ */
 async function refreshActionTypes(root: string) {
   const actionsSource = await readFile(path.join(appDir(root), "actions.json"), "utf8").catch(() => undefined);
   if (actionsSource === undefined) return;
@@ -801,6 +959,7 @@ async function refreshActionTypes(root: string) {
   }
 }
 
+/** Add each entry to .gitignore unless a line already names it. */
 export async function ignoreInGit(root: string, entries: string[]) {
   const file = path.join(root, ".gitignore");
   let current = "";
@@ -816,7 +975,14 @@ function slugOf(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "app";
 }
 
+/**
+ * Writes a new app folder without a Kernel: the template in app/, konae.json
+ * and the files every app folder carries. The app's ID is made here; the
+ * first publish registers it on the installation with project_create, which
+ * takes an ID the caller chose.
+ */
 export async function initLocal(root: string, options: { name?: string; template?: string } = {}) {
+  // The file project_create answers from, so a folder starts the same through the CLI and through MCP.
   const templates = embeddedResources?.templates ?? await readFile(path.join(toolRoot!, "kernel-rs/konae/src/project-templates.json"), "utf8");
   const all = JSON.parse(templates) as ProjectTemplates;
   const born = all.templates[options.template ?? all.default];
@@ -829,9 +995,14 @@ export async function initLocal(root: string, options: { name?: string; template
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, source, { flag: "wx" });
   }
+  // The template says who may open the app. Only people the owner invites can create an account.
+  const modules = defaultModuleStates();
+  if (Object.values(born.files).some((source) => /miniapp\s*\.\s*files/.test(source))) modules.files = { on: true, fileAccess: null };
+  if (sourcesUseHttp(born.files)) modules.http = { on: true };
+  if (sourcesUseCalls(born.files)) modules.calls = { on: true };
   const settings: AppSettings = {
     id: `app_${crypto.randomUUID()}`, name, slug: slugOf(name), visibility: born.visibility,
-    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, manifest: { version: 1 },
+    signupPolicy: { mode: INIT_SIGNUP_POLICY.mode, allowlist: [] }, signInMethods: ["password"], kernel: KERNEL_VERSION, modules, manifest: { version: 1 },
   };
   await writeFile(path.join(root, SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx" });
   await writeEntries(root, await folderFiles(root, settings));
@@ -839,14 +1010,21 @@ export async function initLocal(root: string, options: { name?: string; template
   return settings;
 }
 
+/** The Kernel `dev` runs on the folder, and the commands `sql`, `events` and `dev` give it. */
 export type LocalKernel = { binary: string; env: Record<string, string | undefined>; data: string; mailbox: string; run(args: string[], input?: string): Promise<string> };
 
 async function localStateSummary(root: string) {
   return localResetSummary(await json<unknown>(path.join(root, ".konae/local-state.json")).catch(() => undefined));
 }
 
+/**
+ * 1 TiB, the quota a local Kernel holds unless KONAE_FILES_QUOTA_BYTES names another.
+ * `kernel import` checks pulled files against the quota and the per-file limit, and
+ * a published app's files can exceed the 20 MiB default quota, so `dev --reset` needs room.
+ */
 const LOCAL_FILES_QUOTA = String(1024 ** 4);
 
+/** Locates a compatible Kernel without creating an app runtime. */
 async function resolveLocalKernel(options: { build?: boolean } = {}) {
   let binary = process.env.KONAE_KERNEL_BIN ? path.resolve(process.env.KONAE_KERNEL_BIN) : toolRoot ? path.join(toolRoot, "kernel-rs/target/debug/kernel") : "";
   if (!process.env.KONAE_KERNEL_BIN && toolRoot && options.build !== false && !existsSync(binary)) {
@@ -860,6 +1038,7 @@ async function resolveLocalKernel(options: { build?: boolean } = {}) {
   return { binary, capabilities };
 }
 
+/** Reads the source schema or local data structure without opening an app runtime. */
 export async function fingerprintLocal(root: string, data = false): Promise<string> {
   const { binary, capabilities } = await resolveLocalKernel();
   if (capabilities.schemaTransforms !== 1) throw Error("This Kernel does not support schema fingerprints. Update the Kernel or set KONAE_KERNEL_BIN to a compatible binary.");
@@ -872,6 +1051,13 @@ export async function fingerprintLocal(root: string, data = false): Promise<stri
   return answer.fingerprint;
 }
 
+/**
+ * The `kernel` binary on this machine and the environment that points it at
+ * the folder. Its data directory is `.konae/kernel`, where `apps/<id>` links
+ * back to the folder, so the Kernel reads `konae.json`, `app/`, `dist/` and
+ * `data/` where they are. KONAE_KERNEL_BIN names a built `kernel` binary to
+ * run instead of compiling one.
+ */
 export async function localKernel(root: string, settings: AppSettings, options: { port?: string; confirmSchema?: string; build?: boolean } = {}): Promise<LocalKernel> {
   const { binary } = await resolveLocalKernel(options);
   const data = path.join(root, ".konae/kernel");
@@ -885,9 +1071,12 @@ export async function localKernel(root: string, settings: AppSettings, options: 
     KONAE_BIND: "127.0.0.1", KONAE_DATA_DIR: data, KONAE_KERNEL_PORT: port,
     KONAE_PUBLIC_ORIGIN: `http://localhost:${port}`, KONAE_HOST_SUFFIX: "localhost",
     KONAE_EXECUTION_MODE: "test",
+
     KONAE_MAIL_TRANSPORT: "development",
+
     KONAE_FILES_QUOTA_BYTES: process.env.KONAE_FILES_QUOTA_BYTES || LOCAL_FILES_QUOTA,
     ...(process.env.KONAE_FILE_MAX_BYTES ? { KONAE_FILE_MAX_BYTES: process.env.KONAE_FILE_MAX_BYTES } : {}),
+
     ...(process.env.KONAE_SCHEDULE_MIN_SECONDS ? { KONAE_SCHEDULE_MIN_SECONDS: process.env.KONAE_SCHEDULE_MIN_SECONDS } : {}),
     ...(options.confirmSchema ? { KONAE_CONFIRM_SCHEMA: options.confirmSchema } : {}),
   };
@@ -927,6 +1116,7 @@ export async function localKernel(root: string, settings: AppSettings, options: 
 
 const KERNEL_RELEASE = "https://github.com/danibram/konae/releases/download";
 
+/** Downloads this CLI release's Kernel and checks its published SHA-256. */
 export async function downloadKernel(version: string): Promise<string> {
   const os = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : undefined;
   const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : undefined;
@@ -967,6 +1157,12 @@ export async function downloadKernel(version: string): Promise<string> {
   return binary;
 }
 
+/**
+ * Sets a local value for each signing secret actions.json names that the
+ * local app does not hold yet, and returns one line for each secret it set.
+ * The Kernel does not serve an app whose route signs with an unset secret,
+ * and the published app's values never leave its installation.
+ */
 export async function setDevSecrets(root: string, kernel: Pick<LocalKernel, "run">) {
   let actions: Record<string, { http?: { signature?: { secret?: string } }; auth?: { secret?: string } }>;
   try { actions = JSON.parse(await readFile(path.join(appDir(root), "actions.json"), "utf8")).actions ?? {}; } catch { return []; }
@@ -980,6 +1176,7 @@ export async function setDevSecrets(root: string, kernel: Pick<LocalKernel, "run
   const lines: string[] = [];
   for (const [name, use] of wanted) {
     if (held.has(name)) continue;
+    // whsec_ and base64, so a svix route takes it too.
     const value = `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64")}`;
     await kernel.run(["secret", "set", name, "--use", use], value);
     lines.push(`Set the secret ${name} of the local app to ${value}. Sign local requests with it; the published app keeps its own.`);
@@ -987,10 +1184,16 @@ export async function setDevSecrets(root: string, kernel: Pick<LocalKernel, "run
   return lines;
 }
 
+/** The local app's record of a range, from one run of the kernel binary's events command. */
 export function kernelRecord(kernel: Pick<LocalKernel, "run">): ReadRecord {
   return async ({ from, to }) => JSON.parse(await kernel.run(["events", "--from", from, "--to", to]));
 }
 
+/**
+ * Replaces data/ with the data `pull` exported into .konae/pull, through
+ * the kernel binary's import, or empties it when there is none. `dev
+ * --reset` runs it after the build and before the Kernel starts.
+ */
 export async function acquireLocalLifecycleLock(root: string): Promise<() => Promise<void>> {
   const file = path.join(root, ".konae/lifecycle.lock");
   await mkdir(path.dirname(file), { recursive: true });
@@ -1007,6 +1210,7 @@ export async function acquireLocalLifecycleLock(root: string): Promise<() => Pro
   }
 }
 
+/** Serializes test replies and schedules with local data replacement. */
 export async function acquireLocalControlLock(root: string): Promise<() => Promise<void>> {
   const file = path.join(root, ".konae/control.lock");
   await mkdir(path.dirname(file), { recursive: true });
@@ -1132,8 +1336,10 @@ async function emptyReset(root: string) {
 
 async function exists(file: string) { try { await stat(file); return true; } catch { return false; } }
 
+/** Which export of the published app's data `dev --reset` last put in data/. */
 const IMPORTED_MARKER = ".konae/pull-imported.json";
 
+/** Returns the current pull until dev imports the same package into data/. */
 export async function pendingPull(root: string): Promise<Pulled | undefined> {
   const pulled = await readPulled(root);
   if (!pulled) return undefined;
@@ -1141,6 +1347,7 @@ export async function pendingPull(root: string): Promise<Pulled | undefined> {
   return imported?.packageId === pulled.manifest.packageId ? undefined : pulled;
 }
 
+/** init and export write a whole app folder, so the target must hold nothing but dotfiles (.git, .konae, .gitignore). */
 async function assertEmptyFolder(root: string) {
   let entries: string[] = [];
   try { entries = await readdir(root); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -1153,6 +1360,7 @@ type DomainView = {
   record?: { type: "TXT"; name: string; value: string }; dns?: string; rules?: DomainRules;
 };
 
+/** domain_read, domain_set or domain_clear, with the hostname checked by the Kernel's rules first. Returns the lines to print. */
 export async function domainLocal(client: Pick<McpClient, "call">, deploymentId: string, request: { set?: string; clear?: boolean }): Promise<string[]> {
   if (request.clear) {
     const cleared = await client.call<{ cleared: string | null; generatedUrl: string }>("domain_clear", { projectId: deploymentId });
@@ -1163,7 +1371,7 @@ export async function domainLocal(client: Pick<McpClient, "call">, deploymentId:
   if (request.set !== undefined) {
     const checked = checkHostname(request.set, current.rules ?? { suffix: "", installationHosts: [] });
     if (!checked.ok) throw Error(checked.message);
-    view = await client.call<DomainView>("domain_set", { projectId: deploymentId, hostname: checked.hostname });
+    view = await client.call<DomainView>("domain_set", { projectId: deploymentId, hostname: checked.hostname, expected: current.hostname });
   }
   if (view.status === "none") return [`This app has no custom domain. It answers at ${view.generatedUrl}.`];
   if (view.status === "active") return [`${view.url} serves this app, next to ${view.generatedUrl}. Your proxy must terminate TLS for ${view.hostname} and forward Host unchanged.`];
@@ -1173,6 +1381,7 @@ export async function domainLocal(client: Pick<McpClient, "call">, deploymentId:
     `Point ${view.hostname} at this installation's proxy, then run this command again with --set ${view.hostname}.`,
   ];
 }
+
 
 export function toolArguments(text?: string, piped?: { key: string; value: string }): Record<string, unknown> {
   let value: unknown = {};
@@ -1257,13 +1466,16 @@ export async function main() {
     process.exitCode = await conformFromCli(args);
     return;
   }
+  // The installation every remote command talks to: --url, then the one login saved beside the token it would send.
   const installation = async () => {
     const url = option("url") ?? (await json<{ url?: string }>(path.join(root, ".konae/credentials.json")).catch(() => undefined))?.url;
     if (!url) throw Error(NO_INSTALLATION);
     return url;
   };
+  // The owner's MCP on that installation, with KONAE_MCP_TOKEN or the token login saved.
   const ownerClient = async () => new McpClient(endpoint(await installation()), { token: await credentials(root) });
   if (command === "domain" || command === "hostname") {
+    // konae.json's id is the Deployment's ID, so a folder names the Deployment without --deployment.
     const deploymentId = option("deployment") ?? (args.includes("--dir") ? (await readSettings(root)).id : undefined);
     if (!deploymentId) throw Error(DOMAIN_NEEDS_DEPLOYMENT);
     const client = await ownerClient();
@@ -1272,6 +1484,7 @@ export async function main() {
     return;
   }
   if (command === "tool") {
+    // The name and the JSON are the two words that are neither a flag nor a flag's value.
     const [name, text] = args.filter((arg, i) => !arg.startsWith("--") && !["--dir", "--url", "--stdin"].includes(args[i - 1]));
     if (!name) throw Error("Name the tool: tool <name> ['<json arguments>']. docs/mcp-tools.md lists the tools, and tool session_inspect shows what this credential may call.");
     const key = option("stdin");
@@ -1318,6 +1531,7 @@ export async function main() {
       return;
     }
     if (action !== "set") throw Error("Use secret set <name> or secret list.");
+    // The name is the one argument that is neither a flag nor a flag's value. The value never comes through argv.
     const name = rest.find((arg, i) => !arg.startsWith("--") && !["--dir", "--url", "--use"].includes(rest[i - 1]));
     if (!name) throw Error("Name the secret: secret set <name>, then give its value on stdin.");
     const use = option("use");
@@ -1327,6 +1541,7 @@ export async function main() {
     console.log(await setSecret(await client(), projectId, name, value, use));
     return;
   }
+  // sql and events read the local app through the Kernel's commands, and the published Deployment only with --prod.
   const target = async (): Promise<{ deploymentId: string; feed?: string } & ({ local: LocalKernel; client?: undefined } | { client: McpClient; local?: undefined })> => {
     if (!args.includes("--prod")) {
       const settings = await readSettings(root);
@@ -1341,6 +1556,7 @@ export async function main() {
   };
   if (command === "sql") {
     const file = option("file");
+    // The statement is the one argument that is neither a flag nor a flag's value.
     const inline = args.find((arg, i) => !arg.startsWith("--") && !["--dir", "--url", "--file"].includes(args[i - 1]));
     const sql = file ? await readFile(path.resolve(file), "utf8") : inline;
     if (!sql?.trim()) throw Error("Give the statement in quotes or with --file <file.sql>.");
@@ -1385,6 +1601,8 @@ export async function main() {
     const seen = new Map<number, number>();
     const printed = new Set<string>();
     const read = async () => {
+      // Only the local Kernel has a mailbox this machine can read.
+      // dev's events page stamps each mail when it is written, so its answer is preferred to a read from here.
       const served = feed ? await (async () => {
         const feedUrl = new URL(feed);
         const token = new URLSearchParams(feedUrl.hash.slice(1)).get("control") ?? "";
@@ -1395,6 +1613,7 @@ export async function main() {
       })() : undefined;
       const events = served ?? await readEvents(record, deploymentId, { days, seen, mailbox: local?.mailbox });
       for (const event of events) {
+        // A notice or a call changes state, so the same event prints again when its outcome does.
         const key = `${event.id}:${event.outcome}`;
         if (printed.has(key)) continue;
         printed.add(key);
@@ -1442,6 +1661,7 @@ export async function main() {
     let restartTask: Promise<void> | undefined;
     let queueRestart = false;
     let timer: ReturnType<typeof setTimeout>;
+    // Builds dist/, sets the local secrets, imports the pulled data on the first start with --reset, and starts the Kernel, which opens the folder as a release.
     const start = async (): Promise<string | undefined> => {
       if (shuttingDown) return undefined;
       try {
@@ -1508,6 +1728,7 @@ export async function main() {
       const servedUrl = await start();
       if (!servedUrl || shuttingDown) return;
       console.log(servedUrl);
+      // The events page answers on the next port, on this machine only. A taken port leaves the command, which reads the Kernel itself.
       const { serveEvents } = await import("./events");
       if (shuttingDown) return;
       const eventsPort = Number(option("events-port", String(Number(port) + 1)));
@@ -1518,6 +1739,7 @@ export async function main() {
       if (shuttingDown) return;
       const policy = settings.signupPolicy.mode;
       if (policy !== "open") {
+        // The Kernel's own settings, so a command run by hand seals and addresses its links as the Kernel does.
         const envFile = path.join(root, ".konae/kernel.env");
         await writeFile(envFile, Object.entries(kernel.env).filter(([name]) => name.startsWith("KONAE_")).map(([name, value]) => `${name}=${value}\n`).join(""), { mode: 0o600 });
         const mailbox = kernel.mailbox;

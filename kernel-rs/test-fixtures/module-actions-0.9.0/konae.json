@@ -1,0 +1,10 @@
+{
+  "id": "app_legacy_modules",
+  "name": "Legacy modules",
+  "slug": "legacy-modules",
+  "visibility": "public",
+  "signupPolicy": { "mode": "open", "allowlist": [] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

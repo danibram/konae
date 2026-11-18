@@ -32,7 +32,15 @@ export type KonaeAgentHandle = KonaeAgent & {
   reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void;
   retarget(project: MiniAppProject): void;
   dispose(): void;
+  initialize?(): Promise<void>;
+  assertExecution?(): Promise<void>;
+  execution?(callId: string, observesCallId?: string): import("../mcp/client").AgentExecution | null;
+  recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void>;
 };
+
+// Durable 1.5.2 candidate entry points live behind the same lazy editor-agent
+// boundary. Shared writes are intentionally gated until the follow-up protocol work.
+export { createDurableKonaeAgent, openDurableHistory, openLocalDurableEngine, SHARED_DURABLE_ACTIVATION } from "./durable-engine";
 
 export type KonaeAgentOptions = {
   platform?: AgentPlatformBinding;
@@ -427,6 +435,18 @@ class WorkspaceHolder implements CapsuleWorkspace {
 
   serialize() {
     return this.workspace.serialize();
+  }
+
+  reset() {
+    this.workspace.reset();
+  }
+
+  reseed(files: CapsuleFiles) {
+    this.workspace.reseed(files);
+  }
+
+  adoptBaseline(files: CapsuleFiles) {
+    this.workspace.adoptBaseline(files);
   }
 
   private forward() {

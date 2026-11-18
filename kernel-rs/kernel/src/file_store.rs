@@ -46,6 +46,8 @@ pub trait FileStore: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredObject {
     pub id: String,
+    /// The number of bytes the store lists for this object.
+    pub size: u64,
     /// Milliseconds since the epoch when the bytes were written, when the store says.
     pub modified_ms: Option<u64>,
 }
@@ -125,14 +127,13 @@ impl FileStore for LocalFolder {
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob")) {
                     if crate::valid_file_id(id) {
-                        let modified_ms = entry
-                            .metadata()
-                            .await?
+                        let metadata = entry.metadata().await?;
+                        let modified_ms = metadata
                             .modified()
                             .ok()
                             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|elapsed| elapsed.as_millis() as u64);
-                        objects.push(StoredObject { id: id.to_owned(), modified_ms });
+                        objects.push(StoredObject { id: id.to_owned(), size: metadata.len(), modified_ms });
                     }
                 }
             }
@@ -239,7 +240,7 @@ impl S3Store {
         format!("{}{deployment}/{file}", self.settings.prefix)
     }
 
-    async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>)>, Vec<String>)> {
+    async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>, u64)>, Vec<String>)> {
         let mut keys = Vec::new();
         let mut folders = Vec::new();
         let mut continuation: Option<String> = None;
@@ -251,7 +252,7 @@ impl S3Store {
             for object in page.contents() {
                 if let Some(key) = object.key() {
                     let modified = object.last_modified().and_then(|time| u64::try_from(time.to_millis().ok()?).ok());
-                    keys.push((key.to_owned(), modified));
+                    keys.push((key.to_owned(), modified, object.size().and_then(|size| u64::try_from(size).ok()).unwrap_or_default()));
                 }
             }
             folders.extend(page.common_prefixes().iter().filter_map(|folder| folder.prefix().map(str::to_owned)));
@@ -346,9 +347,9 @@ impl FileStore for S3Store {
             let (keys, _) = self.keys(&folder, false).await?;
             let mut objects: Vec<StoredObject> = keys
                 .into_iter()
-                .filter_map(|(key, modified_ms)| {
+                .filter_map(|(key, modified_ms, size)| {
                     let id = key.strip_prefix(&folder)?;
-                    crate::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), modified_ms })
+                    crate::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), size, modified_ms })
                 })
                 .collect();
             objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -870,6 +871,23 @@ pub async fn read_all(store: &dyn FileStore, deployment: &str, file: &str) -> Re
 pub mod tests {
     use super::*;
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct FakeS3Request {
+        pub method: &'static str,
+        pub key: String,
+        pub request_bytes: u64,
+        pub response_bytes: u64,
+    }
+
+    #[derive(Clone, Default)]
+    pub struct FakeS3Metrics(Arc<std::sync::Mutex<Vec<FakeS3Request>>>);
+
+    impl FakeS3Metrics {
+        pub fn snapshot(&self) -> Vec<FakeS3Request> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
     fn table<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |name| pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
     }
@@ -951,6 +969,14 @@ pub mod tests {
     /// `KONAE_TEST_S3_ENDPOINT` (and `KONAE_TEST_S3_BUCKET`) to run the
     /// same tests against a real S3-compatible server instead.
     pub async fn fake_s3() -> String {
+        fake_s3_server(2).await.0
+    }
+
+    pub async fn fake_s3_with_metrics() -> (String, FakeS3Metrics) {
+        fake_s3_server(1000).await
+    }
+
+    async fn fake_s3_server(page_size: usize) -> (String, FakeS3Metrics) {
         use axum::{
             Router,
             body::{Body, Bytes},
@@ -961,19 +987,26 @@ pub mod tests {
         };
         use std::collections::{BTreeMap, HashMap};
         type Objects = Arc<std::sync::Mutex<BTreeMap<String, (Vec<u8>, u64)>>>;
+        type StateData = (Objects, FakeS3Metrics, usize);
         fn xml(text: &str) -> String {
             text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
         }
         fn missing() -> Response {
             (StatusCode::NOT_FOUND, "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>").into_response()
         }
-        async fn put(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>, body: Bytes) -> Response {
+        async fn put(State((objects, metrics, _)): State<StateData>, UrlPath((bucket, key)): UrlPath<(String, String)>, body: Bytes) -> Response {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-            objects.lock().unwrap().insert(format!("{bucket}/{key}"), (body.to_vec(), now));
+            let full_key = format!("{bucket}/{key}");
+            metrics.0.lock().unwrap().push(FakeS3Request { method: "PUT", key: full_key.clone(), request_bytes: body.len() as u64, response_bytes: 0 });
+            objects.lock().unwrap().insert(full_key, (body.to_vec(), now));
             (StatusCode::OK, [(header::ETAG, "\"fake\"")]).into_response()
         }
-        async fn read(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>, headers: HeaderMap) -> Response {
-            let Some((bytes, _)) = objects.lock().unwrap().get(&format!("{bucket}/{key}")).cloned() else { return missing() };
+        async fn read(State((objects, metrics, _)): State<StateData>, UrlPath((bucket, key)): UrlPath<(String, String)>, headers: HeaderMap) -> Response {
+            let full_key = format!("{bucket}/{key}");
+            let Some((bytes, _)) = objects.lock().unwrap().get(&full_key).cloned() else {
+                metrics.0.lock().unwrap().push(FakeS3Request { method: "GET", key: full_key, request_bytes: 0, response_bytes: 0 });
+                return missing();
+            };
             let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok()).and_then(|value| {
                 let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
                 Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
@@ -983,68 +1016,77 @@ pub mod tests {
                     let end = end.min(bytes.len() - 1);
                     let part = bytes[start..=end].to_vec();
                     let content_range = format!("bytes {start}-{end}/{}", bytes.len());
+                    metrics.0.lock().unwrap().push(FakeS3Request { method: "GET", key: full_key, request_bytes: 0, response_bytes: part.len() as u64 });
                     (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, content_range)], part).into_response()
                 }
-                None => (StatusCode::OK, bytes).into_response(),
+                None => {
+                    metrics.0.lock().unwrap().push(FakeS3Request { method: "GET", key: full_key, request_bytes: 0, response_bytes: bytes.len() as u64 });
+                    (StatusCode::OK, bytes).into_response()
+                }
             }
         }
-        async fn remove(State(objects): State<Objects>, UrlPath((bucket, key)): UrlPath<(String, String)>) -> Response {
-            objects.lock().unwrap().remove(&format!("{bucket}/{key}"));
+        async fn remove(State((objects, metrics, _)): State<StateData>, UrlPath((bucket, key)): UrlPath<(String, String)>) -> Response {
+            let full_key = format!("{bucket}/{key}");
+            metrics.0.lock().unwrap().push(FakeS3Request { method: "DELETE", key: full_key.clone(), request_bytes: 0, response_bytes: 0 });
+            objects.lock().unwrap().remove(&full_key);
             StatusCode::NO_CONTENT.into_response()
         }
-        async fn list(State(objects): State<Objects>, UrlPath(bucket): UrlPath<String>, Query(query): Query<HashMap<String, String>>) -> Response {
+        async fn list(State((objects, metrics, page_size)): State<StateData>, UrlPath(bucket): UrlPath<String>, Query(query): Query<HashMap<String, String>>) -> Response {
             let prefix = query.get("prefix").cloned().unwrap_or_default();
             let delimiter = query.get("delimiter").cloned();
             let after = query.get("continuation-token").cloned().unwrap_or_default();
-            let mut entries: Vec<(String, Option<u64>)> = Vec::new();
-            for (stored, (_, modified)) in objects.lock().unwrap().iter() {
+            let mut entries: Vec<(String, Option<u64>, u64)> = Vec::new();
+            for (stored, (bytes, modified)) in objects.lock().unwrap().iter() {
                 let Some(key) = stored.strip_prefix(&format!("{bucket}/")) else { continue };
                 let Some(rest) = key.strip_prefix(&prefix) else { continue };
                 match delimiter.as_deref().and_then(|delimiter| rest.find(delimiter)) {
                     Some(end) => {
                         let folder = format!("{prefix}{}/", &rest[..end]);
-                        if !entries.iter().any(|(name, kind)| name == &folder && kind.is_none()) {
-                            entries.push((folder, None));
+                        if !entries.iter().any(|(name, kind, _)| name == &folder && kind.is_none()) {
+                            entries.push((folder, None, 0));
                         }
                     }
-                    None => entries.push((key.to_owned(), Some(*modified))),
+                    None => entries.push((key.to_owned(), Some(*modified), bytes.len() as u64)),
                 }
             }
-            let page: Vec<_> = entries.into_iter().filter(|(name, _)| name.as_str() > after.as_str()).collect();
-            let truncated = page.len() > 2;
-            let page = &page[..page.len().min(2)];
+            let page: Vec<_> = entries.into_iter().filter(|(name, _, _)| name.as_str() > after.as_str()).collect();
+            let truncated = page.len() > page_size;
+            let page = &page[..page.len().min(page_size)];
             let mut body = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>{bucket}</Name><Prefix>{}</Prefix><KeyCount>{}</KeyCount><IsTruncated>{truncated}</IsTruncated>", xml(&prefix), page.len());
             if truncated {
                 body.push_str(&format!("<NextContinuationToken>{}</NextContinuationToken>", xml(&page[page.len() - 1].0)));
             }
-            for (name, modified) in page {
+            for (name, modified, size) in page {
                 match modified {
                     Some(modified) => {
                         let seconds = modified / 1000;
+                        let millis = modified % 1000;
                         let (year, month, day) = crate::copies::civil_from_days((seconds / 86_400) as i64);
                         let time = seconds % 86_400;
                         body.push_str(&format!(
-                            "<Contents><Key>{}</Key><LastModified>{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z</LastModified><Size>0</Size></Contents>",
-                            xml(name), time / 3600, time / 60 % 60, time % 60
+                            "<Contents><Key>{}</Key><LastModified>{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z</LastModified><Size>{size}</Size></Contents>",
+                            xml(name), time / 3600, time / 60 % 60, time % 60, size = size
                         ));
                     }
                     None => body.push_str(&format!("<CommonPrefixes><Prefix>{}</Prefix></CommonPrefixes>", xml(name))),
                 }
             }
             body.push_str("</ListBucketResult>");
+            metrics.0.lock().unwrap().push(FakeS3Request { method: "LIST", key: format!("{bucket}/{prefix}"), request_bytes: 0, response_bytes: body.len() as u64 });
             ([(header::CONTENT_TYPE, "application/xml")], Body::from(body)).into_response()
         }
         let objects: Objects = Arc::default();
+        let metrics = FakeS3Metrics::default();
         let app = Router::new()
             .route("/{bucket}", get(list))
             .route("/{bucket}/", get(list))
             .route("/{bucket}/{*key}", get(read).put(put).delete(remove))
             .layer(axum::extract::DefaultBodyLimit::disable())
-            .with_state(objects);
+            .with_state((objects, metrics.clone(), page_size));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        format!("http://{address}")
+        (format!("http://{address}"), metrics)
     }
 
     /// An `S3Store` on `KONAE_TEST_S3_ENDPOINT` when it is set, on the
@@ -1084,6 +1126,7 @@ pub mod tests {
         expected.sort();
         let objects = store.objects(&expected[0]).await.unwrap();
         assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].size, 1);
         assert!(objects[0].modified_ms.is_some_and(|at| at > 1_700_000_000_000));
         let _ = std::fs::remove_dir_all(root);
     }

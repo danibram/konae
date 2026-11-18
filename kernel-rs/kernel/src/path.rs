@@ -438,6 +438,7 @@ mod tests {
         let actions = json!({"version": 1, "actions": {"items.count": {"kind": "query", "access": "anonymous",
             "statement": "SELECT 1 AS n LIMIT 1", "bindings": [], "http": {"method": "GET", "path": "/api/count"}}}});
         let body = json!({
+            "initialModules": {"auth":{"on":true}},
             "project": {"id": project, "name": project, "slug": project, "manifest": {},
                 "files": {"actions.json": actions.to_string(), "schema.sql": ""}},
             "visibility": "public",
@@ -498,7 +499,7 @@ mod tests {
         assert!(!has_accounts(&closed), "public, signup Closed and only anonymous actions");
 
         let mut shared_files = closed.clone();
-        shared_files.manifest["fileAccess"] = json!("app-users");
+        shared_files.modules.get_mut("files").unwrap()["fileAccess"] = json!("app-users");
         assert!(has_accounts(&shared_files));
 
         let mut invitation = closed.clone();

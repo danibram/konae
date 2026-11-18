@@ -24,6 +24,8 @@ export type HttpBinding = {
   fields?: Record<string, string>;
 };
 
+export type PageBinding = { path: string; file: string; list?: string };
+
 const ROUTE_CALLERS: readonly RouteCaller[] = ["signature", "key", "session"];
 
 export function routeCallers(http: HttpBinding, visibility: "public" | "private"): RouteCaller[] | null {
@@ -45,6 +47,7 @@ export type ServerActionDefinition = RuntimeActionDeclaration & {
   statement: string;
   bindings: ActionBinding[];
   http?: HttpBinding;
+  page?: PageBinding;
   signal?: SignalDeclaration;
   guard?: string;
   notify?: NotifyDeclaration;
@@ -78,6 +81,7 @@ export function parseServerActionSource(source: string): ServerActionProgram {
   const actions: Record<string, ServerActionDefinition> = {};
   for (const name of Object.keys(declared)) actions[name] = parsed.get(name)!;
   assertDistinctRoutes(actions);
+  assertPageLists(actions);
   assertCallTargets(actions);
   return { version: 1, actions };
 }
@@ -115,10 +119,10 @@ export function resolveServerAction(
 }
 
 const ACTION_KEYS: Record<ServerActionDefinition["kind"], readonly string[]> = {
-  query: ["kind", "access", "statement", "bindings", "http"],
-  mutation: ["kind", "access", "statement", "bindings", "http", "signal", "guard", "notify", "schedule"],
-  signal: ["kind", "access", "statement", "bindings", "signal"],
-  call: ["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then"],
+  query: ["kind", "access", "statement", "bindings", "http", "page"],
+  mutation: ["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule"],
+  signal: ["kind", "access", "statement", "bindings", "signal", "page"],
+  call: ["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then", "page"],
 };
 
 function parseAction(name: string, value: unknown): ServerActionDefinition {
@@ -143,6 +147,7 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   if (!access) throw refusal("action.access-invalid", `Action ${name} has an invalid access. Use "anonymous" or "authenticated".`);
   const kind = candidate.kind === "query" || candidate.kind === "mutation" || candidate.kind === "signal" || candidate.kind === "call" ? candidate.kind : null;
   if (!kind) throw refusal("action.kind-invalid", `Action ${name} has an invalid kind. Use "query", "mutation", "signal" or "call".`);
+  if (candidate.page !== undefined && kind !== "query") throw refusal("page.query", `Action ${name} declares a page path, so it must be an anonymous query.`);
   if (!Array.isArray(candidate.bindings)) throw refusal("action.bindings-missing", `Action ${name} requires a bindings array.`);
   const bindings = candidate.bindings.map((binding, index) => parseBinding(name, index, binding));
   if (kind !== "signal" && kind !== "call" && typeof candidate.statement !== "string") throw refusal("action.invalid", `Invalid server action: ${name}`);
@@ -174,14 +179,104 @@ function parseActionBody(name: string, value: unknown): ServerActionDefinition {
   }
   const signal = parseSignal(name, kind, bindings, candidate.signal);
   const http = candidate.http === undefined ? undefined : parseHttpBinding(name, kind, access, candidate.http, bindings);
+  const page = candidate.page == null ? undefined : parsePageBinding(name, kind, access, candidate.page, bindings, http, statement);
   const guard = parseGuard(name, kind, candidate.guard);
   assertNoSubscribe(name, candidate);
   const schedule = parseSchedule(name, kind, bindings, candidate.schedule);
   const notify = parseNotify(name, kind, bindings, candidate.notify);
   return {
     name, kind, access, statement: statement.trim(), bindings,
-    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}),
+    ...(signal ? { signal } : {}), ...(http ? { http } : {}), ...(page ? { page } : {}), ...(guard ? { guard } : {}), ...(notify ? { notify } : {}), ...(schedule ? { schedule } : {}),
   };
+}
+
+function parsePageBinding(name: string, kind: string, access: string, value: unknown, bindings: ActionBinding[], http?: HttpBinding, statement?: string): PageBinding {
+  if (kind !== "query" || access !== "anonymous") throw refusal("page.query", `Action ${name} declares a page path, so it must be an anonymous query.`);
+  if (http) throw refusal("page.route-conflict", `Action ${name} declares both http and page. Declare one.`);
+  if (statement && selectedColumns(statement)?.has("title") === false) throw refusal("page.title", `Action ${name} has a page query that does not return a title column.`);
+  const invalid = `Action ${name} has an invalid page binding.`;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw refusal("page.invalid", invalid);
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !["path", "file", "list"].includes(key)) || typeof record.path !== "string" || typeof record.file !== "string") throw refusal("page.invalid", invalid);
+  const path = record.path;
+  const segments = path.split("/").slice(1);
+  if (path.length > 200 || !path.startsWith("/") || segments.some((segment) => !segment || segment === "." || segment === ".." || !/^:[A-Za-z][A-Za-z0-9_]*$/.test(segment) && !/^[A-Za-z0-9._~-]+$/.test(segment)) || segments[0]?.startsWith(":")) {
+    throw refusal("page.path-invalid", `Action ${name} has an invalid page path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", with parameters such as ":slug" after the first segment.`);
+  }
+  const first = segments[0]?.toLowerCase();
+  if (["_konae", "oauth", ".well-known", "mcp"].includes(first ?? "")) throw refusal("page.path-reserved", `Action ${name} binds the reserved path ${path}. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel.`);
+  const params = segments.filter((segment) => segment.startsWith(":")).map((segment) => segment.slice(1));
+  const inputs = bindings.filter((binding): binding is Extract<ActionBinding, { source: "input" }> => binding.source === "input").map((binding) => binding.key);
+  if (new Set(params).size !== params.length || [...params].sort().join("\0") !== [...inputs].sort().join("\0")) {
+    throw refusal("page.bindings", `Action ${name} declares page parameters that do not match its input bindings.`);
+  }
+  if (record.file.startsWith("/") || record.file.includes("\\") || record.file.split("/").some((part) => !part || part === "." || part === "..")) throw refusal("page.invalid", invalid);
+  if (record.list !== undefined && (typeof record.list !== "string" || !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(record.list))) throw refusal("page.list-invalid", `Action ${name} has an invalid page list. Name an anonymous query with no input bindings.`);
+  return { path, file: record.file, ...(typeof record.list === "string" ? { list: record.list } : {}) };
+}
+
+function selectedColumns(statement: string): Set<string> | null {
+  const tokens = sqlTokens(statement);
+  const select = tokens.findIndex((token) => token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "SELECT");
+  if (select < 0) return null;
+  const end = tokens.findIndex((token, index) => index > select && token.kind === "word" && token.depth === 0 && ["FROM", "WHERE", "GROUP", "ORDER", "LIMIT", "UNION"].includes(token.text.toUpperCase()));
+  const projection = tokens.slice(select + 1, end < 0 ? tokens.length : end);
+  if (projection.length === 1 && projection[0].kind === "symbol" && projection[0].depth === 0 && projection[0].text === "*") return null;
+  const columns = new Set<string>();
+  let start = 0;
+  for (let end = 0; end <= projection.length; end += 1) {
+    const separator = projection[end];
+    if (separator && !(separator.kind === "symbol" && separator.depth === 0 && separator.text === ",")) continue;
+    const expression = projection.slice(start, end);
+    let aliasAt = expression.length - 1;
+    while (aliasAt >= 0) {
+      const token = expression[aliasAt];
+      if (token.kind === "word" && token.depth === 0 && token.text.toUpperCase() === "AS") break;
+      aliasAt -= 1;
+    }
+    const column = aliasAt >= 0 ? expression[aliasAt + 1] : expression.at(-1);
+    if (column && (column.kind === "word" || column.kind === "identifier")) columns.add(column.text.toLowerCase());
+    start = end + 1;
+  }
+  return columns;
+}
+
+function assertPageLists(actions: Record<string, ServerActionDefinition>) {
+  const paths: [string, string][] = [];
+  const files = new Map<string, { name: string; depth: number }>();
+  for (const [name, action] of Object.entries(actions).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
+    if (action.page) {
+      if (action.page.file === "index.html") throw refusal("page.file-invalid", `Action ${name} names index.html as a page file, but index.html is the app entry page.`);
+      const depth = action.page.path.split("/").filter(Boolean).length;
+      const earlierFile = files.get(action.page.file);
+      if (earlierFile && earlierFile.depth !== depth) throw refusal("page.file-depth", `Actions ${earlierFile.name} and ${name} name the same page file at different path depths.`);
+      files.set(action.page.file, { name: earlierFile?.name ?? name, depth });
+      const earlier = paths.find(([, prior]) => pagePathsOverlap(prior, action.page!.path))?.[0];
+      if (earlier) throw refusal("page.duplicate", `Actions ${earlier} and ${name} both bind page path ${action.page.path}.`);
+      paths.push([name, action.page.path]);
+    }
+    const page = action.page;
+    const listName = page?.list;
+    if (!page || !listName) continue;
+    const list = actions[listName];
+    if (!list) throw refusal("page.list-undeclared", `Action ${name} names ${listName} as its page list, which is not declared.`);
+    if (list.kind !== "query" || list.access !== "anonymous" || list.bindings.some((binding) => binding.source === "input")) {
+      throw refusal("page.list-invalid", `Action ${name} has an invalid page list. Name an anonymous query with no input bindings.`);
+    }
+    const columns = selectedColumns(list.statement);
+    if (!columns) continue;
+    const expected = new Set((page.path.match(/:[A-Za-z][A-Za-z0-9_]*/g) ?? []).map((part) => part.slice(1)));
+    if (columns.has("updated")) expected.add("updated");
+    if (columns.size !== expected.size || [...columns].some((column) => !expected.has(column))) {
+      throw refusal("page.list-columns", `Action ${name} names ${listName} as its page list, whose columns must match the page parameters and optional updated.`);
+    }
+  }
+}
+
+function pagePathsOverlap(left: string, right: string): boolean {
+  const a = left.split("/").slice(1);
+  const b = right.split("/").slice(1);
+  return a.length === b.length && a.every((segment, index) => segment.startsWith(":") || b[index].startsWith(":") || segment === b[index]);
 }
 
 function assertNoReservedKernelTable(name: string, statement: string) {

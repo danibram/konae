@@ -9,6 +9,8 @@ export type HostnameMove = {
   googleCallback: string;
 };
 
-export const setHostname = (deploymentId: string, name: string) => platformMcp.call<HostnameMove>("hostname_set", { projectId: deploymentId, name });
+
+export const setHostname = (deploymentId: string, name: string, expected: string) => platformMcp.call<HostnameMove>("hostname_set", { projectId: deploymentId, name, expected });
+
 
 export const hostnameLabel = (url: string) => new URL(url).hostname.split(".")[0] ?? "";

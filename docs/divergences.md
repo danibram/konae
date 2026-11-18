@@ -19,6 +19,14 @@ The policy's `script-src` is `'self'` plus the SHA-256 of each inline script. It
 
 The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or on a published Deployment.
 
+Turn on HTTP routes and outgoing calls with `module_set` for `http` and `calls`. Both require `actions`. `connects` remains in the Capsule manifest and controls the page's `connect-src`.
+
+The editor preview opens one `srcDoc` document in an iframe. It has no app URL or page history, so it cannot resolve declared page paths or populate `miniapp.page.params`. Use `konae dev` or a Deployment to check page paths. It writes no `<head>` tags for row values.
+
+The editor preview does not write canonical addresses, page cards, `robots.txt` or a sitemap. `konae dev` does, using its local host as the address. Check the `seo` module on `konae dev` or a published Deployment.
+
+The editor preview uses the project's saved `files.fileAccess` option. It does not read a published Deployment's module state, so an owner change to `fileAccess` takes effect in the Deployment and `konae dev` after pulling its settings, but may not affect the preview until the project state is refreshed.
+
 Saved public assets work in the preview, including images in `public/`, linked stylesheets, imported CSS, media conditions and SVG fragments. Programmatic `fetch()` of local saved assets and runtime-created URLs that point to local saved assets need `konae dev` or a Deployment. The preview's missing Content Security Policy still allows fetches to other origins.
 
 ## Email on konae dev
@@ -43,7 +51,7 @@ The editor preview re-runs `schema.sql` on its own test rows and never changes a
 
 ## Gate and publish builders
 
-The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script, as the build does. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
+The Validation Gate checks schema and `actions.json`. The Gate and builder refuse a Capsule whose pages are all whole documents that load no script when a module with browser calls is on. A static Capsule with no browser calls may use whole documents without scripts. A page that names a missing file fails at build or release, not at `validate_capsule`. Check every path you write.
 
 ## Read next
 

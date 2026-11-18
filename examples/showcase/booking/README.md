@@ -10,7 +10,7 @@ A room booking board for a small office. Anyone with the link sees which rooms a
 | --- | --- |
 | Public Deployment with anonymous queries | `rooms.list` and `availability.day` answer a signed-out visitor with `{ room, hour }` only, no titles and no names |
 | Authenticated mutations | `bookings.create`, `bookings.cancel` and `staff.name` bind the caller with `{ "source": "actor", "field": "id" }` |
-| Allowlist signup by `@domain` | `konae.json` names `signupPolicy: { mode: "allowlist", allowlist: ["@office.example"] }` and `konae publish` installs it on the first release |
+| Allowlist signup by `@domain` | `konae.json` names `signupPolicy` with mode `allowlist` and an address list, and `konae publish` installs it on the first release |
 | One SQL statement per action | `bookings.create` is one `INSERT ... WITH RECURSIVE ... SELECT` that writes every hour of the span or none |
 | CHECK constraints and a partial unique index | `schema.sql` refuses a fractional hour, an hour outside 08 to 17, an invalid date and a second holder of an hour |
 | HTTP route, unsigned | `GET /api/availability?day=YYYY-MM-DD` for a lobby screen |
@@ -44,7 +44,7 @@ rm -rf /tmp/booking/app && mkdir /tmp/booking/app
 cp examples/showcase/booking/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/booking/app/
 ```
 
-1. In `/tmp/booking/konae.json` set `"visibility": "public"` and `"signupPolicy": { "mode": "allowlist", "allowlist": ["@office.example"] }`, with your office's domain.
+1. In `/tmp/booking/konae.json` set `"visibility": "public"`, `"signupPolicy": { "mode": "allowlist", "allowlist": ["@office.example"] }` and `"modules": { "auth": { "on": true } }`, with your office's domain.
 2. Run `bun run konae -- publish --dir /tmp/booking`. The first run registers the project and is refused, naming the unset signing secret `panel_hook`.
 3. Over MCP, set it with `secret_set`, with the `id` from `konae.json` as `projectId`, and publish again.
 4. Add the rooms:

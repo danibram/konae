@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "case": "the expected value is stale",
+      "expected": "old@example.org",
+      "current": "new@example.org",
+      "error": "The setting changed since you read it. Its current value is \"new@example.org\". Read it again before changing it.",
+      "code": "setting.changed"
+    }
+  ]
+}

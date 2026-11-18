@@ -1,5 +1,20 @@
 import { expect, test } from "bun:test";
-import { generatedFiles, type AppSettings } from "./app-folder";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { defaultModuleStates, generatedFiles, type AppSettings } from "./app-folder";
+
+test("module defaults preserve only module choices that already exist", () => {
+  expect(defaultModuleStates()).toEqual({});
+  expect(defaultModuleStates({ seo: { on: true, canonical: "path", image: "social.png" }, actions: { on: false }, http: { on: false }, calls: { on: false } })).toEqual({
+    actions: { on: false },
+    calls: { on: false },
+    http: { on: false },
+    seo: { on: true, canonical: "path", image: "social.png" },
+  });
+  expect(defaultModuleStates({ files: { on: true } })).toEqual({ files: { on: true, fileAccess: null } });
+});
 
 const settings: AppSettings = {
   id: "notes-1", name: "Notes", slug: "notes", visibility: "private",
@@ -30,4 +45,34 @@ test("the folder's AGENTS.md says when dist/ needs npm install and when it does 
   expect(guide).toContain("run `npm install` once, then `npm run build`");
   expect(guide).toContain("`dev` writes it without `npm install`");
   expect(guide).toContain("Once that directory exists, the builder runs `npm run build`");
+});
+
+test("a generated scripts/build.mjs builds its folder", () => {
+  const repo = path.resolve(import.meta.dir, "../..");
+  const root = mkdtempSync(path.join(os.tmpdir(), "konae-generated-folder-"));
+  try {
+    const entries = generatedFiles({
+      settings,
+      actionsSource: `{"version":1,"actions":{}}`,
+      schemaSource: "",
+      runtime: readFileSync(path.join(repo, "src/mcp/runtime.js"), "utf8"),
+      staticArtifact: readFileSync(path.join(repo, "src/lib/static-artifact.js"), "utf8"),
+      localBuilder: readFileSync(path.join(repo, "src/lib/local-builder.js"), "utf8"),
+    });
+    for (const entry of entries) {
+      const target = path.join(root, entry.path);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, entry.contents);
+    }
+    mkdirSync(path.join(root, "app"), { recursive: true });
+    writeFileSync(path.join(root, "konae.json"), JSON.stringify(settings));
+    writeFileSync(path.join(root, "app/index.html"), '<!doctype html><main>Folder</main><script type="module" src="app.js"></script>');
+    writeFileSync(path.join(root, "app/app.js"), "document.body.dataset.ready = 'yes';");
+    symlinkSync(path.join(repo, "node_modules"), path.join(root, "node_modules"), "dir");
+    expect(execFileSync("node", ["scripts/build.mjs"], { cwd: root, encoding: "utf8" })).toContain("Built dist/");
+    expect(readFileSync(path.join(root, "dist/index.html"), "utf8")).toContain("Folder");
+    expect(readFileSync(path.join(root, "dist/app.js"), "utf8")).toContain("dataset.ready");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

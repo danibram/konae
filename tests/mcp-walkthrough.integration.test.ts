@@ -306,6 +306,12 @@ describe("the MCP walkthrough", () => {
   });
 
   test("7. a signing secret, then publish with the policy konae.json names", async () => {
+    const settingsPath = path.join(app(), "konae.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    settings.modules.http = { on: true };
+    await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    r.step("http-module");
+    r.add("json", JSON.stringify({ modules: { http: settings.modules.http } }, null, 2));
     r.step("publish-refused");
     const refused = await cli(["publish", "--dir", app()]);
     expect(refused.code).toBe(1);
@@ -384,6 +390,9 @@ describe("the MCP walkthrough", () => {
     expect(again.refused).toBe("This order is already claimed.");
 
     r.step("file");
+    const beforeFiles = await tool("modules_read", { projectId: s.deploymentId }, { pick: (value) => ({ files: value.modules.files }) });
+    await tool("module_set", { projectId: s.deploymentId, module: "files", on: true, expected: (beforeFiles.result as any).modules.files.state });
+    await tool("modules_read", { projectId: s.deploymentId }, { pick: (value) => ({ files: value.modules.files }) });
     const bytes = new TextEncoder().encode("Invoice A-1: 12.00\n");
     const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     const begun = await runtimeTool(s.hostname, s.cookie, "transfer_begin", { size: bytes.length, sha256 });

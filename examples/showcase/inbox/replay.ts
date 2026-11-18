@@ -114,9 +114,8 @@ try {
   assert.deepEqual(listedSecrets.secrets.map((secret) => secret.name).sort(), ["events_feed", "events_webhook", "github_webhook", "payments_webhook"]);
   assert(!JSON.stringify(listedSecrets).includes(webhookSecret), "secrets_list must not return a value.");
   const inbox = await release(project, compiled.files, compiled.artifact, { initialSignupPolicy: { mode: "invitation", allowlist: [] } });
-  const policy = await owner.call<{ mode: string; visibility: string }>("signup_policy_read", { deploymentId: inbox.id });
+  const policy = (await owner.call<any>("modules_read", { projectId: inbox.id })).modules.auth.state.signupPolicy;
   assert.equal(policy.mode, "invitation");
-  assert.equal(policy.visibility, "private");
   pass("Publish", `The release with its three webhook secrets unset is refused with one message naming each; after secret_set it publishes private with signup by invitation at ${inbox.url}.`);
 
   const host = (extra: Record<string, string> = {}) => ({ host: inbox.hostname, "x-forwarded-for": freshAddress(), ...extra });

@@ -11,7 +11,7 @@ use crate::{
     Settings, SignupMode, Startup,
 };
 
-const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test"];
+const COMMANDS: &[&str] = &["users", "invite", "suspend", "resume", "signup-policy", "module", "modules", "api-key", "secret", "sql", "events", "import", "maintenance", "enter", "test"];
 
 pub fn usage() -> &'static str {
     "Commands on an app this Kernel serves. Add --app <id> when the data directory holds more than one app.
@@ -20,6 +20,8 @@ pub fn usage() -> &'static str {
   kernel suspend <user id>
   kernel resume <user id>
   kernel signup-policy open|invitation|closed|allowlist [<email or @domain>...]
+  kernel modules
+  kernel module <name> on|off
   kernel api-key list
   kernel api-key create <name> [--action <name>]... [--files public|private]...
   kernel api-key revoke <key id>
@@ -246,6 +248,21 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
             invitations::run(state, &deployment, &operator(state, id), tool, &json!({"userId": user})).await
         }
         "signup-policy" => signup_policy(state, deployment, words).await,
+        "modules" => {
+            ensure!(words.rest().is_empty(), "kernel modules takes no arguments.");
+            Ok(crate::modules::read(state, &deployment))
+        }
+        "module" => {
+            let name = words.next().context("kernel module needs a module name and on or off.")?;
+            let value = words.next().context("kernel module needs on or off.")?;
+            ensure!(words.rest().is_empty() && ["on", "off"].contains(&value.as_str()), "kernel module <name> on|off");
+            let result = crate::modules::set(&state.data_root, &deployment.id, &name, Some(value == "on"), None, None).await?;
+            let mut deployments = state.deployments.write().await;
+            if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+                current.modules.insert(name, result["state"].clone());
+            }
+            Ok(result)
+        }
         "maintenance" => {
             let on = match words.required("on or off")?.as_str() {
                 "on" => true,
@@ -299,7 +316,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
     }
 }
 
-/// `signup_policy_set` as Konae's tool runs it. The entries stay when none are given.
+/// `module_set` on `auth` as Konae's tool runs it. The entries stay when none are given.
 async fn signup_policy(state: &AppState, deployment: Deployment, words: &mut Arguments) -> Result<Value> {
     let mode: SignupMode = serde_json::from_value(json!(words.required("open, invitation, closed or allowlist")?))
         .map_err(|_| anyhow!("The Signup Policy is open, invitation, closed or allowlist."))?;

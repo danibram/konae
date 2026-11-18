@@ -13,6 +13,7 @@ describe("signup policy", () => {
   test("reads and saves the policy through the owner MCP tools", async () => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];
     let policy = { mode: "open", allowlist: [] as string[] };
+    let authState: Record<string, unknown> = { on: true, signupPolicy: policy, signInMethods: ["password"] };
     let publishedVisibility: "public" | "private" = "private";
     let draftVisibility: "public" | "private" = "public";
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -21,10 +22,14 @@ describe("signup policy", () => {
       if (request.method === "initialize") return Response.json({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-11-25" } });
       const { name, arguments: args } = request.params;
       calls.push({ name, args });
-      if (request.params.name === "signup_policy_set") policy = { mode: args.mode, allowlist: args.allowlist };
-      const value = request.params.name === "project_inspect"
-        ? { project: { id: args.projectId, manifest: { visibility: draftVisibility } }, deployment: { id: args.projectId, manifest: { visibility: publishedVisibility }, signupPolicy: policy } }
-        : policy;
+      let value: unknown;
+      if (name === "modules_read") value = { modules: { auth: { state: authState, current: { offered: ["password"], googleClient: { clientIdSet: false, clientSecretSet: false }, redirectUris: [] } } } };
+      if (name === "module_set") {
+        policy = args.options.signupPolicy;
+        authState = { ...authState, ...args.options };
+        value = { projectId: args.projectId, module: "auth", state: authState };
+      }
+      if (name === "project_inspect") value = { project: { id: args.projectId, manifest: { visibility: draftVisibility } }, deployment: { id: args.projectId, manifest: { visibility: publishedVisibility } } };
       return Response.json({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { result: value }, content: [], isError: false } });
     }) as typeof fetch;
     expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open", visibility: "private" });
@@ -33,9 +38,14 @@ describe("signup policy", () => {
     expect(await readSignupPolicy("deploy/a")).toMatchObject({ mode: "open", visibility: "public" });
     expect(await saveSignupPolicy("deploy/a", "allowlist", ["@example.com"])).toMatchObject({ mode: "allowlist", allowlist: ["@example.com"] });
     expect(calls).toEqual([
+      { name: "modules_read", args: { projectId: "deploy/a" } },
       { name: "project_inspect", args: { projectId: "deploy/a" } },
+      { name: "modules_read", args: { projectId: "deploy/a" } },
       { name: "project_inspect", args: { projectId: "deploy/a" } },
-      { name: "signup_policy_set", args: { projectId: "deploy/a", mode: "allowlist", allowlist: ["@example.com"] } },
+      { name: "modules_read", args: { projectId: "deploy/a" } },
+      { name: "module_set", args: { projectId: "deploy/a", module: "auth", options: { signupPolicy: { mode: "allowlist", allowlist: ["@example.com"] } }, expected: { on: true, signupPolicy: { mode: "open", allowlist: [] }, signInMethods: ["password"] } } },
+      { name: "modules_read", args: { projectId: "deploy/a" } },
+      { name: "modules_read", args: { projectId: "deploy/a" } },
       { name: "project_inspect", args: { projectId: "deploy/a" } },
     ]);
   });
@@ -136,6 +146,32 @@ describe("first publish signup policy", () => {
 
   test("sends no policy when none is given, as a republish must", async () => {
     expect(await uploaded()).not.toHaveProperty("initialSignupPolicy");
+  });
+
+  test("sends the project's module state with the first release", async () => {
+    const project = { ...starterProject, modules: { seo: { on: true, canonical: "path", image: null } } };
+    let payload: Record<string, unknown> = {};
+    fakeKernel((name, args) => {
+      if (name === "transfer_begin") return { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 };
+      if (name === "transfer_write") payload = JSON.parse(new TextDecoder().decode(decodeBase64(String(args.data))));
+      if (name === "release_plan") return { planId: "p", schema: noChange };
+      return {};
+    });
+    await deployProject(project, "private", artifact, askNever, undefined, undefined, project.modules);
+    expect(payload.initialModules).toMatchObject({ seo: { on: true, canonical: "path", image: null } });
+  });
+
+  test("does not send portable module state with a later release", async () => {
+    const project = { ...starterProject, modules: { seo: { on: true, canonical: "path", image: null } } };
+    let payload: Record<string, unknown> = {};
+    fakeKernel((name, args) => {
+      if (name === "transfer_begin") return { transferId: "t", size: args.size, sha256: args.sha256, chunkBytes: 1 << 20 };
+      if (name === "transfer_write") payload = JSON.parse(new TextDecoder().decode(decodeBase64(String(args.data))));
+      if (name === "release_plan") return { planId: "p", schema: noChange };
+      return {};
+    });
+    await deployProject(project, "private", artifact, askNever, undefined, undefined, undefined);
+    expect(payload).not.toHaveProperty("initialModules");
   });
 });
 

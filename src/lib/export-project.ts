@@ -7,7 +7,7 @@ import type { MiniAppProject } from "./types";
 import { sourceContents } from "./source-files";
 import type { PackageComponentName } from "./portable-package";
 import {
-  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, generatedFiles,
+  DIST_FOLDER, KERNEL_VERSION, SETTINGS_FILE, SOURCES_FOLDER, dataEntries, defaultModuleStates, generatedFiles, settingsForFolder,
   type AppSettings, type FolderEntry,
 } from "./app-folder";
 
@@ -34,11 +34,12 @@ export async function createProjectExport(
   } else {
     const artifact = await door.build(project);
     const { visibility, ...manifest } = project.manifest;
-    settings = {
+    const modules = defaultModuleStates(project.modules);
+    if (modules?.auth) modules.auth.signupPolicy = { mode: visibility === "public" ? "open" : "closed", allowlist: [] };
+    settings = settingsForFolder({
       id: project.id, name: project.name, slug: project.slug, visibility,
-      signupPolicy: { mode: visibility === "public" ? "open" : "closed", allowlist: [] }, signInMethods: ["password"],
-      kernel: KERNEL_VERSION, manifest,
-    };
+      kernel: KERNEL_VERSION, modules, manifest,
+    });
     entries = [
       { path: SETTINGS_FILE, contents: `${JSON.stringify(settings, null, 2)}\n` },
       ...Object.keys(project.files).map((file) => ({ path: `${SOURCES_FOLDER}/${file}`, contents: sourceContents(project, file) })),
@@ -52,7 +53,8 @@ export async function createProjectExport(
     const entry = entries.find((item) => item.path === `${SOURCES_FOLDER}/${file}`);
     return entry === undefined ? "" : typeof entry.contents === "string" ? entry.contents : new TextDecoder().decode(entry.contents);
   };
-  entries.push(...generatedFiles({ settings, actionsSource: text("actions.json"), schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource }));
+  const actionsSource = entries.some((item) => item.path === `${SOURCES_FOLDER}/actions.json`) ? text("actions.json") : '{"version":1,"actions":{}}';
+  entries.push(...generatedFiles({ settings, actionsSource, schemaSource: text("schema.sql"), runtime: hostedRuntime, staticArtifact: staticArtifactSource, localBuilder: localBuilderSource }));
   const folder = safeFilename(project.slug);
   const archive = createTar(entries.map((entry) => ({ path: `${folder}/${entry.path}`, contents: entry.contents })));
   const bytes = new ArrayBuffer(archive.byteLength);

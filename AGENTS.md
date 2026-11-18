@@ -30,12 +30,14 @@ After any write through MCP or the editor, observe the effect through the same d
 | Email when a row changes | `notify` on that mutation | Browser mail or a call action for mail |
 | Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
-| Another service calls this app | `http` on an anonymous action with callers / signature / key | A call action (that is outbound) |
-| This app calls another host | `kind: call` | `fetch` of a secret from the browser |
+| Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
-| Every signed-in user reads every uploaded file | `manifest.fileAccess` set to `app-users` | Each upload as public |
+| Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
+| Turn an app capability on or set its options | `modules_read` and `module_set`, then read it back with `modules_read` | A separate tool or a setting in the Capsule |
+| Be listed in search | Turn on `seo` with `module_set`, after `modules_read` | Assume a public app is listed |
 | A short link on the installation's domain | path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | export and import of the app folder | Copy (moves the installation) |
 | Debug or rehearse a source change against published rows | `konae pull --data-only`, `dev --reset`, local `dev`, then `rehearse` | Publishing to find out |
@@ -58,10 +60,12 @@ These are not bugs to paper over. Say them when they matter.
 
 - The editor preview applies no Content Security Policy. Inline handlers, other-origin fetches and WebAssembly can still run there; a published app and `konae dev` refuse them. Their `script-src` is `'self'` plus each inline script's hash, with no `'wasm-unsafe-eval'` or `'unsafe-eval'`, so a library that compiles WebAssembly or calls `eval` fails there.
 - The preview has no HTTP routes, schedule timer, notice email, Usage store or call outbox. Try those on `konae dev` or a published Deployment.
+- The preview opens one `srcDoc` document in an iframe. It has no app URL or page history, so it cannot resolve declared page paths or populate `miniapp.page.params`. Try page paths on `konae dev` or a Deployment. It writes no `<head>` tags for row values. It uses the project's saved `files.fileAccess` option and does not read a published Deployment's module state, so an owner change may not reach the preview until its project state is refreshed.
 - The editor preview refuses a file over 2 MiB. A Kernel refuses at its own `KONAE_FILE_MAX_BYTES`, 2 MiB unless the operator raised it, and names the number. `konae dev` applies the same 2 MiB per file, and `KONAE_FILE_MAX_BYTES` raises it there. Its quota for all files is 1 TiB unless `KONAE_FILES_QUOTA_BYTES` names another.
 - The editor preview has no Google sign-in. `miniapp.auth.signInWithGoogle()` refuses there; try it on a published Deployment once its owner has set the app's Google client and turned Google on.
+- The editor preview writes no canonical, card, `robots.txt` or sitemap. `konae dev` writes them using the local host as the address.
 - The editor's build reads npm packages from esm.sh; `konae build` and an app folder's `npm run build` read them from `node_modules`. Both use the exact versions in `package.json`, but the bundles are not byte-identical.
-- The Validation Gate checks schema, `actions.json` and `manifest.fileAccess`, and refuses a Capsule whose pages are all whole documents that load no script. A page that names a missing file fails at build or release, not at `validate_capsule`.
+- When actions is on, the Validation Gate checks schema and `actions.json`. When files is on, it checks file access declarations. Both doors refuse a Capsule whose used module is off. The builder refuses a Capsule whose pages are all whole documents that load no script only when a module with a browser call is on. A page that names a missing file fails at build or release, not at `validate_capsule`.
 - The editor preview re-runs `schema.sql` on its own test rows and never changes a table it already has. A Kernel derives the schema change at publish. When preview lacks a declared table or column, the Gate reports `PREVIEW_BEHIND`, names the difference and says to try `konae dev` or a Deployment; its summary marks row checks skipped.
 - `konae dev` sends no email. Account email and notices land in `.konae/kernel/mail-testbox.jsonl`, and `konae events` lists them.
 

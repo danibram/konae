@@ -204,7 +204,17 @@ describe("capsule mutations", () => {
     expect(Object.keys(snapshot.files).sort()).toEqual([...capsuleFileNames].sort());
   });
 
-  test("mutation events carry the file, a full snapshot and the current changed set", async () => {
+  test("a read-back baseline advances without replacing the current scratch proposal", async () => {
+    const capsule = workspace();
+    getOrThrow(await capsule.env.writeFile("/workspace/index.html", "candidate"));
+    getOrThrow(await capsule.env.writeFile("/workspace/styles.css", "unapplied scratch"));
+    capsule.adoptBaseline({ ...seed, "index.html": "candidate" });
+    expect(capsule.files["index.html"]).toBe("candidate");
+    expect(capsule.files["styles.css"]).toBe("unapplied scratch");
+    expect(capsule.changedFiles()).toEqual(["styles.css"]);
+  });
+
+  test("mutation events carry a file, a full snapshot and the current changed set", async () => {
     const capsule = workspace();
     const seen: CapsuleMutation[] = [];
     const unsubscribe = capsule.onMutation((mutation) => seen.push(mutation));

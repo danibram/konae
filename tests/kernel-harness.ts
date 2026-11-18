@@ -69,6 +69,12 @@ export function runtime(kernel: Kernel, hostname: string, cookie?: string) {
   } });
 }
 
+export async function setSignupPolicy(owner: McpClient, projectId: string, policy: { mode: string; allowlist?: string[] }) {
+  const before = await owner.call<any>("modules_read", { projectId });
+  const next = await owner.call<any>("module_set", { projectId, module: "auth", options: { signupPolicy: { mode: policy.mode, allowlist: policy.mode === "allowlist" ? policy.allowlist ?? [] : [] } }, expected: before.modules.auth.state });
+  return next.state.signupPolicy;
+}
+
 export function appFetch(kernel: Kernel, hostname: string, route: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("host", hostname);
@@ -84,7 +90,13 @@ export async function account(kernel: Kernel, hostname: string, route: "signup" 
 }
 
 export async function release(client: McpClient, payload: object, projectId: string) {
-  const upload = await client.upload(new TextEncoder().encode(JSON.stringify(payload)), projectId);
+  const request = payload as { project?: { files?: Record<string, string> }; artifact?: { files?: Record<string, string> } };
+  const files = [...Object.values(request.project?.files ?? {}), ...Object.values(request.artifact?.files ?? {})];
+  const initialModules = files.some((source) => /miniapp\s*\.\s*files/.test(source))
+    ? { files: { on: true } }
+    : undefined;
+  const body = initialModules ? { ...(payload as object), initialModules } : payload;
+  const upload = await client.upload(new TextEncoder().encode(JSON.stringify(body)), projectId);
   try {
     const observed = await client.call<{ sourcesRevision: number }>("project_inspect", { projectId });
     const plan = await client.call<{ planId: string; applied?: boolean; receipt?: Deployment }>("release_plan", { transferId: upload.transferId, observedSourcesRevision: observed.sourcesRevision });

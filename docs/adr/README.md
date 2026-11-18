@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states one standing decision as it holds now, with its reason and the options it rejected. When a decision changes, its record changes, and the git history keeps the earlier text. A new decision that fits no record gets the next free number, 0015.
+Each record states one standing decision as it holds now, with its reason and the options it rejected. When a decision changes, its record changes, and the git history keeps the earlier text. A new decision that fits no record gets the next free number, 0018. A record whose status is proposed states a decision the code does not hold yet.
 
 | ADR | Decides |
 | --- | --- |
@@ -18,6 +18,9 @@ Each record states one standing decision as it holds now, with its reason and th
 | [0012](0012-email-leaves-through-one-queue-to-addresses-the-app-has-proved.md) | One persistent mail queue with limits; a mutation's notice to the contact email, the actor or the accounts its rows name |
 | [0013](0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) | HTTP routes, callers, API keys, signature schemes and secrets; call actions the Kernel queues and sends |
 | [0014](0014-an-app-answers-on-its-hostname-a-custom-domain-or-a-path.md) | `KONAE_DOMAIN` names the hosts; a custom domain proved by TXT; a path address on a shared origin the owner accepts |
+| [0015](0015-an-app-turns-on-the-modules-it-uses.md) | Proposed. A module is one capability of an app; `konae.json` holds state for modules whose switch is available; two tools manage it |
+| [0016](0016-an-app-is-listed-in-search-only-when-its-owner-turns-that-on.md) | Proposed. The `seo` module: `noindex` unless the owner turns listing on; the owner chooses the canonical address; the Kernel writes the card, `robots.txt` and the sitemap |
+| [0017](0017-a-query-may-answer-a-page-path.md) | Proposed. An anonymous query may declare a page path with parameters, and the Kernel writes the row's title and card |
 
 ## Which record answers a question
 
@@ -48,3 +51,7 @@ Each record states one standing decision as it holds now, with its reason and th
 | Where does a secret live? | 0013 |
 | How does an app answer on its own domain? | 0014 |
 | Which host serves what, and how does an app answer on a path? | 0014 |
+| What can an app do, and who turns a capability on? | 0015 |
+| What happens to an app made before a module existed? | 0015 |
+| When does a search engine list an app, and under which address? | 0016 |
+| How does a row get its own address, title and card? | 0017 |

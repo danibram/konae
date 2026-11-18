@@ -12,17 +12,6 @@ use serde_json::Value;
 use super::BuildArtifact;
 
 pub const ROUTING_MESSAGE: &str = "Routing must be \"pages\" or \"spa\".";
-pub const FILE_ACCESS_MESSAGE: &str = "manifest.fileAccess must be \"app-users\" when set.";
-
-/// An omitted policy keeps the default deployment-wide file access.
-pub fn check_file_access(manifest: &Value) -> Result<(), String> {
-    match manifest.get("fileAccess") {
-        None => Ok(()),
-        Some(Value::String(access)) if access == "app-users" => Ok(()),
-        Some(_) => Err(FILE_ACCESS_MESSAGE.to_owned()),
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Routing {
     Pages,
@@ -109,6 +98,7 @@ pub fn not_found_page() -> Response {
     *response.status_mut() = StatusCode::NOT_FOUND;
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
 
@@ -131,15 +121,6 @@ mod tests {
         }
         assert_eq!(routing(&json!({})), Routing::Pages);
         assert_eq!(routing(&json!({"routing": "spa"})), Routing::Spa);
-    }
-
-    #[test]
-    fn file_access_accepts_only_app_users_when_present() {
-        assert_eq!(check_file_access(&json!({})), Ok(()));
-        assert_eq!(check_file_access(&json!({"fileAccess": "app-users"})), Ok(()));
-        for value in [json!(null), json!("deployment"), json!(true), json!(["app-users"])] {
-            assert_eq!(check_file_access(&json!({"fileAccess": value})), Err(FILE_ACCESS_MESSAGE.to_owned()));
-        }
     }
 
     #[test]

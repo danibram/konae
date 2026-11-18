@@ -5,9 +5,12 @@ import { hostnameLabel, setHostname } from "../deployments/hostnames";
 import { isSharedOriginRefusal, pathAddressLabel, pathNeedsDomain, readPath, setPath, type PathChange, type PathView } from "../deployments/paths";
 import { checkHostname } from "../lib/domain-name";
 import { checkPathName } from "../lib/path-name";
+import { isSettingChanged } from "../deployments/client";
+import { sdkContract } from "../sdk/contract";
 import { AppContactEmail } from "./AppContactEmail";
 import { AppImport } from "./AppImport";
 import { AppMaintenance } from "./AppMaintenance";
+import { ModulesSettings } from "./ModulesSettings";
 import { useLoadingHold } from "./loading-hold";
 import { isSignedOutError } from "./owner-session";
 import { Badge, Button, Dialog, Field, Input, LoadingBlock, Switch, TabBar } from "./ui";
@@ -15,32 +18,42 @@ import "./app-settings.css";
 
 type Props = {
   projectName: string;
+  section: Section;
+  onSectionChange: (section: Section) => void;
+  modules?: Record<string, { on: boolean; [key: string]: unknown }>;
+  files?: string[];
+
   importTarget?: { project: { id: string; name: string; slug: string }; visibility: "public" | "private"; onImported: () => void };
   deploymentId?: string;
   onClose: () => void;
   onSignedOut: () => void;
+
   onAddressMoved?: (url: string) => void;
   signInHref: string;
+
   onExport?: () => void;
 };
 
-type Section = "addresses" | "email" | "move";
+type Section = "addresses" | "modules" | "email" | "move";
 const sections: { id: Section; label: string }[] = [
   { id: "addresses", label: "Addresses" },
+  { id: "modules", label: "Modules" },
   { id: "email", label: "Contact email" },
   { id: "move", label: "Move this app" },
 ];
 
-export function AppSettingsDialog({ projectName, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
-  const [section, setSection] = useState<Section>("addresses");
+export type AppSettingsSection = Section;
+
+export function AppSettingsDialog({ projectName, section, onSectionChange, modules, files, importTarget, deploymentId, onClose, onSignedOut, onAddressMoved, signInHref, onExport }: Props) {
+  const initialModules = modules ?? Object.fromEntries(sdkContract.modules.filter((module) => module.switch).map((module) => [module.name, { on: false, ...Object.fromEntries(module.options.map((option) => [option.key, option.default])) }]));
   const [view, setView] = useState<DomainView | null>(null);
   const [hostname, setHostname] = useState("");
   const [reading, setLoading] = useState(Boolean(deploymentId));
+
   const loading = useLoadingHold(reading);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [inputError, setInputError] = useState("");
-  const [reloadOffered, setReloadOffered] = useState(false);
   const [notice, setNotice] = useState("");
   const [signedOut, setSignedOut] = useState(false);
   const [reload, setReload] = useState(0);
@@ -76,15 +89,9 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
     if (!deploymentId || busy) return;
     setBusy(true);
     setError("");
-    setReloadOffered(false);
     setNotice("");
     try {
-      const current = await readDomain(deploymentId);
-      if (current.hostname !== view?.hostname) {
-        setReloadOffered(true);
-        throw new Error("The domain changed elsewhere. Reload its settings before changing it.");
-      }
-      const result = operation === "remove" ? await clearDomain(deploymentId) : await setDomain(deploymentId, nextHostname);
+      const result = operation === "remove" ? await clearDomain(deploymentId, view?.hostname ?? null) : await setDomain(deploymentId, nextHostname, view?.hostname ?? null);
       if (!alive.current) return;
       if (operation === "remove") {
         setView({ deploymentId, hostname: null, status: "none", generatedUrl: result.generatedUrl, rules: view?.rules });
@@ -99,6 +106,12 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       setConfirmation(null);
     } catch (cause) {
       if (!alive.current) return;
+      if (isSettingChanged(cause)) {
+        try {
+          const current = await readDomain(deploymentId);
+          if (alive.current) { setView(current); setHostname(current.hostname ?? ""); setConfirmation(null); }
+        } catch {  }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }
     } finally { if (alive.current) setBusy(false); }
@@ -120,17 +133,21 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   };
 
   return <Dialog title="App settings" description={projectName} onClose={() => { if (!busy) onClose(); }} className="app-settings-dialog">
-    {deploymentId && <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={setSection}
-      items={sections.map((item) => ({ ...item, tabId: `app-settings-tab-${item.id}`, controls: `app-settings-${item.id}` }))} />}
+    <TabBar label="App settings" className="app-settings-tabs" value={section} onChange={onSectionChange}
+      items={sections.filter((item) => deploymentId || item.id === "addresses" || item.id === "modules").map((item) => ({ ...item, tabId: `app-settings-tab-${item.id}`, controls: `app-settings-${item.id}` }))} />
     <div className="app-settings-body" aria-busy={busy || loading}>
       {!deploymentId ? <>
+        <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
         <header className="domain-heading"><Globe2 size={20} /><h3>Addresses</h3></header>
         <p>Deploy this app first. Then its addresses appear here.</p>
+        </div>
+        <div className="app-settings-section" role="tabpanel" id="app-settings-modules" aria-labelledby="app-settings-tab-modules" hidden={section !== "modules"}>
+          <ModulesSettings projectId={null} initial={initialModules} files={files} onSignedOut={onSignedOut} />
+        </div>
       </> : <>
       <div className="app-settings-section" role="tabpanel" id="app-settings-addresses" aria-labelledby="app-settings-tab-addresses" hidden={section !== "addresses"}>
         {loading && <LoadingBlock label="Reading domain settings" rows={2} />}
         {error && <p className="domain-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
-        {error && view && reloadOffered && !signedOut && <Button disabled={busy} onClick={() => { setConfirmation(null); setReload((value) => value + 1); }}>Reload domain settings</Button>}
         {signedOut && <a href={signInHref}>Sign in again to manage this app</a>}
         {!loading && !view && !signedOut && <Button onClick={() => setReload((value) => value + 1)}>Retry loading</Button>}
         {!loading && view && <>
@@ -183,6 +200,9 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
       <div className="app-settings-section" role="tabpanel" id="app-settings-email" aria-labelledby="app-settings-tab-email" hidden={section !== "email"}>
         <AppContactEmail key={`contact-${deploymentId}`} deploymentId={deploymentId} onSignedOut={onSignedOut} />
       </div>
+      <div className="app-settings-section" role="tabpanel" id="app-settings-modules" aria-labelledby="app-settings-tab-modules" hidden={section !== "modules"}>
+        <ModulesSettings key={`modules-${deploymentId}`} projectId={deploymentId} initial={initialModules} files={files} onSignedOut={onSignedOut} />
+      </div>
       <div className="app-settings-section" role="tabpanel" id="app-settings-move" aria-labelledby="app-settings-tab-move" hidden={section !== "move"}>
         <p>To take this app to another machine with its accounts, rows and rules, export its folder here and import it there. Pause it first so nothing changes in between.</p>
         {onExport && <section className="domain-step" aria-label="Export">
@@ -198,6 +218,7 @@ export function AppSettingsDialog({ projectName, importTarget, deploymentId, onC
   </Dialog>;
 }
 
+/** Moves the generated address to another name. The Kernel checks the name and its refusal is shown as it comes; the change counts once domain_read shows the new address. */
 function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOut }: { deploymentId: string; url: string; disabled: boolean; onMoved: (url: string) => void; onSignedOut: () => void }) {
   const current = hostnameLabel(url);
   const [name, setName] = useState(current);
@@ -220,7 +241,7 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
     setBusy(true);
     setError("");
     try {
-      const moved = await setHostname(deploymentId, wanted);
+      const moved = await setHostname(deploymentId, wanted, new URL(url).hostname);
       const readBack = await readDomain(deploymentId);
       if (!alive.current) return;
       if (readBack.generatedUrl !== moved.url) throw new Error("The address does not show the change yet. Reload the app settings and check it again.");
@@ -230,6 +251,12 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
     } catch (cause) {
       if (!alive.current) return;
       setConfirming(false);
+      if (isSettingChanged(cause)) {
+        try {
+          const readBack = await readDomain(deploymentId);
+          if (alive.current) onMoved(readBack.generatedUrl);
+        } catch {  }
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       if (isSignedOutError(cause)) onSignedOut();
     } finally { if (alive.current) setBusy(false); }
@@ -257,6 +284,7 @@ function GeneratedAddressName({ deploymentId, url, disabled, onMoved, onSignedOu
 
 type PathConfirmation = { kind: "accept"; change: PathChange; message: string } | { kind: "remove-name" };
 
+/** The path address of the app: its switch, its addresses and its name. Each change reads the path back before it reports success. */
 function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: string; signInHref: string; onSignedOut: () => void }) {
   const [view, setView] = useState<PathView | null>(null);
   const [reading, setLoading] = useState(true);
@@ -292,7 +320,8 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
     return () => { current = false; };
   }, [deploymentId, reload, onSignedOut]);
 
-  const apply = async (next: PathChange, operation: () => Promise<unknown> = () => setPath(deploymentId, next)) => {
+  // A change counts only when path_read shows it. A shared-origin refusal asks the owner, and the Kernel's words are the ones shown.
+  const apply = async (next: PathChange, operation: () => Promise<unknown> = () => setPath(deploymentId, next, { enabled: view!.enabled, name: view!.name, acceptSharedOrigin: view!.acceptSharedOrigin })) => {
     if (!view || busy) return;
     setBusy(true);
     setError("");
@@ -313,12 +342,19 @@ function PathAddress({ deploymentId, signInHref, onSignedOut }: { deploymentId: 
       if (isSharedOriginRefusal(cause)) {
         setConfirmation({ kind: "accept", change: next, message: cause instanceof Error ? cause.message : String(cause) });
       } else {
+        if (isSettingChanged(cause)) {
+          try {
+            const readBack = await readPath(deploymentId);
+            if (alive.current) { setView(readBack); setName(readBack.name ?? ""); setConfirmation(null); }
+          } catch { /* Keep the refusal visible if the read-back fails. */ }
+        }
         setError(cause instanceof Error ? cause.message : String(cause));
       }
       if (isSignedOutError(cause)) { setSignedOut(true); onSignedOut(); }
     } finally { if (alive.current) setBusy(false); }
   };
 
+  // The Kernel decides whether this app has accounts; its path.shared-origin refusal opens the confirmation with its own words.
   const turnOn = (next: PathChange) => { void apply(next); };
 
   const checked = name.trim() ? checkPathName(name) : null;

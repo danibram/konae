@@ -6,8 +6,8 @@ export type ProjectTree = {
   encodings?: Record<string, "base64">;
 };
 
-export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json"]);
-const reservedProjectPaths = new Set([...protectedProjectPaths, "schema-transforms.json"]);
+export const protectedProjectPaths: ReadonlySet<string> = new Set(["index.html", "styles.css", "app.js"]);
+const reservedProjectPaths = new Set(["index.html", "styles.css", "app.js", "schema.sql", "actions.json", "schema-transforms.json"]);
 const optionalProtectedFiles = new Set(["schema-transforms.json"]);
 
 export function foldPath(path: string): string {

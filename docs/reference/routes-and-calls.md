@@ -2,9 +2,29 @@
 
 Declare an HTTP route to receive a request or a call action to send one, and read here who may use each and what the Kernel refuses.
 
+## Page paths
+
+An anonymous query may answer an app-defined page path. The query binds each `:parameter` to an input and names the HTML file that renders the body.
+
+```json
+"posts.head": {
+  "kind": "query",
+  "access": "anonymous",
+  "page": { "path": "/posts/:slug", "file": "post.html", "list": "posts.published" },
+  "statement": "SELECT title, summary AS description, cover AS image FROM posts WHERE slug = ?1 LIMIT 1",
+  "bindings": [{ "source": "input", "key": "slug", "type": "string", "maxLength": 120 }]
+}
+```
+
+The query returns a `title` column. The Kernel escapes its value before writing `<title>` and, when `seo` is on, the social card and canonical address. The page's script reads its path values from `miniapp.page.params`. A missing row answers the app's `404.html` or the Kernel's 404 page. HTTP routes win first, then artifact files, then page paths, then the routing mode's fallback.
+
+An optional `list` names an anonymous query with no input bindings. Its columns match the path parameters, with optional `updated`, and its rows add addresses to the sitemap. A page query uses a statement slot and the query budget. It does not use the anonymous action limit by client address.
+
+The editor preview opens one `srcDoc` document without an app URL or page history. It cannot resolve page paths or fill `miniapp.page.params`, and it writes no head tags for row values. Check page paths on `konae dev` or a Deployment.
+
 ## HTTP routes
 
-An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
+Turn on `http` with `module_set` before a route runs. A first release also needs `actions` on. An action declared `anonymous` may answer one method and path on its Deployment's host, so a project receives a webhook or serves JSON without a server of its own. `kernel-rs/kernel/src/http.rs` implements it, and [ADR-0013](../adr/0013-http-routes-take-named-callers-and-calls-leave-through-the-kernel.md) records the decision.
 
 ```json
 "orders.receive": {
@@ -165,6 +185,7 @@ api_keys_revoke { "projectId", "keyId" }
 ```
 
 `api_keys_create` returns the key once. A key belongs to one Deployment, grants no owner tool, and works only on HTTP routes and the file read path. The runtime endpoint refuses it with 403 `An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session.` A key names actions that have an HTTP route and the file visibilities `public` and `private`; a key that names `private` reads every private file of its Deployment. A Deployment holds at most 50 live keys. The Kernel keeps the key's SHA-256 hash in `identity.sqlite`.
+Creating a key needs the modules of its scopes. An action scope needs `actions` and `http`. A files-only key needs `files`, and it works while `http` is off. `api_keys_list` and `api_keys_revoke` remain available while `http` is off.
 
 An export carries each key's name, actions, file visibilities and hash, and an import marks every live key revoked. `api_keys_list` on the destination shows those with `revokedReason: "import"`, and Access > Integrations lists them under "Revoked at import", so the owner knows which programs need a new key. A key the owner revoked has `revokedReason: null`. A restore keeps keys live. Access > Integrations in the editor also sets and deletes secrets and shows a new key once with a curl for each route it names.
 
@@ -172,11 +193,11 @@ An export carries each key's name, actions, file visibilities and hash, and an i
 
 `GET /_konae/files/<id>` on the Deployment host returns a stored file with its content type, except that a JavaScript, HTML, XML or SVG type is sent as `application/octet-stream`. It sends `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, an `ETag` of the file ID and size, and `Cache-Control: private, no-cache`. A request whose `If-None-Match` names that tag gets 304 without the bytes, after the same check as a read, and counts no file read in Usage. A refusal answers `Cache-Control: private, no-store`. PNG, JPEG, GIF, WebP and AVIF answer `inline`, every other type `attachment`. `miniapp.files.url(fileId)` returns this path, so an `img` or a `fetch` on the app's own origin reads it.
 
-A person reads by the [file rules](./actions.md#runtime-endpoint). With `fileAccess: "app-users"`, only a session for that app grants access. Otherwise a key reads the visibilities it names, and on a public Deployment also public files. A visitor with no session or key on a private Deployment gets 401 `authentication-required` before any file is looked up. Every other caller who may not read the file gets 404 `File not found.`, the same as for a missing file. There is no listing at `/_konae/files/`, and nothing is served from the bucket.
+A person reads by the [file rules](./actions.md#runtime-endpoint). With the `files` module option `fileAccess` set to `"app-users"`, only a session for that app grants access. Otherwise a key reads the visibilities it names, and on a public Deployment also public files. A visitor with no session or key on a private Deployment gets 401 `authentication-required` before any file is looked up. Every other caller who may not read the file gets 404 `File not found.`, the same as for a missing file. There is no listing at `/_konae/files/`, and nothing is served from the bucket.
 
 ## Calls between apps
 
-An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, so a signing secret or an API key the request needs stays in the Kernel. `kernel-rs/kernel/src/calls.rs` implements it.
+Turn on `calls` with `module_set` before an outgoing call runs. A first release also needs `actions` on. An action of `"kind": "call"` sends one HTTP request to another app or an outside service. The Kernel sends it from its own process, so a signing secret or an API key the request needs stays in the Kernel. `kernel-rs/kernel/src/calls.rs` implements it.
 
 ```json
 "tasks.escalate": {

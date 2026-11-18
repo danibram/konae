@@ -1,11 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import * as esbuild from "esbuild";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildLocal } from "../../scripts/konae";
 import { createDefaultManifest, normalizeManifest } from "../deployments/manifest";
+import { sourcesUseFiles } from "./module-use";
 import type { MiniAppProject } from "./types";
 import { assembleStaticArtifact, basePath, checkRouting, isDocument, pathPrefixPattern, resolveReference, routingMessage, runtimeFile, runtimeLoaderScript, servedPath, splitFragmentHead, stripModulePaths } from "./static-artifact.js";
 
@@ -15,18 +16,98 @@ const { buildProjectInBrowser } = await import("../runtime/browser-build");
 const runtime = "window.miniapp = {};";
 const page = (title: string, body = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
-function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; bundle?: (path: string) => { script: string; styles: string } } = {}) {
+function assemble(files: Record<string, string | Uint8Array>, options: { routing?: unknown; runtime?: string; sdk?: boolean; bundle?: (path: string) => { script: string; styles: string } } = {}) {
   return assembleStaticArtifact({
     paths: Object.keys(files),
     read: async (file) => files[file],
     compile: async () => ({ styles: typeof files["styles.css"] === "string" ? files["styles.css"] : "", script: "console.log('app')" }),
     bundle: async (file) => options.bundle?.(file) ?? { script: `/* bundled ${file} */`, styles: "" },
-    runtime,
+    runtime: options.runtime ?? runtime,
+    sdk: options.sdk,
     routing: options.routing,
   });
 }
 
+describe("page path assets", () => {
+  test("a static document does not receive the SDK or runtime.js", async () => {
+    const artifact = await assemble({ "index.html": page("Home") }, { sdk: false });
+    expect(artifact.files["index.html"]).not.toContain("/runtime.js");
+    expect(artifact.files["index.html"]).not.toContain("data-konae-runtime");
+    expect(artifact.files[runtimeFile]).toBeUndefined();
+  });
+  test("the builder moves relative URLs up to the app root by the declared page depth", async () => {
+    const files = {
+      "index.html": page("Blog", "<main></main>"),
+      "post.html": page("Post", '<link rel="stylesheet" href="styles/post.css"><img src="images/post.png"><script>const source = "src=app.js";</script><script type="module" src="app.js"></script><a href="posts/next">Next</a>'),
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+      "app.js": "document.body.dataset.loaded = 'yes';",
+      "styles/post.css": "body { background: url('../images/background.png'); }",
+      "images/post.png": "image",
+      "images/background.png": "background",
+    };
+    const artifact = await assemble(files);
+    expect(artifact.files["post.html"]).toContain('href="../styles/post.css"');
+    expect(artifact.files["post.html"]).toContain('src="../images/post.png"');
+    expect(artifact.files["post.html"]).toContain('src="../app.js"');
+    expect(artifact.files["post.html"]).toContain('const source = "src=app.js";');
+    expect(artifact.files["post.html"]).toContain('href="../posts/next"');
+    expect(artifact.files["styles/post.css"]).toContain("url('../images/background.png')");
+  });
+
+  test("the builder rewrites relative URLs in a fragment page named by a page path", async () => {
+    const files = {
+      "index.html": page("Home", '<script type="module" src="app.js"></script>'),
+      "post.html": '<img src="cover.png"><a href="about">About</a>',
+      "about.html": page("About"),
+      "cover.png": "image",
+      "styles.css": "body { background-image: url('cover.png'); }",
+      "app.js": "document.body.dataset.loaded = 'yes';",
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+    };
+    const artifact = await assemble(files);
+    expect(artifact.files["post.html"]).toContain('src="../cover.png"');
+    expect(artifact.files["post.html"]).toContain('href="../about"');
+    expect(artifact.files["post.html"]).toContain("url('../cover.png')");
+  });
+
+  test("the builder resolves page assets from the named file's directory", async () => {
+    const artifact = await assemble({
+      "index.html": page("Home"),
+      "pages/blog/post.html": page("Post", '<link rel="stylesheet" href="post.css"><img src="cover.png">'),
+      "public/blog/post.css": "body { color: red }",
+      "public/blog/cover.png": "image",
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/blog/post", file: "pages/blog/post.html" } } } }),
+    });
+    expect(artifact.files["blog/post.html"]).toContain('href="../blog/post.css"');
+    expect(artifact.files["blog/post.html"]).toContain('src="../blog/cover.png"');
+    expect(artifact.files["blog/post.css"]).toContain("color: red");
+  });
+
+  test("the builder rewrites URL attributes and CSS without changing text or other attribute values", async () => {
+    const artifact = await assemble({
+      "index.html": "<main></main>",
+      "post.html": '<a href=plain.css data-action="click->gallery#next" title="href=docs.html">href="docs.html"</a><pre><code>href="docs.html"</code></pre><img srcset="one.png 1x,\n two.png 2x"><style>@import "more.css";</style>',
+      "actions.json": JSON.stringify({ actions: { "posts.head": { page: { path: "/posts/:slug", file: "post.html" } } } }),
+      "plain.css": "", "docs.html": "", "one.png": "", "two.png": "", "more.css": "",
+    });
+    const html = artifact.files["post.html"];
+    expect(html).toContain("href=../plain.css");
+    expect(html).toContain('data-action="click->gallery#next" title="href=docs.html"');
+    expect(html).toContain('<code>href="docs.html"</code>');
+    expect(html).toContain("../one.png 1x,\n ../two.png 2x");
+    expect(html).toContain('@import "../more.css";');
+  });
+
+});
+
 describe("which Capsule files become pages", () => {
+  test("broken actions JSON builds the static artifact without page routes", async () => {
+    for (const actions of ["{", "null"]) {
+      const artifact = await assemble({ "index.html": "<main>Home</main>", "actions.json": actions });
+      expect(artifact.files["index.html"]).toContain("<main>Home</main>");
+    }
+  });
+
   test("schema-transforms.json stays in sources and is never served in the Build Artifact", async () => {
     const artifact = await assemble({ "index.html": "<main id=app></main>", "schema-transforms.json": "{\"version\":1,\"transitions\":[]}" });
     expect(artifact.files).not.toHaveProperty("schema-transforms.json");
@@ -57,6 +138,13 @@ describe("which Capsule files become pages", () => {
       expect(resolveReference(outside, "index.html")).toBeNull();
     }
   });
+});
+
+test("a bracketed miniapp.files source misses detection while the release runtime contains files", async () => {
+  const source = 'window["miniapp"].files.list();';
+  expect(sourcesUseFiles([source])).toBe(false);
+  const artifact = await assemble({ "index.html": '<script type="module" src="app.js"></script>', "app.js": source }, { runtime: await readFile(new URL("../mcp/runtime.js", import.meta.url), "utf8") });
+  expect(artifact.files["index.html"]).toContain("files: {");
 });
 
 describe("the artifact", () => {
@@ -129,10 +217,24 @@ describe("the artifact", () => {
     expect(Object.keys(artifact.files)).toEqual(["index.html"]);
   });
 
-  test("only the elements a fragment opens with move: a stylesheet link or a later title stays in the body", () => {
-    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: "", body: '<link rel="stylesheet" href="x.css"><title>A</title><main></main>' });
+  test("metadata moves from the fragment lead while a title after body content stays there", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><title>A</title><main></main>')).toEqual({ head: '<title>A</title>', body: '<link rel="stylesheet" href="x.css"><main></main>' });
     expect(splitFragmentHead("<main></main><title>A</title>")).toEqual({ head: "", body: "<main></main><title>A</title>" });
     expect(splitFragmentHead('<!-- top -->\n<title>A</title><link rel="apple-touch-icon" href="/t.png"><main></main>')).toEqual({ head: '<title>A</title><link rel="apple-touch-icon" href="/t.png">', body: "<main></main>" });
+  });
+
+  test("fragment head split leaves stylesheets and http-equiv metadata in the body", () => {
+    expect(splitFragmentHead('<link rel="stylesheet" href="x.css"><meta http-equiv="Content-Security-Policy" content="default-src none"><meta name="description" content="Details"><main/>')).toEqual({
+      head: '<meta name="description" content="Details">',
+      body: '<link rel="stylesheet" href="x.css"><meta http-equiv="Content-Security-Policy" content="default-src none"><main/>',
+    });
+  });
+
+  test("a fragment moves description metadata and JSON-LD into the document head", () => {
+    expect(splitFragmentHead('<meta name="description" content="Details"><link rel="canonical" href="/about"><script type="application/ld+json">{"@type":"Thing"}</script><main>Body</main>')).toEqual({
+      head: '<meta name="description" content="Details"><link rel="canonical" href="/about"><script type="application/ld+json">{"@type":"Thing"}</script>',
+      body: '<main>Body</main>',
+    });
   });
 
   test("a Capsule without index.html gets the default fragment home page", async () => {
@@ -188,6 +290,13 @@ describe("refusals", () => {
       'pages/index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.');
   });
 
+  test("a whole document without a browser SDK call publishes without an entry script", async () => {
+    const artifact = await assemble({ "index.html": page("App", '<script src="/runtime.js"></script>'), "app.js": "document.body.textContent = 'app';" }, { sdk: false });
+    expect(artifact.files["index.html"]).toContain("<title>App</title>");
+    expect(artifact.files["index.html"]).not.toContain("data-konae-runtime");
+    expect(artifact.files[runtimeFile]).toBeUndefined();
+  });
+
   test("a whole document with no script passes while the app runs elsewhere, or when there is no app", async () => {
     const passes = (files: Record<string, string>) => expect(assemble(files)).resolves.toBeDefined();
     await passes({ "index.html": "<div id=root></div>", "404.html": page("Not found"), "app.js": "" });
@@ -221,7 +330,7 @@ describe("the CLI and the editor build the same artifact", () => {
     "about.html": page("About", '<script src="/runtime.js"></script><script type="module" src="/app.js"></script>'),
     "pages/guide/install.html": page("Install", '<link rel="stylesheet" href="../styles.css">'),
     "styles.css": "body { color: #222 }",
-    "app.js": "const greeting = 'hi';\ndocument.title = greeting;\n",
+    "app.js": "miniapp.actions.call('notes.list');\nconst greeting = 'hi';\ndocument.title = greeting;\n",
     "public/robots.txt": "User-agent: *\n",
     "schema.sql": "",
     "actions.json": "{\"version\":1,\"actions\":{}}",
@@ -242,10 +351,10 @@ describe("the CLI and the editor build the same artifact", () => {
   }
 
   test("the same pages, files and SDK from both doors", async () => {
-    const root = await onDisk(capsule);
+    const root = await onDisk({ ...capsule, "konae.json": JSON.stringify({ modules: { actions: { on: true } } }) });
     try {
       const cli = (await buildLocal(root)).artifact;
-      const editor = await buildProjectInBrowser(project(capsule));
+      const editor = await buildProjectInBrowser({ ...project(capsule), modules: { actions: { on: true } } });
       expect(Object.keys(cli.files).sort()).toEqual(["about.html", "app.js", "guide/install.html", "index.html", "robots.txt", "runtime.js", "styles.css"]);
       expect(Object.keys(editor.files).sort()).toEqual(Object.keys(cli.files).sort());
       for (const file of ["index.html", "about.html", "guide/install.html", "robots.txt", "styles.css", "runtime.js", "app.js"]) {
@@ -306,7 +415,7 @@ describe("the CLI and the editor build the same artifact", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  test("both run src/main.tsx in a fragment page, and refuse a whole document that never loads it with the same words", async () => {
+  test("both run src/main.tsx in a fragment page, and accept a whole document without browser calls", async () => {
     const typed = { "index.html": "<div id=root></div>", "src/main.tsx": "const count: number = 2;\ndocument.title = String(count);\n" };
     const root = await onDisk(typed);
     try {
@@ -319,9 +428,10 @@ describe("the CLI and the editor build the same artifact", () => {
     const blank = { ...typed, "index.html": page("App", '<div id="root"></div>') };
     const broken = await onDisk(blank);
     try {
-      const message = "index.html is a whole document that loads no script, so src/main.tsx never runs and the page stays empty.";
-      await expect(buildLocal(broken)).rejects.toThrow(message);
-      await expect(buildProjectInBrowser(project(blank))).rejects.toThrow(message);
+      const cli = await buildLocal(broken);
+      const editor = await buildProjectInBrowser(project(blank));
+      expect(cli.artifact.files["index.html"]).not.toContain("runtime.js");
+      expect(editor.files["index.html"]).not.toContain("runtime.js");
     } finally { await rm(broken, { recursive: true, force: true }); }
   });
 
@@ -377,6 +487,17 @@ describe("a path address finds its base path, and the SDK loader writes its tag 
 });
 
 describe("the Validation Gate refuses a page that never runs the app, as the build does", () => {
+  test("a static whole document passes when no SDK module is on", async () => {
+    const { default: initSqlJs } = await import("sql.js");
+    const { createCapsuleValidator } = await import("../agent/gate");
+    const validator = createCapsuleValidator(() => initSqlJs());
+    const files = { "index.html": page("Static"), "app.js": "document.body.dataset.ready = 'yes';" };
+    const modules = { actions: { on: false }, auth: { on: false }, files: { on: false } };
+    const result = await validator.validate(files, undefined, { modules, visibility: "public" });
+    expect(result.ok).toBe(true);
+    await expect(assemble(files, { sdk: false })).resolves.toBeDefined();
+  });
+
   test("a whole-document index.html with no script beside app.js fails the Gate with the build's sentence", async () => {
     const { default: initSqlJs } = await import("sql.js");
     const { createCapsuleValidator } = await import("../agent/gate");
@@ -384,10 +505,11 @@ describe("the Validation Gate refuses a page that never runs the app, as the bui
     const validator = createCapsuleValidator(() => initSqlJs());
     const files = { ...starterProject.files, "index.html": page("App", '<div id="app"></div>') };
     const message = 'index.html is a whole document that loads no script, so app.js never runs and the page stays empty. Drop its doctype and its <html>, <head> and <body> tags so the build puts app.js into it, or add <script type="module" src="app.js"></script> to it.';
-    const result = await validator.validate(files);
+    const facts = { modules: { files: { on: true } } };
+    const result = await validator.validate(files, undefined, facts);
     expect(result.ok).toBe(false);
     expect(result.errors).toContainEqual({ stage: "actions", message });
     await expect(assemble(files)).rejects.toThrow(message);
-    expect((await validator.validate(starterProject.files)).ok).toBe(true);
+    expect((await validator.validate(starterProject.files, undefined, facts)).ok).toBe(true);
   });
 });

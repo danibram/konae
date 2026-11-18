@@ -6,7 +6,7 @@ Konae is the guardrail that lets a person who does not write code, and a person 
 
 Read "Words an app author uses" to make an app, edit its files or take it elsewhere. Read "Words for running an installation" only to operate a Kernel or a Konae installation. Each entry gives the meaning now and the words to avoid; the decision records in `docs/adr/` hold the rules.
 
-Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, these terms are written in lowercase, because that is how the editor and the Kernel say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client, file store, app user, contact email and schema change. Usage, Signal and Action Contract keep their capitals.
+Each term below is capitalized in its heading. In a sentence, in docs, in the editor and in Kernel messages, these terms are written in lowercase, because that is how the editor and the Kernel say them: API key, signing secret, guard, callers, app folder, copy, maintenance, revocation record, invitation, invitation code, email job, sender preflight, setup key, custom domain, path address, notice, schedule, signature scheme, call action, outbox, SDK module, sign-in methods, Google client, file store, app user, contact email, schema change, module and module state. Usage, Signal and Action Contract keep their capitals.
 
 ## Words an app author uses
 
@@ -43,7 +43,7 @@ The app's files and state. `konae init` writes `konae.json`, `app/`, generated d
 _Avoid_: kit, package, workspace, repo
 
 **Capsule**:
-The app's editable files in `app/`, including pages, styles, scripts, `schema.sql`, `actions.json`, optional `package.json` and binary assets. The editor and CLI read and write these files; a Deployment serves the Build Artifact built from them. Saved draft settings in `konae.json` can differ from the applied settings snapshot until release.
+The app's editable files in `app/`, including pages, styles, scripts, optional `schema.sql` and `actions.json` when the actions module is on, optional `package.json` and binary assets. The editor and CLI read and write these files; a Deployment serves the Build Artifact built from them. Saved draft settings in `konae.json` can differ from the applied settings snapshot until release.
 _Avoid_: bundle, repo, the project files
 
 **Server Action**:
@@ -51,7 +51,7 @@ A named operation in `actions.json` and the only way a page reaches the database
 _Avoid_: raw SQL endpoint, database API
 
 **Validation Gate**:
-The editor checks `schema.sql`, `actions.json` and file access declarations against preview state. A proposal stays in a candidate preview with candidate rows, files and actor until Apply accepts it. Apply waits for a successful build and a ready preview, merges the proposal into the editable project and updates the preview. The normal autosave then saves the accepted files through `project_sources_save` without another Gate run. Hand edits autosave the same way. Discard drops candidate state without saving it. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004). A source save after release planning makes `release_apply` refuse the stale plan.
+The editor checks `schema.sql` and `actions.json` against preview state when actions are on, and checks file access declarations when files are on. A proposal stays in a candidate preview with candidate rows, files and actor until Apply accepts it. Apply waits for a successful build and a ready preview, merges the proposal into the editable project and updates the preview. The normal autosave then saves the accepted files through `project_sources_save` without another Gate run. Hand edits autosave the same way. Discard drops candidate state without saving it. A refusal shows its code, detail, remedy and count of remaining errors. The Kernel checks the release at publish and startup, and shares refusal words for the rules both doors enforce (ADR-0004). A source save after release planning makes `release_apply` refuse the stale plan.
 _Avoid_: linter, preview
 
 **Refusal**:
@@ -89,11 +89,11 @@ A Deployment with any other visibility, or none. Its shell, assets and runtime e
 _Avoid_: password-protected app
 
 **Signup Policy**:
-The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. The editor preselects Invitation only for a private app, `konae init` writes Invitation only, and a release without a policy defaults public apps to Open and private apps to Closed. The owner chooses it on the first release and changes it with `signup_policy_set`, which needs `manage_users` (ADR-0002, ADR-0003).
+The rule for who may create an app account: Open, Allowlist, Invitation only or Closed. It is the `signupPolicy` option of `auth`, changed with `module_set` and the `manage_users` permission (ADR-0002, ADR-0003, ADR-0015).
 _Avoid_: invite list, access grant
 
 **Sign-in Methods**:
-The ways an app account signs in: `password` always, and `google` once the owner sets the app's Google client and turns it on with `sign_in_methods_set`. `konae.json` carries the list; the client stays behind (ADR-0003).
+The ways an app account signs in: `password` always, and `google` once the owner sets the app's Google client and includes it in the `auth` module's `signInMethods` option. `konae.json` carries the list; the client stays behind (ADR-0003, ADR-0015).
 _Avoid_: social login, SSO
 
 **Google Client**:
@@ -163,8 +163,16 @@ The calls a Deployment queued, in the installation's `calls.sqlite`, which the o
 _Avoid_: call log, queue (the mail queue holds email)
 
 **SDK Module**:
-A namespace on `window.miniapp`, such as `auth`, `actions` or `files`, described once in `src/sdk/contract.ts`, from which the build agent's prompt, `platform_guide` topic `sdk` and `docs/sdk.md` are rendered.
+The part of a module that a page calls on `window.miniapp`, such as `auth`, `actions` or `files`, described in `src/sdk/contract.ts`.
 _Avoid_: plugin, library, extension
+
+**Module**:
+One capability of an app, described in `src/sdk/contract.ts` with its calls, Capsule keys, options, permission, agent rule, requirements, use markers and whether it can be switched yet. `konae.json` stores state only for modules that can be switched. `modules_read` reads the state and `module_set` changes it; the Kernel binary reads the same state from an exported app folder (ADR-0015).
+_Avoid_: plugin, extension
+
+**Module State**:
+The on/off value and options for modules whose switch is available, held in `konae.json`. A change applies at once, and export carries the value to import.
+_Avoid_: plugin configuration
 
 **Action Contract**:
 The generated description of a Capsule's Server Actions, `action-contract.json` and `action-contract.md`: inputs, returned columns, Signals, callers, errors and limits. `konae conform` checks a backend against it (ADR-0004).
@@ -179,7 +187,7 @@ _Avoid_: vanity URL, CNAME, domain mapping
 _Avoid_: short link, vanity path, app URL
 
 **File Store**:
-Where an installation keeps the bytes of uploaded files: each app folder's `data/files/`, or an S3 bucket. The index in the app folder decides which files exist and who may read them (ADR-0009).
+Where an installation keeps the bytes of uploaded files: each app folder's `data/files/`, or an S3 bucket. The index in the app folder decides which files exist. The `files` module's `fileAccess` option decides whether every signed-in app user may read them (ADR-0009, ADR-0015).
 _Avoid_: bucket (one kind of store), storage
 
 ### Taking the app elsewhere

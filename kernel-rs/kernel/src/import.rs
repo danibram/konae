@@ -29,7 +29,7 @@ impl Target {
     pub fn release(input: &DeployInput) -> Result<Self> {
         Ok(Self {
             sql: input.project.files.get("schema.sql").cloned().unwrap_or_default(),
-            program: serde_json::from_str(input.project.files.get("actions.json").context("actions.json is required.")?)?,
+            program: serde_json::from_str(input.project.files.get("actions.json").map(String::as_str).unwrap_or(r#"{"version":1,"actions":{}}"#))?,
             schema_transforms: input.project.files.get("schema-transforms.json").cloned(),
         })
     }
@@ -40,7 +40,7 @@ impl Target {
         let sources = layout::sources(&state.data_root, id);
         Ok(Self {
             sql: std::fs::read_to_string(sources.join("schema.sql")).unwrap_or_default(),
-            program: serde_json::from_str(&std::fs::read_to_string(sources.join("actions.json")).context("app/actions.json is missing.")?)?,
+            program: serde_json::from_str(&std::fs::read_to_string(sources.join("actions.json")).unwrap_or_else(|_| r#"{"version":1,"actions":{}}"#.into()))?,
             schema_transforms: read_optional_transform_document(&sources.join("schema-transforms.json"))?,
         })
     }
@@ -71,7 +71,7 @@ pub enum Outcome {
 }
 
 struct Incoming {
-    database: PathBuf,
+    database: Option<PathBuf>,
     identity: Option<PathBuf>,
     files: Option<PathBuf>,
     usage: Option<PathBuf>,
@@ -79,7 +79,7 @@ struct Incoming {
 
 impl Incoming {
     fn size(&self) -> u64 {
-        [Some(&self.database), self.identity.as_ref(), self.files.as_ref(), self.usage.as_ref()]
+        [self.database.as_ref(), self.identity.as_ref(), self.files.as_ref(), self.usage.as_ref()]
             .into_iter()
             .flatten()
             .filter_map(|path| std::fs::metadata(path).ok())
@@ -120,7 +120,8 @@ fn remove_database(path: &Path) {
     }
 }
 
-fn plan(state: &AppState, database: &Path, target: &Target) -> Result<Change> {
+fn plan(state: &AppState, database: Option<&Path>, target: &Target) -> Result<Change> {
+    let Some(database) = database else { return Ok(Change::default()); };
     let scratch = state.data_root.join("transfers").join(format!(".import-plan-{}.sqlite", Uuid::new_v4()));
     std::fs::create_dir_all(state.data_root.join("transfers"))?;
     let result = std::fs::copy(database, &scratch)
@@ -146,7 +147,7 @@ pub async fn import_data(
     let uploads = package::component_paths(state, &deployment.project_id, package)?;
     let find = |name: &str| uploads.iter().find(|(component, _)| component == name).map(|(_, path)| path.clone());
     let incoming = Incoming {
-        database: find("database").context("The package has no database.")?,
+        database: find("database"),
         identity: find("identity"),
         files: find("files"),
         usage: find("usage"),
@@ -161,7 +162,7 @@ pub async fn import_data(
 pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &Path, target: &Target, confirmation: Option<&str>) -> Result<Outcome> {
     let data = folder.join("data");
     let database = data.join("database.sqlite");
-    ensure!(database.is_file(), "{} holds no database.sqlite to import.", data.display());
+    ensure!(database.is_file() || !crate::modules::is_on(&deployment.modules, "actions"), "{} holds no database.sqlite to import while actions is on.", data.display());
     let stage = state.data_root.join("transfers").join(format!(".import-folder-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&stage).await?;
     let result = async {
@@ -173,19 +174,27 @@ pub async fn import_folder(state: &AppState, deployment: &Deployment, folder: &P
         } else {
             None
         };
-        let incoming = Incoming { database, identity: present("identity.sqlite"), files, usage: present(usage::USAGE_DATABASE) };
+        let incoming = Incoming { database: present("database.sqlite"), identity: present("identity.sqlite"), files, usage: present(usage::USAGE_DATABASE) };
         package::ensure_space(package::free_bytes(&state.data_root)?, incoming.size() * 2 + SPACE_MARGIN, "import this folder")?;
-        let components = [("database", Some(&incoming.database)), ("identity", incoming.identity.as_ref()), ("files", incoming.files.as_ref()), ("usage", incoming.usage.as_ref())]
+        let components = [("database", incoming.database.as_ref()), ("identity", incoming.identity.as_ref()), ("files", incoming.files.as_ref()), ("usage", incoming.usage.as_ref())]
             .into_iter()
             .filter_map(|(name, path)| path.map(|path| (name.to_owned(), path.clone())))
             .collect::<Vec<_>>();
         let limits = state.files.limits;
-        tokio::task::spawn_blocking(move || package::check_components(&components, &limits)).await??;
+        let actions_on = crate::modules::is_on(&deployment.modules, "actions");
+        tokio::task::spawn_blocking(move || package::check_components_for_modules(&components, &limits, actions_on)).await??;
         import_incoming(state, deployment, incoming, target, confirmation, false).await
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&stage).await;
-    result
+    let change = result?;
+    if let Some(modules) = crate::folder::decide_app_modules(&state.data_root, &deployment.id, crate::folder::ModuleSource::Installed).await? {
+        let mut deployments = state.deployments.write().await;
+        if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+            current.modules = modules;
+        }
+    }
+    Ok(change)
 }
 
 async fn import_incoming(
@@ -196,7 +205,7 @@ async fn import_incoming(
     confirmation: Option<&str>,
     sources: bool,
 ) -> Result<Outcome> {
-    let change = plan(state, &incoming.database, target)?;
+    let change = plan(state, incoming.database.as_deref(), target)?;
     if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
         return Ok(Outcome::NeedsConfirmation(change));
     }
@@ -233,7 +242,8 @@ async fn backup_held(state: &AppState, deployment: &Deployment, label: &str, hol
             let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
             let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
             let target = folder.clone();
-            tokio::task::spawn_blocking(move || package::snapshot(&data, &target, &blobs)).await??;
+            let modules = deployment.modules.clone();
+            tokio::task::spawn_blocking(move || package::snapshot(&data, &target, &blobs, &modules)).await??;
         }
         if holds.contains(&HOLDS_SOURCES) {
             let saved = sources::read(&state.data_root, &deployment.id).await?;
@@ -284,7 +294,7 @@ pub async fn restore_held(state: &AppState, deployment: &Deployment, record: &Da
     let incoming = if holds.contains(&HOLDS_DATA) {
         let path = |name: &str| Some(folder.join(name)).filter(|path| path.exists());
         Some(Incoming {
-            database: path("database.sqlite").context("The backup has no database.")?,
+            database: path("database.sqlite"),
             identity: path("identity.sqlite"),
             files: path("files.tar"),
             usage: path(usage::USAGE_DATABASE),
@@ -310,11 +320,14 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
     tokio::fs::create_dir_all(&stage).await?;
     let result = async {
         let live = layout::data(&state.data_root, &deployment.id);
-        let database = stage.join("database.sqlite");
-        std::fs::copy(&incoming.database, &database)?;
-        let change = match schema {
-            Some((target, confirmation)) => schema_change::apply_with_transforms(&database, &target.sql, &target.program, target.schema_transforms.as_deref(), Mode::Apply(confirmation))?,
-            None => Change::default(),
+        let database = if let Some(source) = &incoming.database {
+            let database = stage.join("database.sqlite");
+            std::fs::copy(source, &database)?;
+            Some(database)
+        } else { None };
+        let change = match (&database, schema) {
+            (Some(database), Some((target, confirmation))) => schema_change::apply_with_transforms(database, &target.sql, &target.program, target.schema_transforms.as_deref(), Mode::Apply(confirmation))?,
+            _ => Change::default(),
         };
         let identity = match &incoming.identity {
             Some(source) => {
@@ -349,7 +362,7 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             }
             None => None,
         };
-        replace_database_file(&database, &live.join("database.sqlite"))?;
+        if let Some(database) = database { replace_database_file(&database, &live.join("database.sqlite"))?; }
         if let Some(staged) = identity {
             replace_database_file(&staged, &live.join("identity.sqlite"))?;
         }
@@ -467,7 +480,7 @@ mod tests {
         })).unwrap();
         let files = layout::data(&root, &deployment.id);
         std::fs::create_dir_all(&files).unwrap();
-        let incoming_files = Incoming { database: incoming, identity: None, files: None, usage: None };
+        let incoming_files = Incoming { database: Some(incoming), identity: None, files: None, usage: None };
         replace_held(&state, &deployment, incoming_files, Some((&target, None))).await.unwrap();
         let live = Connection::open(layout::database(&root, &deployment.id)).unwrap();
         let body: String = live.query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
@@ -477,6 +490,82 @@ mod tests {
         assert_eq!(history.entries[0].id, "baseline");
         assert!(history.entries[0].baseline_skipped);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn importing_folder_files_turns_on_the_files_module_and_returns_that_state() {
+        let root = std::env::temp_dir().join(format!("konae-import-files-module-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut state = AppState::for_test(&root);
+        let id = "import_files";
+        let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "id":id,"projectId":id,"projectName":"Import files","slug":"import-files","url":"http://import-files.localhost",
+            "createdAt":1,"releasedAt":1,"manifest":{"visibility":"public"},"hostname":"import-files.localhost","actions":"{}","artifactVersion":"v1",
+            "signupPolicy":{"mode":"open","allowlist":[]},"signInMethods":["password"]
+        })).unwrap();
+        deployment.modules = crate::modules::defaults();
+        deployment.modules.get_mut("files").unwrap()["on"] = serde_json::json!(false);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::from([(deployment.hostname.clone(), deployment.clone())])));
+        crate::Settings::of(&deployment).write(&root).await.unwrap();
+        let live = layout::database(&root, id);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        initialize_database(&live).unwrap();
+
+        let folder = root.join("incoming");
+        let data = folder.join("data");
+        let files = data.join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-fixtures/module-files-0.9.0");
+        std::fs::copy(fixture.join("files-index.json"), files.join("index.json")).unwrap();
+        std::fs::copy(fixture.join("files-018f2b2c-4a10-7a01-8000-000000000001.blob"), files.join("018f2b2c-4a10-7a01-8000-000000000001.blob")).unwrap();
+        let incoming_db = data.join("database.sqlite");
+        std::fs::create_dir_all(&data).unwrap();
+        initialize_database(&incoming_db).unwrap();
+        let target = Target { sql:String::new(), program:serde_json::from_str(r#"{"version":1,"actions":{}}"#).unwrap(), schema_transforms:None };
+        import_folder(&state, &deployment, &folder, &target, None).await.unwrap();
+        let current = state.deployments.read().await.values().next().unwrap().clone();
+        assert_eq!(current.modules["files"]["on"], true);
+        assert_eq!(crate::Settings::read(&root, id).unwrap().modules["files"]["on"], true);
+        assert!(layout::files(&root, id).join("018f2b2c-4a10-7a01-8000-000000000001.blob").exists());
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn importing_data_without_a_database_keeps_the_live_database_when_actions_are_off() {
+        let root = std::env::temp_dir().join(format!("konae-import-no-database-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut state = AppState::for_test(&root);
+        let id = "import_no_database";
+        let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "id":id,"projectId":id,"projectName":"No database","slug":"no-database","url":"http://no-database.localhost",
+            "createdAt":1,"releasedAt":1,"manifest":{"visibility":"public"},"hostname":"no-database.localhost","actions":"{}","artifactVersion":"v1",
+            "signupPolicy":{"mode":"open","allowlist":[]},"signInMethods":["password"]
+        })).unwrap();
+        deployment.modules = crate::modules::defaults();
+        deployment.modules.get_mut("actions").unwrap()["on"] = serde_json::json!(false);
+        state.deployments = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::from([(deployment.hostname.clone(), deployment.clone())])));
+        crate::Settings::of(&deployment).write(&root).await.unwrap();
+        let live = layout::database(&root, id);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        let db = Connection::open(&live).unwrap();
+        db.execute_batch("CREATE TABLE notes(body TEXT); INSERT INTO notes VALUES('keep');").unwrap();
+        drop(db);
+        let folder = root.join("incoming");
+        std::fs::create_dir_all(folder.join("data")).unwrap();
+        let target = Target { sql: String::new(), program: serde_json::from_str(r#"{"version":1,"actions":{}}"#).unwrap(), schema_transforms: None };
+        import_folder(&state, &deployment, &folder, &target, None).await.unwrap();
+        let db = Connection::open(&live).unwrap();
+        let body: String = db.query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(body, "keep");
+        drop(db);
+        let backup = backup_held(&state, &deployment, "Before import", &[HOLDS_DATA]).await.unwrap();
+        let id = backup["id"].as_str().unwrap().to_owned();
+        let record = DatabaseBackup { id: id.clone(), label: "Before import".into(), created_at: now_ms(), size_bytes: 0, key: id, holds: vec![HOLDS_DATA.into()] };
+        restore_held(&state, &deployment, &record).await.unwrap();
+        let db = Connection::open(&live).unwrap();
+        let body: String = db.query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(body, "keep");
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

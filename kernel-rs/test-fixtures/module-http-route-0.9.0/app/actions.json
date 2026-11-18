@@ -1,0 +1,1 @@
+{"version":1,"actions":{"hooks.receive":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO events (name) VALUES (?1)","bindings":[{"source":"input","key":"name","type":"string"}],"http":{"method":"POST","path":"/hooks/events","signature":{"header":"X-Konae-Signature","secret":"legacy_hook"}}}}}

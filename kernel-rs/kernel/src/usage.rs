@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 pub const USAGE_DATABASE: &str = "usage.sqlite";
@@ -81,6 +81,7 @@ enum Message {
 static QUEUE_SENDER: OnceLock<SyncSender<Message>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
+static OPEN_LOCK: Mutex<()> = Mutex::new(());
 
 fn sender() -> &'static SyncSender<Message> {
     QUEUE_SENDER.get_or_init(|| {
@@ -263,11 +264,12 @@ fn writer(receiver: Receiver<Message>) {
 }
 
 fn open(path: &Path) -> Result<Connection> {
+    let _opening = OPEN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
+    super::use_wal(&connection);
     connection.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS usage_daily(
+        "CREATE TABLE IF NOT EXISTS usage_daily(
            day TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL,
            PRIMARY KEY(day, kind, name));
          CREATE TABLE IF NOT EXISTS signals(
@@ -736,8 +738,9 @@ pub fn storage(data_root: &Path, id: &str) -> Value {
     let files: Vec<Value> = std::fs::read(&index).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
     let file_bytes: u64 = files.iter().filter_map(|file| file["size"].as_u64()).sum::<u64>() + bytes_on_disk(&index);
     let limits = crate::file_store::FileLimits::from_env().unwrap_or_default();
+    let database_exists = layout::database(data_root, id).is_file();
     let parts = [
-        ("database", sqlite_bytes(&layout::database(data_root, id)), Some(super::MAX_APP_DATABASE_BYTES), true),
+        ("database", sqlite_bytes(&layout::database(data_root, id)), Some(super::MAX_APP_DATABASE_BYTES), database_exists),
         ("files", file_bytes, Some(limits.quota_bytes), true),
         ("accounts", sqlite_bytes(&layout::identity(data_root, id)), Some(super::auth::MAX_IDENTITY_DATABASE_BYTES), true),
         ("usage", sqlite_bytes(&layout::usage(data_root, id)), Some(MAX_USAGE_DATABASE_BYTES), true),
@@ -910,6 +913,7 @@ mod tests {
         let part = |name: &str| storage["parts"].as_array().unwrap().iter().find(|p| p["part"] == name).unwrap().clone();
         assert_eq!(part("files")["bytes"].as_u64().unwrap(), 1024 + std::fs::metadata(data.join("files/index.json")).unwrap().len());
         assert_eq!(part("published")["bytes"], 9);
+        assert_eq!(part("database")["exported"], false);
         assert_eq!(part("backups")["exported"], false);
         assert_eq!(storage["files"], 2);
         assert!(part("usage")["bytes"].as_u64().unwrap() > 0 && part("accounts")["bytes"].as_u64().unwrap() > 0);

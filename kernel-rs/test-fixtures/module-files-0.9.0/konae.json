@@ -1,0 +1,10 @@
+{
+  "id": "legacy_uploads",
+  "name": "Legacy uploads",
+  "slug": "legacy-uploads",
+  "visibility": "public",
+  "signupPolicy": { "mode": "open", "allowlist": [] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

@@ -15,13 +15,14 @@ export function createHostedArtifact(input: {
   styles: string;
   script: string;
   deploymentId?: string;
+  sdk?: boolean;
 }): BuildArtifact {
   const deploymentMeta = deploymentHead(input.deploymentId);
   return {
     version: 1,
     entrypoint: "index.html",
     files: {
-      "index.html": renderCapsuleDocument({ ...input, head: deploymentMeta, runtime: hostedRuntime }),
+      "index.html": renderCapsuleDocument({ ...input, head: deploymentMeta, runtime: input.sdk === false ? "" : hostedRuntime }),
     },
   };
 }

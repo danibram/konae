@@ -1,6 +1,7 @@
 import type { MiniAppProject } from "../lib/types";
 import { sourceBytes } from "../lib/source-files";
 import { resolveReference, servedPath } from "../lib/static-artifact.js";
+import { sdkRequired } from "../lib/module-use";
 import { renderCapsuleDocument } from "./artifact";
 
 export const runtimeClient = String.raw`
@@ -92,6 +93,13 @@ export const runtimeClient = String.raw`
   }
 
   window.miniapp = {
+    page: {
+      get params() { return {}; },
+      url: (path) => {
+        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) throw Error('An app page path must start with one slash.');
+        return path;
+      },
+    },
     actions: {
       call: (name, input = {}) => request('actions.invoke', { name, input })
     },
@@ -124,7 +132,41 @@ export const runtimeClient = String.raw`
   };
 })();`;
 
+export const previewReporter = String.raw`
+(() => {
+  let port;
+  let capability;
+  let sequence = 0;
+  const pending = new Map();
+  addEventListener('message', (event) => {
+    if (event.source !== parent || !event.ports[0]) return;
+    if (event.data?.channel !== 'konae-runtime' || event.data?.type !== 'connect') return;
+    port = event.ports[0];
+    capability = event.data.capability;
+    port.onmessage = ({ data }) => { pending.delete(data?.id); };
+    port.start();
+    port.postMessage({ jsonrpc: '2.0', id: 'preview_init', method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'konae-preview-reporter', version: '0.1.0' } } });
+    port.postMessage({ jsonrpc: '2.0', method: 'notifications/initialized', params: { _meta: { 'konae/capability': capability } } });
+  });
+  parent.postMessage({ channel: 'konae-runtime', type: 'hello' }, '*');
+  function report(kind, message, stack) {
+    const box = document.createElement('pre');
+    box.dataset.konaeError = kind;
+    box.style.cssText = 'margin:20px;padding:16px;background:#3b1717;color:#ffdede;white-space:pre-wrap';
+    box.textContent = message + (stack ? '\n\n' + stack : '');
+    document.body.appendChild(box);
+    if (!port) return;
+    const id = 'req_' + (++sequence);
+    pending.set(id, true);
+    port.postMessage({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'preview_error', arguments: { kind, message, stack }, _meta: { 'konae/capability': capability } } });
+  }
+  addEventListener('error', (event) => report('error', event.message || String(event.error), event.error?.stack));
+  addEventListener('unhandledrejection', (event) => report('unhandledrejection', event.reason?.message || String(event.reason), event.reason?.stack));
+})();
+`;
+
 export function createPreviewDocument(project: MiniAppProject): string {
+  const sdk = sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined);
   const assets = new Map<string, string>();
   const stylesheets = new Map<string, string>();
   for (const source of Object.keys(project.files)) {
@@ -140,7 +182,8 @@ export function createPreviewDocument(project: MiniAppProject): string {
     body: project.files["index.html"] ?? "",
     styles: project.files["styles.css"] ?? "",
     script: project.files["app.js"] ?? "",
-    runtime: runtimeClient,
+    runtime: sdk ? runtimeClient : "",
+    reporter: sdk ? "" : previewReporter,
   });
   return rewritePreviewAssets(document, assets, stylesheets);
 }

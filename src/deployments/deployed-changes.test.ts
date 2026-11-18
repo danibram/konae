@@ -29,11 +29,14 @@ describe("changes not deployed", () => {
     expect(changesNotDeployed(changed, live, await sourceDigest(changed))).toBe(true);
   });
 
-  test("who can open the app and who can read uploads count", () => {
+  test("a missing actions.json matches an empty action program", () => {
+    const staticProject = project();
+    delete staticProject.files["actions.json"];
+    expect(accessNotDeployed(staticProject, live)).toBe(false);
+  });
+
+  test("who can open the app counts", () => {
     expect(accessNotDeployed(project({}, "private"), live)).toBe(true);
-    const shared = { ...project(), manifest: { ...project().manifest, fileAccess: "app-users" as const } };
-    expect(accessNotDeployed(shared, live)).toBe(true);
-    expect(changesNotDeployed(shared, live, null)).toBe(true);
   });
 
   test("other files compare against the digest the release names", async () => {

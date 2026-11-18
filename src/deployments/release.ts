@@ -62,6 +62,7 @@ export type ReleaseContents = {
   visibility: unknown;
   artifact: CarriedFiles;
   initialSignupPolicy?: { mode: string; allowlist: string[] };
+  initialModules?: Record<string, unknown>;
   contactEmail?: string;
 };
 
@@ -80,7 +81,7 @@ export async function publishProject<Receipt>(
   registerProject = true,
 ): Promise<{ plan: ReleasePlan; receipt?: Receipt }> {
   if (registerProject) await client.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
-  const { project: sent, visibility, artifact, initialSignupPolicy, contactEmail } = await contents();
+  const { project: sent, visibility, artifact, initialSignupPolicy, initialModules, contactEmail } = await contents();
   const sources: CarriedFiles & { directories: string[] } = {
     files: sent.files,
     ...(sent.encodings && Object.keys(sent.encodings).length ? { encodings: sent.encodings } : {}),
@@ -89,7 +90,7 @@ export async function publishProject<Receipt>(
   checkSourceFiles(sources);
   checkArtifact(artifact);
   const identity = { id: sent.id, name: sent.name, slug: sent.slug, manifest: sent.manifest };
-  const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(contactEmail ? { contactEmail } : {}) }));
+  const payload = new TextEncoder().encode(JSON.stringify({ project: identity, visibility, artifact, ...(initialSignupPolicy ? { initialSignupPolicy } : {}), ...(initialModules ? { initialModules } : {}), ...(contactEmail ? { contactEmail } : {}) }));
   checkRelease(payload);
   const sourceBytes = new TextEncoder().encode(JSON.stringify(sources));
   checkSourceUpload(sourceBytes.length);

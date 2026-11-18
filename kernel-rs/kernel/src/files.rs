@@ -35,6 +35,7 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
     let Some(deployment) = deployment_for(state, headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
+    if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
     let actor = match authenticate_deployment(state, &deployment, headers) {
         Ok(Some(actor)) => actor,
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "authentication-required"),
@@ -158,7 +159,7 @@ mod tests {
         let old_private = upload(&state, &alice, 2, None).await;
         let old_public = upload(&state, &alice, 2, Some("public")).await;
         let mut updated = deployment.clone();
-        updated.manifest["fileAccess"] = json!("app-users");
+        updated.modules.get_mut("files").unwrap()["fileAccess"] = json!("app-users");
         state.deployments.write().await.insert(updated.hostname.clone(), updated);
         for id in [&old_private, &old_public] {
             assert_eq!(serve_file(State(state.clone()), AxumPath(id.clone()), visitor.clone()).await.status(), StatusCode::NOT_FOUND);
@@ -185,7 +186,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("konae-file-publish-{}", Uuid::new_v4()));
         let state = AppState::for_test(&root);
         let release = |project: &str, shared: bool| json!({
-            "project": {"id": project, "name": project, "slug": project, "manifest": if shared { json!({"fileAccess":"app-users"}) } else { json!({}) },
+            "initialModules": {"auth":{"on":true},"files":{"on":true,"fileAccess":if shared { json!("app-users") } else { Value::Null }}},
+            "project": {"id": project, "name": project, "slug": project, "manifest": {},
                 "files": {"actions.json": json!({"version":1,"actions":{"items.count":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}).to_string(), "schema.sql":""}},
             "visibility":"public", "artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<main>attachments</main>"}}
         });
@@ -211,10 +213,12 @@ mod tests {
         };
         let read = |headers: HeaderMap, id: &str| crate::stack(state.clone(), Router::new()).oneshot(request(headers, id));
         assert_eq!(read(visitor.clone(), &stored[0].0).await.unwrap().status(), StatusCode::OK);
-        assert_eq!(deploy(&state, release("attachments", true).to_string().as_bytes()).await.status(), StatusCode::OK);
+        let mut updated = app.clone();
+        updated.modules.get_mut("files").unwrap()["fileAccess"] = json!("app-users");
+        state.deployments.write().await.insert(updated.hostname.clone(), updated);
         let updated = state.deployments.read().await.values().find(|d| d.project_id == "attachments").unwrap().clone();
         assert_eq!(updated.id, app.id);
-        assert_eq!(updated.manifest["fileAccess"], "app-users");
+        assert_eq!(updated.modules["files"]["on"], true);
         assert_eq!(deploy(&state, release("other", true).to_string().as_bytes()).await.status(), StatusCode::OK);
         let other = state.deployments.read().await.values().find(|d| d.project_id == "other").unwrap().clone();
         let (foreign, _) = signed_in(&state, &other.id, &visitor, "foreign@example.test");

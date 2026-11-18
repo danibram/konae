@@ -4,7 +4,7 @@ Each app decides who may create an account, how its people sign in and prove an 
 
 ## Signup policy
 
-Each Deployment has a Signup Policy that decides who may create an app account. `signup_policy_set { projectId, mode, allowlist? }` needs `manage_users`, and `project_inspect` needs `read`. A `deploymentId` is the app's ID, the same value as its `projectId` and the `id` in `konae.json`, because an app keeps one ID for its folder, its project and its Deployment.
+Each Deployment has a Signup Policy that decides who may create an app account. `module_set { projectId, module: "auth", options: { signupPolicy } }` needs `manage_users`, and `modules_read` needs `read`. A `deploymentId` is the app's ID, the same value as its `projectId` and the `id` in `konae.json`, because an app keeps one ID for its folder, its project and its Deployment.
 
 | `mode` | Who may create an account |
 | --- | --- |
@@ -17,21 +17,21 @@ A public Deployment starts Open and a private one Closed. A first release may se
 
 ## Sign-in methods
 
-`sign_in_methods_set { projectId, methods }` takes `["password"]` or `["password", "google"]` and needs `manage_users`. `sign_in_methods_read` reads it back with `read`. Password cannot be turned off, so every account keeps a way back in.
+The `auth` module's `signInMethods` option takes `["password"]` or `["password", "google"]` and changes through `module_set` with `manage_users`. `modules_read` reads it back with `read`. Password cannot be turned off, so every account keeps a way back in.
 
-Each app has its own Google client, which the owner makes as a Web application client in their own Google Cloud console and sets as two signing secrets with `secret_set { projectId, name, value, use: "google" }`, named `google_client_id` and `google_client_secret`. Those names take only `use: "google"`, the values are never returned, and no route or call reads them. `sign_in_methods_read` answers `googleClient { clientIdSet, clientSecretSet }` and `redirectUris`, the callbacks to register in that client:
+Each app has its own Google client, which the owner makes as a Web application client in their own Google Cloud console and sets as two signing secrets with `secret_set { projectId, name, value, use: "google" }`, named `google_client_id` and `google_client_secret`. Those names take only `use: "google"`, the values are never returned, and no route or call reads them. `modules_read` answers `auth.current.googleClient { clientIdSet, clientSecretSet }` and `auth.current.redirectUris`, the callbacks to register in that client:
 
 - `<app address>/_konae/auth/google/callback` on the generated host;
 - the same on a verified custom domain;
 - `<domain>/p/<id>/_konae/auth/google/callback` while the path address is on. The name address uses this callback too, so a rename leaves it working.
 
-The installation's home address has no callback, and Google sign-in there answers "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google." `sign_in_methods_set` refuses `google` while either half is unset, with "Set this app's Google client ID and client secret before turning Google on.", and `secret_delete` refuses either half while Google is on. Access > Users in the editor shows the same redirect URIs, the two fields and the switch.
+The installation's home address has no callback, and Google sign-in there answers "Google sign-in does not run on the installation's home address. Open this app on its own address to continue with Google." `module_set` refuses `google` while either half is unset, with "Set this app's Google client ID and client secret before turning Google on.", and `secret_delete` refuses either half while Google is on. The editor's Users view shows the same redirect URIs, the two fields and the switch.
 
 The flow stays on the app's host. `/_konae/auth/google/start` records state, nonce, PKCE verifier, Deployment and origin behind a cookie and sends the browser to Google. `/_konae/auth/google/callback` takes the flow once, on the same Deployment, origin and browser, exchanges the code with the app's client and checks the ID token: Google as issuer, the app's client as audience, expiry, the nonce, a key from Google's JWKS and a verified email. It then opens the app's own session.
 
 A Google sign-in reaches the app account with the same email, compared without case, whether that account was made with a password or with Google. Google proves only an address it manages, a `gmail.com` address or one whose Workspace domain the token names in `hd`. Any other address answers "This Google account uses an email address Google does not manage, so it cannot sign in here. Sign in with email and password." A suspended account is refused and a pending one keeps waiting for its link. An active account whose email nobody proved, as local verification allows, goes to the person Google vouches for, and its password and sessions stop working. For an email with no account, the Signup Policy decides as it does for a password. An account created through Google has no password until recovery by email sets one.
 
-An export carries `signInMethods` and the accounts, never the client. On another installation the owner sets the two secrets again and registers that host's redirect URI. Until then the sign-in page offers only email and password, and `sign_in_methods_read` returns a `notice` that says so.
+An export carries `signInMethods` and the accounts, never the client. On another installation the owner sets the two secrets again and registers that host's redirect URI. Until then the sign-in page offers only email and password, and `modules_read` returns a `notice` under `auth.current`.
 
 ## Users and invitations
 

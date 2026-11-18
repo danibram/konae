@@ -20,19 +20,27 @@ export function mergeProposal(current: CapsuleFiles, proposal: AgentProposal): P
   if (drifted) return { ok: false, reason: "drifted" };
 
   const files = { ...current };
-  for (const file of changed) files[file] = proposal.files[file];
+  for (const file of changed) {
+    if (Object.hasOwn(proposal.files, file)) files[file] = proposal.files[file];
+    else delete files[file];
+  }
   return { ok: true, files, changedFiles: [...changed] };
 }
 
 export function applyProposal(project: MiniAppProject, proposal: AgentProposal, now = Date.now()): { project: MiniAppProject; changedFiles: ProjectFile[] } | null {
-  const merge = mergeProposal(textFiles(project), proposal);
+  // An explicit encoding map marks a full source snapshot. In particular, an
+  // empty map means restoration intentionally contains no binary files.
+  const current = proposal.encodings !== undefined ? project.files : textFiles(project);
+  const merge = mergeProposal(current, proposal);
   if (!merge.ok) return null;
   const files = { ...project.files, ...merge.files };
+  for (const file of proposal.changedFiles) if (!Object.hasOwn(proposal.files, file)) delete files[file];
+  const encodings = { ...(keptEncodings(project.encodings, files, { replaced: merge.changedFiles }) ?? {}), ...(proposal.encodings ?? {}) };
   return {
     project: {
       ...project,
       files,
-      encodings: keptEncodings(project.encodings, files, { replaced: merge.changedFiles }),
+      encodings: Object.keys(encodings).length ? encodings : undefined,
       directories: [...new Set([...project.directories, ...directoriesForFiles(files)])].sort(),
       updatedAt: now,
     },

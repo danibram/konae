@@ -1,0 +1,10 @@
+{
+  "id": "legacy_public_static",
+  "name": "Legacy public static",
+  "slug": "legacy-public-static",
+  "visibility": "public",
+  "signupPolicy": { "mode": "open", "allowlist": [] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

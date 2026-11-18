@@ -52,7 +52,7 @@ function payload(id: string) {
         "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id,title FROM notes WHERE user_id=?1 ORDER BY id LIMIT 50", bindings: [{ source: "actor", field: "id" }] },
         "notes.create": { kind: "mutation", access: "authenticated", statement: "INSERT INTO notes(title,user_id) VALUES(?1,?2)", bindings: [{ source: "input", key: "title", type: "string", maxLength: 100 }, { source: "actor", field: "id" }] },
       } }),
-    } }, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Package proof</main>" } },
+    } }, visibility: "public", initialModules: { auth: { on: true }, files: { on: true } }, artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Package proof</main>" } },
   };
 }
 
@@ -133,12 +133,49 @@ async function sourcePackage(id: string, directory: string) {
   const upload = await writer.upload(new TextEncoder().encode("attachment bytes"));
   const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
   await writer.cancel(upload.transferId);
+  const signingSecret = `private-signing-material-${id}-012345`;
+  await owner.call("secret_set", { projectId: source.id, name: "private_hook", value: signingSecret });
+  const secretDatabase = await open(path.join(root, "data", "apps", source.id, "data", "secrets.sqlite"), "r");
+  await secretDatabase.close();
+  const moduleState = await owner.call("modules_read", { projectId: source.id });
+  expect(JSON.stringify(moduleState)).not.toContain(signingSecret);
   const key = await owner.call<{ keyId: string; key: string }>("api_keys_create", { projectId: source.id, name: "Mirror", files: ["public"] });
   const exported = await owner.call<Exported>("project_export", { projectId: source.id });
-  return { source, cookie, fileId: file.id, key, exported, files: await download(owner, exported, directory) };
+  expect(JSON.stringify(exported)).not.toContain(signingSecret);
+  const files = await download(owner, exported, directory);
+  expect(folders.at(-1)).not.toContain("data/secrets.sqlite");
+  return { source, cookie, fileId: file.id, key, exported, files };
 }
 
 describe("chunked package", () => {
+  test("a static app exports and imports without a database component", async () => {
+    const sourceId = "pkg_static_source";
+    const targetId = "pkg_static_target";
+    const staticPayload = (id: string) => ({
+      project: { id, name: "Static", slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" }, files: { "index.html": "<!doctype html><title>Static</title>" } },
+      visibility: "public",
+      initialModules: { seo: { on: true } },
+      artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><title>Static</title>" } },
+    });
+    await owner.call("project_create", { projectId: sourceId, name: "Static" });
+    const source = (await release(owner, staticPayload(sourceId), sourceId)).receipt;
+    const exported = await owner.call<Exported>("project_export", { projectId: source.id });
+    const directory = await mkdtemp(path.join(root, "static-export-"));
+    try {
+      const files = await download(owner, exported, directory);
+      expect(exported.manifest.contents.map(({ name }) => name)).toEqual([]);
+      await owner.call("project_create", { projectId: targetId, name: "Static import" });
+      const components = await uploadPackage(owner, exported.manifest, files, targetId);
+      const target = (await release(owner, { ...staticPayload(targetId), initialPackage: { manifest: exported.manifest, components } }, targetId)).receipt;
+      expect(target.id).toBe(targetId);
+      expect(await readFile(path.join(root, "data", "apps", targetId, "dist", "index.html"), "utf8")).toContain("<title>Static</title>");
+      expect(await readFile(path.join(root, "data", "apps", targetId, "data", "database.sqlite"), "utf8").then(() => true, () => false)).toBe(false);
+    } finally {
+      for (const transfer of [exported.folder, ...Object.values(exported.downloads)]) await owner.cancel(transfer.transferId).catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("a legacy export keeps saved source metadata separate from the installed release", async () => {
     const id = "pkg_legacy_metadata";
     const receipt = await publish(id);
@@ -163,7 +200,8 @@ describe("chunked package", () => {
       expect(portableSettings.name).toBe("Legacy saved draft");
       expect(portableSettings.slug).toBe("legacy-draft");
       expect(portableSettings.visibility).toBe("private");
-      expect(portableSettings.manifest.fileAccess).toBe("app-users");
+      expect(portableSettings.manifest.fileAccess).toBeUndefined();
+      expect(portableSettings.modules.files.fileAccess).toBeUndefined();
       expect(portableSettings.manifest.runtime).toBeUndefined();
       expect(portableSettings.directories).toEqual(["empty/nested"]);
       expect(portableSettings.released.actions).toBe(record.actions);

@@ -14,12 +14,14 @@ This is the table the `pieces` topic of `platform_guide` returns, and the one in
 | Email when a row changes | `notify` on that mutation | Browser mail or a call action for mail |
 | Work when nobody is looking | `schedule` on a no-input mutation | External cron unless asked |
 | Owner-facing occurrence | `signal` on a mutation, or `kind: signal` | A side table only the agent reads |
-| Another service calls this app | `http` on an anonymous action with callers, signature or key | A call action (that is outbound) |
-| This app calls another host | `kind: call` | `fetch` of a secret from the browser |
+| Another service calls this app | Turn on `http` with `module_set`, then declare it on an anonymous action with callers / signature / key | A call action (that is outbound) |
+| This app calls another host | Turn on `calls` with `module_set`, then declare `kind: call` | `fetch` of a secret from the browser |
 | Uploaded files | `miniapp.files` | Large bytes in a SQLite column |
-| Every signed-in user reads every uploaded file | `manifest.fileAccess` set to `app-users` | Each upload as public |
+| Every signed-in user reads every uploaded file | `files.fileAccess` set to `app-users` with `module_set` | Each upload as public |
 | Who may create an app account | Signup Policy and invitations | A homemade users table that bypasses Runtime Actor |
 | An administrator inside the app | A role column in the app's own table, checked in SQL | An owner account inside the app |
+| Turn an app capability on or set its options | `modules_read` and `module_set`, then read it back with `modules_read` | A separate tool or a setting in the Capsule |
+| Be listed in search | Turn on `seo` with `module_set`, after `modules_read` | Assume a public app is listed |
 | A short link on the installation's domain | Path address (`path_set`) | A custom domain when DNS is not yours |
 | Take the app elsewhere | Export and import of the app folder | Copy (moves the installation) |
 | Debug, or try the next version, on what the published app holds | `konae pull` (an export of the data) + `dev --reset` (its import) | Publishing to find out |
@@ -35,7 +37,7 @@ The app folder is the app: `konae.json`, `app/`, `dist/` and `data/` with its da
 - `guard`, `notify`, `schedule`, `signal`, `http` and `kind: call` are on [Server Actions](./server-actions.md).
 - Signup Policy, invitations and roles kept by the app are on [Accounts and access](./accounts-and-access.md).
 - Export and import are in the [take the app elsewhere](./guides/take-the-app-elsewhere.md) guide.
-- `miniapp.files` and `manifest.fileAccess` are in the [upload files](./guides/upload-files.md) guide.
+- `miniapp.files` and the `files.fileAccess` module option are in the [upload files](./guides/upload-files.md) guide.
 
 ## Read next
 

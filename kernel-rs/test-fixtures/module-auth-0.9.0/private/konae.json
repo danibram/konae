@@ -1,0 +1,10 @@
+{
+  "id": "legacy_private",
+  "name": "Legacy private",
+  "slug": "legacy-private",
+  "visibility": "private",
+  "signupPolicy": { "mode": "closed", "allowlist": [] },
+  "signInMethods": ["password"],
+  "kernel": "0.9.0",
+  "manifest": { "version": 1, "routing": "pages" }
+}

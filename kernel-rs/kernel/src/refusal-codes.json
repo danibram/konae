@@ -81,6 +81,21 @@
   "notify.recipient-invalid": { "fix": "capsule", "remedy": "Set notify \"to\" to \"owner\", \"actor\" or {\"column\": \"<name>\"}." },
   "notify.subject-invalid": { "fix": "capsule", "remedy": "Write a notify subject of 1 to 120 characters on one line." },
 
+  "page.bindings": { "fix": "capsule", "remedy": "Make the page path parameters match the query's input bindings." },
+  "page.duplicate": { "fix": "capsule", "remedy": "Give each page path its own pattern." },
+  "page.file-depth": { "fix": "capsule", "remedy": "Give page paths that name one file the same number of segments." },
+  "page.file-invalid": { "fix": "capsule", "remedy": "Use a page file other than index.html, which is the app entry page." },
+  "page.file-missing": { "fix": "capsule", "remedy": "Add the named page file to the Build Artifact." },
+  "page.invalid": { "fix": "capsule", "remedy": "Give page a path and a file, with an optional list query." },
+  "page.path-reserved": { "fix": "capsule", "remedy": "Choose a page path outside the Kernel's reserved prefixes." },
+  "page.list-columns": { "fix": "capsule", "remedy": "Return each page parameter from the list query, with optional updated." },
+  "page.list-invalid": { "fix": "capsule", "remedy": "Name an anonymous query with no input bindings as the page list." },
+  "page.list-undeclared": { "fix": "capsule", "remedy": "Declare the anonymous query named by page.list." },
+  "page.path-invalid": { "fix": "capsule", "remedy": "Use a leading slash and valid path segments, with parameters after the first segment." },
+  "page.query": { "fix": "capsule", "remedy": "Declare page on an anonymous query." },
+  "page.route-conflict": { "fix": "capsule", "remedy": "Declare either http or page on an action." },
+  "page.title": { "fix": "capsule", "remedy": "Return a column named title from the page query." },
+
   "path.hyphen-edge": { "fix": "owner", "remedy": "Start and end the path name with a letter or digit.", "tool": "path_set" },
   "path.length": { "fix": "owner", "remedy": "Name a path of 3 to 40 characters.", "tool": "path_set" },
   "path.missing": { "fix": "owner", "remedy": "Name a path, such as spring-menu.", "tool": "path_set" },
@@ -129,10 +144,12 @@
   "schema-transform.row-limit": { "fix": "capsule", "remedy": "Lower the affected rows or split the data change into smaller transitions." },
   "schema-transform.statement-refused": { "fix": "capsule", "remedy": "Use only CREATE TABLE/INDEX, ALTER TABLE RENAME/ADD COLUMN, INSERT or UPDATE in a transition." },
 
+  "setting.changed": { "fix": "owner", "remedy": "Read the current setting again before retrying the change." },
+
   "secret.google-id-looks-like-secret": { "fix": "owner", "remedy": "Paste the client ID, which ends with .apps.googleusercontent.com, and put the GOCSPX- value in google_client_secret.", "tool": "secret_set" },
   "secret.google-names-only": { "fix": "owner", "remedy": "Name a secret with use google google_client_id or google_client_secret.", "tool": "secret_set" },
   "secret.google-names-reserved": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with use google, or leave use out.", "tool": "secret_set" },
-  "secret.google-still-on": { "fix": "owner", "remedy": "Turn Google off with sign_in_methods_set methods [\"password\"], or in Access > Users, then delete the secret.", "tool": "sign_in_methods_set" },
+  "secret.google-still-on": { "fix": "owner", "remedy": "Turn Google off with module_set methods [\"password\"], or in Access > Users, then delete the secret.", "tool": "module_set" },
   "secret.value-invalid": { "fix": "owner", "remedy": "Paste a value of 16 to 512 printable ASCII characters without spaces.", "tool": "secret_set" },
 
   "signal.invalid": { "fix": "capsule", "remedy": "Give signal a \"name\" and optionally a \"properties\" list of input keys." },
@@ -147,8 +164,8 @@
   "signal.statement": { "fix": "capsule", "remedy": "Remove the statement from the signal action." },
 
   "signin.google-client-unset": { "fix": "owner", "remedy": "Set google_client_id and google_client_secret with secret_set use google, or in Access > Users, then turn Google on.", "tool": "secret_set" },
-  "signin.methods-invalid": { "fix": "owner", "remedy": "Send methods as [\"password\"] or [\"password\", \"google\"].", "tool": "sign_in_methods_set" },
-  "signin.password-required": { "fix": "owner", "remedy": "Keep \"password\" in methods.", "tool": "sign_in_methods_set" },
+  "signin.methods-invalid": { "fix": "owner", "remedy": "Send methods as [\"password\"] or [\"password\", \"google\"].", "tool": "module_set" },
+  "signin.password-required": { "fix": "owner", "remedy": "Keep \"password\" in methods.", "tool": "module_set" },
 
   "signature.algorithm-invalid": { "fix": "capsule", "remedy": "Set the signature algorithm to \"sha256\" or \"sha1\"." },
   "signature.encoding-invalid": { "fix": "capsule", "remedy": "Set the signature encoding to \"hex\" or \"base64\"." },
@@ -163,6 +180,15 @@
   "signature.tag-invalid": { "fix": "capsule", "remedy": "Set the signature tag to the field's name and \"=\", such as \"v1=\"." },
   "signature.timestamp-prefix-invalid": { "fix": "capsule", "remedy": "Set the timestamp prefix to the field's name and \"=\", such as \"t=\"." },
   "signature.window-invalid": { "fix": "capsule", "remedy": "Set the signature window to a whole number of seconds from 1 to 3600." },
+
+  "module.changed": { "fix": "owner", "remedy": "Read the current module state with modules_read, then retry module_set.", "tool": "modules_read" },
+  "module.in-use": { "fix": "capsule", "remedy": "Remove the module's use from the published app before turning it off." },
+  "module.not-switch": { "fix": "owner", "remedy": "This module's switch is not available yet." },
+  "module.option-invalid": { "fix": "owner", "remedy": "Set the module option to one of its allowed values." },
+  "module.option-unknown": { "fix": "owner", "remedy": "Use an option listed by modules_read." },
+  "module.off": { "fix": "owner", "remedy": "Turn the module on with module_set or App settings for a published app, or in the folder's konae.json for a local run.", "tool": "module_set" },
+  "module.requires": { "fix": "owner", "remedy": "Turn on each required module before enabling this module.", "tool": "module_set" },
+  "module.unknown": { "fix": "owner", "remedy": "Use a module listed by modules_read." },
 
   "sources.file-count": { "fix": "capsule", "remedy": "Keep app/ at 1000 files or fewer. Move files the app does not serve out of app/." },
   "sources.path-invalid": { "fix": "capsule", "remedy": "Rename the file, or move it out of app/. Dot files and node_modules stay outside the sources." },

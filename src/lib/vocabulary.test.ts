@@ -91,7 +91,7 @@ describe("the words of CONTEXT.md", () => {
       "Konae", "Kernel", "Owner", "App User", "App Folder", "Schema Change", "actions.d.ts", "Contact Email",
       "Entering as a User", "Import", "Kernel Commands",
       "API Key", "Signing Secret", "Guard", "Callers", "Export", "Copy", "Maintenance", "Revocation Record",
-      "Invitation", "Invitation Code", "Email Job", "Sender Preflight", "Action Contract", "SDK Module", "Usage", "Signal",
+      "Invitation", "Invitation Code", "Email Job", "Sender Preflight", "Action Contract", "SDK Module", "Module", "Usage", "Signal",
     ];
     const entries = [...context.matchAll(/^\*\*([^*]+)\*\*:$/gm)].map((match) => match[1]);
     expect(new Set(entries).size).toBe(entries.length);

@@ -59,7 +59,7 @@ rm -rf /tmp/inbox/app && mkdir /tmp/inbox/app
 cp examples/showcase/inbox/{index.html,styles.css,app.js,schema.sql,actions.json} /tmp/inbox/app/
 ```
 
-Set `"visibility": "private"` and `"signupPolicy": { "mode": "invitation" }` in `/tmp/inbox/konae.json`, then run `bun run konae -- publish --dir /tmp/inbox`. The first run registers the project and is refused, naming the unset signing secrets `events_webhook`, `github_webhook` and `payments_webhook`. Set each over MCP with `secret_set`, with the `id` from `konae.json` as `projectId`, and publish again. A project published from a folder does not open in the editor, so invite the team with `app_invitations_create` and issue the feed's key with `api_keys_create`.
+Set `"visibility": "private"`, `"signupPolicy": { "mode": "invitation", "allowlist": [] }` and `"modules": { "auth": { "on": true } }` in `/tmp/inbox/konae.json`, then run `bun run konae -- publish --dir /tmp/inbox`. The first run registers the project and is refused, naming the unset signing secrets `events_webhook`, `github_webhook` and `payments_webhook`. Set each over MCP with `secret_set`, with the `id` from `konae.json` as `projectId`, and publish again. A project published from a folder does not open in the editor, so invite the team with `app_invitations_create` and issue the feed's key with `api_keys_create`.
 
 ## What worked
 

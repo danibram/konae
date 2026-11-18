@@ -66,7 +66,7 @@ The Signup Policy decides who may create an app account on one Deployment.
 
 Public Deployments start Open. A private Deployment starts Closed when its first release names no mode. The editor's deploy dialog preselects Invitation only for a private app, and `konae init` writes `invitation` into `konae.json`, so a first release from either door names it. After that, a republish never changes it, except that republishing a public app as private turns Open into Closed.
 
-The owner changes it in the editor's Access > Users view, or with `signup_policy_set`, which needs the `manage_users` permission. An app folder published with the CLI takes its first release's policy from `signupPolicy` in `konae.json`.
+The owner changes it in the editor's Users view, or with `module_set` on `auth`, which needs the `manage_users` permission. An app folder published with the CLI takes its first release's policy from `signupPolicy` in `konae.json`.
 
 In local verification mode, Konae does not verify email addresses. Whoever signs up first with a listed address gets that account. Use Closed for apps that hold private data, or require verification.
 
@@ -76,8 +76,8 @@ Every app account can sign in with email and password. The owner can add Google 
 
 1. Make a Web application client in your Google Cloud console.
 2. Set its two halves as the signing secrets `google_client_id` and `google_client_secret`, with `secret_set` and `use: "google"`, with `konae secret set <name> --dir <folder>`, which reads the value from stdin and gives these two names use google, or in the editor's Access > Users view.
-3. Register the redirect URIs that `sign_in_methods_read` lists in that client.
-4. Turn Google on with `sign_in_methods_set` and `["password", "google"]`, which needs `manage_users`.
+3. Register the redirect URIs under `modules.auth.current.redirectUris` from `modules_read` in that client.
+4. Set `auth`'s `signInMethods` option to `["password", "google"]` with `module_set`, which needs `manage_users`.
 
 A Google sign-in reaches the app account with the same email. For an email with no account, the Signup Policy decides as it does for a password. Password stays on, so every account keeps a way back in. An export carries the setting and the accounts but never the client, so on another installation the owner sets the two secrets again. [The reference](./reference/accounts.md#sign-in-methods) states every rule and refusal.
 

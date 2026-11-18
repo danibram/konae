@@ -1,0 +1,37 @@
+{
+  "totalBytes": 2584602,
+  "entryBytes": 488,
+  "outputs": {
+    "browser-dist/typesafe-system-one-5MJQR6PC.js": 6501,
+    "browser-dist/runtime-VDTU7BDK.js": 1051559,
+    "browser-dist/entry.js": 488,
+    "browser-dist/node.browser-NH2YUJ5B.js": 876,
+    "browser-dist/node.browser-BOUWOE73.js": 2896,
+    "browser-dist/anthropic-messages-H3YJVBJE.js": 576024,
+    "browser-dist/chunk-IDBV7KFG.js": 1804,
+    "browser-dist/chunk-6R4AL2ZO.js": 608,
+    "browser-dist/chunk-QK73C4GN.js": 4669,
+    "browser-dist/openai-decisions-GPVRL45L.js": 5531,
+    "browser-dist/chunk-52CBPRYT.js": 3510,
+    "browser-dist/openai-responses-4OECTNOP.js": 40921,
+    "browser-dist/openai-completions-CVJHDQJH.js": 49488,
+    "browser-dist/chunk-ZBVKNEMA.js": 1210,
+    "browser-dist/chunk-6M2TIMXV.js": 418,
+    "browser-dist/chunk-HCNHLF4N.js": 20667,
+    "browser-dist/chunk-YPCHUM3X.js": 30143,
+    "browser-dist/chunk-XSIOT5VA.js": 58664,
+    "browser-dist/openrouter-images-VCDIGTTX.js": 4765,
+    "browser-dist/chunk-YTJM46EX.js": 707291,
+    "browser-dist/chunk-A4XCIZJJ.js": 243,
+    "browser-dist/chunk-7Q2NJZO4.js": 7657,
+    "browser-dist/chunk-6C4IYVVH.js": 6793,
+    "browser-dist/chunk-4VNS5WPM.js": 1876
+  },
+  "externalImports": [
+    {
+      "output": "browser-dist/chunk-YPCHUM3X.js",
+      "path": "node:fs",
+      "kind": "require-call"
+    }
+  ]
+}

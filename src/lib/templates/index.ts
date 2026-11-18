@@ -1,6 +1,8 @@
 import { withVisibility } from "../../deployments/manifest";
 import { withPrivateNotes } from "../private-notes";
 import type { MiniAppProject } from "../types";
+import { defaultModuleStates } from "../app-folder";
+import { sourcesUseActions, sourcesUseAuth } from "../module-use";
 import { digestTemplate } from "./digest";
 import { formTemplate } from "./form";
 import { galleryTemplate } from "./gallery";
@@ -29,10 +31,20 @@ export function templateSource(id: TemplateId): TemplateSource | undefined {
 }
 
 export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProject {
-  if (id === "tasks") return { ...base, manifest: withVisibility(base.manifest, "public") };
+  const modules = defaultModuleStates(base.modules);
+  const applyModules = (files: Record<string, string>, visibility: "public" | "private") => {
+    const state = { ...modules };
+    if (sourcesUseActions(files)) state.actions = { ...state.actions, on: true };
+    else delete state.actions;
+    if (Object.values(files).some((source) => /miniapp\s*\.\s*files/.test(source))) state.files = { ...state.files, on: true };
+    else delete state.files;
+    state.auth = { ...state.auth, on: visibility === "private" || sourcesUseAuth(Object.values(files)) };
+    return state;
+  };
+  if (id === "tasks") return { ...base, modules: applyModules(base.files, "public"), manifest: withVisibility(base.manifest, "public") };
   if (id === "notes") {
     const notes = withPrivateNotes(base);
-    return { ...notes, manifest: withVisibility(notes.manifest, "private") };
+    return { ...notes, modules: applyModules(notes.files, "private"), manifest: withVisibility(notes.manifest, "private") };
   }
   const source = templateSource(id);
   if (!source) return base;
@@ -40,6 +52,7 @@ export function applyTemplate(base: MiniAppProject, id: TemplateId): MiniAppProj
     ...base,
     directories: [],
     files: { ...source.files },
+    modules: applyModules(source.files, source.visibility),
     manifest: withVisibility(base.manifest, source.visibility),
     updatedAt: Date.now(),
   };

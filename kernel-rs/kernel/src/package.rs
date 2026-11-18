@@ -47,6 +47,8 @@ pub struct Manifest {
     #[serde(default)]
     pub visibility: String,
     #[serde(default)]
+    pub modules: std::collections::BTreeMap<String, Value>,
+    #[serde(default)]
     pub signup_policy: Option<SignupPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in_methods: Option<Vec<SignInMethod>>,
@@ -122,7 +124,8 @@ pub fn check_manifest(manifest: &Manifest, files: &file_store::FileLimits) -> Re
             content.name
         );
     }
-    ensure!(seen.contains("database"), "The package manifest lists no database.");
+    let actions_on = manifest.modules.get("actions").is_none_or(|state| state["on"] != false);
+    ensure!(seen.contains("database") || !actions_on, "The package manifest lists no database. This Kernel requires a database component for apps with actions on.");
     if let Some(policy) = &manifest.signup_policy {
         SignupPolicy::from_input(policy.mode, &policy.allowlist).map_err(anyhow::Error::msg)?;
     }
@@ -200,7 +203,7 @@ pub async fn export(
         let Revisions { published: published_revision, sources: sources_revision } = revisions(&deployment)?;
         let _data = database_lock(state, &deployment.id).await;
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
-        open_auth(state, &deployment)?;
+        if crate::modules::is_on(&deployment.modules, "auth") { open_auth(state, &deployment)?; }
         let elsewhere: u64 = match state.files.store.kind() {
             "local" => 0,
             _ => file_store::indexed_files(&state.data_root, &deployment.id).await?.unwrap_or_default().iter().map(|(_, size)| size).sum(),
@@ -219,8 +222,9 @@ pub async fn export(
             let saved = crate::sources::digest_folder(&app_sources).await?;
             sources_ahead |= saved != released;
         }
+        let modules = deployment.modules.clone();
         let components = tokio::task::spawn_blocking(move || {
-            let components = capture(&source, &target, &blobs)?;
+            let components = capture(&source, &target, &blobs, &modules)?;
             write_folder_tar(&app_folder, &target.join("folder.tar"), &export_settings)?;
             Ok::<_, anyhow::Error>(components)
         })
@@ -242,6 +246,7 @@ pub async fn export(
         deployment_id: deployment.id.clone(),
         project_id: deployment.project_id.clone(),
         visibility: if is_private(&deployment) { "private" } else { "public" }.into(),
+        modules: deployment.modules.clone(),
         signup_policy: Some(deployment.signup_policy.clone()),
         sign_in_methods: Some(deployment.sign_in_methods.clone()),
         published_revision,
@@ -303,9 +308,9 @@ pub fn folder_size(folder: &Path) -> Result<u64> {
     Ok(total)
 }
 
-fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles) -> Result<Vec<(String, PathBuf, u64, String)>> {
-    let components = snapshot(folder, scratch, blobs)?;
-    revoke_access(&components[1].1)?;
+fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles, modules: &std::collections::BTreeMap<String, Value>) -> Result<Vec<(String, PathBuf, u64, String)>> {
+    let components = snapshot(folder, scratch, blobs, modules)?;
+    if let Some((_, identity)) = components.iter().find(|(name, _)| *name == "identity") { revoke_access(identity)?; }
     components
         .into_iter()
         .map(|(name, path)| {
@@ -320,17 +325,26 @@ fn capture(folder: &Path, scratch: &Path, blobs: &file_store::BlockingFiles) -> 
 /// one, `usage.sqlite`. The caller holds the data and identity locks. An
 /// export then revokes the copy's access (`capture`); an import's backup
 /// keeps it as it is (`import.rs`).
-pub fn snapshot(folder: &Path, target: &Path, blobs: &file_store::BlockingFiles) -> Result<Vec<(&'static str, PathBuf)>> {
+pub fn snapshot(folder: &Path, target: &Path, blobs: &file_store::BlockingFiles, modules: &std::collections::BTreeMap<String, Value>) -> Result<Vec<(&'static str, PathBuf)>> {
     // Usage queued before the copy is written first, so the copy holds it.
     usage::flush();
     std::fs::create_dir_all(target)?;
-    let database = target.join("database.sqlite");
-    copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
-    let identity = target.join("identity.sqlite");
-    copies::vacuum_into(&folder.join("identity.sqlite"), &identity).context("accounts")?;
-    let files = target.join("files.tar");
-    write_files_tar(&folder.join("files"), &files, |id| blobs.open(id)).context("files")?;
-    let mut components = vec![("database", database), ("identity", identity), ("files", files)];
+    let mut components = Vec::new();
+    if crate::modules::is_on(modules, "actions") || folder.join("database.sqlite").is_file() {
+        let database = target.join("database.sqlite");
+        copies::vacuum_into(&folder.join("database.sqlite"), &database).context("database")?;
+        components.push(("database", database));
+    }
+    if crate::modules::is_on(modules, "auth") {
+        let identity = target.join("identity.sqlite");
+        copies::vacuum_into(&folder.join("identity.sqlite"), &identity).context("accounts")?;
+        components.push(("identity", identity));
+    }
+    if crate::modules::is_on(modules, "files") {
+        let files = target.join("files.tar");
+        write_files_tar(&folder.join("files"), &files, |id| blobs.open(id)).context("files")?;
+        components.push(("files", files));
+    }
     if folder.join(usage::USAGE_DATABASE).is_file() {
         let usage = target.join(usage::USAGE_DATABASE);
         copies::vacuum_into(&folder.join(usage::USAGE_DATABASE), &usage).context("usage")?;
@@ -650,6 +664,7 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
     let total: u64 = uploads.iter().map(|(c, _)| c.size).sum();
     ensure_space(free_bytes(&state.data_root)?, total + database + SPACE_MARGIN, "import this app")?;
     let file_limits = state.files.limits;
+    let actions_on = package.manifest.modules.get("actions").is_none_or(|state| state["on"] != false);
     tokio::task::spawn_blocking(move || {
         for (content, path) in &uploads {
             let (size, sha256) = copies::checksum_file(path)?;
@@ -660,7 +675,7 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
             );
         }
         let components = uploads.into_iter().map(|(content, path)| (content.name, path)).collect::<Vec<_>>();
-        check_components(&components, &file_limits)
+        check_components_for_modules(&components, &file_limits, actions_on)
     })
     .await?
 }
@@ -669,15 +684,22 @@ pub async fn verify(state: &AppState, principal: &str, project_id: &str, package
 /// SQLite integrity, no stored trigger or view, an accounts file with its
 /// users, and files that fit the limits and belong to accounts it holds.
 pub fn check_components(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits) -> Result<()> {
+    check_components_for_modules(components, file_limits, true)
+}
+
+pub fn check_components_for_modules(components: &[(String, PathBuf)], file_limits: &file_store::FileLimits, actions_on: bool) -> Result<()> {
     let path = |name: &str| components.iter().find(|(component, _)| component == name).map(|(_, p)| p.clone());
-    let database = path("database").context("The package has no database.")?;
-    no_trigger_or_view(&database, "database", "database")?;
+    let database = path("database");
+    ensure!(database.is_some() || !actions_on, "The package has no database. This Kernel requires a database component for apps with actions on.");
+    if let Some(database) = &database {
+        no_trigger_or_view(database, "database", "database")?;
+        integrity(database, "database")?;
+    }
     for (name, label, what) in [("identity", "accounts", "accounts component"), ("usage", "usage", "usage component")] {
         if let Some(component) = path(name) {
             no_trigger_or_view(&component, label, what)?;
         }
     }
-    integrity(&database, "database")?;
     let accounts = match path("identity") {
         Some(identity) => {
             integrity(&identity, "accounts")?;
@@ -808,6 +830,26 @@ fn copy_verified(source: &Path, target: &Path, content: &Content) -> Result<()> 
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn snapshots_carry_an_existing_database_when_actions_are_off() {
+        let root = std::env::temp_dir().join(format!("konae-package-off-{}", Uuid::new_v4()));
+        let folder = root.join("app/data");
+        let target = root.join("snapshot");
+        std::fs::create_dir_all(&folder).unwrap();
+        let database = Connection::open(folder.join("database.sqlite")).unwrap();
+        database.execute_batch("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES('kept');").unwrap();
+        drop(database);
+        let store: Arc<dyn file_store::FileStore> = Arc::new(file_store::LocalFolder::new(&root));
+        let blobs = file_store::BlockingFiles::new(store, "app");
+        let mut modules = crate::modules::defaults();
+        modules.get_mut("actions").unwrap()["on"] = json!(false);
+        let parts = snapshot(&folder, &target, &blobs, &modules).unwrap();
+        assert!(parts.iter().any(|(name, _)| *name == "database"));
+        let copied = Connection::open(target.join("database.sqlite")).unwrap();
+        assert_eq!(copied.query_row("SELECT value FROM notes", [], |row| row.get::<_, String>(0)).unwrap(), "kept");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn manifest() -> Manifest {
         Manifest {
             format: PACKAGE_FORMAT.into(),
@@ -817,6 +859,7 @@ mod tests {
             deployment_id: "d".into(),
             project_id: "app".into(),
             visibility: "private".into(),
+            modules: std::collections::BTreeMap::new(),
             signup_policy: None,
             sign_in_methods: None,
             published_revision: 1,
@@ -856,6 +899,11 @@ mod tests {
         let mut empty = manifest();
         empty.contents.clear();
         assert!(check_manifest(&empty, &Default::default()).unwrap_err().to_string().contains("no database"));
+        let mut static_app = manifest();
+        static_app.contents.clear();
+        static_app.modules.insert("actions".into(), json!({"on":false}));
+        assert!(check_manifest(&static_app, &Default::default()).is_ok());
+        assert!(check_components_for_modules(&[], &Default::default(), false).is_ok());
         let mut checksum = manifest();
         checksum.contents[0].sha256 = "A".repeat(64);
         assert!(check_manifest(&checksum, &Default::default()).is_err());

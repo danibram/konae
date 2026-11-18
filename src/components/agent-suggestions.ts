@@ -2,7 +2,7 @@ import { parseServerActionSource, type ServerActionDefinition } from "../kernel/
 
 type SuggestionFacts = {
   files: Record<string, string | undefined>;
-  manifest: { visibility: "public" | "private"; fileAccess?: "app-users" };
+  manifest: { visibility: "public" | "private" };
 };
 
 const candidates: { sentence: string; done: (actions: ServerActionDefinition[], facts: SuggestionFacts) => boolean }[] = [
@@ -24,7 +24,7 @@ const candidates: { sentence: string; done: (actions: ServerActionDefinition[], 
   },
   {
     sentence: "Let people attach a photo to each row.",
-    done: (_actions, facts) => facts.manifest.fileAccess === "app-users" || /miniapp\.files/.test(facts.files["app.js"] ?? ""),
+    done: (_actions, facts) => /miniapp\.files/.test(facts.files["app.js"] ?? ""),
   },
   {
     sentence: "Clear rows older than 30 days every night.",
@@ -39,7 +39,7 @@ const candidates: { sentence: string; done: (actions: ServerActionDefinition[], 
 export function suggestedChanges(facts: SuggestionFacts, count = 3): string[] {
   let actions: ServerActionDefinition[] = [];
   try {
-    actions = Object.values(parseServerActionSource(facts.files["actions.json"] ?? "").actions);
+    actions = Object.values(parseServerActionSource(facts.files["actions.json"] ?? '{"version":1,"actions":{}}').actions);
   } catch {
     // A file the check refuses still gets suggestions; none of them is marked done.
   }

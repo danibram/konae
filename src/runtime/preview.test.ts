@@ -4,7 +4,7 @@ import { createHostedArtifact } from "./artifact";
 import { createPreviewDocument } from "./preview";
 import { encodeBase64 } from "../mcp/client";
 
-const project = cloneStarter();
+const project = { ...cloneStarter(), modules: { actions: { on: true }, auth: { on: true } } };
 
 function sdkSurfaceOf(html: string): string[] {
   const source = html.match(/<script data-konae-runtime>([\s\S]*?)<\/script>/)?.[1];
@@ -29,6 +29,13 @@ function sdkSurfaceOf(html: string): string[] {
 }
 
 describe("preview document", () => {
+  test("a static project preview has no SDK runtime", () => {
+    const document = createPreviewDocument({ ...project, files: { "index.html": "<!doctype html><title>Static</title>" }, manifest: { ...project.manifest, visibility: "public" }, modules: { actions: { on: false }, auth: { on: false }, files: { on: false }, seo: { on: true } } });
+    expect(document).not.toContain("data-konae-runtime");
+    expect(document).not.toContain("window.miniapp");
+    expect(document).toContain("addEventListener('error'");
+    expect(document).toContain("preview_error");
+  });
   test("runs app.js as a module, the same way a Deployment does", () => {
     const document = createPreviewDocument(project);
     expect(document).toContain('<script type="module">');
@@ -46,7 +53,7 @@ describe("preview document", () => {
   test("offers a Capsule exactly the SDK a Deployment offers", () => {
     const preview = sdkSurfaceOf(createPreviewDocument(project));
     expect(preview).toEqual(sdkSurfaceOf(createHostedArtifact({ body: "", styles: "", script: "" }).files["index.html"]));
-    expect(preview).toEqual(["actions.call", "auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "files.delete", "files.list", "files.update", "files.upload", "files.url"]);
+    expect(preview).toEqual(["actions.call", "auth.session", "auth.signIn", "auth.signInWithGoogle", "auth.signOut", "files.delete", "files.list", "files.update", "files.upload", "files.url", "page.params", "page.url"]);
   });
 
   test("keeps a closing script tag inside app.js from ending the script element", () => {
@@ -154,7 +161,7 @@ describe("preview document", () => {
   });
 
   test("emits the compiled module exactly as a Deployment does", () => {
-    const script = "const x = 1;\nif (!document.querySelector('#app')) throw new Error('boom');\nexport { x };";
+    const script = "miniapp.actions.call('hello.read');\nconst x = 1;\nif (!document.querySelector('#app')) throw new Error('boom');\nexport { x };";
     const body = "<main id=app></main>";
     const styles = "main { color: red }";
     const preview = createPreviewDocument({ ...project, files: { ...project.files, "index.html": body, "styles.css": styles, "app.js": script } });

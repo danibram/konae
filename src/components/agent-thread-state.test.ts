@@ -169,6 +169,13 @@ describe("agent thread tool chips", () => {
 });
 
 describe("agent thread errors", () => {
+  test("an initialization error does not end an active submission before send settles", () => {
+    const started = agentThreadReducer(initialAgentThreadState, { type: "prompt", text: "change the app" });
+    const failed = agentThreadReducer(started, { type: "event", event: { type: "error", message: "temporary provider error" }, keepBusy: true });
+    expect(failed.busy).toBe(true);
+    expect(agentThreadReducer(failed, { type: "settled" }).busy).toBe(false);
+  });
+
   test("an error event ends the run, closes the stream and can be dismissed", () => {
     const failed = run([
       { type: "prompt", text: "x" },
@@ -384,6 +391,14 @@ describe("agent thread composer and providers", () => {
 
     const blocker = submitBlocker(anthropic, false, "claude-sonnet-4-6");
     expect(canSubmit(initialAgentThreadState, "hola", false, blocker)).toBe(false);
+  });
+
+  test("a definite no-admission result restores the composer and removes its unsubmitted message", () => {
+    const submitted = run([{ type: "prompt", text: "keep this draft" }]);
+    const restored = agentThreadReducer(submitted, { type: "unsubmit", text: "keep this draft" });
+    expect(restored.messages).toEqual([]);
+    expect(restored.busy).toBe(false);
+    expect(restored.seq).toBe(0);
   });
 
   test("only tool and turn boundaries carry a workspace snapshot", () => {

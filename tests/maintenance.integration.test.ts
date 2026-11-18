@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { appFetch, buildKernel, release, startKernel, type Kernel } from "./kernel-harness";
+import { appFetch, buildKernel, release, setSignupPolicy, startKernel, type Kernel } from "./kernel-harness";
 
 let root: string;
 let kernel: Kernel;
@@ -52,7 +52,7 @@ test("an owner puts an app in maintenance, where it serves its page, refuses wri
   expect(write.status).toBe(503);
   expect(await write.json()).toEqual({ error: "This app is in maintenance. It accepts no writes, signups, recovery, administrative changes or email until it comes out of maintenance.", maintenance: true });
 
-  await expect(kernel.owner.call("signup_policy_set", { projectId: receipt.id, mode: "closed" })).rejects.toThrow("This app is in maintenance.");
+  await expect(setSignupPolicy(kernel.owner, receipt.id, { mode: "closed" })).rejects.toThrow("This app is in maintenance.");
   const inspected = await kernel.owner.call<{ deployment: { id: string } }>("project_inspect", { projectId: id });
   expect(inspected.deployment.id).toBe(receipt.id);
   const rows = await kernel.owner.call<{ rows: { body: string }[] }>("database_execute", { projectId: receipt.id, operation: "browse", input: { tableName: "notes" } }).catch((error: Error) => error);

@@ -43,7 +43,7 @@ test("export writes the app folder offline: settings, sources, dist and the gene
     ]));
     expect(files.some((file) => file.startsWith(".konae") || file.startsWith("data/"))).toBe(false);
     expect(JSON.parse(await readFile(path.join(output, "konae.json"), "utf8"))).toEqual(settings);
-    expect(await readFile(path.join(output, "dist/index.html"), "utf8")).toContain("<script data-konae-runtime>");
+    expect(await readFile(path.join(output, "dist/index.html"), "utf8")).not.toContain("data-konae-runtime");
     await expect(exportLocal(root, output)).rejects.toThrow("Refusing to overwrite");
   } finally {
     await rm(root, { recursive: true, force: true });

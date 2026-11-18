@@ -5,6 +5,7 @@ import { normalizeProjectPath } from "../lib/project-files";
 import { sourceBytes, sourceContents, textFiles } from "../lib/source-files";
 import { hostedRuntime, type BuildArtifact } from "./artifact";
 import { appEntry, assembleStaticArtifact, resolveReference, servedPath } from "../lib/static-artifact.js";
+import { sdkRequired } from "../lib/module-use";
 
 let initialized: Promise<void> | undefined;
 
@@ -15,6 +16,7 @@ export async function buildProjectInBrowser(project: MiniAppProject): Promise<Bu
     compile: () => compileProjectInBrowser(project, { release: true }),
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
+    sdk: sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined),
     routing: project.manifest.routing,
   });
 }
@@ -33,6 +35,7 @@ export async function compileProjectInBrowser(project: MiniAppProject, options: 
     compile: async () => ({ styles: compiled.styles, script: compiled.script }),
     bundle: async (path) => bundleInBrowser(project, textFiles(project), path, true),
     runtime: hostedRuntime,
+    sdk: sdkRequired(project.modules, project.files, project.manifest.visibility as string | undefined),
     routing: project.manifest.routing,
   });
   return compiled;

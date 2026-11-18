@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildLocal } from "../scripts/konae";
+import { buildLocal, initLocal } from "../scripts/konae";
 import { McpClient } from "../src/mcp/client";
 import { routingMessage } from "../src/lib/static-artifact.js";
 
@@ -54,7 +55,7 @@ async function release(id: string, artifact: object, manifest: Record<string, un
   const project = { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public", ...manifest } };
   await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
   const files = { "schema.sql": capsule["schema.sql"], "actions.json": capsule["actions.json"] };
-  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project: { ...project, files }, visibility: "public", artifact })), id);
+  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project: { ...project, files }, visibility: project.manifest.visibility, artifact })), id);
   try {
     const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
     const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
@@ -113,6 +114,82 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
+test("the Konae home builds and publishes with only Search listing on", async () => {
+  const folder = path.join(root, "konae-home-folder");
+  const settings = await initLocal(folder, { name: "Konae home" });
+  await rm(path.join(folder, "app"), { recursive: true, force: true });
+  await cp(path.resolve(import.meta.dir, "../examples/home"), path.join(folder, "app"), { recursive: true });
+  const settingsPath = path.join(folder, "konae.json");
+  const localSettings = JSON.parse(await readFile(settingsPath, "utf8"));
+  localSettings.visibility = "public";
+  localSettings.signupPolicy = { mode: "closed", allowlist: [] };
+  localSettings.manifest = { version: 1, visibility: "public", routing: "pages" };
+  await writeFile(settingsPath, JSON.stringify(localSettings, null, 2));
+  const built = await buildLocal(folder);
+  for (const pagePath of ["index.html", "es/index.html"]) {
+    expect(built.artifact.files[pagePath]).toBeDefined();
+    expect(built.artifact.files[pagePath]).not.toContain("runtime.js");
+  }
+  expect(built.artifact.files).not.toHaveProperty("runtime.js");
+  const sourceFiles = Object.fromEntries(Object.entries(built.files).map(([name, value]) => [name, value]));
+  const project = { id: settings.id, name: settings.name, slug: settings.slug, manifest: localSettings.manifest, files: sourceFiles };
+  await owner.call("project_create", { projectId: project.id, name: project.name, slug: project.slug, manifest: project.manifest });
+  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({
+    project, visibility: "public", initialModules: { seo: { on: true, canonical: "path", image: null } }, artifact: built.artifact,
+  })), project.id);
+  try {
+    const inspected = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: project.id });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: inspected.sourcesRevision });
+    const deployment = await owner.call<{ hostname: string }>("release_apply", { planId: plan.planId });
+    hosts[project.id] = deployment.hostname;
+  } finally {
+    await owner.cancel(transfer.transferId);
+  }
+  const directory = path.join(root, "data", "apps", project.id, "data");
+  expect(await readdir(directory).catch(() => [])).not.toContain("database.sqlite");
+  expect((await get(project.id, "/")).status).toBe(200);
+  expect((await get(project.id, "/es/")).status).toBe(200);
+  const visitor = new McpClient(`${url}/_konae/mcp`, { fetch: (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set("host", hosts[project.id]!);
+    return fetch(input, { ...init, headers });
+  } });
+  await expect(visitor.call("actions_invoke", { name: "missing.action" })).rejects.toThrow("Module actions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+  await expect(owner.call("database_execute", { projectId: project.id, operation: "inspect" })).rejects.toThrow("Module actions is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.");
+  expect(await readdir(directory).catch(() => [])).not.toContain("database.sqlite");
+});
+
+test("a held database backup restores while actions are off", async () => {
+  const id = "static_restore_backup";
+  const project = { id, name: id, slug: id, manifest: { version: 1, visibility: "public" }, files: {} };
+  await owner.call("project_create", { projectId: id, name: id, slug: id, manifest: project.manifest });
+  const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({ project, visibility: "public", artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<title>Static</title>" } } })), id);
+  try {
+    const observed = await owner.call<{ sourcesRevision: number }>("project_inspect", { projectId: id });
+    const plan = await owner.call<{ planId: string }>("release_plan", { transferId: transfer.transferId, observedSourcesRevision: observed.sourcesRevision });
+    const receipt = await owner.call<{ hostname: string }>("release_apply", { planId: plan.planId });
+    hosts[id] = receipt.hostname;
+  } finally { await owner.cancel(transfer.transferId); }
+  const app = path.join(root, "data", "apps", id);
+  const live = path.join(app, "data/database.sqlite");
+  await mkdir(path.dirname(live), { recursive: true });
+  const current = new Database(live);
+  current.run("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES ('live');");
+  current.close();
+  const backupId = "before-import";
+  const backup = path.join(app, ".konae/backups", backupId);
+  await mkdir(backup, { recursive: true });
+  const backupDatabase = new Database(path.join(backup, "database.sqlite"));
+  backupDatabase.run("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES ('saved');");
+  backupDatabase.close();
+  await writeFile(path.join(app, `.konae/backups/${backupId}.json`), JSON.stringify({ id: backupId, key: backupId, label: "Before import", createdAt: Date.now(), sizeBytes: 0, holds: ["data"] }));
+
+  await owner.call("database_execute", { projectId: id, operation: "restore-backup", input: { backupId } });
+  const restored = new Database(live, { readonly: true });
+  expect(restored.query("SELECT value FROM notes").get()).toEqual({ value: "saved" });
+  restored.close();
+});
+
 describe("a multi-page artifact under pages routing", () => {
   test("each page answers at its file, and an extensionless path answers with its .html page", async () => {
     for (const [pathname, expected] of [
@@ -134,6 +211,29 @@ describe("a multi-page artifact under pages routing", () => {
     }
   });
 
+  test("Kernel pages, private apps and public apps with seo off tell crawlers not to list them", async () => {
+    expect((await get("static_pages", "/")).headers.get("x-robots-tag")).toBe("noindex");
+    const { artifact } = await buildLocal(await capsuleOnDisk("private", capsule));
+    await release("static_private", artifact, { visibility: "private" });
+    const home = await get("static_private", "/");
+    expect(home.headers.get("x-robots-tag")).toBe("noindex");
+
+    const robots = await get("static_private", "/robots.txt");
+    expect(robots.status).toBe(200);
+    expect(robots.headers.get("content-type")).toContain("text/plain");
+    const robotsBody = await robots.text();
+    expect(robotsBody).toContain("User-agent: *");
+    expect(robotsBody).toContain("Allow: /");
+    expect(robotsBody).not.toContain("Disallow");
+    expect(robots.headers.get("x-robots-tag")).toBe("noindex");
+
+    expect((await get("static_pages", "/_konae/login")).headers.get("x-robots-tag")).toBe("noindex");
+    await owner.call("maintenance_set", { projectId: "static_pages", on: true });
+    const maintenance = await get("static_pages", "/");
+    expect(maintenance.headers.get("x-robots-tag")).toBe("noindex");
+    await owner.call("maintenance_set", { projectId: "static_pages", on: false });
+  });
+
   test("a path under /_konae is never an app file", async () => {
     const response = await get("static_pages", "/_konae/about.html");
     expect(response.status).not.toBe(200);
@@ -142,7 +242,7 @@ describe("a multi-page artifact under pages routing", () => {
 
   test("every file answers with its content type, and binary files keep their bytes", async () => {
     for (const [pathname, type] of [
-      ["/styles.css", "text/css; charset=utf-8"], ["/app.js", "text/javascript; charset=utf-8"], ["/runtime.js", "text/javascript; charset=utf-8"],
+      ["/styles.css", "text/css; charset=utf-8"], ["/app.js", "text/javascript; charset=utf-8"],
       ["/logo.png", "image/png"], ["/fonts/body.woff2", "font/woff2"], ["/sitemap.xml", "application/xml; charset=utf-8"],
       ["/robots.txt", "text/plain; charset=utf-8"], ["/site.webmanifest", "application/manifest+json"], ["/data/items.json", "application/json"],
     ]) {
@@ -199,6 +299,7 @@ describe("other answers for a missing path", () => {
     const body = await response.text();
     expect(body).toContain("<title>Page not found</title>");
     expect(body).not.toContain("Bare home");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
   });
 
   test('"routing": "spa" serves index.html for every path the artifact does not hold', async () => {

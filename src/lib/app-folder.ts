@@ -1,22 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
 import { generateActionContract, renderActionContractMarkdown } from "./action-contract";
 import { ACTION_TYPES_FILE, renderActionTypes } from "./action-types";
 import type { PackageComponentName } from "./portable-package";
 import { readTar } from "./tar";
 import { version } from "../../package.json";
+import { sdkContract } from "../sdk/contract";
+import { sdkRequired } from "./module-use";
 
 export type FolderEntry = { path: string; contents: string | Uint8Array };
 
 export type SignupPolicy = { mode: "open" | "invitation" | "closed" | "allowlist"; allowlist?: string[] };
+
 
 export type AppSettings = {
   id: string;
   name: string;
   slug: string;
   visibility: "public" | "private";
-  signupPolicy: SignupPolicy;
-  signInMethods: ("password" | "google")[];
+  signupPolicy?: SignupPolicy;
+  signInMethods?: ("password" | "google")[];
   contactEmail?: string;
+  modules?: Record<string, { on: boolean; [option: string]: unknown }>;
+
   kernel: string;
+
   manifest: Record<string, unknown>;
 };
 
@@ -24,7 +42,31 @@ export const SETTINGS_FILE = "konae.json";
 export const SOURCES_FOLDER = "app";
 export const DIST_FOLDER = "dist";
 export const DATA_FOLDER = "data";
+
 export const KERNEL_VERSION: string = version;
+
+export function defaultModuleStates(existing: AppSettings["modules"] = {}): AppSettings["modules"] {
+  return Object.fromEntries(sdkContract.modules.filter((module) => module.switch && existing?.[module.name] !== undefined).map((module) => [module.name, Object.assign(
+    { on: false },
+    Object.fromEntries(module.options.map((option) => [option.key, option.default])),
+    existing[module.name] ?? {},
+  )]));
+}
+
+export function settingsForFolder(settings: AppSettings): AppSettings {
+  const modules = defaultModuleStates(settings.modules);
+  const auth = modules?.auth;
+  if (auth) {
+    settings = {
+      ...settings,
+      signupPolicy: settings.signupPolicy ?? auth.signupPolicy as SignupPolicy | undefined ?? { mode: settings.visibility === "public" ? "open" : "closed", allowlist: [] },
+      signInMethods: settings.signInMethods ?? auth.signInMethods as AppSettings["signInMethods"] ?? ["password"],
+    };
+    modules!.auth = { on: auth.on };
+  }
+  return { ...settings, modules };
+}
+
 
 export const dataPaths: Record<PackageComponentName, string> = {
   database: "data/database.sqlite",
@@ -33,11 +75,13 @@ export const dataPaths: Record<PackageComponentName, string> = {
   usage: "data/usage.sqlite",
 };
 
+
 export function dataEntries(name: PackageComponentName, bytes: Uint8Array): FolderEntry[] {
   if (name !== "files") return [{ path: dataPaths[name], contents: bytes }];
   return readTar(bytes).map((entry) => ({ path: `${dataPaths.files}/${entry.path}`, contents: entry.contents }));
 }
 
+/** The secrets the app's routes and calls sign with, by name. */
 export function secretNames(actionsSource: string): string[] {
   let actions: Record<string, { http?: { signature?: { secret?: unknown } }; auth?: { secret?: unknown } }> = {};
   try { actions = JSON.parse(actionsSource).actions ?? {}; } catch { return []; }
@@ -49,6 +93,12 @@ export function secretNames(actionsSource: string): string[] {
   return [...names].sort();
 }
 
+/**
+ * The files the folder carries beside `app/`, `dist/` and `data/`. `runtime`
+ * is the SDK (src/mcp/runtime.js) and `staticArtifact` the build rules
+ * (src/lib/static-artifact.js), and `localBuilder` holds the esbuild call
+ * both local build doors run.
+ */
 export function generatedFiles(input: { settings: AppSettings; actionsSource: string; schemaSource: string; runtime: string; staticArtifact: string; localBuilder: string }): FolderEntry[] {
   const { settings } = input;
   const { contract } = generateActionContract({ actionsSource: input.actionsSource, schemaSource: input.schemaSource, project: { id: settings.id, name: settings.name } });
@@ -74,6 +124,7 @@ export const gitignore = `data/
 node_modules/
 `;
 
+/** The image is the Kernel version konae.json names, so an exported folder runs the Kernel that wrote it. */
 function envExample(settings: AppSettings) {
   return `# The Kernel's settings for compose.yaml. Copy to .env, which stays on this machine.
 # The image to run. A release publishes this tag for linux/amd64 and linux/arm64. A local image can replace it.
@@ -121,6 +172,12 @@ function packageManifest(settings: AppSettings) {
   }, null, 2)}\n`;
 }
 
+/**
+ * What `npm run build` type-checks a TypeScript app against: app/src/, the
+ * files it imports, and actions.d.ts. A script beside the app, such as a
+ * replay script at the root of app/, stays out. Not strict, so a type that is only implicit passes; a call
+ * to an action that does not exist, or with an input it does not take, fails.
+ */
 const tsconfig = `${JSON.stringify({
   compilerOptions: {
     target: "ES2022",
@@ -144,7 +201,7 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 ## Layout
 
-- \`konae.json\`: the app's name, visibility (${settings.visibility}), Signup Policy, sign-in methods, contact email and the Kernel version.
+- \`konae.json\`: the app's name, visibility (${settings.visibility}), module state, contact email and the Kernel version.
 - \`app/\`: the editable sources. It may also hold binary assets. Konae checks the same path, count and decoded-size limits before saving and publishing them.
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
@@ -159,6 +216,13 @@ An optional \`schema-transforms.json\` records ordered data changes between sche
 - A query that reads rows names a LIMIT.
 - \`schema.sql\` is the model. Add tables and columns there; the Kernel applies an added table, column or index on the next publish or start, and a change that drops or retypes one only with the confirmation it names.
 - A page loads no script from another origin, uses no inline event handler, and runs no WebAssembly or \`eval\`. It fetches only from its own origin and the origins \`manifest.connects\` in \`konae.json\` names.
+
+## Module settings
+
+| Need | Use | Not |
+| --- | --- | --- |
+| Turn an app capability on or set its options | \`modules_read\` and \`module_set\`, then read it back with \`modules_read\` | A separate tool or a setting in the Capsule |
+| Be listed in search | Turn on \`seo\` with \`module_set\`, after \`modules_read\` | Assume a public app is listed |
 
 ## Rules nothing checks
 
@@ -193,6 +257,10 @@ Add \`--app ${settings.id}\` when the Kernel serves more than one app.
 `;
 }
 
+
+
+
+
 const buildScript = `import { spawnSync } from 'node:child_process';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -201,6 +269,8 @@ import { fileURLToPath } from 'node:url';
 import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
 import { bundleModule } from './local-builder.mjs';
 
+const sdkRequired = ${sdkRequired.toString()};
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
 const dist = path.join(root, 'dist');
@@ -208,6 +278,10 @@ const development = process.argv.includes('--dev');
 const settings = JSON.parse(await readFile(path.join(root, 'konae.json'), 'utf8'));
 const runtime = await readFile(path.join(root, 'scripts/runtime.js'), 'utf8');
 const paths = await walk('');
+const sources = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(app, file), 'utf8').catch(() => '')]));
+const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
+const schemaSource = await readFile(path.join(app, 'schema.sql'), 'utf8').catch(() => '');
+const sdk = sdkRequired(settings.modules, Object.fromEntries(sources), settings.visibility);
 if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,
@@ -224,6 +298,7 @@ const artifact = await assembleStaticArtifact({
   },
   bundle: (relative) => bundleModule(app, relative, development),
   runtime,
+  sdk,
   routing: settings.manifest?.routing,
   warn: (message) => console.warn('Warning: ' + message),
 });

@@ -1,0 +1,1 @@
+{"version":1,"actions":{"notes.route":{"kind":"query","access":"anonymous","statement":"SELECT body FROM notes ORDER BY id LIMIT 50","bindings":[],"http":{"method":"GET","path":"/api/notes"}},"notes.tick":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO notes(body) VALUES('scheduled')","bindings":[],"schedule":{"daily":"10:00"}}}}

@@ -3,6 +3,7 @@ use super::runtime::*;
 use super::transfers::{ADMIN_CHUNK, ADMIN_MCP_BODY_BYTES, MAX_TRANSFER, download, transfer, transfer_call, transfer_path};
 use rusqlite::params;
 
+
 fn admin_body_refused() -> String {
     format!("MCP request exceeds {ADMIN_MCP_BODY_BYTES} bytes. Write a transfer in blocks of at most chunkBytes ({ADMIN_CHUNK} bytes).")
 }
@@ -78,7 +79,7 @@ fn remember_import(state: &Konae, package_id: &str, project: &str, plan: &str) -
 
 /// Tools that change nothing a paused app serves. Every other tool that
 /// names a paused Deployment, its project or one of its plans is refused.
-const OPEN_TOOLS: [&str; 19] = [
+const OPEN_TOOLS: [&str; 18] = [
     "platform_guide",
     "platform_describe",
     "mail_status",
@@ -95,14 +96,16 @@ const OPEN_TOOLS: [&str; 19] = [
     "api_keys_list",
     "usage_summary",
     "signals_read",
-    "sign_in_methods_read",
     "project_export",
     "release_plan",
 ];
 /// What `initialize` tells an owner's agent on `/mcp`.
 const OWNER_INSTRUCTIONS: &str = "A delegated credential can access only projects that already exist; it cannot create a project. Source and builds stay on your computer. Run konae init and konae dev, then konae login --browser and konae publish. After a write, read its effect through the door named by platform_guide rules.";
+
+
 const PAUSED_TOOLS: [&str; 2] = ["maintenance_set", "project_import"];
 const READ_TOOLS_SUFFIX: [&str; 2] = ["_list", "_read"];
+
 
 async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     if name.starts_with("transfer_")
@@ -126,6 +129,7 @@ async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
                     .query_row("SELECT project,receipt FROM plans WHERE id=?1", [plan], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
                 match row {
+
                     Some((_, Some(_))) => return Ok(()),
                     Some((project, None)) => Some(project),
                     None => None,
@@ -144,17 +148,22 @@ async fn admin_guard(state: &Konae, name: &str, a: &Value) -> Result<()> {
     Ok(())
 }
 
+
+
+
+
 pub(super) fn installation() -> super::installation::Installation {
     use super::installation::{AccountDatabase, RootDatabase};
     let mut installation = super::installation::Installation::kernel();
     installation.databases.splice(0..0, [
         RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
-        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans"] },
+        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans", "conversation_live_authority", "conversation_execution_leases", "conversation_stop_requests"] },
     ]);
     installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
     installation.mail_group = project_owner;
     installation
 }
+
 
 fn project_owner(root: &Path, project_id: &str) -> Option<String> {
     let connection = Connection::open_with_flags(root.join("mcp.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
@@ -210,6 +219,7 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_project_sources {
         db.execute("ALTER TABLE projects ADD COLUMN sources INTEGER NOT NULL DEFAULT 0", [])?;
     }
+
     let has_sources: bool = db
         .prepare("PRAGMA table_info(plans)")?
         .query_map([], |r| r.get::<_, String>(1))?
@@ -313,6 +323,11 @@ pub(super) fn authenticate_owner(state: &Konae, headers: &HeaderMap) -> Result<O
         }))
 }
 
+
+
+
+
+
 fn owner_unauthorized(state: &Konae, headers: &HeaderMap) -> Response {
     let refused = unauthorized(state, headers);
     let Some(token) = bearer(headers) else { return refused };
@@ -365,12 +380,18 @@ pub(super) fn owned_project(state: &Konae, owner: &Owner, id: &str, scope: &str)
 
 pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this project. Type the project's name exactly to delete it.";
 
+
+
+
+
+
 async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     let published = {
         let mut deployments = state.deployments.write().await;
         let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.id == id).map(|(host, _)| host.clone()).collect();
         hosts.into_iter().filter_map(|host| deployments.remove(&host)).count() > 0
     };
+
     let ids: Vec<String> = if published || tokio::fs::try_exists(crate::layout::record(&state.data_root, id)).await? { vec![id.to_owned()] } else { Vec::new() };
     let trash = state.data_root.join("deleted");
     tokio::fs::create_dir_all(&trash).await?;
@@ -382,11 +403,18 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
         super::path::forget(state, deployment).await?;
         super::hostname::forget(state, deployment).await?;
         park(&folder, &trash, deployment).await?;
+
+
         super::file_store::forget_deployment(state.files.store.as_ref(), deployment).await;
     }
+
     park(&folder, &trash, id).await?;
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let owner: Option<String> = tx.query_row("SELECT owner FROM projects WHERE id=?1", [id], |r| r.get(0)).optional()?;
+    if let Some(owner) = owner {
+        super::conversations::delete_project_tx(&tx, &owner, id, now_ms() as i64)?;
+    }
     for (table, column) in [("plans", "project"), ("package_imports", "project")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if present {
@@ -397,6 +425,11 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     tx.commit()?;
     Ok(ids)
 }
+
+
+
+
+
 
 fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -> Result<bool> {
     let db = store(state)?;
@@ -409,6 +442,7 @@ fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -
     }
     Ok(false)
 }
+
 
 async fn park(folder: &Path, trash: &Path, id: &str) -> Result<()> {
     let parked = trash.join(format!("{id}-{}", Uuid::new_v4().simple()));
@@ -434,10 +468,11 @@ fn validate_sources(source: &Value, id: &str) -> Result<()> {
     let directories = source["directories"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid project directories."))?;
     anyhow::ensure!(directories.len() <= super::sources::MAX_FILES && directories.iter().all(|entry| entry.as_str().is_some_and(super::sources::holds)), "Invalid project directories.");
     let manifest = &source["manifest"];
-    artifact::check_file_access(manifest).map_err(anyhow::Error::msg)?;
     anyhow::ensure!(manifest["version"] == 1 && ["public", "private"].contains(&manifest["visibility"].as_str().unwrap_or("")), "Invalid project manifest. Send version 1 and visibility \"public\" or \"private\".");
     Ok(())
 }
+
+
 
 fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value> {
     anyhow::ensure!(delta["format"] == "delta", "Invalid source update format.");
@@ -476,6 +511,8 @@ fn merge_source_delta(current: &Value, delta: &Value, id: &str) -> Result<Value>
     Ok(merged)
 }
 
+
+
 fn ensure_no_component(upload: &Value) -> Result<()> {
     match upload["component"].as_str() {
         Some(component) => anyhow::bail!("This upload names the {component} component of an export. Upload sources and releases without a component."),
@@ -483,12 +520,16 @@ fn ensure_no_component(upload: &Value) -> Result<()> {
     }
 }
 
+
+
 async fn release_bytes(state: &Konae, upload: &Value, transfer_id: &str) -> Result<Vec<u8>> {
     ensure_no_component(upload)?;
     let size = upload["size"].as_u64().unwrap_or(0) as usize;
     anyhow::ensure!(size <= super::size::RELEASE_BYTES, "{}", super::size::release_refused(size));
     Ok(tokio::fs::read(transfer_path(state, transfer_id)?).await?)
 }
+
+
 
 async fn release_upload_ids(
     state: &Konae,
@@ -515,6 +556,8 @@ async fn cleanup_release_uploads(state: &Konae, owner: &Owner, principal: &str, 
         let db = store(state)?;
         db.query_row("SELECT transfer,sources,cleanup_uploads FROM plans WHERE id=?1 AND owner=?2", params![plan_id, owner.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
     };
+
+
     let mut ids: Vec<String> = serde_json::from_str(&recorded_ids)?;
     if ids.is_empty() {
         ids = release_upload_ids(state, principal, &release_id, sources_id.as_deref()).await?;
@@ -545,6 +588,7 @@ fn transfer_project_for_owner(state: &Konae, owner: &Owner, principal: &str, tra
     Ok((None, false))
 }
 
+
 #[derive(serde::Deserialize)]
 struct ReleaseSources {
     files: HashMap<String, String>,
@@ -553,6 +597,11 @@ struct ReleaseSources {
     #[serde(default)]
     directories: Vec<String>,
 }
+
+
+
+
+
 
 async fn release_input(state: &Konae, principal: &str, transfer_id: &str, sources_id: Option<&str>, artifact_id: Option<&str>) -> Result<DeployInput> {
     let upload = transfer(state, principal, &json!({"transferId": transfer_id}))?;
@@ -668,7 +717,12 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         path_read_tool(),
         tool("maintenance_read", "Read whether a deployment is in maintenance and since when. installation names a hold of the whole installation that the app's own state cannot lift.", json!({"projectId":text}), &["projectId"], true),
         tool("contact_email_read", "Read the app's contact email, where \"notify\": { \"to\": \"owner\" } sends, and ownerNotices, the actions that send there. A contact email of null with ownerNotices listed means those notices are not sent.", json!({"projectId":text}), &["projectId"], true),
+        tool("modules_read", "Read every module's state and options. Read back module_set with this tool.", json!({"projectId":text}), &["projectId"], true),
     ]);
+    let module_registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json")).expect("module registry is valid JSON");
+    if owner.scopes.iter().any(|scope| module_registry["modules"].as_object().into_iter().flatten().any(|(_, module)| module["switch"] == true && module["permission"] == scope.as_str())) {
+        tools.push(tool("module_set", "Turn a module on or off, or change its options. Pass the state returned by modules_read as expected. Read the result back with modules_read.", json!({"projectId":text,"module":text,"on":{"type":"boolean"},"options":{"type":"object"},"expected":{"type":"object"}}), &["projectId", "module"], false));
+    }
     if owner.scopes.iter().any(|s| s == "export_data") {
         tools.extend([
             tool(
@@ -683,28 +737,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools.extend(usage_tools());
     tools.extend(calls_tools());
     tools.extend(mail_tools());
-    tools.push(tool(
-        "sign_in_methods_read",
-        "Read how people sign in to a deployment: password, and google when the owner turned it on. googleClient says whether the app's google_client_id and google_client_secret are set, without their values, and redirectUris lists the callbacks to register in the app's Google OAuth client.",
-        json!({"projectId":text}),
-        &["projectId"],
-        true,
-    ));
     if owner.scopes.iter().any(|s| s == "manage_users") {
-        tools.push(tool(
-            "sign_in_methods_set",
-            "Choose how people sign in to a deployment: [\"password\"] or [\"password\",\"google\"]. Password cannot be turned off. Google needs the app's own Google client: set google_client_id and google_client_secret with secret_set use google first. Read back with sign_in_methods_read.",
-            json!({"projectId":text,"methods":{"type":"array","items":{"type":"string","enum":["password","google"]},"minItems":1,"maxItems":2}}),
-            &["projectId", "methods"],
-            false,
-        ));
-        tools.push(tool(
-            "signup_policy_set",
-            "Choose who may create an account on a deployment: open, invitation (only people invited with app_invitations_create), closed, or allowlist (exact emails or @domain entries). Omitting allowlist keeps the current entries.",
-            json!({"projectId":text,"mode":{"type":"string","enum":["open","invitation","closed","allowlist"]},"allowlist":{"type":"array","items":{"type":"string","minLength":1,"maxLength":254}}}),
-            &["projectId", "mode"],
-            false,
-        ));
         tools.extend(invitations_tools());
         if owner.session {
             tools.push(tool(
@@ -718,7 +751,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     }
     if owner.scopes.iter().any(|s| s == "publish") {
         tools.extend([
-            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends, or, with use google, the app's Google OAuth client as google_client_id and google_client_secret. The value is never returned. Read back with secrets_list, and the Google client with sign_in_methods_read.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call","google"]}}), &["projectId","name","value"], false),
+            tool("secret_set", "Set a signing secret an action's http signature names, or, with use call, one a call action signs with or an API key it sends, or, with use google, the app's Google OAuth client as google_client_id and google_client_secret. The value is never returned. Read back with secrets_list, and read Google client state with modules_read.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64},"value":{"type":"string","minLength":16,"maxLength":512},"use":{"type":"string","enum":["route","call","google"]}}), &["projectId","name","value"], false),
             tool("secret_delete", "Delete a signing secret no published action uses. A Google client secret is refused while Google sign-in is on.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":64}}), &["projectId","name"], false),
             tool("api_keys_create", "Issue an API key for one deployment, scoped to named actions with an HTTP route and to file visibilities. The key appears only in this answer.", json!({"projectId":text,"name":{"type":"string","minLength":1,"maxLength":80},"actions":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"files":{"type":"array","items":{"type":"string","enum":["public","private"]}}}), &["projectId","name"], false),
             tool("api_keys_revoke", "Revoke a deployment's API key by its ID.", json!({"projectId":text,"keyId":text}), &["projectId","keyId"], false),
@@ -748,15 +781,15 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
         ));
         tools.push(tool(
             "contact_email_set",
-            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. Later publishes keep it, unless the folder's konae.json names contactEmail, which konae publish sends. Requires publish. Read back with contact_email_read.",
-            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254}}),
+            "Set the app's contact email in konae.json, where \"notify\": { \"to\": \"owner\" } sends, or clear it with email null. A publish of an app with none fills it with the owner's email when Konae knows it; an owner who signs in through Clerk sets it here. A later publish keeps it. Pass expected from contact_email_read to refuse a change made since that read. Requires publish. Read back with contact_email_read.",
+            json!({"projectId":text,"email":{"type":["string","null"],"maxLength":254},"expected":{"type":["string","null"],"maxLength":254}}),
             &["projectId", "email"],
             false,
         ));
         tools.push(tool(
             "maintenance_set",
-            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Requires publish. Read back with maintenance_read.",
-            json!({"projectId":text,"on":{"type":"boolean"}}),
+            "Put a deployment in maintenance (on true) or take it out (on false). In maintenance the app serves a maintenance page, refuses writes, signups and sign-ins, holds its email, calls and schedule, and refuses every administrative tool that would change it except maintenance_set and project_import. Moving an app with no lost write is maintenance, project_export, then an import on the other installation. Pass expected from maintenance_read to refuse a change made since that read. Requires publish. Read back with maintenance_read.",
+            json!({"projectId":text,"on":{"type":"boolean"},"expected":{"type":"boolean"}}),
             &["projectId", "on"],
             false,
         ));
@@ -771,6 +804,7 @@ pub(super) fn admin_tools(owner: &Owner) -> Vec<Value> {
     tools.extend(transfer_tools(false));
     tools
 }
+
 
 
 fn calls_tools() -> Vec<Value> {
@@ -800,27 +834,29 @@ fn domain_tools() -> Vec<Value> {
     vec![
         tool(
             "domain_set",
-            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260}}),
+            "Serve a deployment from a hostname you control as well as its generated one. The first call returns a TXT record, _konae.<hostname>, and the token it must hold; add it at your DNS provider, point the hostname at this installation's proxy, and call domain_set again with the same hostname. The Kernel looks the record up itself and the alias serves once it holds the token. The proxy terminates TLS and must forward Host unchanged. Pass expected from domain_read to refuse a change made since that read. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"hostname":{"type":"string","minLength":1,"maxLength":260},"expected":{"type":["string","null"],"maxLength":260}}),
             &["projectId", "hostname"],
             false,
         ),
         tool(
             "domain_clear",
-            "Stop serving a deployment from its custom domain. The generated hostname keeps answering. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1}}),
+            "Stop serving a deployment from its custom domain. Pass expected from domain_read to refuse a change made since that read. The generated hostname keeps answering. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"expected":{"type":["string","null"],"maxLength":260}}),
             &["projectId"],
             false,
         ),
         tool(
             "hostname_set",
-            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260}}),
+            "Move a deployment to another generated hostname, <name>.<app suffix>, that no other app on this installation holds or held. The names it held before answer with a permanent redirect to the new one and stay reserved for it. The new name is a new origin: app users sign in again there, and an app with Google sign-in needs the googleCallback the answer names registered in its Google client. Pass expected from project_inspect's deployment.hostname to refuse a change made since that read. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"name":{"type":"string","minLength":1,"maxLength":260},"expected":{"type":"string","minLength":1,"maxLength":260}}),
             &["projectId", "name"],
             false,
         ),
     ]
 }
+
+
 
 
 fn invitations_tools() -> Vec<Value> {
@@ -881,6 +917,10 @@ fn invitations_tools() -> Vec<Value> {
 }
 
 
+
+
+
+
 fn mail_tools() -> Vec<Value> {
     let text = json!({"type": "string", "minLength": 1});
     vec![tool(
@@ -908,20 +948,21 @@ fn path_tools() -> Vec<Value> {
     vec![
         tool(
             "path_set",
-            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Read back with path_read. Requires publish.",
+            "Answer a deployment on <domain>/p/<id>, and on <domain>/p/<name> when it has a name. The path shares its origin with the home and every other path on this installation, so an app with accounts or a private app needs acceptSharedOrigin true before its path turns on. A name is 3 to 40 letters, digits and hyphens, and no other Deployment may hold it. An omitted name or acceptSharedOrigin keeps the stored value, a null name removes the name, and path_clear turns the path off and removes both. Pass expected from path_read as { enabled, name, acceptSharedOrigin } to refuse a change made since that read. Requires publish.",
             json!({
                 "projectId":{"type":"string","minLength":1},
                 "enabled":{"type":"boolean"},
                 "name":{"type":["string","null"],"minLength":1,"maxLength":260},
-                "acceptSharedOrigin":{"type":"boolean"}
+                "acceptSharedOrigin":{"type":"boolean"},
+                "expected":{"type":"object","properties":{"enabled":{"type":"boolean"},"name":{"type":["string","null"]},"acceptSharedOrigin":{"type":"boolean"}},"required":["enabled","name","acceptSharedOrigin"],"additionalProperties":false}
             }),
             &["projectId", "enabled"],
             false,
         ),
         tool(
             "path_clear",
-            "Turn off a deployment's path address and forget its name. The generated hostname and any custom domain keep answering. Requires publish.",
-            json!({"projectId":{"type":"string","minLength":1}}),
+            "Turn off a deployment's path address and forget its name. Pass expected from path_read as { enabled, name, acceptSharedOrigin } to refuse a change made since that read. The generated hostname and any custom domain keep answering. Requires publish.",
+            json!({"projectId":{"type":"string","minLength":1},"expected":{"type":"object","properties":{"enabled":{"type":"boolean"},"name":{"type":["string","null"]},"acceptSharedOrigin":{"type":"boolean"}},"required":["enabled","name","acceptSharedOrigin"],"additionalProperties":false}}),
             &["projectId"],
             false,
         ),
@@ -972,6 +1013,10 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
     }
     let principal = format!("owner:{}", owner.id);
     let tools = admin_tools(&owner);
+
+
+
+
     let bytes = match read_body_up_to(request, ADMIN_MCP_BODY_BYTES, &admin_body_refused()).await {
         Ok(bytes) => bytes,
         Err(response) => return response,
@@ -998,6 +1043,7 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                 return rpc_error(id, -32602, "Tool name is required.");
             };
             let Some(definition) = tools.iter().find(|t| t["name"] == name) else {
+
                 let hint = super::guide::missing_permission(name, &owner);
                 return rpc_error(id, -32602, &hint.map_or("Unknown tool or insufficient permission.".to_owned(), |hint| format!("Unknown tool or insufficient permission. {hint}")));
             };
@@ -1008,15 +1054,43 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
             }
-            let previous_mode = if name == "signup_policy_set" {
-                let deployments = state.deployments.read().await;
-                deployments
-                    .values()
-                    .find(|d| Some(d.id.as_str()) == arguments["projectId"].as_str())
-                    .map(|d| d.signup_policy.mode)
-            } else {
-                None
-            };
+            let execution_headers = [
+                "x-konae-execution-project",
+                "x-konae-execution-conversation",
+                "x-konae-execution-id",
+                "x-konae-execution-generation",
+                "x-konae-execution-call",
+            ];
+            let any_execution = execution_headers
+                .iter()
+                .any(|name| headers.contains_key(*name));
+            let mut execution: Option<(String, String, String, i64, String, Option<String>, bool)> = None;
+            if any_execution {
+                let get = |name: &str| {
+                    headers.get(name).and_then(|value| value.to_str().ok())
+                };
+                let (Some(project), Some(conversation), Some(executor), Some(generation), Some(call_id)) = (
+                    get(execution_headers[0]), get(execution_headers[1]), get(execution_headers[2]),
+                    get(execution_headers[3]), get(execution_headers[4]),
+                ) else { return rpc_error(id, -32602, "Incomplete agent execution identity."); };
+                let generation = match generation.parse::<i64>() {
+                    Ok(value) => value,
+                    Err(_) => return rpc_error(id, -32602, "Invalid agent execution generation."),
+                };
+                let observes = get("x-konae-execution-observes").map(str::to_owned);
+                let admission = {
+                    let _project_effects = database_lock(&state, &format!("conversation-effects:{project}")).await;
+                    super::conversations::authorize_agent_mcp_call(
+                        &state, &owner.id, project, conversation, executor, generation, call_id,
+                        name, &arguments, observes.as_deref(),
+                    )
+                };
+                let write = match admission {
+                    Ok(value) => value,
+                    Err(message) => return rpc_error(id, -32000, &message),
+                };
+                execution = Some((project.to_owned(), conversation.to_owned(), executor.to_owned(), generation, call_id.to_owned(), observes, write));
+            }
             let package_transfer = (name.starts_with("transfer_") && name != "transfer_begin")
                 .then(|| transfer(&state, &principal, &arguments).ok())
                 .flatten();
@@ -1045,6 +1119,8 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     Some(id) => owned_project(&state, &owner, id, scope).map(|_| ()),
                     None => owner.require(scope, None),
                 };
+
+
                 let held = |accepted: &[&'static str]| {
                     accepted
                         .iter()
@@ -1091,18 +1167,30 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     }
                 }
             }
+            if let Some((project, conversation, _executor, _generation, call_id, observes, write)) = &execution {
+                let message = result.as_ref().err().map(|error| format!("{error:#}"));
+                let definitive_refusal = message.as_deref().is_some_and(|value| {
+                    value.contains("Permission denied") || value.contains("Sources changed since revision")
+                });
+                if let Err(message) = super::conversations::finish_agent_mcp_call(
+                    &state, &owner.id, project, conversation, call_id, *write, result.is_ok(),
+                    definitive_refusal, observes.as_deref(), name,
+                ) {
+                    result = Err(anyhow::anyhow!(message));
+                }
+            }
             match export_transfer.as_ref().filter(|_| name == "transfer_read") {
                 // One row per component download, written at its first
                 // block or on a refusal, so a 256 MiB database read in
                 // 64 blocks does not push the rest out of the log.
                 Some(t) if arguments["offset"] == 0 || result.is_err() => {
                     let target = json!({"projectId":t["projectId"],"component":t["component"]});
-                    audit(&state, &principal, "package_download", &target, None, &result);
+                    audit(&state, &principal, "package_download", &target, &result);
                 }
                 Some(_) => {}
                 // An upload of a part of an export is audited at its first block.
                 None if component_upload && arguments["offset"] != 0 && result.is_ok() => {}
-                None => audit(&state, &principal, name, &arguments, previous_mode, &result),
+                None => audit(&state, &principal, name, &arguments, &result),
             }
             Ok(tool_result(result))
         }
@@ -1118,10 +1206,8 @@ fn audit(
     principal: &str,
     name: &str,
     arguments: &Value,
-    previous_mode: Option<SignupMode>,
     result: &Result<Value>,
 ) {
-    let mode = |value: &Value| value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
     let (target, detail): (Option<String>, Option<String>) = match name {
         "release_apply" => {
             let project = store(state).ok().and_then(|db| {
@@ -1159,17 +1245,6 @@ fn audit(
             arguments["projectId"].as_str().map(str::to_owned),
             arguments["component"].as_str().map(str::to_owned),
         ),
-        "signup_policy_set" => {
-            let before = previous_mode.map(|m| mode(&json!(m))).unwrap_or_else(|| "unknown".into());
-            let after = match result {
-                Ok(value) => mode(&value["mode"]),
-                Err(_) => format!("{} (refused)", mode(&arguments["mode"])),
-            };
-            (
-                arguments["projectId"].as_str().map(str::to_owned),
-                Some(format!("{before} to {after}")),
-            )
-        }
         _ => (
             arguments["projectId"].as_str().map(str::to_owned),
             None,
@@ -1179,9 +1254,11 @@ fn audit(
 }
 
 /// The sink for an app user's file uploads and deletes, which the runtime
+
 pub(super) fn runtime_audit(root: PathBuf) -> super::runtime::AuditSink {
     Arc::new(move |principal: &str, name: &str, app: &str, ok: bool| record_audit(&root, principal, name, Some(app), None, ok))
 }
+
 
 fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, detail: Option<&str>, ok: bool) {
     let written = store_at(root).and_then(|db| {
@@ -1193,6 +1270,9 @@ fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, 
         let id = db.last_insert_rowid();
         if id % AUDIT_PRUNE_INTERVAL == 0 {
             db.execute("DELETE FROM audit WHERE at<?1", [now_ms().saturating_sub(AUDIT_RETENTION_MS)])?;
+
+
+
             let actor = text(principal);
             let (low, high) = audit_partition(&actor);
             db.execute(
@@ -1207,12 +1287,15 @@ fn record_audit(root: &Path, principal: &str, name: &str, target: Option<&str>, 
     }
 }
 
+
+
 fn audit_partition(actor: &str) -> (String, String) {
     let prefix = actor
         .strip_prefix("runtime:")
         .and_then(|rest| rest.split_once(':'))
         .map(|(deployment, _)| format!("runtime:{deployment}:"))
         .unwrap_or_else(|| actor.to_owned());
+
     let high = if prefix.starts_with("runtime:") { format!("{};", &prefix[..prefix.len() - 1]) } else { format!("{prefix}\u{1}") };
     (prefix, high)
 }
@@ -1298,7 +1381,6 @@ async fn admin_call(
                 .unwrap_or_else(|| format!("app_{}", Uuid::new_v4()));
             owner.require("write", Some(&id))?;
             anyhow::ensure!(valid_app_id(&id), "Invalid project ID. Use lowercase letters, digits, \"_\" and \"-\".");
-            artifact::check_file_access(&a["manifest"]).map_err(anyhow::Error::msg)?;
             let initial_sources = if let Some(transfer_id) = a["sourcesTransferId"].as_str() {
                 let upload = transfer(state, principal, &json!({"transferId":transfer_id}))?;
                 anyhow::ensure!(upload["complete"] == true && upload["direction"] == "upload"
@@ -1352,6 +1434,8 @@ async fn admin_call(
             );
             let template = project_template(a["template"].as_str())?;
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").map(super::sources::manifest_without_runtime).unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
+
+
             let created = async {
                 super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
                     .write(&state.data_root)
@@ -1425,6 +1509,7 @@ async fn admin_call(
                 )?;
                 return Ok(json!({"cancelled":true}));
             }
+
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let db = store(state)?;
             db.execute("DELETE FROM source_read_requests WHERE expires<=?1", [now_ms()])?;
@@ -1498,6 +1583,10 @@ async fn admin_call(
         }
         "project_delete" => {
             let id = a["projectId"].as_str().unwrap();
+            owner.require("write", Some(id))?;
+            let _project_effects = database_lock(state, &format!("conversation-effects:{id}")).await;
+            super::conversations::ensure_no_running_project_effect(&owner.id, id)
+                .map_err(|message| anyhow::anyhow!(message))?;
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let (project, _) = owned_project(state, owner, id, "write")?;
             anyhow::ensure!(project["name"] == a["name"], "{}", DELETE_NAME_MISMATCH);
@@ -1546,6 +1635,7 @@ async fn admin_call(
         "secrets_list" | "secret_set" | "secret_delete" => {
             let id = a["projectId"].as_str().unwrap();
             owned_project(state, owner, id, if name == "secrets_list" { "read" } else { "publish" })?;
+
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let deployment = find_project_deployment(&*state.deployments.read().await, id);
             if name == "secret_set" && super::http::sets_route_secret(&a) {
@@ -1589,6 +1679,7 @@ async fn admin_call(
             let from = a["from"].as_str().unwrap_or("").to_owned();
             let to = a["to"].as_str().unwrap_or("").to_owned();
             tokio::task::spawn_blocking(move || {
+
                 super::usage::validate_range(&from, &to)?;
                 let flushed = super::usage::flush_status();
                 let apps: Vec<Value> = items.into_iter().map(|(id, name, deployment)| {
@@ -1607,25 +1698,6 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "read").await?;
             super::usage::admin_call(&state.data_root, &deployment, name, &a).await
         }
-        "sign_in_methods_read" => {
-            let id = a["projectId"].as_str().unwrap();
-            let deployment = owned_deployment(state, owner, id, "read").await?;
-            Ok(sign_in_methods_value(state, &deployment))
-        }
-        "sign_in_methods_set" => {
-            let id = a["projectId"].as_str().unwrap();
-            let found = owned_deployment(state, owner, id, "manage_users").await?;
-            let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
-            let mut updated = owned_deployment(state, owner, id, "manage_users").await?;
-            let methods = requested_sign_in_methods(state, &updated, &a["methods"])?;
-            let previous = updated.sign_in_methods.clone();
-            updated.sign_in_methods = methods;
-            persist_deployment(state, &updated).await?;
-            state.deployments.write().await.insert(updated.hostname.clone(), updated.clone());
-            let mut value = sign_in_methods_value(state, &updated);
-            value["previousMethods"] = json!(previous);
-            Ok(value)
-        }
         "maintenance_read" => {
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::maintenance::read(&state.data_root, &deployment.id))
@@ -1634,23 +1706,54 @@ async fn admin_call(
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
             Ok(super::notify::contact_view(&deployment))
         }
+        "modules_read" => {
+            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "read").await?;
+            let mut value = kernel::modules::read(&state, &deployment);
+            value["modules"]["auth"]["current"] = sign_in_methods_value(state, &deployment);
+            Ok(value)
+        }
+        "module_set" => {
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let module = a["module"].as_str().unwrap_or_default();
+            let registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json"))?;
+            let scope = registry["modules"][module]["permission"].as_str().ok_or_else(|| anyhow::Error::new(kernel::refusal::refuse("module.unknown", format!("Unknown module {module}."))))?;
+            let deployment = owned_deployment(state, owner, id, scope).await?;
+            let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
+            if module == "auth" {
+                if let Some(methods) = a.get("options").and_then(|options| options.get("signInMethods")) {
+                    requested_sign_in_methods(state, &deployment, methods)?;
+                }
+            }
+            let result = kernel::modules::set(&state.data_root, &deployment.id, module, a["on"].as_bool(), a.get("options"), a.get("expected")).await?;
+            let mut deployments = state.deployments.write().await;
+            if let Some(current) = deployments.values_mut().find(|current| current.id == deployment.id) {
+                current.modules.insert(module.to_owned(), result["state"].clone());
+                if module == "auth" {
+                    if let Some(policy) = result["state"].get("signupPolicy").filter(|value| !value.is_null()) { current.signup_policy = serde_json::from_value(policy.clone())?; }
+                    if let Some(methods) = result["state"].get("signInMethods") { current.sign_in_methods = serde_json::from_value(methods.clone())?; }
+                    persist_deployment(state, current).await?;
+                }
+            }
+            Ok(result)
+        }
         "contact_email_set" => {
             let id = a["projectId"].as_str().unwrap_or_default();
             let deployment = owned_deployment(state, owner, id, "publish").await?;
+
             let _guard = database_lock(state, &format!("project:{}", deployment.project_id)).await;
             let current = owned_deployment(state, owner, id, "publish").await?;
+            super::refusal::check_setting_expected_read(a.get("expected"), json!(current.contact_email), owner.scopes.iter().any(|scope| scope == "read"))?;
             super::notify::set_contact_email(state, &current, a["email"].as_str()).await
         }
         "maintenance_set" => {
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let found = owned_deployment(state, owner, id, "publish").await?;
+            let _guard = database_lock(state, &format!("project:{}", found.project_id)).await;
+            let deployment = owned_deployment(state, owner, id, "publish").await?;
             let on = a["on"].as_bool().ok_or_else(|| anyhow::anyhow!("on must be true or false."))?;
+            let current = super::maintenance::read(&state.data_root, &deployment.id)["maintenance"].clone();
+            super::refusal::check_setting_expected(a.get("expected"), current)?;
             super::maintenance::set(&state.data_root, &deployment.id, on)
-        }
-        "signup_policy_set" => {
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap(), "manage_users").await?;
-            let mode: SignupMode = serde_json::from_value(a["mode"].clone())?;
-            let entries: Option<Vec<String>> = a.get("allowlist").map(|list| serde_json::from_value(list.clone())).transpose()?;
-            set_signup_policy(state, &deployment.id, mode, entries).await
         }
         "database_execute" => {
             let id = a["projectId"].as_str().unwrap();
@@ -1669,6 +1772,8 @@ async fn admin_call(
                 .await,
             )
             .await?;
+
+
             if op == "restore-backup" && answer["holds"].as_array().is_some_and(|holds| holds.iter().any(|part| part == "sources")) {
                 store(state)?.execute("UPDATE projects SET sources=sources+1 WHERE id=?1", [&deployment.project_id])?;
             }
@@ -1700,12 +1805,15 @@ async fn admin_call(
                 return Err(source_revision_refusal(observed.unwrap_or(0)));
             }
             if let Some(package) = input.initial_package.as_ref() {
+
                 if let Some(replay) = replay_import(state, owner, &input.project.id, &package.manifest.package_id)? {
                     return Ok(replay);
                 }
                 super::package::verify(state, principal, &input.project.id, package).await?;
             }
             let schema = validate_release(state, &input, None).await?;
+
+
             let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
             let (hostname, first_release) = match existing {
                 Some(deployment) => (Some(deployment.hostname), false),
@@ -1714,6 +1822,8 @@ async fn admin_call(
             let url = hostname.as_deref().map(|hostname| deployment_url(&state.public_origin, hostname));
             let id = Uuid::new_v4().to_string();
             let expires = now_ms() + 900_000;
+
+
             let cleanup_uploads = release_upload_ids(state, principal, transfer_id, sources_id).await?;
             store(state)?.execute("INSERT INTO plans(id,owner,project,revision,transfer,expires,sources,source_revision,cleanup_uploads) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,owner.id,input.project.id,revision,transfer_id,expires,sources_id,source_revision,serde_json::to_string(&cleanup_uploads)?])?;
             if let Some(package) = input.initial_package.as_ref() {
@@ -1745,7 +1855,10 @@ async fn admin_call(
             }
             let mut input = release_input(state, principal, &row.2, row.5.as_deref(), None).await?;
             anyhow::ensure!(input.project.id == row.0, "Artifact belongs to another project.");
+
             input.contact_email = contact_email(state, owner, &row.0, input.contact_email.as_deref()).await?;
+
+
             input.schema_confirmation = a["confirmSchema"].as_str().map(str::to_owned);
             metadata["name"] = json!(input.project.name);
             metadata["slug"] = json!(input.project.slug);
@@ -1769,13 +1882,28 @@ async fn admin_call(
             super::enter::issue(state, &deployment, a["userId"].as_str().unwrap_or_default(), principal).await
         }
         name if name.starts_with("app_") => {
+
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
             let inviter = super::invitations::Inviter { id: owner.id.clone(), email: inviter_email(state, &owner.id) };
             super::invitations::run(state, &deployment, &inviter, name, &a).await
         }
         name if name.starts_with("domain_") || name.starts_with("path_") || name.starts_with("hostname_") => {
             let scope = if name.ends_with("_read") { "read" } else { "publish" };
-            let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), scope).await?;
+            let id = a["projectId"].as_str().unwrap_or_default();
+            let found = owned_deployment(state, owner, id, scope).await?;
+            let _guard = if scope == "publish" && !name.starts_with("hostname_") { Some(database_lock(state, &format!("project:{}", found.project_id)).await) } else { None };
+            let deployment = owned_deployment(state, owner, id, scope).await?;
+            if a.get("expected").is_some() && name != "hostname_set" {
+                let current = if name == "domain_set" || name == "domain_clear" {
+                    json!(super::domain::admin_call(state, &deployment, "domain_read", &a).await?["hostname"])
+                } else if name == "path_set" || name == "path_clear" {
+                    let view = super::path::admin_call(state, &deployment, "path_read", &a).await?;
+                    json!({"enabled":view["enabled"],"name":view["name"],"acceptSharedOrigin":view["acceptSharedOrigin"]})
+                } else {
+                    Value::Null
+                };
+                super::refusal::check_setting_expected_read(a.get("expected"), current, owner.scopes.iter().any(|scope| scope == "read"))?;
+            }
             if name.starts_with("domain_") {
                 super::domain::admin_call(state, &deployment, name, &a).await
             } else if name.starts_with("hostname_") {
@@ -1789,6 +1917,12 @@ async fn admin_call(
 }
 
 const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
+
+
+
+
+
+
 
 async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
     use super::import::{Outcome, Target};
@@ -1827,15 +1961,15 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 "encodings": input.artifact.encodings,
             });
             anyhow::ensure!(input.project.id == project, "The release belongs to another project.");
-            anyhow::ensure!(
-                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none(),
-                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
-            );
             let against = match &package {
                 Some(package) => super::package::component_paths(state, &project, package)?.into_iter().find(|(name, _)| name == "database").map(|(_, path)| path),
                 None => None,
             };
             let change = validate_release(state, &input, against.as_deref()).await?;
+            anyhow::ensure!(
+                input.initial_package.is_none() && input.initial_signup_policy.is_none() && input.initial_sign_in_methods.is_none() && input.initial_modules.is_none(),
+                "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
+            );
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
                 return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
             }
@@ -1843,6 +1977,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         }
         None => None,
     };
+
     let resolved_contact_email = match &release {
         Some((payload, _)) => Some(contact_email(state, owner, &project, payload["contactEmail"].as_str()).await?),
         None => None,
@@ -1882,6 +2017,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
     Ok(answer)
 }
 
+
 async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Value> {
     if has_package {
         let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
@@ -1894,6 +2030,10 @@ async fn restore_import_after_release_failure(state: &Konae, deployment: &Deploy
     Err(error)
 }
 
+
+
+
+
 pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     db.busy_timeout(std::time::Duration::from_secs(5)).ok()?;
@@ -1901,13 +2041,16 @@ pub(super) fn inviter_email(state: &Konae, owner_id: &str) -> Option<String> {
 }
 
 async fn contact_email(state: &Konae, owner: &Owner, project: &str, given: Option<&str>) -> Result<Option<String>> {
-    if let Some(given) = given {
-        let email = super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))?;
-        return Ok(Some(email));
+    let given = given.map(|given| super::auth::normalize_email(given).map_err(|_| anyhow::anyhow!(super::notify::CONTACT_EMAIL_INVALID))).transpose()?;
+    let deployment = find_project_deployment(&*state.deployments.read().await, project);
+    if deployment.is_none() && given.is_some() {
+        return Ok(given);
     }
-    let kept = find_project_deployment(&*state.deployments.read().await, project).and_then(|deployment| deployment.contact_email);
-    Ok(kept.or_else(|| owner_email(state, &owner.id)))
+    let kept = deployment.and_then(|deployment| deployment.contact_email);
+    Ok(kept.or(given).or_else(|| owner_email(state, &owner.id)))
 }
+
+
 
 fn owner_email(state: &Konae, owner: &str) -> Option<String> {
     let db = Connection::open_with_flags(state.data_root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
@@ -1916,6 +2059,8 @@ fn owner_email(state: &Konae, owner: &str) -> Option<String> {
 }
 
 const METHODS_INVALID: &str = "Name the methods as password and google.";
+
+
 
 fn requested_sign_in_methods(state: &Konae, deployment: &Deployment, requested: &Value) -> Result<Vec<SignInMethod>> {
     use super::refusal::refuse;
@@ -1927,6 +2072,10 @@ fn requested_sign_in_methods(state: &Konae, deployment: &Deployment, requested: 
     }
     Ok(methods)
 }
+
+
+
+
 
 fn sign_in_methods_value(state: &Konae, deployment: &Deployment) -> Value {
     let client = super::google::client_set(state, deployment);
@@ -1949,6 +2098,9 @@ fn sign_in_methods_value(state: &Konae, deployment: &Deployment) -> Value {
 
 const GOOGLE_CLIENT_MISSING: &str = "This app asks for Google sign-in, but its Google client ID and client secret are not set on this installation, so its sign-in page offers only email and password. Set both, and add this app's redirect URIs to the Google client. Until then, people who signed in with Google sign in with a password, or set one with Forgot your password.";
 
+
+
+
 fn project_template(id: Option<&str>) -> Result<Value> {
     let all: Value = serde_json::from_str(include_str!("project-templates.json"))?;
     let id = id.or(all["default"].as_str()).unwrap_or_default();
@@ -1962,8 +2114,12 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
     match super::clerk::ClerkConfig::from_env() {
         Ok(Some(config)) => Json(json!({"mode":"clerk","publishableKey":config.publishable_key})).into_response(),
         Ok(None) => {
+
             let editor = std::env::var("KONAE_EDITOR_DIR").is_ok_and(|dir| !dir.trim().is_empty());
+
             let mail = std::env::var("KONAE_MAIL_TRANSPORT").unwrap_or_default();
+
+
             let local = url::Url::parse(&state.public_origin).ok().and_then(|u| u.host_str().map(crate::is_local_host)).unwrap_or(false);
             let default_key = local && state.setup_key == crate::DEFAULT_SETUP_KEY;
             Json(json!({"mode":"local","admission":super::admission::mode(&state).as_str(),"emailVerificationRequired":state.accounts.verification == auth::Verification::Required,"editor":editor,"mailToFile":mail == "development","defaultSetupKey":default_key.then_some(crate::DEFAULT_SETUP_KEY)})).into_response()
@@ -1971,6 +2127,9 @@ async fn owner_config(State(state): State<Konae>, headers: HeaderMap) -> Respons
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "Owner identity is not configured."),
     }
 }
+
+
+
 
 pub(super) async fn owner_session(State(state): State<Konae>, headers: HeaderMap) -> Response {
     if !super::oauth::valid_owner_host(&state, &headers).await { return StatusCode::FORBIDDEN.into_response(); }
@@ -2057,12 +2216,15 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
         Err(_) => return error(StatusCode::BAD_REQUEST, "Expected JSON."),
     };
     let client = state.guards.client_ip(peer, &headers);
+
     if let Err(wait) = state
         .guards
         .auth_attempt("owner", client, a["email"].as_str().unwrap_or(""))
     {
         return too_many_attempts(wait);
     }
+
+
     let admission = if signup {
         match super::admission::read(&state, &a) {
             Ok(admission) => Some(admission),
@@ -2088,6 +2250,8 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
             Err(e) => auth_error(e),
         };
     }
+
+
     let (result, _guard) = if let Some(admission) = admission {
         match blocking(move || auth::NewAccount::prepare(&email, &password)).await {
             Ok(account) => {
@@ -2119,6 +2283,7 @@ async fn owner_auth(state: Konae, request: Request, signup: bool) -> Response {
     }
 }
 
+
 async fn claim_for_first_owner(state: &Konae, user_id: &str) {
     if let Ok(db) = store(state) {
         let owner_db = Connection::open(state.data_root.join("owners.sqlite")).unwrap();
@@ -2132,6 +2297,7 @@ async fn claim_for_first_owner(state: &Konae, user_id: &str) {
         }
     }
 }
+
 
 pub(super) fn owner_session_response(state: &Konae, session: auth::AuthSession) -> Response {
     let cookie_name = owner_cookie_name(state);
@@ -2280,6 +2446,8 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+
+
     #[tokio::test]
     async fn the_path_host_refuses_administration() {
         use tower::ServiceExt;
@@ -2301,6 +2469,9 @@ mod tests {
         }
         let _ = tokio::fs::remove_dir_all(root).await;
     }
+
+
+
 
     #[tokio::test]
     async fn an_expired_token_says_it_expired() {
@@ -2383,6 +2554,288 @@ mod tests {
         assert_eq!(inspected["deployment"]["hostname"], moved["hostname"]);
         assert_eq!(inspected["deployment"]["url"], moved["url"]);
         assert!(moved["hostname"].as_str().unwrap().starts_with("scope-two."), "{moved}");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn setting_changed_redacts_current_value_without_read_permission() {
+        let root = std::env::temp_dir().join(format!("konae-setting-redaction-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let body = json!({"project":{"id":"app_redact","name":"Redact","slug":"redact","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Redact</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_redact','o','{}')", []).unwrap();
+        let publish = Owner { id:"o".into(), display:None, scopes:vec!["publish".into()], projects:vec![], session:false };
+        let publish_and_read = Owner { scopes:vec!["publish".into(),"read".into()], ..publish.clone() };
+        for (owner, contains_value) in [(&publish, false), (&publish_and_read, true)] {
+            let error = admin_call(&state, owner, "owner:o", "contact_email_set", json!({"projectId":"app_redact","email":"new@example.test","expected":"stale@example.test"})).await.unwrap_err();
+            let refusal = error.downcast_ref::<crate::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, "setting.changed");
+            assert_eq!(refusal.message.contains("current value is null"), contains_value);
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn module_tools_read_back_changes_and_refuse_stale_or_unauthorized_writes() {
+        let root = std::env::temp_dir().join(format!("konae-module-tools-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let body = json!({
+            "project":{"id":"app_modules","name":"Modules","slug":"modules","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},
+            "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Modules</title>"}}
+        });
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_modules','o','{}')", []).unwrap();
+        let publisher = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into(),"manage_users".into()], projects:vec![], session:false };
+        let reader = Owner { scopes:vec!["read".into()], ..publisher.clone() };
+        let before = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"auth","on":true})).await.unwrap();
+        let auth_on = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        let file_state = auth_on["modules"]["files"]["state"].clone();
+        admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"files","on":true,"options":{"fileAccess":"app-users"},"expected":file_state})).await.unwrap();
+        let files_after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        assert_eq!(files_after["modules"]["files"]["state"]["on"], true);
+        assert_eq!(files_after["modules"]["files"]["state"]["fileAccess"], "app-users");
+        assert_eq!(state.deployments.read().await.values().find(|item| item.id == "app_modules").unwrap().modules["files"]["fileAccess"], "app-users");
+        let expected = before["modules"]["seo"]["state"].clone();
+        admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":true,"options":{"canonical":"path"},"expected":expected})).await.unwrap();
+        let after = admin_call(&state, &publisher, "owner:o", "modules_read", json!({"projectId":"app_modules"})).await.unwrap();
+        assert_eq!(after["modules"]["seo"]["state"]["on"], true);
+        assert_eq!(after["modules"]["seo"]["state"]["canonical"], "path");
+        assert_eq!(state.deployments.read().await.values().find(|item| item.id == "app_modules").unwrap().modules["seo"]["canonical"], "path");
+        assert_eq!(after["modules"]["actions"]["state"]["on"], false);
+        assert_eq!(after["modules"]["actions"]["switch"], true);
+        let stale = admin_call(&state, &publisher, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false,"expected":expected})).await.unwrap_err();
+        let refusal = stale.downcast_ref::<crate::refusal::Refusal>().unwrap();
+        assert_eq!(refusal.code, "module.changed");
+        let denied = admin_call(&state, &reader, "owner:o", "module_set", json!({"projectId":"app_modules","module":"seo","on":false})).await.unwrap_err().to_string();
+        assert_eq!(denied, "Permission denied for publish.");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn file_api_key_creation_requires_files_but_not_http() {
+        let root = std::env::temp_dir().join(format!("konae-api-key-http-module-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into(),"manage_users".into()], projects:vec![], session:false };
+        let body = json!({"project":{"id":"api_key_http","name":"API key HTTP","slug":"api-key-http","manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Keys</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('api_key_http','o','{}')", []).unwrap();
+        let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"auth","on":true,"expected":before["modules"]["auth"]["state"]})).await.unwrap();
+        let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"files","on":true,"expected":before["modules"]["files"]["state"]})).await.unwrap();
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        assert_eq!(current["modules"]["http"]["state"]["on"], false);
+        let created = admin_call(&state, &owner, "owner:o", "api_keys_create", json!({"projectId":"api_key_http","name":"Files key","actions":[],"files":["public"]})).await.unwrap();
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"api_key_http"})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"api_key_http","module":"files","on":false,"expected":current["modules"]["files"]["state"]})).await.unwrap();
+        let refused = admin_call(&state, &owner, "owner:o", "api_keys_create", json!({"projectId":"api_key_http","name":"Blocked","files":["public"]})).await.unwrap_err();
+        assert!(refused.to_string().contains("Module files is off."));
+        assert_eq!(admin_call(&state, &owner, "owner:o", "api_keys_list", json!({"projectId":"api_key_http"})).await.unwrap()["keys"].as_array().unwrap().len(), 1);
+        admin_call(&state, &owner, "owner:o", "api_keys_revoke", json!({"projectId":"api_key_http","keyId":created["keyId"]})).await.unwrap();
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn actions_cannot_be_turned_off_while_an_action_feature_is_declared() {
+        let root = std::env::temp_dir().join(format!("konae-actions-in-use-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"publish".into()], projects:vec![], session:false };
+        let body = json!({"project":{"id":"app_actions_in_use","name":"Actions in use","slug":"actions-in-use","manifest":{},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>Actions</title>"}}});
+        assert_eq!(deploy(&state, body.to_string().as_bytes()).await.status(), StatusCode::OK);
+        store(&state).unwrap().execute("INSERT INTO projects(id,owner,body) VALUES('app_actions_in_use','o','{}')", []).unwrap();
+        let cases = [
+            ("route", json!({"kind":"query","access":"anonymous","http":{"method":"GET","path":"/route"}})),
+            ("call", json!({"kind":"call","method":"POST","url":"https://example.test/hook"})),
+            ("schedule", json!({"kind":"mutation","access":"anonymous","schedule":{"every":"5m"}})),
+            ("notice", json!({"kind":"mutation","access":"anonymous","notify":{"to":"owner","subject":"Changed","body":"Changed"}})),
+            ("page path", json!({"kind":"query","access":"anonymous","page":{"path":"/notes/:slug","file":"note.html"}})),
+            ("authenticated access", json!({"kind":"query","access":"authenticated"})),
+        ];
+        for (index, (label, action)) in cases.into_iter().enumerate() {
+            let name = format!("feature_{index}");
+            let actions = json!({"version":1,"actions":{name:action}});
+            tokio::fs::write(crate::layout::sources(&state.data_root, "app_actions_in_use").join("actions.json"), serde_json::to_vec(&actions).unwrap()).await.unwrap();
+            let record = kernel::layout::record(&state.data_root, "app_actions_in_use");
+            let mut installed: Value = serde_json::from_slice(&tokio::fs::read(&record).await.unwrap()).unwrap();
+            installed["actions"] = json!(serde_json::to_string(&actions).unwrap());
+            tokio::fs::write(&record, serde_json::to_vec(&installed).unwrap()).await.unwrap();
+            let before = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"app_actions_in_use"})).await.unwrap();
+            if before["modules"]["actions"]["state"]["on"] != true {
+                admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"app_actions_in_use","module":"actions","on":true,"expected":before["modules"]["actions"]["state"]})).await.unwrap();
+            }
+            let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":"app_actions_in_use"})).await.unwrap();
+            let error = admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":"app_actions_in_use","module":"actions","on":false,"expected":current["modules"]["actions"]["state"]})).await.unwrap_err();
+            let refusal = error.downcast_ref::<kernel::refusal::Refusal>().unwrap();
+            assert_eq!(refusal.code, "module.in-use", "{label}");
+            assert!(refusal.message.contains("Module actions is in use by actions.json"), "{label}: {}", refusal.message);
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn first_release_persists_inferred_files_state_for_missing_and_partial_initial_modules() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-first-files-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        for (id, initial_modules) in [("app_first_files_none", None), ("app_first_files_partial", Some(json!({"seo":{"on":false}})))] {
+            admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+            let mut payload = json!({
+                "project":{"id":id,"name":"Files first release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":"{\"version\":1,\"actions\":{\"notes.list\":{\"kind\":\"query\",\"access\":\"anonymous\",\"statement\":\"SELECT 1 AS n LIMIT 1\",\"bindings\":[]}}}","schema.sql":""}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<script>miniapp.files.upload()</script>"}}
+            });
+            if let Some(modules) = initial_modules { payload["initialModules"] = modules; }
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+            let deployment = state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().clone();
+            assert_eq!(deployment.modules["files"]["on"], true, "{id}");
+            assert_eq!(deployment.modules["actions"]["on"], true, "{id}");
+            let settings = crate::Settings::read(&state.data_root, id).unwrap();
+            assert_eq!(settings.modules["files"]["on"], true, "{id}");
+            assert_eq!(settings.modules["actions"]["on"], true, "{id}");
+            let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["files"]["on"], true, "{id}");
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], true, "{id}");
+            let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+            let expected = read["modules"]["seo"]["state"].clone();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"seo","on":true,"expected":expected})).await.unwrap();
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn first_release_persists_inferred_module_state_in_memory_and_on_disk() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-first-actions-release-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        for (id, actions, schema, expected_actions, expected_http, expected_calls) in [
+            ("app_first_actions_on", r#"{"version":1,"actions":{"notes.list":{"kind":"query","access":"anonymous","statement":"SELECT 1 AS n LIMIT 1","bindings":[]}}}"#, "", true, false, false),
+            ("app_first_actions_off", r#"{"version":1,"actions":{}}"#, "", false, false, false),
+            ("app_first_http_on", r#"{"version":1,"actions":{"hooks.receive":{"kind":"mutation","access":"anonymous","statement":"INSERT INTO events (name) VALUES (?1)","bindings":[{"source":"input","key":"name","type":"string"}],"http":{"method":"POST","path":"/hooks/events"}}}}"#, "CREATE TABLE IF NOT EXISTS events(name TEXT);", true, true, false),
+            ("app_first_calls_on", r#"{"version":1,"actions":{"notice.send":{"kind":"call","access":"anonymous","bindings":[],"method":"POST","url":"https://example.test/hooks/events"}}}"#, "", true, false, true),
+        ] {
+            admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"First actions release","slug":id,"manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+            let payload = json!({
+                "project":{"id":id,"name":"First actions release","slug":id,"manifest":{"version":1,"visibility":"public"},"files":{"actions.json":actions,"schema.sql":schema}},
+                "visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<!doctype html><title>Static</title>"}}
+            });
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":id,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+            admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+            assert_eq!(state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_actions, "memory actions {id}");
+            assert_eq!(crate::Settings::read(&state.data_root, id).unwrap().modules["actions"]["on"], expected_actions, "disk actions {id}");
+            let reloaded = kernel::load_deployments(&state.data_root, "http://localhost").await.unwrap();
+            assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules["actions"]["on"], expected_actions, "reload actions {id}");
+            for (module, expected) in [("http", expected_http), ("calls", expected_calls)] {
+                assert_eq!(state.deployments.read().await.values().find(|deployment| deployment.id == id).unwrap().modules[module]["on"], expected, "memory {module} {id}");
+                assert_eq!(crate::Settings::read(&state.data_root, id).unwrap().modules[module]["on"], expected, "disk {module} {id}");
+                assert_eq!(reloaded.values().find(|deployment| deployment.id == id).unwrap().modules[module]["on"], expected, "reload {module} {id}");
+            }
+            let read = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+            let expected = read["modules"]["actions"]["state"].clone();
+            admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"actions","on":expected_actions,"expected":expected})).await.unwrap();
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn project_create_normalizes_legacy_file_access_on_both_metadata_inputs() {
+        use base64::Engine;
+        use sha2::Digest;
+        let root = std::env::temp_dir().join(format!("konae-create-file-access-{}", Uuid::new_v4()));
+        let (kernel_state, _) = kernel::tests::login_test_state(&root, "public").await;
+        let state = Konae::for_test(kernel_state);
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into()], projects:vec![], session:false };
+        let source = json!({"id":"app_legacy_access","name":"Legacy access","slug":"legacy-access","files":{"index.html":"<main>Legacy</main>"},"directories":[],"manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"updatedAt":1});
+        let bytes = serde_json::to_vec(&source).unwrap();
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
+        let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":null,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+        let transfer_id = transfer["transferId"].as_str().unwrap();
+        transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+        transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":"app_legacy_access","name":"Legacy access","slug":"legacy-access","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"sourcesTransferId":transfer_id})).await.unwrap();
+        let saved = super::super::sources::read(&state.data_root, "app_legacy_access").await.unwrap().unwrap();
+        assert!(saved["manifest"].get("fileAccess").is_none());
+        assert_eq!(saved["files"]["index.html"], "<main>Legacy</main>");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_file_access_survives_release_apply_and_project_import_for_other_users() {
+        async fn upload_release(state: &Konae, payload: &Value, project: &str) -> String {
+            let bytes = serde_json::to_vec(payload).unwrap();
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let transfer = transfer_call(&state.kernel, "owner:o", "transfer_begin", &json!({"projectId":project,"size":bytes.len(),"sha256":digest}), false).await.unwrap();
+            let transfer_id = transfer["transferId"].as_str().unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_write", &json!({"transferId":transfer_id,"offset":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}), false).await.unwrap();
+            transfer_call(&state.kernel, "owner:o", "transfer_complete", &json!({"transferId":transfer_id}), false).await.unwrap();
+            transfer_id.to_owned()
+        }
+        use axum::{http::{Request, header}, Router};
+        use base64::Engine;
+        use sha2::Digest;
+        use tower::ServiceExt;
+        let root = std::env::temp_dir().join(format!("konae-file-access-doors-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(crate::layout::apps(&root)).await.unwrap();
+        let state = Konae::for_test(AppState::for_test(&root));
+        let owner = Owner { id:"o".into(), display:None, scopes:vec!["read".into(),"write".into(),"publish".into()], projects:vec![], session:false };
+        let id = "app_file_access_doors";
+        admin_call(&state, &owner, "owner:o", "project_create", json!({"projectId":id,"name":"File access","slug":"file-access","manifest":{"version":1,"visibility":"public"}})).await.unwrap();
+        let payload = json!({"project":{"id":id,"name":"File access","slug":"file-access","manifest":{"version":1,"visibility":"public","fileAccess":"app-users"},"files":{"actions.json":"{\"version\":1,\"actions\":{}}","schema.sql":""}},"visibility":"public","artifact":{"version":1,"entrypoint":"index.html","files":{"index.html":"<title>File access</title>"}}});
+        let transfer_id = upload_release(&state, &payload, id).await;
+        let plan = admin_call(&state, &owner, "owner:o", "release_plan", json!({"transferId":transfer_id,"observedSourcesRevision":0})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "release_apply", json!({"planId":plan["planId"]})).await.unwrap();
+        let deployment = state.kernel.deployments.read().await.values().find(|item| item.id == id).unwrap().clone();
+        assert_eq!(deployment.modules["files"]["fileAccess"], "app-users");
+
+        let auth = kernel::auth::AuthService::open(kernel::layout::identity(&state.data_root, id)).unwrap();
+        let uploader = auth.signup("uploader@example.test", "correct horse battery").unwrap();
+        let other = auth.signup("other@example.test", "correct horse battery").unwrap();
+        let file_id = "018f2b2c-4a10-7a01-8000-000000000001";
+        let file_dir = kernel::layout::files(&state.data_root, id);
+        tokio::fs::create_dir_all(&file_dir).await.unwrap();
+        tokio::fs::write(file_dir.join(format!("{file_id}.blob")), b"door proof\n").await.unwrap();
+        let file = json!([{"id":file_id,"name":"proof.txt","type":"text/plain","size":11,"visibility":"private","ownerId":uploader.user.user_id,"createdAt":1}]);
+        tokio::fs::write(file_dir.join("index.json"), serde_json::to_vec(&file).unwrap()).await.unwrap();
+        let read_as = |token: &str| {
+            let request = Request::builder().uri(format!("/_konae/files/{file_id}")).header(header::HOST, deployment.hostname.as_str()).header(header::COOKIE, format!("konae_app_session={token}")).body(axum::body::Body::empty()).unwrap();
+            kernel::stack(state.kernel.clone(), Router::new()).oneshot(request)
+        };
+        let first_read = read_as(&other.token).await.unwrap();
+        assert_eq!(first_read.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(first_read.into_body(), 1024).await.unwrap().as_ref(), b"door proof\n");
+
+        let current = admin_call(&state, &owner, "owner:o", "modules_read", json!({"projectId":id})).await.unwrap();
+        admin_call(&state, &owner, "owner:o", "module_set", json!({"projectId":id,"module":"files","options":{"fileAccess":null},"expected":current["modules"]["files"]["state"]})).await.unwrap();
+        assert_ne!(read_as(&other.token).await.unwrap().status(), StatusCode::OK);
+        let import_transfer = upload_release(&state, &payload, id).await;
+        admin_call(&state, &owner, "owner:o", "project_import", json!({"projectId":id,"replace":"sources","transferId":import_transfer})).await.unwrap();
+        let final_deployment = state.kernel.deployments.read().await.values().find(|item| item.id == id).unwrap().clone();
+        assert_eq!(final_deployment.modules["files"]["fileAccess"], "app-users");
+        let final_read = read_as(&other.token).await.unwrap();
+        assert_eq!(final_read.status(), StatusCode::OK);
+        assert_eq!(axum::body::to_bytes(final_read.into_body(), 1024).await.unwrap().as_ref(), b"door proof\n");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -2546,7 +2999,7 @@ mod tests {
         let (state, _) = kernel::tests::login_test_state(&root, "public").await;
         let state = Konae::for_test(state);
         let ok: Result<Value> = Ok(json!({}));
-        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), None, &ok);
+        audit(&state, "owner:ana", "project_create", &json!({"projectId": "p1"}), &ok);
         let rows = AUDIT_MAX_ROWS + 3 * AUDIT_PRUNE_INTERVAL;
         {
             let db = store(&state).unwrap();
@@ -2607,14 +3060,16 @@ mod tests {
         for definition in admin_tools(&reader) {
             assert!(definition["inputSchema"]["properties"].get("deploymentId").is_none(), "owner tool {} uses deploymentId", definition["name"]);
         }
-        assert!(!names(&reader).contains(&"signup_policy_set".to_owned()));
-        assert!(names(&reader).contains(&"sign_in_methods_read".to_owned()));
-        assert!(!names(&reader).contains(&"sign_in_methods_set".to_owned()));
+        for removed in ["signup_policy_set", "sign_in_methods_set", "sign_in_methods_read"] { assert!(!names(&reader).contains(&removed.to_owned())); }
         let publisher = Owner { scopes: vec!["read".into(), "publish".into()], ..reader.clone() };
-        assert!(!names(&publisher).contains(&"signup_policy_set".to_owned()), "publish alone does not change who may sign up");
+        assert!(names(&publisher).contains(&"module_set".to_owned()));
         assert!(!names(&publisher).iter().any(|name| name.starts_with("app_")));
         let manager = Owner { scopes: vec!["read".into(), "manage_users".into()], ..reader };
-        for tool in ["signup_policy_set", "sign_in_methods_set", "app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
+        assert!(names(&manager).contains(&"module_set".to_owned()));
+        let registry: Value = serde_json::from_str(include_str!("../../kernel/src/modules.json")).unwrap();
+        assert_eq!(registry["modules"]["auth"]["permission"], "manage_users");
+        for removed in ["signup_policy_set", "sign_in_methods_set", "sign_in_methods_read"] { assert!(!names(&manager).contains(&removed.to_owned())); }
+        for tool in ["app_users_list", "app_user_suspend", "app_user_resume", "app_invitations_create", "app_invitations_list", "app_invitation_resend", "app_invitation_revoke"] {
             assert!(names(&manager).contains(&tool.to_owned()), "{tool}");
         }
     }
@@ -2646,7 +3101,7 @@ mod tests {
                 deployment.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
             }
             let answer = match case["tool"].as_str().unwrap() {
-                "sign_in_methods_set" => requested_sign_in_methods(&state, &deployment, &case["input"]["methods"]).map(|_| json!(null)),
+                "module_set" => requested_sign_in_methods(&state, &deployment, &case["input"]["methods"]).map(|_| json!(null)),
                 tool => super::super::http::secrets_call(&db, "p1", Some(&deployment), tool, &case["input"]),
             };
             match (case["error"].as_str(), answer) {
@@ -2664,7 +3119,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_methods_set_keeps_password_and_refuses_google_without_the_apps_client() {
+    fn auth_sign_in_methods_keep_password_and_refuse_google_without_the_apps_client() {
         let root = std::env::temp_dir().join(format!("konae-methods-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state = Konae::for_test(AppState {
@@ -2690,14 +3145,17 @@ mod tests {
             requested_sign_in_methods(&state, &deployment, &json!(["google", "password", "google"])).unwrap(),
             vec![SignInMethod::Password, SignInMethod::Google]
         );
+
         deployment.sign_in_methods = vec![SignInMethod::Password, SignInMethod::Google];
         let value = sign_in_methods_value(&state, &deployment);
         assert_eq!(value["googleClient"], json!({"clientIdSet": true, "clientSecretSet": true}));
         assert_eq!(value["offered"], json!(["password", "google"]));
         assert_eq!(value["redirectUris"], json!(["http://practice.localhost:8790/_konae/auth/google/callback"]));
         assert!(!value.to_string().contains("GOCSPX"));
+
         let deleted = super::super::http::secrets_call(&db, "p1", Some(&deployment), "secret_delete", &json!({"name": "google_client_secret"}));
         assert_eq!(deleted.unwrap_err().to_string(), "Google sign-in is on for this app and needs google_client_secret. Turn Google off before deleting it.");
+
         db.execute("DELETE FROM secrets", []).unwrap();
         let value = sign_in_methods_value(&state, &deployment);
         assert_eq!((value["methods"].clone(), value["offered"].clone()), (json!(["password", "google"]), json!(["password"])));
@@ -2706,13 +3164,17 @@ mod tests {
     }
 
 
+
+
     #[test]
     fn a_refused_source_save_names_the_expected_format() {
         let manifest = json!({"version":1,"visibility":"private","runtime":{"database":{"mode":"declared-actions","actions":[]},"auth":{"mode":"optional"},"files":{"access":"deployment"}}});
         let base = json!({"id":"app_a","name":"A","slug":"a","files":{"index.html":"<main></main>"},"directories":[],"manifest":manifest,"updatedAt":1});
         assert!(validate_sources(&base, "app_a").is_ok());
         let refusal = |change: &dyn Fn(&mut Value)| { let mut source = base.clone(); change(&mut source); validate_sources(&source, "app_a").unwrap_err().to_string() };
-        assert_eq!(refusal(&|s| s["manifest"]["fileAccess"] = json!("public")), artifact::FILE_ACCESS_MESSAGE);
+        let mut old_file_option = base.clone();
+        old_file_option["manifest"]["fileAccess"] = json!("public");
+        assert!(validate_sources(&old_file_option, "app_a").is_ok());
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("directories"); }).starts_with("Invalid project directories."));
         assert!(refusal(&|s| s["manifest"] = json!({"version":1})).starts_with("Invalid project manifest. Send version 1 and visibility"));
         assert!(refusal(&|s| { s.as_object_mut().unwrap().remove("updatedAt"); }).starts_with("Invalid project metadata. Send { id, name, slug, files, directories, manifest, updatedAt }"));
@@ -2793,7 +3255,7 @@ mod tests {
         assert_eq!(tokio::fs::read(legacy_path).await.unwrap(), before_legacy);
         let source = crate::sources::read(&state.data_root, id).await.unwrap().unwrap();
         assert_eq!(source["name"], "Legacy saved draft");
-        assert_eq!(source["manifest"]["fileAccess"], "app-users");
+        assert!(source["manifest"].get("fileAccess").is_none());
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
@@ -2817,6 +3279,9 @@ mod tests {
         let invalid = json!({"format":"delta","metadata":{"name":"A","slug":"a","directories":[],"manifest":manifest,"updatedAt":4},"files":{"public/.secret":"x"},"removedPaths":[]});
         assert!(validate_sources(&merge_source_delta(&merged, &invalid, "app_a").unwrap(), "app_a").is_err());
     }
+
+
+
 
     #[tokio::test]
     async fn platform_guide_sdk_topic_is_the_rendered_contract() {

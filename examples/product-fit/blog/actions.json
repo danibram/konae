@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "actions": {
+    "posts.head": {
+      "kind": "query",
+      "access": "anonymous",
+      "page": { "path": "/posts/:slug", "file": "post.html", "list": "posts.published" },
+      "statement": "SELECT title, summary AS description, cover AS image, body FROM posts WHERE slug = ?1 AND published = 1 LIMIT 1",
+      "bindings": [{ "source": "input", "key": "slug", "type": "string", "maxLength": 120 }]
+    },
+    "posts.published": {
+      "kind": "query",
+      "access": "anonymous",
+      "statement": "SELECT slug, updated FROM posts WHERE published = 1 LIMIT 1000",
+      "bindings": []
+    }
+  }
+}

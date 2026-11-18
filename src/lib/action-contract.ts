@@ -117,6 +117,7 @@ export type ContractAction = {
   schedule?: ScheduleDeclaration;
   call?: ContractCall;
   thenOf?: string;
+  page?: { path: string; file: string; list?: string };
   runtime: { endpoint: string; tool: string; sdk: string; callers: ContractCaller[] };
   http?: ContractHttp;
   errors: ContractError[];
@@ -278,6 +279,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
         ? { kind: "queued", fields: ["callId", "queued"] }
         : { kind: "changes", fields: ["changes", "lastInsertId"] };
   const http = action.http ? contractHttp(action.http, action.kind) : undefined;
+  const page = action.page;
   const timerOnly = Boolean(action.schedule && !action.http);
   return {
     name: action.name,
@@ -291,6 +293,7 @@ function contractAction(action: ServerActionDefinition, tables: SchemaTables, ca
     ...(action.notify ? { notify: { ...action.notify } } : {}),
     ...(action.schedule ? { schedule: { ...action.schedule } } : {}),
     ...(action.call ? { call: contractCall(action.call) } : {}),
+    ...(page ? { page: { ...page } } : {}),
     ...(callOf ? { thenOf: callOf } : {}),
     runtime: { ...RUNTIME, callers: http?.onlyDoor === "always" || callOf || timerOnly ? [] : runtimeCallers(access, Boolean(http)) },
     ...(http ? { http } : {}),
@@ -940,6 +943,7 @@ export function programFromContract(contract: ActionContract): ServerActionProgr
       ...(action.guard ? { guard: action.guard } : {}),
       ...(action.notify ? { notify: { ...action.notify } } : {}),
       ...(action.schedule ? { schedule: { ...action.schedule } } : {}),
+      ...(action.page ? { page: { ...action.page } } : {}),
       ...(action.http ? {
         http: {
           method: action.http.method,

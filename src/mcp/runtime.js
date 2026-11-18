@@ -80,6 +80,20 @@
   }
 
   window.miniapp = {
+    page: {
+      get params() {
+        const value = typeof document === 'undefined' ? undefined : document.querySelector?.('meta[name="konae-page-params"]')?.getAttribute("content");
+        if (!value) return {};
+        try {
+          const parsed = JSON.parse(value);
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch { return {}; }
+      },
+      url: path => {
+        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || /[\\\u0000-\u001f\u007f]/.test(path)) throw Error('An app page path must start with one slash.');
+        return base + path;
+      }
+    },
     actions: { call: async (name, input = {}) => {
       try { return await call('actions_invoke', { name, input }); }
       catch (error) { if (error.status === 401) location.assign(base + '/_konae/login'); throw error; }
@@ -89,7 +103,7 @@
         try { return await call('auth_session'); }
         catch (error) { if (error.status === 401) return { userId: 'anonymous', name: 'Anonymous', role: 'anonymous' }; throw error; }
       },
-      signIn: () => { location.assign(base + '/_konae/login'); },
+      signIn: async () => { await call('auth_session'); location.assign(base + '/_konae/login'); },
       signInWithGoogle: () => { location.assign(base + '/_konae/auth/google/start'); },
       signOut: async () => {
         const result = await call('auth_logout');

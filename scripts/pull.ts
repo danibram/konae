@@ -9,7 +9,7 @@ import { downloadToFile } from "./package-files";
 import { readTar } from "../src/lib/tar";
 import { sourceDigest } from "../src/deployments/source-digest";
 import { sourceFilesFrom } from "../src/lib/source-files";
-import { settingsDigest } from "./settings-digest";
+import { settingsDigest, settingsMatchAfterLocalModuleDecision } from "./settings-digest";
 import { matchesSourceRevisionScope, sourceRevisionScope } from "./source-revision";
 
 export const PULL_DIRECTORY = ".konae/pull";
@@ -104,7 +104,6 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     const artifactEntries = folderEntries
       .filter((entry) => entry.path.startsWith("dist/"))
       .map((entry) => ({ path: entry.path.slice(5), contents: entry.contents }));
-    if (!sourceEntries.some((entry) => entry.path === "actions.json")) throw new Error("The export's app/ has no actions.json.");
     const stagedApp = path.join(scratch, "app");
     await mkdir(stagedApp, { recursive: true });
     for (const entry of sourceEntries) {
@@ -144,7 +143,10 @@ export async function pullLocal(root: string, client: McpClient, from: string, p
     try { localSettingsDigest = settingsDigest(JSON.parse(await readFile(path.join(root, SETTINGS_FILE), "utf8"))); } catch { localSettingsDigest = undefined; }
     const incomingDigest = pulled.sourceDigest;
     const cleanApp = localAppDigest !== undefined && (localAppDigest === marker?.sourceDigest || localAppDigest === incomingDigest);
-    const cleanSettings = localSettingsDigest !== undefined && (localSettingsDigest === marker?.settingsDigest || localSettingsDigest === remoteSettingsDigest);
+    let localSettings: unknown;
+    try { localSettings = JSON.parse(await readFile(path.join(root, SETTINGS_FILE), "utf8")); } catch { localSettings = undefined; }
+    const localModuleDecision = settingsMatchAfterLocalModuleDecision(localSettings, remoteSettings);
+    const cleanSettings = localSettingsDigest !== undefined && (localSettingsDigest === marker?.settingsDigest || localSettingsDigest === remoteSettingsDigest || localModuleDecision);
     const cleanToReplace = cleanApp && cleanSettings;
     pulled.sourcesInstalled = cleanToReplace;
     await writeFile(path.join(scratch, RECORD), JSON.stringify(pulled, null, 2), { mode: 0o600 });
@@ -207,6 +209,7 @@ async function pullDataOnly(root: string, client: McpClient, from: string, proje
   const scratch = await mkdtemp(path.join(root, ".konae/pull-data-"));
   try {
     const { manifest, files } = await downloadPackage(client, remote.deployment.id, scratch, false);
+    await mkdir(path.join(scratch, "data"), { recursive: true });
     for (const { name, file } of files) {
       for (const entry of dataEntries(name as PackageComponentName, new Uint8Array(await readFile(file)))) {
         const target = path.resolve(scratch, entry.path);

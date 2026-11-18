@@ -1,0 +1,91 @@
+export type ModuleRefusal = { code: string; message: string };
+import moduleCases from "../../kernel-rs/kernel/src/module-cases.json";
+
+export const moduleCheckOrder = (moduleCases as Array<{ rule: string; order?: string[] }>).find((item) => item.rule === "release-order")?.order ?? [];
+
+type ModuleCase = {
+  rule: string;
+  module: string;
+  state?: unknown;
+  expected?: unknown;
+  switch?: boolean;
+  known?: boolean;
+  required?: string;
+  requiredState?: { on?: boolean };
+  dependent?: string;
+  dependentState?: { on?: boolean };
+  action?: string;
+  used?: boolean;
+  option?: string;
+  value?: unknown;
+  options?: Array<{ key: string; type: string; values?: string[]; default?: unknown }>;
+};
+
+function stable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stable(item)]));
+  }
+  return value;
+}
+
+export function checkModuleChange(input: ModuleCase): ModuleRefusal | null {
+  if (input.rule === "expected" && JSON.stringify(stable(input.state)) !== JSON.stringify(stable(input.expected))) {
+    return { code: "module.changed", message: `Module ${input.module} changed since it was read. Read modules_read and try again.` };
+  }
+  if (input.rule === "switch" && input.switch !== true) {
+    return { code: "module.not-switch", message: `Module ${input.module} cannot be changed yet.` };
+  }
+  if (input.rule === "known" && input.known !== true) return { code: "module.unknown", message: `Unknown module ${input.module}.` };
+  if (input.rule === "on" && (input.state as { on?: boolean } | undefined)?.on !== true) {
+    return { code: "module.off", message: `Module ${input.module} is off. Turn it on with module_set or App settings for a published app, or in the folder's konae.json for a local run.` };
+  }
+  if (input.rule === "requires" && input.requiredState?.on !== true) {
+    return { code: "module.requires", message: `Module ${input.module} requires ${input.required}, which is off. Turn ${input.required} on first.` };
+  }
+  if (input.rule === "dependent-requires" && input.dependentState?.on === true) {
+    return { code: "module.requires", message: `Module ${input.module} is required by ${input.dependent}, which is on. Turn ${input.dependent} off first.` };
+  }
+  if (input.rule === "private-auth" && input.requiredState?.on !== true) {
+    return { code: "module.requires", message: "A private app requires auth, which is off. Turn auth on first." };
+  }
+  if (input.rule === "in-use" && input.used === true) {
+    const message = input.module === "actions"
+      ? "Module actions is in use by actions.json, which declares Server Actions, HTTP routes, calls, schedules, notices, Signals or page paths, or by schema.sql or miniapp.actions. Remove those uses before turning it off."
+      : `Module ${input.module} is in use by the published app. Remove its use before turning it off.`;
+    return { code: "module.in-use", message };
+  }
+  if (input.rule === "in-use-action") {
+    const message = input.module === "http"
+      ? `Module http is in use by action ${input.action}, which declares an HTTP route. Remove its route before turning it off.`
+      : `Module calls is in use by action ${input.action}, which sends an outgoing call. Remove its call before turning it off.`;
+    return { code: "module.in-use", message };
+  }
+  if (input.rule === "option-unknown" || input.rule === "option-invalid") {
+    const option = input.options?.find((candidate) => candidate.key === input.option);
+    if (!option) return { code: "module.option-unknown", message: `Unknown option ${input.option} for module ${input.module}.` };
+    const valid = (input.value === null && option.default === null) || (option.type === "boolean" ? typeof input.value === "boolean"
+      : option.type === "string" ? typeof input.value === "string"
+      : option.type === "number" ? typeof input.value === "number"
+      : option.type === "enum" ? option.values?.includes(String(input.value)) === true
+      : option.type === "signup-policy" ? isSignupPolicy(input.value)
+      : option.type === "sign-in-methods" ? JSON.stringify(input.value) === JSON.stringify(["password"]) || JSON.stringify(input.value) === JSON.stringify(["password", "google"])
+      : option.type === "path" ? input.value === null || (typeof input.value === "string" && input.value.length > 0 && !input.value.startsWith("/") && !input.value.includes("\\") && input.value.split("/").every((part) => part !== "" && part !== "." && part !== ".."))
+      : false);
+    if (!valid) {
+      const message = option.type === "enum"
+        ? `Module ${input.module} option ${input.option} must be one of ${option.values?.join(", ") ?? ""}.`
+        : option.type === "path"
+          ? `Module ${input.module} option ${input.option} must be a relative app path or null.`
+          : `Module ${input.module} option ${input.option} must be a ${option.type}.`;
+      return { code: "module.option-invalid", message };
+    }
+  }
+  return null;
+}
+
+function isSignupPolicy(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as { mode?: unknown; allowlist?: unknown };
+  return ["open", "invitation", "closed", "allowlist"].includes(String(policy.mode)) && Array.isArray(policy.allowlist) && policy.allowlist.every((entry) => typeof entry === "string");
+}

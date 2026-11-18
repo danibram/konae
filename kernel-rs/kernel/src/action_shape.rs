@@ -60,6 +60,9 @@ fn check_types(name: &str, action: &Value) -> Result<(), Refusal> {
     if !matches!(kind, "query" | "mutation" | "signal" | "call") {
         return Err(refuse("action.kind-invalid", format!(r#"Action {name} has an invalid kind. Use "query", "mutation", "signal" or "call"."#)));
     }
+    if action.contains_key("page") && kind != "query" {
+        return Err(refuse("page.query", format!("Action {name} declares a page path, so it must be an anonymous query.")));
+    }
     let Some(bindings) = action.get("bindings").and_then(Value::as_array) else {
         return Err(refuse("action.bindings-missing", format!("Action {name} requires a bindings array.")));
     };
@@ -113,6 +116,7 @@ pub fn check_program(program: &ActionProgram) -> Result<(), Refusal> {
         super::validate_action(name, &program.actions[name])?;
     }
     super::http::validate_routes(program)?;
+    super::page::check_program(program)?;
     super::calls::check_program(program)
 }
 
@@ -162,10 +166,10 @@ pub fn check_action(name: &str, action: &ActionDefinition) -> Result<(), Refusal
 
 fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
-        "query" => &["kind", "access", "statement", "bindings", "http"],
-        "mutation" => &["kind", "access", "statement", "bindings", "http", "signal", "guard", "notify", "schedule"],
-        "signal" => &["kind", "access", "statement", "bindings", "signal"],
-        _ => &["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then"],
+        "query" => &["kind", "access", "statement", "bindings", "http", "page"],
+        "mutation" => &["kind", "access", "statement", "bindings", "http", "page", "signal", "guard", "notify", "schedule"],
+        "signal" => &["kind", "access", "statement", "bindings", "signal", "page"],
+        _ => &["kind", "access", "statement", "bindings", "url", "method", "body", "headers", "auth", "then", "page"],
     }
 }
 
@@ -176,6 +180,7 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
 pub fn check_keys(name: &str, action: &ActionDefinition) -> Result<(), Refusal> {
     let declared = [
         ("http", action.http.is_some()),
+        ("page", action.page.is_some()),
         ("signal", action.signal.is_some()),
         ("guard", action.guard.is_some()),
         ("notify", action.notify.is_some()),
@@ -213,6 +218,18 @@ mod tests {
     fn the_kernel_refuses_the_action_shapes_the_editor_refuses_with_the_same_message() {
         let cases: Vec<Value> = serde_json::from_str(include_str!("action-cases.json")).unwrap();
         assert!(cases.len() >= 25);
+        for case in cases {
+            let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
+            let outcome = super::read(&source).map(|_| ()).map_err(|error_value| {
+                crate::refusal::of(&error_value).cloned().unwrap_or_else(|| panic!("{}: {error_value} has no code", case["case"]))
+            });
+            crate::refusal::assert_case(&case, outcome);
+        }
+    }
+
+    #[test]
+    fn page_declarations_match_the_editor_refusals() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("page-cases.json")).unwrap();
         for case in cases {
             let source = serde_json::json!({"version": 1, "actions": case["actions"]}).to_string();
             let outcome = super::read(&source).map(|_| ()).map_err(|error_value| {

@@ -1,18 +1,4 @@
-/**
- * The miniapp SDK contract: every module on `window.miniapp`, every call, its
- * arguments, what it returns, what it refuses and the limits that apply.
- *
- * This file is the single source. `bun run sdk:render` writes three readers
- * from it: the SDK section of the build agent's prompt
- * (src/agent/sdk-section.generated.ts), the `sdk` topic of `platform_guide`
- * (kernel-rs/konae/src/sdk-guide.json) and docs/sdk.md. src/sdk/contract.test.ts
- * fails when src/mcp/runtime.js, the preview client or any reader disagrees.
- *
- * Error messages are the exact text the published app sees: the Kernel's,
- * or the SDK's own when `source` is "sdk". `preview` records where the
- * editor preview differs: absent means the same text, null means the preview
- * never refuses that case, a list holds the preview's own messages for it.
- */
+
 
 export type SdkArgument = {
   name: string;
@@ -68,10 +54,29 @@ export type SdkDeclaration = {
 
 export type SdkModule = {
   name: string;
+  title: string;
   summary: string;
+  switch: boolean;
+  options: SdkModuleOption[];
+  permission: string;
+  agentRule: "after-owner-confirms" | "never";
+  requires: string[];
+  uses: string[];
   calls: SdkCall[];
   declarations: SdkDeclaration[];
   notes: string[];
+};
+
+export type SdkModuleOption = {
+  key: string;
+  type: "boolean" | "enum" | "path" | "string" | "number" | "signup-policy" | "sign-in-methods";
+  values?: string[];
+  valueLabels?: Record<string, string>;
+  defaultLabel?: string;
+  valuesFrom?: "app-images";
+  default: unknown;
+  label: string;
+  help: string;
 };
 
 export type SdkContract = {
@@ -123,13 +128,18 @@ export const sdkContract = {
   modules: [
     {
       name: "auth",
+      title: "App accounts",
       summary: "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
+      switch: true, options: [
+        { key: "signupPolicy", type: "signup-policy", values: ["open", "allowlist", "invitation", "closed"], valueLabels: { open: "Open", allowlist: "Allowlist", invitation: "Invitation only", closed: "Closed" }, default: null, label: "Who can create an account", help: "Choose who may create an app account. Allowlist entries stay as separate email addresses or domains." },
+        { key: "signInMethods", type: "sign-in-methods", values: ["password", "google"], valueLabels: { password: "Email and password", google: "Continue with Google" }, default: ["password"], label: "Sign-in methods", help: "Password stays on. Google needs this app's Google client set as signing secrets." },
+      ], permission: "manage_users", agentRule: "after-owner-confirms", requires: [], uses: ["private deployment", "app accounts or invitations", "authenticated actions", "actor bindings"],
       declarations: [],
       notes: [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
         "An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.",
-        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.",
-        "The owner may add Continue with Google to the sign-in page in the editor's Access > Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.",
+        "The Deployment's Signup Policy decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.",
+        "The owner may add Continue with Google to the sign-in page in the Users view, once the app's own Google client ID and secret are set as signing secrets. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.",
       ],
       calls: [
         {
@@ -194,8 +204,24 @@ export const sdkContract = {
     },
     {
       name: "actions",
+      title: "Data and actions",
       summary: "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [], uses: ["actions.json", "schema.sql", "miniapp.actions"],
       declarations: [
+        {
+          file: "actions.json",
+          key: "page",
+          summary: "{ path, file, list? } on an anonymous query. The Kernel binds path parameters to the query's input bindings, serves the named file with the row's title and card, and exposes parameters as miniapp.page.params. list names an anonymous query with no inputs for the sitemap.",
+          errors: [
+            { message: "Action <name> declares a page path, so it must be an anonymous query.", when: "page is set on any other action or an authenticated query", source: "kernel" },
+            { message: "Action <name> declares page parameters that do not match its input bindings.", when: "the named parameters and input binding keys differ", source: "kernel" },
+            { message: "Actions <name> and <name> both bind page path <key>.", when: "two page declarations have the same literal and parameter pattern", source: "kernel" },
+            { message: "Action <name> names <key> as its page file, but the Build Artifact does not contain it.", when: "the named file is absent from the Build Artifact at release", source: "kernel" },
+            { message: "Action <name> has a page query that does not return a title column.", when: "the query does not select a column named title", source: "kernel" },
+            { message: "Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated.", when: "the list query's selected columns differ", source: "kernel" },
+          ],
+          limits: ["The first path segment is literal.", "The page query returns at most one row.", "The list query returns at most 1000 rows."],
+        },
         {
           file: "actions.json",
           key: "kind",
@@ -351,9 +377,23 @@ export const sdkContract = {
       ],
     },
     {
+      name: "page",
+      title: "Page address values",
+      summary: "Values from the page address. The Kernel fills params when a declared page path answers.",
+      switch: false, options: [], permission: "publish", agentRule: "never", requires: ["actions"], uses: ["actions.json"],
+      declarations: [],
+      calls: [
+        { name: "params", signature: "miniapp.page.params", summary: "Read the values captured by the page path, or an empty object on a file page.", signedOut: true, tools: [], args: [], returns: "An object keyed by page path parameter, such as { slug: \"hello\" }", errors: [], limits: [], examples: [{ code: "const { slug } = miniapp.page.params;" }], preview: "Always returns an empty object because the editor preview has no page URL." },
+        { name: "url", signature: "miniapp.page.url(path)", summary: "Build an app link that keeps the current hostname or path address.", signedOut: true, tools: [], args: [{ name: "path", type: "string", required: true, description: "An app path starting with one slash, such as /posts/hello." }], returns: "The path with the current /p/<name> prefix when the app uses a path address.", errors: [{ message: "An app page path must start with one slash.", when: "path does not start with one slash", source: "sdk" }], limits: [], examples: [{ code: "link.href = miniapp.page.url(`/posts/${encodeURIComponent(slug)}`);" }], preview: "Returns the app path unchanged." },
+      ],
+      notes: [],
+    },
+    {
       name: "files",
-      summary: "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
-      declarations: [{ key: "fileAccess", file: "manifest", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.' }],
+      title: "File storage",
+      summary: "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      switch: true, options: [{ key: "fileAccess", type: "enum", values: ["app-users"], valueLabels: { "app-users": "All signed-in users" }, defaultLabel: "Only the uploader", default: null, label: "Who can read every file", help: "Let every signed-in user read all files in this app." }], permission: "publish", agentRule: "never", requires: ["auth"], uses: ["miniapp.files"],
+      declarations: [{ key: "fileAccess", file: "module", summary: 'Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.' }],
       notes: [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
@@ -475,7 +515,9 @@ export const sdkContract = {
     },
     {
       name: "calls",
+      title: "Outgoing calls",
       summary: "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: ["actions"], uses: ["actions.json kind=call"],
       calls: [],
       declarations: [
         {
@@ -548,7 +590,9 @@ export const sdkContract = {
     },
     {
       name: "http",
+      title: "Incoming routes",
       summary: "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: ["actions"], uses: ["actions.json http"],
       calls: [],
       declarations: [
         {
@@ -624,6 +668,23 @@ export const sdkContract = {
         "GET /_konae/files/<id>, the path miniapp.files.url returns under the page's base path, answers a file the caller may read, with its own type. A person reads by the usual file rules, a visitor reads public files of a public app, and an API key reads the visibilities the owner named on it. A visitor without a session on a private app gets 401 authentication-required before any file is looked up; every other caller who may not read the file gets 404 File not found, the same as for a missing or deleted one.",
         "The editor preview serves no routes. Run them on konae dev, or on a Deployment.",
       ],
+    },
+    {
+      name: "seo",
+      title: "Search listing",
+      summary: "Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.",
+      switch: true,
+      options: [
+        { key: "canonical", type: "enum", values: ["domain", "hostname", "path"], valueLabels: { domain: "Custom domain", hostname: "Generated hostname", path: "Path address" }, defaultLabel: "Use the default address", default: null, label: "Canonical address", help: "Choose the address search engines and link previews should use." },
+        { key: "image", type: "path", valuesFrom: "app-images", default: null, label: "Card image", help: "Choose an image path from the app's published files." },
+      ],
+      permission: "publish",
+      agentRule: "after-owner-confirms",
+      requires: [],
+      uses: ["HTML pages with a title"],
+      calls: [],
+      declarations: [],
+      notes: [],
     },
   ],
 } as const satisfies SdkContract;

@@ -182,11 +182,13 @@ Saved a 24-hour MCP credential in .konae/credentials.json. Keep .konae out of Gi
     "oauth": "An MCP client with OAuth reads /.well-known/oauth-authorization-server, registers at /oauth/register, and sends the owner to /oauth/authorize with PKCE S256, resource <origin>/mcp and a scope of read, write, publish and manage_users. A client that redirects to http://127.0.0.1, localhost or [::1] gets a 24-hour token and may also ask for export_data; any other client gets a one-hour token without export_data. Under Clerk every token lasts one hour. There is no refresh token.",
     "permissions": {
       "export_data": "project_export and reading its downloads",
-      "manage_users": "signup_policy_set, sign_in_methods_set, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+      "manage_users": "module_set for auth, app_users_list, app_user_suspend, app_user_resume, app_user_enter from the owner's browser session, and the app_invitations tools",
+      "module_set": "Changes a module whose registry permission is held by the credential",
+      "modules_read": "Reads module state and options; requires read",
       "none": "platform_describe, platform_guide, session_inspect and mail_status",
       "ownerSession": "tokens_list, token_create, token_revoke and app_user_enter",
-      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, project_import, and initialSignupPolicy on a first release",
-      "read": "projects_list, project_inspect (including deployment.signupPolicy), project_sources_read, sign_in_methods_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_summary, signals_read, usage_overview, calls_read, notices_read and database_execute reads",
+      "publish": "release_plan, release_apply, secret_set, secret_delete, api_keys_create, api_keys_revoke, hostname_set, domain_set, domain_clear, path_set, path_clear, maintenance_set, contact_email_set, module_set for modules with publish permission, project_import, and initialSignupPolicy on a first release",
+      "read": "projects_list, project_inspect (including deployment.signupPolicy), project_sources_read, modules_read, domain_read, path_read, maintenance_read, contact_email_read, secrets_list, api_keys_list, usage_summary, signals_read, usage_overview, calls_read, notices_read and database_execute reads",
       "write": "project_create, project_sources_save, project_delete and database_execute changes"
     },
     "projectScope": "A project-scoped credential can act only on the existing project IDs it names, within the permissions it holds. It cannot create a project. Create projects from the owner's browser session or publish a folder with konae.",
@@ -345,6 +347,7 @@ cat /tmp/orders/konae.json
     "password"
   ],
   "kernel": "<Kernel version>",
+  "modules": {},
   "manifest": {
     "version": 1
   }
@@ -579,6 +582,20 @@ Wrote the Action Contract for 4 actions to /tmp/orders/action-contract.json, wit
 <!-- /walkthrough:contract -->
 
 ## 7. Set the signing secret, then publish
+
+The first `dev` run wrote `http` as off because the folder had no route yet. The source now declares signed routes, so turn `http` on in `konae.json` before publishing.
+
+<!-- walkthrough:http-module -->
+```json
+{
+  "modules": {
+    "http": {
+      "on": true
+    }
+  }
+}
+```
+<!-- /walkthrough:http-module -->
 
 `orders.receive` signs with `orders_webhook`, which the project does not have yet, so the first publish is refused with what to do:
 
@@ -921,6 +938,132 @@ The app user claims order 1. The second claim changes no row, so the Kernel answ
 An upload is a transfer of at most the installation's per-file limit, 2 MiB by default, then `files_upload`. In a page, `miniapp.files.upload` sends the bytes in one `PUT /_konae/transfers/<id>` in place of the `transfer_write` blocks shown here. The file is private to the app user who uploaded it. `miniapp.files.url(fileId)` returns its path, `/_konae/files/<id>`, which that app user reads with the session cookie; a visitor of a private app gets 401 before any file is looked up.
 
 <!-- walkthrough:file -->
+```json
+{
+  "name": "modules_read",
+  "arguments": {
+    "projectId": "<project id>"
+  }
+}
+```
+
+```json
+{
+  "result": {
+    "files": {
+      "agentRule": "never",
+      "message": null,
+      "options": [
+        {
+          "default": null,
+          "defaultLabel": "Only the uploader",
+          "help": "Let every signed-in user read all files in this app.",
+          "key": "fileAccess",
+          "label": "Who can read every file",
+          "type": "enum",
+          "valueLabels": {
+            "app-users": "All signed-in users"
+          },
+          "values": [
+            "app-users"
+          ]
+        }
+      ],
+      "permission": "publish",
+      "requires": [
+        "auth"
+      ],
+      "state": {
+        "fileAccess": null,
+        "on": false
+      },
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
+      "uses": [
+        "miniapp.files"
+      ]
+    }
+  }
+}
+```
+
+```json
+{
+  "name": "module_set",
+  "arguments": {
+    "projectId": "<project id>",
+    "module": "files",
+    "on": true,
+    "expected": {
+      "fileAccess": null,
+      "on": false
+    }
+  }
+}
+```
+
+```json
+{
+  "result": {
+    "module": "files",
+    "projectId": "<project id>",
+    "state": {
+      "fileAccess": null,
+      "on": true
+    }
+  }
+}
+```
+
+```json
+{
+  "name": "modules_read",
+  "arguments": {
+    "projectId": "<project id>"
+  }
+}
+```
+
+```json
+{
+  "result": {
+    "files": {
+      "agentRule": "never",
+      "message": null,
+      "options": [
+        {
+          "default": null,
+          "defaultLabel": "Only the uploader",
+          "help": "Let every signed-in user read all files in this app.",
+          "key": "fileAccess",
+          "label": "Who can read every file",
+          "type": "enum",
+          "valueLabels": {
+            "app-users": "All signed-in users"
+          },
+          "values": [
+            "app-users"
+          ]
+        }
+      ],
+      "permission": "publish",
+      "requires": [
+        "auth"
+      ],
+      "state": {
+        "fileAccess": null,
+        "on": true
+      },
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
+      "uses": [
+        "miniapp.files"
+      ]
+    }
+  }
+}
+```
+
 ```json
 {
   "name": "transfer_begin",
@@ -1323,7 +1466,7 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
       "chunkBytes": 4194304,
       "expiresAt": <time ms>,
       "sha256": "<folder sha256>",
-      "size": 28160,
+      "size": 30720,
       "transferId": "<folder download>"
     },
     "manifest": {
@@ -1360,6 +1503,33 @@ Exporting needs `export_data`, which OAuth does not grant, so the OAuth token fr
         "operator email and storage keys"
       ],
       "format": "konae-package",
+      "modules": {
+        "actions": {
+          "on": true
+        },
+        "auth": {
+          "on": true,
+          "signInMethods": [
+            "password"
+          ],
+          "signupPolicy": null
+        },
+        "calls": {
+          "on": false
+        },
+        "files": {
+          "fileAccess": null,
+          "on": true
+        },
+        "http": {
+          "on": true
+        },
+        "seo": {
+          "canonical": null,
+          "image": null,
+          "on": false
+        }
+      },
       "packageId": "<package id>",
       "projectId": "<project id>",
       "publishedRevision": 1,

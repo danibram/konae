@@ -11,6 +11,8 @@
     "const rows = await miniapp.actions.call(\"tasks.list\");",
     "await miniapp.actions.call(\"tasks.create\", { title });",
     "await miniapp.actions.call(\"lesson.finish\", { lesson });",
+    "const { slug } = miniapp.page.params;",
+    "link.href = miniapp.page.url(`/posts/${encodeURIComponent(slug)}`);",
     "const files = await miniapp.files.list();",
     "const stored = await miniapp.files.upload(file);",
     "const shared = await miniapp.files.upload(file, { visibility: \"public\" });",
@@ -56,11 +58,12 @@
     {
       "name": "auth",
       "summary": "Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.",
+      "switch": true,
       "notes": [
         "Visibility decides who may open the app shell. It never grants data access on its own.",
         "An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.",
-        "The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.",
-        "The owner may add Continue with Google to the sign-in page in the editor's Access > Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on."
+        "The Deployment's Signup Policy decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.",
+        "The owner may add Continue with Google to the sign-in page in the Users view, once the app's own Google client ID and secret are set as signing secrets. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on."
       ],
       "declarations": [],
       "calls": [
@@ -141,6 +144,7 @@
     {
       "name": "actions",
       "summary": "The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.",
+      "switch": true,
       "notes": [
         "A binding passes who calls: { \"source\": \"actor\", \"field\": \"id\" } is the signed-in person's ID or the API key's ID, and refuses a caller without one. It cannot come from the input. Roles are rows in the app's own tables, checked in SQL against that ID.",
         "A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.",
@@ -151,6 +155,48 @@
         "To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner, the person who called the action, or the verified accounts a column of the changed rows names, nobody else."
       ],
       "declarations": [
+        {
+          "file": "actions.json",
+          "key": "page",
+          "summary": "{ path, file, list? } on an anonymous query. The Kernel binds path parameters to the query's input bindings, serves the named file with the row's title and card, and exposes parameters as miniapp.page.params. list names an anonymous query with no inputs for the sitemap.",
+          "limits": [
+            "The first path segment is literal.",
+            "The page query returns at most one row.",
+            "The list query returns at most 1000 rows."
+          ],
+          "errors": [
+            {
+              "message": "Action <name> declares a page path, so it must be an anonymous query.",
+              "when": "page is set on any other action or an authenticated query",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> declares page parameters that do not match its input bindings.",
+              "when": "the named parameters and input binding keys differ",
+              "source": "kernel"
+            },
+            {
+              "message": "Actions <name> and <name> both bind page path <key>.",
+              "when": "two page declarations have the same literal and parameter pattern",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names <key> as its page file, but the Build Artifact does not contain it.",
+              "when": "the named file is absent from the Build Artifact at release",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> has a page query that does not return a title column.",
+              "when": "the query does not select a column named title",
+              "source": "kernel"
+            },
+            {
+              "message": "Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated.",
+              "when": "the list query's selected columns differ",
+              "source": "kernel"
+            }
+          ]
+        },
         {
           "file": "actions.json",
           "key": "kind",
@@ -503,8 +549,53 @@
       ]
     },
     {
+      "name": "page",
+      "summary": "Values from the page address. The Kernel fills params when a declared page path answers.",
+      "switch": false,
+      "notes": [],
+      "declarations": [],
+      "calls": [
+        {
+          "call": "miniapp.page.params",
+          "signature": "miniapp.page.params",
+          "summary": "Read the values captured by the page path, or an empty object on a file page.",
+          "signedOut": true,
+          "tools": [],
+          "args": [],
+          "returns": "An object keyed by page path parameter, such as { slug: \"hello\" }",
+          "errors": [],
+          "limits": []
+        },
+        {
+          "call": "miniapp.page.url",
+          "signature": "miniapp.page.url(path)",
+          "summary": "Build an app link that keeps the current hostname or path address.",
+          "signedOut": true,
+          "tools": [],
+          "args": [
+            {
+              "name": "path",
+              "type": "string",
+              "required": true,
+              "description": "An app path starting with one slash, such as /posts/hello."
+            }
+          ],
+          "returns": "The path with the current /p/<name> prefix when the app uses a path address.",
+          "errors": [
+            {
+              "message": "An app page path must start with one slash.",
+              "when": "path does not start with one slash",
+              "source": "sdk"
+            }
+          ],
+          "limits": []
+        }
+      ]
+    },
+    {
       "name": "files",
-      "summary": "Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.",
+      "summary": "Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.",
+      "switch": true,
       "notes": [
         "By default, only the uploader can list or read a private file.",
         "On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.",
@@ -516,8 +607,8 @@
       "declarations": [
         {
           "key": "fileAccess",
-          "file": "manifest",
-          "summary": "Set \"fileAccess\": \"app-users\" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights."
+          "file": "module",
+          "summary": "Set \"fileAccess\": \"app-users\" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it."
         }
       ],
       "calls": [
@@ -757,6 +848,7 @@
     {
       "name": "calls",
       "summary": "Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.",
+      "switch": true,
       "notes": [
         "The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.",
         "http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.",
@@ -962,6 +1054,7 @@
     {
       "name": "http",
       "summary": "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
+      "switch": true,
       "notes": [
         "Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.",
         "Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.",
@@ -1216,6 +1309,14 @@
           ]
         }
       ],
+      "calls": []
+    },
+    {
+      "name": "seo",
+      "summary": "Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.",
+      "switch": true,
+      "notes": [],
+      "declarations": [],
       "calls": []
     }
   ]

@@ -8,7 +8,7 @@ import { dataEntries, generatedFiles, type AppSettings, type FolderEntry } from 
 import type { PackageComponentName } from "../src/lib/portable-package";
 import { readTar } from "../src/lib/tar";
 import type { Transfer } from "../src/mcp/client";
-import { account, appFetch, buildKernel, freshClient, password, release, runtime, startKernel, type Kernel } from "./kernel-harness";
+import { account, appFetch, buildKernel, freshClient, password, release, runtime, setSignupPolicy, startKernel, type Kernel } from "./kernel-harness";
 
 const repo = path.resolve(import.meta.dir, "..");
 const kernelBinary = path.join(repo, "kernel-rs/target/debug/kernel");
@@ -63,6 +63,8 @@ test("an app exported with its data runs on the kernel binary, and an operator c
   const id = "carried_app";
   await konae.owner.call("project_create", { projectId: id, name: "Carried" });
   const { receipt } = await release(konae.owner, payload(id), id);
+  const moduleState = await konae.owner.call<{ modules: Record<string, { state: { on: boolean } }> }>("modules_read", { projectId: id });
+  await konae.owner.call("module_set", { projectId: id, module: "files", on: true, expected: moduleState.modules.files.state });
   const ana = await account(konae, receipt.hostname, "signup", "ana@carried.test");
   expect(await runtime(konae, receipt.hostname, ana).call("actions_invoke", { name: "notes.add", input: { body: "written on Konae" } })).toMatchObject({ changes: 1 });
   const entries = await exportFolder(konae, receipt.id);
@@ -231,7 +233,7 @@ test("a legacy export starts on a fresh Kernel without its record, and distingui
     manifest: { version: 1, visibility: "private" },
   }));
 
-  await konae.owner.call("signup_policy_set", { projectId: id, mode: "closed" });
+  await setSignupPolicy(konae.owner, id, { mode: "closed" });
   const migratedSettings = JSON.parse(await readFile(settingsPath, "utf8"));
   expect(migratedSettings.released.schemaSql).toContain('CREATE TABLE IF NOT EXISTS "live notes"');
   expect(migratedSettings.released.schemaSql).toContain('CREATE INDEX IF NOT EXISTS "live notes by title"');

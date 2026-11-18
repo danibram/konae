@@ -12,7 +12,7 @@ const loadSql = () => (sql ??= initSqlJs());
 
 function setup(overrides: Partial<CapsuleFiles> = {}) {
   const workspace = createCapsuleWorkspace({ ...starterProject.files, ...overrides });
-  const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql));
+  const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), { releaseFacts: async () => ({ modules: { files: { on: true } } }) });
   return { workspace, tools };
 }
 
@@ -283,7 +283,7 @@ describe("release facts", () => {
 
   test("validate_capsule passes the facts to the Gate, and an unset secret is a warning that names Access > Integrations", async () => {
     const workspace = createCapsuleWorkspace({ ...starterProject.files, "actions.json": route });
-    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), { releaseFacts: async () => ({ secrets: [] }) });
+    const tools = createCapsuleTools(workspace, createCapsuleValidator(loadSql), { releaseFacts: async () => ({ secrets: [], modules: { files: { on: true } } }) });
     const result = await call(tools, "validate_capsule", {});
     expect((result.details as { ok: boolean }).ok).toBe(true);
     const text = textOf(result);

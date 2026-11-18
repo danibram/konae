@@ -31,6 +31,7 @@ pub fn entered_request(state: &AppState, deployment: &Deployment, headers: &Head
 /// `user_id` of `deployment`. Answers the account's email, the link and when
 /// it stops working. The caller holds no lock; this takes the identity lock.
 pub async fn issue(state: &AppState, deployment: &Deployment, user_id: &str, entered_by: &str) -> Result<Value> {
+    crate::modules::require_on(&deployment.modules, "auth")?;
     anyhow::ensure!(!entered_by.trim().is_empty() && entered_by.len() <= 200, LABEL_INVALID);
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let expires_at = auth::now_seconds() + ENTRY_TTL_SECONDS;

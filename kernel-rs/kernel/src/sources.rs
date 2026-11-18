@@ -104,6 +104,7 @@ pub fn normalize_document(source: &Value) -> Result<Value> {
     let mut normalized = source.clone();
     let manifest = normalized["manifest"].as_object_mut().context("The sources' manifest must be an object.")?;
     manifest.remove("runtime");
+    manifest.remove("fileAccess");
     let directories = normalized["directories"].as_array().context("Invalid project directories. Send each app/ directory path once.")?;
     let directory_names = directories.iter().map(|value| value.as_str().context("Invalid project directories. Send each app/ directory path once.")).collect::<Result<Vec<_>>>()?;
     normalized["directories"] = json!(canonical_directories(directory_names)?);
@@ -113,7 +114,7 @@ pub fn normalize_document(source: &Value) -> Result<Value> {
 
 pub fn manifest_without_runtime(manifest: &Value) -> Value {
     let mut normalized = manifest.clone();
-    if let Some(object) = normalized.as_object_mut() { object.remove("runtime"); }
+    if let Some(object) = normalized.as_object_mut() { object.remove("runtime"); object.remove("fileAccess"); }
     normalized
 }
 
@@ -476,6 +477,7 @@ pub async fn read(root: &Path, id: &str) -> Result<Option<Value>> {
     if !encodings.is_empty() {
         source["encodings"] = Value::Object(encodings);
     }
+    source["manifest"] = manifest_without_runtime(&source["manifest"]);
     Ok(Some(normalize_document(&source)?))
 }
 
@@ -673,11 +675,12 @@ mod tests {
         assert_eq!(opened["files"]["index.html"], "folder edit");
         assert_eq!(opened["files"]["actions.json"], "draft actions");
         assert_eq!(opened["manifest"]["routing"], "spa");
+        assert!(opened["manifest"].get("fileAccess").is_none());
         assert!(opened["directories"].as_array().unwrap().contains(&json!("custom/empty")));
         let export_settings = settings_for_export(&root, id).await.unwrap();
         assert_eq!(export_settings.name, "Saved draft");
         assert_eq!(export_settings.visibility, "public");
-        assert_eq!(export_settings.manifest["fileAccess"], "app-users");
+        assert!(export_settings.manifest.get("fileAccess").is_none());
         assert_eq!(export_settings.released.as_ref().unwrap().actions, "applied actions");
         let recovered = export_settings.released.as_ref().unwrap();
         assert!(recovered.schema_sql.contains("CREATE TABLE IF NOT EXISTS \"live rows\""));
@@ -724,7 +727,9 @@ mod tests {
     async fn saving_ahead_sources_keeps_the_released_rules_after_reload() {
         let root = std::env::temp_dir().join(format!("konae-released-settings-{}", Uuid::new_v4()));
         let id = "app_release";
-        let settings = crate::Settings::new(id, "Live app", "live-app", &json!({"version":1,"visibility":"private","fileAccess":"app-users"}));
+        let mut settings = crate::Settings::new(id, "Live app", "live-app", &json!({"version":1,"visibility":"private"}));
+        settings.modules.get_mut("files").unwrap()["on"] = json!(true);
+        settings.modules.get_mut("files").unwrap()["fileAccess"] = json!("app-users");
         settings.write(&root).await.unwrap();
         let app = layout::sources(&root, id);
         tokio::fs::create_dir_all(&app).await.unwrap();
@@ -744,7 +749,7 @@ mod tests {
         let running = crate::load_deployments(&root, "http://localhost").await.unwrap().remove("live-app.localhost").unwrap();
         assert_eq!(running.project_name, "Live app");
         assert_eq!(running.manifest["visibility"], "private");
-        assert_eq!(running.manifest["fileAccess"], "app-users");
+        assert_eq!(running.modules["files"]["fileAccess"], "app-users");
         assert_eq!(running.actions, "old actions");
         assert_eq!(running.released_schema, "CREATE TABLE live(id INTEGER);");
         let saved_settings = crate::Settings::read(&root, id).unwrap();

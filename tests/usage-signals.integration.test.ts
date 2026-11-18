@@ -56,8 +56,9 @@ const schema = "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, topic T
 
 async function release(id: string, files: Record<string, string>) {
   const project = { id, name: id, slug: id.replaceAll("_", "-"), manifest: { version: 1, visibility: "public" } };
+  const initialModules = (await owner.call<any>("project_inspect", { projectId: id })).deployment ? undefined : { auth: { on: true }, files: { on: true } };
   const transfer = await owner.upload(new TextEncoder().encode(JSON.stringify({
-    project: { ...project, files }, visibility: "public",
+    project: { ...project, files }, visibility: "public", ...(initialModules ? { initialModules } : {}),
     artifact: { version: 1, entrypoint: "index.html", files: { "index.html": "<!doctype html><main>Usage</main>" } },
   })), id);
   try {
@@ -259,6 +260,8 @@ describe("Usage and Signals", () => {
   });
 
   test("account activity includes successful actions and queued calls, excludes refusals, and keeps emails out of the overview", async () => {
+    const modules = await owner.call<any>("modules_read", { projectId: "usage_app" });
+    await owner.call("module_set", { projectId: "usage_app", module: "calls", on: true, expected: modules.modules.calls.state });
     await release("usage_app", { "schema.sql": schema, "actions.json": JSON.stringify({ ...actions, actions: {
       ...actions.actions,
       "notes.absent": { kind: "mutation", access: "authenticated", statement: "DELETE FROM notes WHERE id = -1", bindings: [], guard: "This note no longer exists." },

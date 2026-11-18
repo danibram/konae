@@ -28,9 +28,17 @@ type Props = {
   suggestions?: string[];
   proposalReady?: boolean;
   proposalError?: string;
+  recoverAvailable?: boolean;
+  historyAvailable?: boolean;
+  applyBlocked?: boolean;
+  staleRecovery?: { reason: string; checkpointId: string; files: Array<{ path: string; base?: string; candidate?: string }> } | null;
+  restoredProposal?: { sourceRevision: number; files: Array<{ path: string; base?: string; candidate?: string }>; provenance: { parentConversationId: string; parentCheckpointId: string; parentSequence: number } } | null;
+  onRedoRestore?: () => void;
+  onStartLinkedAttempt?: () => void;
+  onOpenHistory?: () => void;
 };
 
-export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError, recoverAvailable = false, historyAvailable = false, applyBlocked = false, staleRecovery, restoredProposal, onRedoRestore, onStartLinkedAttempt, onOpenHistory }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -71,7 +79,38 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
 
   return (
     <div className="agent-panel">
+      {historyAvailable && onOpenHistory && <div className="agent-history-link"><Button variant="secondary" size="sm" onClick={onOpenHistory}>Read saved conversations</Button><span>Read only · no provider request</span></div>}
       <div className="messages agent-thread" ref={threadRef} aria-live="polite" aria-busy={running}>
+        {staleRecovery && (
+          <section className="agent-recovery-review" aria-label="Preserved stale proposal">
+            <h2>Saved sources changed</h2>
+            <p>{staleRecovery.reason}</p>
+            <details>
+              <summary>Inspect preserved proposal ({staleRecovery.files.length} changed files)</summary>
+              {staleRecovery.files.map((file) => <section key={file.path}>
+                <h3>{file.path}</h3>
+                <strong>Saved base</strong><pre>{file.base ?? "(file did not exist)"}</pre>
+                <strong>Candidate</strong><pre>{file.candidate ?? "(file removed)"}</pre>
+              </section>)}
+            </details>
+            <Button variant="secondary" onClick={onStartLinkedAttempt} disabled={!staleRecovery.checkpointId}>Start linked attempt from current saved sources</Button>
+          </section>
+        )}
+        {restoredProposal && (
+          <section className="agent-recovery-review" aria-label="Restored proposal diff">
+            <h2>Restored as a new proposal</h2>
+            <p>Candidate files are compared with the owner's current saved source base at revision {restoredProposal.sourceRevision}. The parent conversation and its records remain unchanged. Only candidate files were restored; real outcomes after the checkpoint remain.</p>
+            <details open>
+              <summary>Inspect current source and candidate ({restoredProposal.files.length} changed files)</summary>
+              {restoredProposal.files.map((file) => <section key={file.path}>
+                <h3>{file.path}</h3>
+                <strong>Current saved source</strong><pre>{file.base ?? "(file did not exist)"}</pre>
+                <strong>Restored candidate</strong><pre>{file.candidate ?? "(file removed)"}</pre>
+              </section>)}
+            </details>
+            <Button variant="secondary" onClick={onRedoRestore}>Redo from checkpoint {restoredProposal.provenance.parentCheckpointId}</Button>
+          </section>
+        )}
         {state.messages.length === 0 && (
           <div className="agent-thread-empty">
             {descriptionReady ? <>
@@ -86,6 +125,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
             <p>{live
               ? "Describe it in one sentence. A change that passes the Gate appears in Preview before you apply it."
               : "Describe it in one sentence. A model you connect makes the change, and you apply it after you see it."}</p>
+            {recoverAvailable && !staleRecovery && !thread.recoveryAttempted && <Button variant="secondary" onClick={() => void thread.recover()} disabled={running}>Continue from saved conversation</Button>}
             {suggestions.length > 0 && <>
               <p className="agent-examples-label">Try one</p>
               <ExamplePrompts sentences={suggestions} onPick={pick} />
@@ -145,7 +185,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
           )}
           <div className="agent-proposal-actions">
             <button className="agent-discard" onClick={thread.discard}>Discard</button>
-            <button className="agent-apply" disabled={!footer.canApply || running || (footer.kind === "validated" && !proposalReady)} onClick={() => void thread.apply()}>
+            <button className="agent-apply" disabled={applyBlocked || !footer.canApply || running || (footer.kind === "validated" && !proposalReady)} onClick={() => void thread.apply()}>
               <Send size={12} /> Apply
             </button>
           </div>

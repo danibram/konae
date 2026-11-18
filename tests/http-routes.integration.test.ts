@@ -20,6 +20,11 @@ const secret = "orders-webhook-secret-0123456789";
 let address = 0;
 const freshAddress = () => `198.18.1.${++address}`;
 
+async function setSignupPolicy(projectId: string) {
+  const before = await owner.call<any>("modules_read", { projectId });
+  await owner.call("module_set", { projectId, module: "auth", options: { signupPolicy: { mode: "open", allowlist: [] } }, expected: before.modules.auth.state });
+}
+
 const actions = {
   version: 1,
   actions: {
@@ -162,7 +167,7 @@ describe("HTTP routes", () => {
     const listed = await owner.call<{ secrets: { name: string }[] }>("secrets_list", { projectId: "http_routes" });
     expect(listed.secrets.map(item => item.name)).toEqual(["orders_webhook"]);
     expect(JSON.stringify(listed)).not.toContain(secret);
-    const receipt = await release("http_routes", files);
+    const receipt = await release("http_routes", files, { initialModules: { auth: { on: true }, files: { on: true } } });
     host = receipt.hostname;
     deploymentId = receipt.id;
     await expect(owner.call("secret_delete", { projectId: "http_routes", name: "orders_webhook" })).rejects.toThrow(
@@ -283,7 +288,7 @@ describe("HTTP routes", () => {
   });
 
   test("a session cookie counts only from the app's own origin", async () => {
-    await owner.call("signup_policy_set", { projectId: deploymentId, mode: "open" });
+    await setSignupPolicy(deploymentId);
     const signup = await route("/_konae/auth/signup", { method: "POST", body: JSON.stringify({ email: "ana@routes.test", password }) });
     expect(signup.status).toBe(200);
     const cookie = signup.headers.get("set-cookie")!.split(";")[0];

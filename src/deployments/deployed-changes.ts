@@ -19,9 +19,14 @@ export function ownerStorage(ownerId: string, storage: Storage = localStorage) {
 
 export function accessNotDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined): boolean {
   if (!deployment) return false;
-  if (deployment.actions !== undefined && (project.files["actions.json"] ?? "") !== deployment.actions) return true;
+  if (deployment.actions !== undefined) {
+    const source = project.files["actions.json"];
+    if (source === undefined) {
+      try { if (Object.keys(JSON.parse(deployment.actions)?.actions ?? {}).length > 0) return true; } catch { return true; }
+    } else if (source !== deployment.actions) return true;
+  }
   if (project.manifest.visibility !== deployment.manifest.visibility) return true;
-  return (project.manifest.fileAccess ?? null) !== (deployment.manifest.fileAccess ?? null);
+  return false;
 }
 
 export function sameAsDeployed(project: Pick<MiniAppProject, "files" | "manifest">, deployment: Compared | null | undefined, digest: string | null): boolean | null {

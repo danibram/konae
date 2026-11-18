@@ -36,6 +36,12 @@ const schema = starter.files["schema.sql"];
 const actions = starter.files["actions.json"];
 
 describe("runtime host", () => {
+  test("a missing actions.json uses an empty action program", () => {
+    const host = new MiniAppRuntimeHost("static", "", undefined as never);
+    expect(host.actionsError).toBeNull();
+    expect(host.previewErrors()).toEqual([]);
+  });
+
   test("an invalid actions.json is reported, not thrown, and the last valid program keeps running", async () => {
     expect(() => new MiniAppRuntimeHost("broken", schema, "{ \"version\": 1, ")).not.toThrow();
     const broken = new MiniAppRuntimeHost("broken", schema, "{ \"version\": 1, ");
@@ -340,6 +346,24 @@ describe("proposal preview host lifecycle", () => {
     expect(applied.getPreviewActor()).toBe("alice");
     expect(await applied.handle("actions.invoke", { name: "tasks.list" })).toMatchObject([{ title: "Saved row" }]);
     expect(applied.getFiles()).toMatchObject([{ name: "photo.png", size: photoBytes }]);
+    await lifecycle.dispose();
+  });
+
+  test("recovered proposal starts fresh preview rows, files, and actor without resetting ordinary preview", async () => {
+    const lifecycle = new ProposalHostLifecycle("recovered_fresh", { schema, actions });
+    const applied = lifecycle.appliedHost;
+    await applied.handle("actions.invoke", { name: "tasks.create", input: { title: "Saved row" } });
+    applied.setPreviewActor("alice");
+    await applied.handle("files.upload", { name: "saved.txt", type: "text/plain", size: 3, dataUrl: "data:text/plain,old" });
+    const recovered = await lifecycle.prepareRecoveredProposal("proposal:recovered", { schema, actions });
+    expect(recovered).not.toBeNull();
+    expect(recovered).not.toBe(applied);
+    expect(recovered!.getPreviewActor()).toBe("guest");
+    expect(await recovered!.handle("actions.invoke", { name: "tasks.list" })).toEqual([]);
+    expect(await recovered!.handle("files.list")).toEqual([]);
+    expect(await applied.handle("actions.invoke", { name: "tasks.list" })).toMatchObject([{ title: "Saved row" }]);
+    expect(applied.getPreviewActor()).toBe("alice");
+    expect(applied.getFiles()).toHaveLength(1);
     await lifecycle.dispose();
   });
 });

@@ -185,7 +185,7 @@ Writes `action-contract.json`, its schema, `action-contract.md` and `actions.d.t
 bun run konae -- publish --dir ./my-app [--url <installation URL>] [--confirm-schema <confirmation>]
 ```
 
-Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with [`secret set`](#secret) first, because a release that signs with an unset secret is refused. On a first release it sends `signupPolicy` from `konae.json`, and prints the generated address the release fixes, from `release_plan`, before it applies.
+Builds and publishes to `--url` or the installation `login` saved. Set each signing secret with [`secret set`](#secret) first, because a release that signs with an unset secret is refused. On a first release it installs `signupPolicy`, and prints the generated address the release fixes, from `release_plan`, before it applies.
 
 The Kernel changes the published database to what `schema.sql` states. A new table, column or index applies. When the change drops a table or a column, or changes a column's type, `publish` prints what it loses, the statements and the plan's confirmation, then asks. Without a terminal it publishes nothing; run it again with `--confirm-schema` and that confirmation. A confirmation fits only the plan it was printed for. `.konae/release-plan.json` keeps the last plan.
 
@@ -253,9 +253,9 @@ bun run konae -- tool session_inspect --dir ./my-app
 | `id` | Every time. It names the project and its Deployment. | No tool. |
 | `name`, `slug`, `manifest` | Every time, as the project's record. | Edit the file and publish. The hostname is not in this file. `hostname_set` moves it. |
 | `visibility` | Every time, with the release plan. | Edit the file and publish. |
-| `signupPolicy` | On the first release only. A later publish that names another policy warns and changes nothing. | `signup_policy_set` |
-| `contactEmail` | Every time it is set. | `contact_email_set`, until the next publish sends the file's value again. |
-| `signInMethods` | Never. | `sign_in_methods_set` |
+| `signupPolicy` | On the first release only. A later publish that names another policy warns and changes nothing. | `module_set` on `auth` |
+| `contactEmail` | On the first release only. Later publishes keep the Deployment's address and warn when the folder names another one. | `contact_email_set` |
+| `signInMethods` | On the first release only. Later publishes keep the Deployment's methods. | `module_set` on `auth` |
 | `kernel` | Never. It is the version of the Kernel that wrote the file. | The Kernel. |
 
 ## Read next

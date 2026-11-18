@@ -12,6 +12,8 @@ await miniapp.auth.signOut();                                    // revoke this 
 const rows = await miniapp.actions.call("tasks.list");           // array of row objects
 await miniapp.actions.call("tasks.create", { title });           // { changes, lastInsertId }
 await miniapp.actions.call("lesson.finish", { lesson });         // a signal action: { recorded: true }
+const { slug } = miniapp.page.params;
+link.href = miniapp.page.url(`/posts/${encodeURIComponent(slug)}`);
 const files = await miniapp.files.list();                        // files visible to the current visitor or app user
 const stored = await miniapp.files.upload(file);                 // uses the app's file policy
 const shared = await miniapp.files.upload(file, { visibility: "public" });
@@ -35,14 +37,21 @@ Error messages below are the exact text a published app receives as `error.messa
 | `MCP request exceeds 200 KB.` | one request body is larger than 200,000 bytes | Kernel | Never refuses |
 | `Invalid MCP response.` | the response does not answer the request the SDK sent | SDK | Never refuses |
 
-## miniapp.auth
+### App accounts (`auth`)
 
 Who is using the app. The Kernel owns accounts and sessions; the app only reads the current one.
 
+Owner control: the owner can change this module with module_set. Permission: `manage_users`. Build agent: waits for owner confirmation.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `signupPolicy` (Who can create an account) | `signup-policy`: `open` (Open), `allowlist` (Allowlist), `invitation` (Invitation only), `closed` (Closed) | Default | Choose who may create an app account. Allowlist entries stay as separate email addresses or domains. |
+| `signInMethods` (Sign-in methods) | `sign-in-methods`: `password` (Email and password), `google` (Continue with Google) | `password` | Password stays on. Google needs this app's Google client set as signing secrets. |
+
 - Visibility decides who may open the app shell. It never grants data access on its own.
 - An app account has no role the Kernel keeps. An app that needs an administrator keeps roles in its own table, keyed by the account ID that actor.id binds, and its owner names the first one with SQL in the editor's Data panel.
-- The Deployment's Signup Policy, which the owner sets in the editor or with signup_policy_set, decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.
-- The owner may add Continue with Google to the sign-in page in the editor's Access > Users view or with sign_in_methods_set, once the app's own Google client ID and secret are set. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.
+- The Deployment's Signup Policy decides who may create an account: Open, Invitation only, Closed or an Allowlist. Under Invitation only, the sign-in page offers no account creation; invited people accept from the link in their email, which opens /_konae/invitation. On an installation whose development transport sends no email, the owner's invitation call answers that link as acceptUrl, once, for the owner to hand over. A pending person who signs in with the right password, or with Google, is told that an invitation is waiting.
+- The owner may add Continue with Google to the sign-in page in the Users view, once the app's own Google client ID and secret are set as signing secrets. A Google sign-in reaches the app account that holds the same email, with the same actor.id as the password, and the Signup Policy decides whether an email without an account gets one. Google proves only Gmail addresses and addresses of a Google Workspace domain; any other address signs in with email and password. Password sign-in stays on.
 
 ### miniapp.auth.session()
 
@@ -106,9 +115,11 @@ Returns { ok: true }.
 
 Editor preview: Switches to the signed-out state and returns the anonymous session.
 
-## miniapp.actions
+### Data and actions (`actions`)
 
 The only door to the database. A call names a Server Action declared in actions.json and passes its input; the Kernel authorizes the caller, binds the input and runs the action's one SQL statement, or records its Signal.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
 - A binding passes who calls: { "source": "actor", "field": "id" } is the signed-in person's ID or the API key's ID, and refuses a caller without one. It cannot come from the input. Roles are rows in the app's own tables, checked in SQL against that ID.
 - A query action returns the rows of its SELECT. Column names are exactly the ones the SELECT projects, so alias any expression the app reads.
@@ -117,6 +128,23 @@ The only door to the database. A call names a Server Action declared in actions.
 - To record that something happened, such as a signup to a newsletter or a finished lesson, declare a signal on the mutation that does it, or add an action of kind signal and call it with miniapp.actions.call. There is no other tracking call.
 - A call the Kernel refuses records no Signal and counts in no Usage total, except a guard's refusal, which Usage counts under refused.
 - To email someone when something happens, such as a booking or an alert, declare notify on the mutation that does it. It reaches the owner, the person who called the action, or the verified accounts a column of the changed rows names, nobody else.
+
+Declared with `page` in `actions.json`. { path, file, list? } on an anonymous query. The Kernel binds path parameters to the query's input bindings, serves the named file with the row's title and card, and exposes parameters as miniapp.page.params. list names an anonymous query with no inputs for the sitemap.
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `Action <name> declares a page path, so it must be an anonymous query.` | page is set on any other action or an authenticated query | Kernel | Same |
+| `Action <name> declares page parameters that do not match its input bindings.` | the named parameters and input binding keys differ | Kernel | Same |
+| `Actions <name> and <name> both bind page path <key>.` | two page declarations have the same literal and parameter pattern | Kernel | Same |
+| `Action <name> names <key> as its page file, but the Build Artifact does not contain it.` | the named file is absent from the Build Artifact at release | Kernel | Same |
+| `Action <name> has a page query that does not return a title column.` | the query does not select a column named title | Kernel | Same |
+| `Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated.` | the list query's selected columns differ | Kernel | Same |
+
+Limits:
+
+- The first path segment is literal.
+- The page query returns at most one row.
+- The list query returns at most 1000 rows.
 
 Declared with `kind` in `actions.json`. Each kind takes its own top-level keys. A query takes kind, access, statement, bindings and http. A mutation takes kind, access, statement, bindings, http, signal, guard, notify and schedule. A signal action takes kind, access, bindings, signal and an empty statement. A call takes kind, access, bindings, url, method, body, headers, auth, then and an empty statement. Any other key is refused, so a misspelled or misplaced key cannot pass and do nothing. A key set to null counts as absent. A key with its own refusal, such as a guard on a query, gets that refusal instead. The Validation Gate and the Kernel refuse the same declarations with the same messages.
 
@@ -254,9 +282,53 @@ Limits:
 
 Editor preview: Ignores the Deployment's visibility and rate limits, and keeps its database in the browser with a 10 MiB cap. A signal action returns { recorded: true } and records nothing; Signals exist only on a Deployment or on konae dev. A call action returns { callId, queued: true } and sends nothing; only a Kernel sends calls.
 
-## miniapp.files
+### Page address values (`page`)
 
-Small files stored by the Kernel for one Deployment. The manifest can require an app session to read every file.
+Values from the page address. The Kernel fills params when a declared page path answers.
+
+Owner control: on and not switchable yet. Permission: `publish`. Build agent: cannot change it.
+
+### miniapp.page.params
+
+Read the values captured by the page path, or an empty object on a file page.
+
+Signed-out visitors on a public Deployment: allowed.
+
+Runtime MCP tools: none.
+
+Returns An object keyed by page path parameter, such as { slug: "hello" }.
+
+Editor preview: Always returns an empty object because the editor preview has no page URL.
+
+### miniapp.page.url(path)
+
+Build an app link that keeps the current hostname or path address.
+
+Signed-out visitors on a public Deployment: allowed.
+
+Runtime MCP tools: none.
+
+| Argument | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | `string` | Yes | An app path starting with one slash, such as /posts/hello. |
+
+Returns The path with the current /p/<name> prefix when the app uses a path address..
+
+| Message | When | Source | Editor preview |
+| --- | --- | --- | --- |
+| `An app page path must start with one slash.` | path does not start with one slash | SDK | Same |
+
+Editor preview: Returns the app path unchanged.
+
+### File storage (`files`)
+
+Small files stored by the Kernel for one Deployment. The module option can require an app session to read every file.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: cannot change it.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `fileAccess` (Who can read every file) | `enum`: `app-users` (All signed-in users) | Only the uploader | Let every signed-in user read all files in this app. |
 
 - By default, only the uploader can list or read a private file.
 - On a public Deployment a signed-out visitor can list and read public files. On a private Deployment any signed-in user can.
@@ -265,7 +337,7 @@ Small files stored by the Kernel for one Deployment. The manifest can require an
 - The operator of the installation sets the per-file limit and the Deployment's file quota. The defaults are 2 MiB per file and 20 MiB per Deployment, and a refusal names the limits in force. Do not promise the defaults in an app's text.
 - A visitor without a session on a private Deployment is asked to sign in before any file is looked up: 401 authentication-required. On a public Deployment, a file the visitor may not read answers 404 File not found, the same as a missing one. A signed-in user who may not read a file also gets 404.
 
-Declared with `fileAccess` in `manifest`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights.
+Declared with `fileAccess` in `module`. Set "fileAccess": "app-users" to let every signed-in user of this app read its files, including earlier uploads. The same rule applies to file listings and direct file URLs. IDs stay valid. The uploader keeps deletion rights. This option takes effect as soon as the owner sets it.
 
 ### miniapp.files.list()
 
@@ -393,9 +465,11 @@ Limits:
 
 - a row that still names the file ID keeps it; the app removes that row with its own action
 
-## The calls module, declared, with no browser call
+### Outgoing calls (`calls`)
 
 Calls from this app to another app or an outside service, made by the Kernel from its own process, never from the browser. There is no browser call: the page invokes the call action with miniapp.actions.call, which answers { callId, queued: true }, and the Kernel sends the request, retries it and runs the then mutation with the answer.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
 - The Kernel resolves an outside host once per attempt and refuses it when any address it resolves to is loopback, private, link-local (where cloud metadata answers), shared, documentation, benchmarking, multicast, reserved, unspecified, unique-local, or an IPv4 address carried in IPv6. It then connects to the address it checked, so a second DNS answer cannot redirect the request.
 - http is allowed only to an app of this installation, which the Kernel reaches in its own process. Every other URL must be https.
@@ -460,9 +534,11 @@ Limits:
 
 - 10 origins
 
-## The http module, declared, with no browser call
+### Incoming routes (`http`)
 
 Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
 - Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
@@ -533,3 +609,14 @@ Limits:
 - fields: 1 to 32 inputs, each path $ and 1 to 16 .name or [index] steps, up to 200 characters
 - the runtime endpoint's action rate limits: 30 per 10 seconds per client address without a key or session, 120 per 10 seconds per user or key
 - 50 live API keys per Deployment
+
+### Search listing (`seo`)
+
+Canonical addresses and page cards for HTML pages, robots.txt and a sitemap when the owner turns search listing on.
+
+Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
+
+| Option | Type | Default | Help |
+| --- | --- | --- | --- |
+| `canonical` (Canonical address) | `enum`: `domain` (Custom domain), `hostname` (Generated hostname), `path` (Path address) | Use the default address | Choose the address search engines and link previews should use. |
+| `image` (Card image) | `path` | Default | Choose an image path from the app's published files. |
