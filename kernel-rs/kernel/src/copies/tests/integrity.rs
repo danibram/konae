@@ -231,19 +231,19 @@ async fn manifest_reader_and_writer_agree_at_the_final_byte() {
             let manifest = manifest_with_final_size(&id, size, version, signing_key);
             let wire = serde_json::to_vec_pretty(&manifest).unwrap();
             assert_eq!(wire.len(), size);
-            let encoded = encode_manifest(&manifest);
+            let encoded = encode_manifest(&Installation::for_test(), &id, &manifest);
             if delta <= 0 {
                 assert_eq!(encoded.unwrap(), wire);
             } else {
                 assert!(encoded.unwrap_err().to_string().contains("4194305"));
                 if version == 1 {
-                    assert!(send_to_directory(&root.join("unreadable-staging"), &root, &id, &manifest, &HashMap::new()).unwrap_err().to_string().contains("4194305"));
+                    assert!(send_to_directory(&root.join("unreadable-staging"), &root, &id, &manifest, &HashMap::new(), &Installation::for_test()).unwrap_err().to_string().contains("4194305"));
                     assert!(!root.join(&id).join(MANIFEST).exists());
                 } else {
                     let plain = Manifest { mac: None, encryption: None, ..manifest.clone() };
-                    if signing_key.is_some() { assert!(encode_manifest(&plain).is_ok()); }
+                    if signing_key.is_some() { assert!(encode_manifest(&Installation::for_test(), &id, &plain).is_ok()); }
                     let target = S3CopyTarget { client: &client, bucket: &bucket, prefix: &prefix, key: signing_key };
-                    let err = send_to_s3(target, &root.join("unreadable-staging"), &plain, &id, &mut ManifestCache::new(), &HashMap::new()).await.err().unwrap();
+                    let err = send_to_s3(target, &root.join("unreadable-staging"), &plain, &id, &mut ManifestCache::new(), &HashMap::new(), &Installation::for_test()).await.err().unwrap();
                     assert!(err.to_string().contains("4194305"), "{err:#}");
                     assert!(!remote.complete_copies().await.unwrap().contains(&id));
                 }
@@ -282,13 +282,91 @@ async fn plain_s3_rejects_a_same_size_substitution_at_the_object_home() {
         version: 1, copy_id: first.clone(), created_at: now_ms(), files: list_files(&root).unwrap(), mac: None, encryption: None,
     };
     let mut cache = ManifestCache::new();
-    send_to_s3(repository(), &root, &manifest, &first, &mut cache, &HashMap::new()).await.unwrap();
+    send_to_s3(repository(), &root, &manifest, &first, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
     client.put_object().bucket(&bucket).key(format!("{prefix}{first}/{path}")).body(ByteStream::from_static(b"def")).send().await.unwrap();
     let second = copy_id(parse_copy_id(&first).unwrap() + 1);
     let manifest = Manifest { copy_id: second.clone(), ..manifest };
-    let error = send_to_s3(repository(), &root, &manifest, &second, &mut cache, &HashMap::new()).await.unwrap_err();
+    let error = send_to_s3(repository(), &root, &manifest, &second, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap_err();
     assert!(format!("{error:#}").contains("SHA-256"));
     let from = Source::S3 { client, bucket, prefix };
     assert_eq!(from.complete_copies().await.unwrap(), [first]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn directory_reuse_requires_real_directories_and_regular_files() {
+    use std::os::unix::fs::symlink;
+    let root = scratch("copy-file-types");
+    let live = root.join("live");
+    let copies = root.join("copies");
+    let (deployment, _) = seed(&live);
+    let config = CopyConfig { targets: vec![Target::Directory(copies.clone())], interval: Duration::from_secs(3600) };
+    let mut state = state(&live);
+    state.copies = Arc::new(CopyStatus::new(Some(&config)));
+    let good = run_copy(&state, &config.targets).await.unwrap();
+    let reference = copy_id(parse_copy_id(&good).unwrap() + 1);
+    let fixture = copies.join(&reference);
+    copy_tree(&copies.join(&good), &fixture).unwrap();
+    let mut manifest: Manifest = serde_json::from_slice(&std::fs::read(fixture.join(MANIFEST)).unwrap()).unwrap();
+    manifest.copy_id = reference.clone();
+    std::fs::write(fixture.join(MANIFEST), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let dist = crate::layout::folder(&fixture, &deployment.id).join("dist");
+    let saved = fixture.join("saved-dist");
+    std::fs::rename(&dist, &saved).unwrap();
+    symlink(&saved, &dist).unwrap();
+    let source = Source::Directory(copies.clone());
+    for expected in ["Expected a directory", "Expected a regular file"] {
+        let error = run_copy(&state, &config.targets).await.unwrap_err().to_string();
+        assert!(error.contains(expected) && error.contains("dist/index.html"), "{error}");
+        assert_eq!(state.copies.health()["targets"][0]["lastCopyId"], good);
+        assert_eq!(source.complete_copies().await.unwrap(), [good.clone(), reference.clone()]);
+        if expected == "Expected a directory" {
+            std::fs::remove_file(&dist).unwrap();
+            std::fs::create_dir(&dist).unwrap();
+            symlink(saved.join("index.html"), dist.join("index.html")).unwrap();
+        }
+    }
+    let restored = root.join("restored");
+    restore(&source, Some(&good), &restored, None, &state.installation).await.unwrap();
+    assert_eq!(std::fs::read(crate::layout::folder(&restored, &deployment.id).join("dist/index.html")).unwrap(), b"<main>copied app</main>");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn writer_and_restore_refuse_the_same_manifest_paths_and_references() {
+    let root = scratch("manifest-paths");
+    let id = copy_id(now_ms());
+    let installation = Installation::kernel();
+    let repository = root.join("repo");
+    let stored = repository.join(&id);
+    std::fs::create_dir_all(&stored).unwrap();
+    let (client, bucket, base) = test_repository().await;
+    let older = copy_id(parse_copy_id(&id).unwrap() - 1);
+    for (path, home, reason) in [
+        ("outside.sqlite", None, "outside a data directory"),
+        ("apps/demo/dist/label\\name", None, "outside a data directory"),
+        ("apps/demo/dist/index.html", Some("invalid-id"), "invalid object reference"),
+    ] {
+        let manifest = Manifest {
+            version: 2, copy_id: id.clone(), created_at: 0, encryption: None, mac: None,
+            files: vec![ManifestFile { path: path.into(), size: 0, sha256: hex::encode(Sha256::digest([])), home_copy: home.map(str::to_owned) }],
+        };
+        let fresh = root.join("new-target");
+        let write = send_to_directory(&root.join("staging"), &fresh, &id, &manifest, &HashMap::new(), &installation).unwrap_err();
+        assert!(write.to_string().contains(reason), "{write:#}");
+        assert!(!fresh.join(&id).join(MANIFEST).exists());
+        let prefix = format!("{base}{}/", uuid::Uuid::new_v4());
+        let previous = Manifest { copy_id: older.clone(), ..manifest.clone() };
+        client.put_object().bucket(&bucket).key(format!("{prefix}{older}/{MANIFEST}"))
+            .body(ByteStream::from(serde_json::to_vec(&previous).unwrap())).send().await.unwrap();
+        let target = S3CopyTarget { client: &client, bucket: &bucket, prefix: &prefix, key: None };
+        let write_s3 = send_to_s3(target, &root.join("staging"), &manifest, &id, &mut ManifestCache::new(), &HashMap::new(), &installation).await.unwrap_err();
+        assert_eq!(write_s3.to_string(), write.to_string());
+        assert!(list_s3_keys(&client, &bucket, &format!("{prefix}{id}/")).await.unwrap().is_empty());
+        std::fs::write(stored.join(MANIFEST), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let read = restore(&Source::Directory(repository.clone()), Some(&id), &root.join("restored"), None, &installation).await.err().unwrap();
+        assert_eq!(write.to_string(), read.to_string());
+    }
     std::fs::remove_dir_all(root).unwrap();
 }

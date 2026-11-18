@@ -38,8 +38,10 @@ pub(crate) fn status_directory(root: &Path) -> PathBuf {
 fn target_file(directory: &Path, target: &Target, endpoint: &str, bucket: &str) -> PathBuf {
     let identity = match target {
         Target::Directory(path) => {
-            let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-            json!(["directory", path])
+            let path = if path.as_os_str().is_empty() { Path::new(".") } else { path.as_path() };
+            let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+            let identity: PathBuf = absolute.components().collect();
+            json!(["directory", identity])
         }
         Target::S3 { prefix } => json!(["s3", endpoint.trim_end_matches('/'), bucket, normalize_prefix(prefix)]),
     };
@@ -184,4 +186,17 @@ pub(super) async fn record_restore(source: &Source, directory: &Path, copy_id: &
     let receipt = RestoreReceipt { copy_id: copy_id.to_owned(), verified_at: now_ms() };
     crate::write_atomic(&path, &serde_json::to_vec(&receipt)?).await
         .with_context(|| format!("Copy {copy_id} was restored. Could not save its verified restore receipt to {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copy_named_from_its_parent_records_the_same_directory() {
+        let path = |root: &Path| target_file(Path::new("reports"), &Target::Directory(root.to_owned()), "", "");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(path(Path::new("")), path(&cwd));
+        assert_eq!(path(&cwd.join("copies/")), path(&cwd.join("copies")));
+    }
 }

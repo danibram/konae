@@ -136,7 +136,7 @@ async fn history_reports_three_missing_payloads_and_writes_a_separate_recovery_p
     }
     let manifest = Manifest { version: 1, copy_id: old.clone(), created_at: now_ms(), files: list_files(&historical).unwrap(), encryption: None, mac: None };
     fs::write(historical.join(MANIFEST), serde_json::to_vec(&manifest).unwrap()).unwrap();
-    send_to_directory(&historical, &repo, &old, &manifest).unwrap();
+    send_to_directory(&historical, &repo, &old, &manifest, &HashMap::new(), &Installation::for_test()).unwrap();
     let original_hash = checksum_file(&repo.join(&old).join(MANIFEST)).unwrap();
     let source = Source::Directory(repo.clone());
     let (report, ok) = audit(&source, &old, None).await.unwrap();
