@@ -168,6 +168,26 @@ async fn a_reader_holds_the_expiring_point_until_it_closes() -> Result<()> {
     let now = 31 * crate::DAY_MS;
     assert!(repository.prune(&scope, now, &copy_id(24)).await.is_err());
     repository.restore(&reader, &scratch.join("cold")).await?;
+    let replica = Source::Directory(scratch.join("replica"));
+    let second = Repository::new(&replica, REPO, &key)?;
+    second
+        .publish(
+            &stage,
+            &Manifest::capture(&stage, 0)?,
+            &scope,
+            16,
+            &HashMap::new(),
+        )
+        .await?;
+    let collector = Reservation::acquire(&replica, true).await?;
+    let output = scratch.join("from-replica");
+    assert!(second.restore(&reader, &output).await.is_err());
+    collector.release().await?;
+    second.restore(&reader, &output).await?;
+    assert_eq!(
+        fs::read(output.join("asset"))?,
+        fs::read(stage.join("asset"))?
+    );
     reader.close().await?;
     assert_eq!(repository.prune(&scope, now, &copy_id(24)).await?, 1);
     assert_eq!(repository.points().await?.first(), Some(&copy_id(1)));

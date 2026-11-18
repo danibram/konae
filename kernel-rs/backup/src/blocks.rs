@@ -473,9 +473,20 @@ impl<'a> Repository<'a> {
     /// Creates a private staging tree. The caller controls activation.
     pub async fn restore(&self, point: &VerifiedPoint<'_>, staging: &Path) -> Result<()> {
         ensure!(
-            point.point.repository == self.identity && std::ptr::eq(point.source, self.source),
+            point.point.repository == self.identity,
             "Point belongs to another repository."
         );
+        if std::ptr::eq(point.source, self.source) {
+            return self.restore_into(point, staging).await;
+        }
+        // A replica with the same identity has its own collector.
+        let guard = Reservation::acquire(self.source, false).await?;
+        let result = self.restore_into(point, staging).await;
+        guard.release().await?;
+        result
+    }
+
+    async fn restore_into(&self, point: &VerifiedPoint<'_>, staging: &Path) -> Result<()> {
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
