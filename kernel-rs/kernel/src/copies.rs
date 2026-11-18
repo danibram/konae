@@ -2153,3 +2153,34 @@ mod tests {
         }
     }
 }
+
+/// The pilot checks these files against a stopped fixture before restore signs anyone out.
+#[cfg(test)]
+#[tokio::test]
+#[ignore = "run through ops/tests/writer-pilot.py with disposable repositories"]
+async fn read_pilot_cut() -> Result<()> {
+    let from = std::env::var("PILOT_SOURCE")?;
+    if from.starts_with("s3://") {
+        let endpoint = url::Url::parse(&std::env::var("KONAE_S3_ENDPOINT")?)?;
+        ensure!(endpoint.scheme() == "http" && endpoint.host_str() == Some("127.0.0.1")
+            && from.starts_with("s3://konae-test/"), "Use the loopback pilot bucket.");
+    }
+    let source = source_for(&from).await?;
+    let id = std::env::var("PILOT_COPY")?;
+    let output = PathBuf::from(std::env::var("PILOT_IMAGE")?);
+    std::fs::create_dir(&output)?;
+    let mut scope = Installation::kernel();
+    if std::env::var("PILOT_BINARY")? == "konae" {
+        for file in ["owners.sqlite", "mcp.sqlite"] {
+            scope.databases.push(crate::installation::RootDatabase { file, sign_out: &[] });
+        }
+    }
+    let key = CopyKey::from_env()?;
+    if let Some(repository) = blocks::source_identity(&source) {
+        blocks::restore(&source, repository, key.as_ref(), Some(&id), &scope, &output).await?;
+    } else {
+        CopyReader::open(&source, &id, key.as_ref().map(CopyKey::files), &scope)
+            .await?.restore(&output).await?;
+    }
+    Ok(())
+}
