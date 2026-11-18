@@ -231,7 +231,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
   const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
   const resolveAgentPublish = useRef<((outcome: PublishOutcome) => void) | null>(null);
-  const agentPublishCallId = useRef<string | null>(null);
+  const agentPublishRequest = useRef<{ callId: string; shared: boolean } | null>(null);
   const deploymentsRef = useRef(deployments);
   deploymentsRef.current = deployments;
   const [agent, setAgent] = useState<KonaeAgentHandle | null>(null);
@@ -349,7 +349,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       resolvePlatformConfirmation.current = null;
       resolveAgentPublish.current?.({ status: "declined" });
       resolveAgentPublish.current = null;
-      agentPublishCallId.current = null;
+      agentPublishRequest.current = null;
     };
   }, [project.id]);
 
@@ -1181,15 +1181,21 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               }),
               publish: async (projectId, callId) => {
                 if (projectId !== projectRef.current.id) return { status: "declined" };
-                if (activeGeneration === null || !activeExecutorId || !activeConversationId) return { status: "failed", error: "Shared execution is not active. Continue from the current saved conversation." };
+                const execution = activeGeneration !== null && activeExecutorId && activeConversationId
+                  ? { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration, callId: `${callId ?? crypto.randomUUID()}-permissions` }
+                  : null;
+                if (stagingRecovery && !execution) return { status: "failed", error: "Shared execution is not active. Continue from the current saved conversation." };
                 try {
-                  const inspect = await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration, callId: `${callId ?? crypto.randomUUID()}-permissions` });
+                  const inspect = execution
+                    ? await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, execution)
+                    : await platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect");
                   if (inspect.can?.publish !== true) return { status: "failed", error: "session_inspect.can.publish is no longer granted. The Deploy dialog was not opened." };
                 } catch (error) { return { status: "failed", error: error instanceof Error ? error.message : String(error) }; }
+                if (!current()) return { status: "declined" };
                 return new Promise<PublishOutcome>((resolve) => {
                 resolveAgentPublish.current?.({ status: "declined" });
                 resolveAgentPublish.current = resolve;
-                agentPublishCallId.current = callId ?? crypto.randomUUID();
+                agentPublishRequest.current = { callId: callId ?? crypto.randomUUID(), shared: stagingRecovery };
                 resolvePlatformConfirmation.current?.(false);
                 resolvePlatformConfirmation.current = null;
                 setPlatformConfirmation(null);
@@ -1715,8 +1721,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const deploy = async (visibility: DeploymentVisibility, signupMode?: SignupMode) => {
-    const agentPublish = resolveAgentPublish.current !== null;
-    const publishCallId = agentPublishCallId.current ?? crypto.randomUUID();
+    const requestedByAgent = resolveAgentPublish.current !== null;
+    const sharedAgent = durableRecoveryStaging && durableRecoveryRef.current ? agentRef.current : null;
+    const sharedBaseRevision = durableSourceRevisionRef.current;
+    const agentPublish = requestedByAgent && agentPublishRequest.current?.shared === true;
+    const publishCallId = agentPublishRequest.current?.callId ?? crypto.randomUUID();
     const sourceSaveExecution = agentPublish ? agentRef.current?.execution?.(`${publishCallId}-sources`) ?? undefined : undefined;
     let confirmedDeployment: DeploymentReceipt | null = null;
     setPublishing(true);
@@ -1772,22 +1781,27 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       } : undefined;
       const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules, fencedClient);
       const record = published.receipt;
+      const sameSharedBase = () => sharedAgent !== null && agentRef.current === sharedAgent
+        && projectRef.current.id === project.id && sharedBaseRevision === observedSourcesRevision
+        && durableSourceRevisionRef.current === sharedBaseRevision;
+      if (!agentPublish && (requestedByAgent || sameSharedBase())) {
+        const inspected = await platformMcp.call<{ deployment?: { id: string } }>("project_inspect", { projectId: project.id });
+        if (inspected.deployment?.id !== record.id) throw new Error("The Deploy outcome is unobserved. Inspect the current Deployment before trying again.");
+      }
       confirmedDeployment = record;
       // Once release_apply and project_inspect agree, remove the Deploy action
       // immediately. Later baseline read-back must never invite a second release.
       setDeployment(record);
       setDeployments((current) => ({ ...current, [project.id]: record }));
-      if (agentPublish) {
-        // release_apply has already been observed through project_inspect, its
-        // documented read-back. Read canonical files with a fresh leased call,
-        // not as an observation of either release_apply or a possibly absent save.
-        const sourceReadback = agentRef.current?.execution?.(`${publishCallId}-released-sources-readback`);
-        if (!sourceReadback) throw new Error("The Deployment was confirmed, but its saved source baseline could not be read back. Do not repeat release; reconcile the Project sources first.");
-        const observed = await sources.observeSaved(project.id, sourceReadback);
+      if (agentPublish || sameSharedBase()) {
+        // The source baseline is a fresh read after project_inspect observed the release.
+        const sourceReadback = agentPublish ? sharedAgent?.execution?.(`${publishCallId}-released-sources-readback`) : undefined;
+        if (agentPublish && !sourceReadback) throw new Error("The Deployment was confirmed, but its saved source baseline could not be read back. Do not repeat release; reconcile the Project sources first.");
+        const observed = await sources.observeSaved(project.id, sourceReadback ?? undefined);
         if (!observed.project || observed.revision !== published.sourcesRevision || !sameProjectSourceFiles(project, observed.project)) {
           throw new Error(`The Deployment was confirmed, but source read-back did not match the exact published files and revision ${published.sourcesRevision}. Do not repeat release; inspect current Project sources before continuing.`);
         }
-        agentRef.current?.adoptSavedBaseline?.(observed.project, observed.revision);
+        if (sameSharedBase() || (agentPublish && agentRef.current === sharedAgent)) sharedAgent?.adoptSavedBaseline?.(observed.project, observed.revision);
       }
       const releasedProject = { ...project, manifest: record.manifest };
       const releasedSnapshot = JSON.stringify(releasedProject);
@@ -1799,7 +1813,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setExportAhead(false);
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
       resolveAgentPublish.current = null;
-      agentPublishCallId.current = null;
+      agentPublishRequest.current = null;
     } catch (error) {
       if (error instanceof SchemaChangeDeclined) return;
       if (isSignedOutError(error)) refreshOwnerSession();
@@ -2400,7 +2414,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; agentPublishCallId.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; agentPublishRequest.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
       {/* After the Deploy dialog, so it paints over it. */}
       {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 

@@ -1807,3 +1807,65 @@ test("restore before schema proposal keeps deployed rows and invitation, exposes
   const rowsAfterApply = await mcp.call<{ rows: unknown[] }>("database_execute", { projectId, operation: "sql", input: { sql: "SELECT id,owner_id,title,created_at FROM notes WHERE title = 'live row before restore' LIMIT 10" } });
   expect(rowsAfterApply.rows).toEqual(rowsBefore.rows);
 });
+
+for (const mode of ["manual-staged", "legacy-tool"] as const) {
+  test(`existing Deploy flow remains usable with ${mode}`, async ({ page }) => {
+    const app = await createProject(page, `Local Deploy fixture ${mode}`);
+    const projectId = app.split("/").at(-1)!;
+    const manual = mode === "manual-staged";
+    const conversationsPath = `/_konae/projects/${projectId}/conversations`;
+    let providerRequests = 0;
+    let releases = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname !== "/mcp" || !request.postData()) return;
+      if (request.postDataJSON().params?.name === "release_apply") releases++;
+    });
+    await page.route("https://api.anthropic.com/**", async (route) => {
+      const request = route.request();
+      const headers = {
+        "access-control-allow-origin": request.headers().origin ?? "*",
+        "access-control-allow-methods": "POST,OPTIONS",
+        "access-control-allow-headers": "*",
+      };
+      if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+      providerRequests++;
+      const tool = !manual && providerRequests === 1 ? { name: "publish", input: {} } : undefined;
+      await route.fulfill({
+        status: 200, headers, contentType: "text/event-stream",
+        body: providerReply(tool, `Deploy fixture model response ${providerRequests}`),
+      });
+    });
+    await page.goto(app + (manual ? "?agent=durable-recovery" : "?agent=legacy"));
+    await connectProposalFixture(page, "local-deploy-path-fixture-key");
+    const saved = await readSavedSources(page, projectId);
+    await askFixture(page, manual ? "Remember this conversation while I deploy." : "Open the existing Deploy dialog.");
+    const list = async () => (await (await page.request.get(conversationsPath)).json()).items;
+    let conversation: string | undefined;
+    if (manual) {
+      await expect(page.getByText("Deploy fixture model response 1", { exact: true })).toBeVisible({ timeout: 25000 });
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+      expect(await list()).toHaveLength(1);
+      conversation = (await list())[0].id;
+      await page.getByRole("banner").getByRole("button", { name: "Deploy", exact: true }).click();
+    }
+    const dialog = page.getByRole("dialog").filter({ has: page.getByRole("button", { name: "Deploy public", exact: true }) });
+    await expect(dialog).toBeVisible({ timeout: 25000 });
+    expect(releases).toBe(0);
+    await dialog.getByRole("button", { name: "Deploy public", exact: true }).click();
+    await expect(page.locator("a.published-url")).toBeVisible({ timeout: 30000 });
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    const published = await readSavedSources(page, projectId);
+    expect(published.revision).toBeGreaterThan(saved.revision);
+    expect(releases).toBe(1);
+    if (manual) await askFixture(page, "Continue using the source baseline I just published.");
+    await expect(page.getByText("Deploy fixture model response 2", { exact: true })).toBeVisible({ timeout: 20000 });
+    expect(providerRequests).toBe(2);
+    if (manual) {
+      expect(await list()).toHaveLength(1);
+      expect((await list())[0].id).toBe(conversation);
+      const checkpoint = (await (await page.request.get(`${conversationsPath}/${conversation}/checkpoints?latest=true`)).json()).items[0];
+      expect(checkpoint.payload.sourcesRevision).toBe(published.revision);
+    } else expect(await list()).toHaveLength(0);
+    expect(releases).toBe(1);
+  });
+}
