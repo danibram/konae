@@ -2,6 +2,7 @@
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 import ctypes
+import http.client
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import subprocess
 import tempfile
 from threading import Condition, Event, Thread
 import time
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 import uuid
 
 
@@ -98,6 +99,10 @@ class Traffic:
     """Count MinIO trace records at the server, grouped by phase and object prefix."""
     def __init__(self, mc):
         self.mc = mc
+        endpoint = urlsplit(os.environ["KONAE_TEST_S3_ENDPOINT"])
+        if endpoint.scheme != "http" or endpoint.hostname != "127.0.0.1" or not endpoint.port:
+            raise ValueError("Traffic observation requires disposable loopback MinIO")
+        self.port = endpoint.port
         self.phase = "setup"
         self.stats = defaultdict(lambda: defaultdict(Counter))
         self.marker = "pilot-marker-" + uuid.uuid4().hex
@@ -125,7 +130,13 @@ class Traffic:
         while time.monotonic() < deadline:
             with self.condition:
                 previous = self.seen
-            subprocess.run([self.mc, "stat", "lab/konae-test/" + self.marker], capture_output=True, timeout=5)
+            # An anonymous HEAD appears in the trace without a bucket-location lookup.
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            try:
+                conn.request("HEAD", "/konae-test/" + self.marker)
+                conn.getresponse().read()
+            finally:
+                conn.close()
             with self.condition:
                 if self.condition.wait_for(lambda: self.seen > previous, .4):
                     self.phase = phase
