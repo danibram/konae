@@ -1,4 +1,8 @@
 
+pub(crate) mod history;
+#[cfg(test)]
+mod history_tests;
+
 use crate::installation::Installation;
 use std::{
     collections::{HashMap, HashSet},
@@ -603,7 +607,10 @@ fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
             }
             "app" | "dist" if kind.is_dir() => copy_tree(&from, &to)?,
             "data" if kind.is_dir() => copy_data(&from, &to)?,
-            ".konae" if kind.is_dir() => copy_private(&from, &to)?,
+            ".konae" => {
+                ensure!(kind.is_dir(), "The app's .konae path must be a directory.");
+                copy_private(&from, &to)?;
+            }
             _ => {}
         }
     }
@@ -642,27 +649,14 @@ fn copy_private(source: &Path, target: &Path) -> Result<()> {
             "deployment.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
-            "backups" if kind.is_dir() => {
-                std::fs::create_dir_all(&to)?;
-                for backup in std::fs::read_dir(&from)? {
-                    let backup = backup?;
-                    let name = backup.file_name();
-                    if backup.file_type()?.is_file() && is_backup_file(&name.to_string_lossy()) {
-                        std::fs::copy(backup.path(), to.join(name))?;
-                    }
-                }
+            "backups" => {
+                ensure!(kind.is_dir(), "The app's backups path must be a directory.");
+                history::copy_records(&from, &to)?;
             }
             _ => {}
         }
     }
     Ok(())
-}
-
-fn is_backup_file(name: &str) -> bool {
-    let Some((stem, extension)) = name.rsplit_once('.') else { return false };
-    (extension == "sqlite" || extension == "json")
-        && stem.len() == 36
-        && stem.chars().all(|character| character.is_ascii_hexdigit() || character == '-')
 }
 
 pub fn vacuum_into(source: &Path, target: &Path) -> Result<()> {
@@ -1128,6 +1122,19 @@ enum Source {
     S3 { client: S3Client, bucket: String, prefix: String },
 }
 
+// Directory copies store regular files and hard links. Resolve each component
+// inside the selected repository before opening manifest or payload bytes.
+fn directory_file(root: &Path, copy: &str, relative: &str) -> Result<PathBuf> {
+    ensure!(safe_relative_path(relative) && safe_relative_path(copy) && !copy.contains('/'), "Invalid copy path.");
+    let mut path = root.join(copy);
+    for name in relative.split('/') {
+        ensure!(std::fs::symlink_metadata(&path)?.is_dir(), "Expected a directory in copy {copy}.");
+        path.push(name);
+    }
+    ensure!(std::fs::symlink_metadata(&path)?.is_file(), "Expected a regular file in copy {copy}.");
+    Ok(path)
+}
+
 impl Source {
     async fn complete_copies(&self) -> Result<Vec<String>> {
         let mut ids = match self {
@@ -1155,7 +1162,7 @@ impl Source {
 
     async fn read(&self, copy: &str, path: &str) -> Result<Vec<u8>> {
         match self {
-            Source::Directory(root) => Ok(tokio::fs::read(root.join(copy).join(path)).await?),
+            Source::Directory(root) => Ok(tokio::fs::read(directory_file(root, copy, path)?).await?),
             Source::S3 { client, bucket, prefix } => read_s3_bytes(client, bucket, &format!("{prefix}{copy}/{path}")).await,
         }
     }
@@ -1163,7 +1170,7 @@ impl Source {
     async fn read_manifest_bytes(&self, copy: &str) -> Result<Option<Vec<u8>>> {
         match self {
             Source::Directory(root) => {
-                let path = root.join(copy).join(MANIFEST);
+                let path = directory_file(root, copy, MANIFEST)?;
                 if tokio::fs::metadata(&path).await?.len() > MAX_MANIFEST_BYTES {
                     return Ok(None);
                 }
@@ -1326,6 +1333,22 @@ async fn newest_authentic_copy(source: &Source, key: &CopyKey, report: &mut dyn 
     )
 }
 
+async fn verified_bytes(source: &Source, copy: &str, manifest: &Manifest, file: &ManifestFile, key: Option<&CopyKey>) -> Result<Vec<u8>> {
+    let home = file.home_copy.as_deref().unwrap_or(copy);
+    let mut bytes = source.read(home, &file.path).await.with_context(|| format!("Could not read {} from copy {home}", file.path))?;
+    if let (Some(_), Some(key)) = (&manifest.encryption, key) {
+        bytes = key
+            .open(home, &file.path, &bytes)
+            .with_context(|| format!("Copy {copy} is damaged: {} does not decrypt. Nothing was installed.", file.path))?;
+    }
+    ensure!(
+        bytes.len() as u64 == file.size && hex::encode(Sha256::digest(&bytes)) == file.sha256,
+        "Copy {copy} is damaged: {} does not match its checksum. Nothing was installed.",
+        file.path
+    );
+    Ok(bytes)
+}
+
 async fn restore(
     source: &Source,
     copy: Option<&str>,
@@ -1384,25 +1407,16 @@ async fn restore(
     let staging = destination.join(format!(".restore-{}", uuid::Uuid::new_v4()));
     let staged = async {
         for file in &manifest.files {
-            let home = file.home_copy.as_deref().unwrap_or(&copy);
-            let mut bytes = source.read(home, &file.path).await.with_context(|| format!("Could not read {} from copy {home}", file.path))?;
-            if let (Some(_), Some(key)) = (&manifest.encryption, key) {
-                bytes = key
-                    .open(home, &file.path, &bytes)
-                    .with_context(|| format!("Copy {copy} is damaged: {} does not decrypt. Nothing was installed.", file.path))?;
-            }
-            ensure!(
-                bytes.len() as u64 == file.size && hex::encode(Sha256::digest(&bytes)) == file.sha256,
-                "Copy {copy} is damaged: {} does not match its checksum. Nothing was installed.",
-                file.path
-            );
+            let bytes = verified_bytes(source, &copy, &manifest, file, key).await?;
             let target = staging.join(&file.path);
             tokio::fs::create_dir_all(target.parent().expect("file has a parent")).await?;
             tokio::fs::write(&target, &bytes).await?;
         }
         let root = staging.clone();
         let stores = installation.clone();
+        let copy_id = copy.clone();
         let removed = tokio::task::spawn_blocking(move || -> Result<usize> {
+            history::warn_incomplete(&root, &copy_id)?;
             check_databases(&root, &stores)?;
             invalidate_sessions(&root, &stores)
         })
@@ -1694,8 +1708,12 @@ mod tests {
         std::fs::write(folder.join("data/files/index.json"), json!([{"id": file_id}]).to_string()).unwrap();
         std::fs::write(folder.join("data/files/.index.json.tmp-x"), "temporary").unwrap();
         std::fs::create_dir_all(folder.join(".konae/backups")).unwrap();
-        let backup_id = uuid::Uuid::new_v4();
-        std::fs::write(folder.join(".konae/backups").join(format!("{backup_id}.json")), "{}").unwrap();
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let backup_dir = crate::layout::backups(root, &deployment.id);
+        let snapshot = backup_dir.join(format!("{backup_id}.sqlite"));
+        vacuum_into(&folder.join("data/database.sqlite"), &snapshot).unwrap();
+        let record = json!({"id": backup_id, "key": format!("{backup_id}.sqlite"), "sizeBytes": snapshot.metadata().unwrap().len(), "label": "Manual", "createdAt": 1});
+        std::fs::write(backup_dir.join(format!("{backup_id}.json")), record.to_string()).unwrap();
         std::fs::write(folder.join(".konae/backups/portable-data-x.sqlite"), "scratch").unwrap();
         crate::http::secrets_call(&crate::http::secrets_store(root, &deployment.id).unwrap(), &deployment.id, None, "secret_set", &json!({"name": "hook", "value": "a-copied-route-secret"})).unwrap();
         AuthService::open(root.join("accounts.sqlite"))
@@ -1791,7 +1809,7 @@ mod tests {
 
         let copied = crate::layout::folder(&copies.join(&id), &deployment.id);
         assert!(!copied.join("files/.index.json.tmp-x").exists(), "temporary files stay behind");
-        assert!(!copied.join("backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
+        assert!(!copied.join(".konae/backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
 
         let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
         assert_eq!((summary.copy_id.as_str(), summary.deployments), (id.as_str(), 1));
@@ -1811,7 +1829,7 @@ mod tests {
         let index: Value = serde_json::from_slice(&std::fs::read(folder.join("data/files/index.json")).unwrap()).unwrap();
         let file_id = index[0]["id"].as_str().unwrap();
         assert_eq!(std::fs::read(folder.join("data/files").join(format!("{file_id}.blob"))).unwrap(), b"attachment");
-        assert_eq!(std::fs::read_dir(folder.join(".konae/backups")).unwrap().count(), 1, "the saved backup travels");
+        assert_eq!(std::fs::read_dir(folder.join(".konae/backups")).unwrap().count(), 2, "the backup record and its database travel");
         assert!(crate::http::holds_route_secret(&crate::http::secrets_store(&restored, &deployment.id).unwrap(), "a-copied-route-secret").unwrap(), "the app's secrets travel in a copy");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
