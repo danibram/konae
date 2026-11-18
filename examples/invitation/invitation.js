@@ -3,10 +3,12 @@ const labels = hostname.split(".");
 const ownHostname = !pathname.startsWith("/p/") && labels.length > 1 && /-[0-9a-f]{6}$/.test(labels[0]);
 const domain = ownHostname ? labels.slice(1).join(".") : hostname;
 const at = (path) => `${protocol}//${domain}${port ? `:${port}` : ""}${path}`;
+const site = document.documentElement.dataset.site;
+const onSite = (path) => (site ? `${protocol}//${site}${path}` : at(path));
 const links = {
-  home: at("/"),
-  docs: at("/p/docs/"),
-  "first-app": at("/p/docs/guides/first-app-from-the-editor"),
+  home: onSite("/"),
+  docs: onSite(site ? "/docs/" : "/p/docs/"),
+  "first-app": onSite(site ? "/docs/guides/first-app-from-the-editor" : "/p/docs/guides/first-app-from-the-editor"),
   privacy: at("/p/politica-de-privacidad/"),
   terms: at("/p/terminos-y-condiciones/"),
 };
