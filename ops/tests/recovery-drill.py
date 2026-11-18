@@ -296,4 +296,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="konae-drill-lab-") as directory:
-        lab(Path(directory), args.minio_bin_dir.resolve(), args.binary.resolve(strict=True))
+        lab(Path(directory).resolve(), args.minio_bin_dir.resolve(), args.binary.resolve(strict=True))
