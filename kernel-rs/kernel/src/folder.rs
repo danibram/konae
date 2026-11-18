@@ -5,7 +5,6 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
-use rusqlite::Connection;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -265,7 +264,7 @@ async fn optional_text(path: &Path) -> Result<Option<String>> {
 fn plan(state: &AppState, database: &Path, schema: &str, program: &crate::ActionProgram, transforms: Option<&str>) -> Result<schema_change::Change> {
     let copy = state.data_root.join(format!("validate-{}.sqlite", Uuid::new_v4()));
     let result = (|| {
-        Connection::open(database)?.execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()])?;
+        crate::copies::vacuum_into(database, &copy)?;
         schema_change::apply_with_transforms(&copy, schema, program, transforms, schema_change::Mode::Plan)
     })();
     let _ = std::fs::remove_file(&copy);
@@ -352,6 +351,7 @@ async fn reload(state: &AppState, deployment: Deployment) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     fn scratch() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("konae-folder-{}", Uuid::new_v4()))
@@ -547,7 +547,15 @@ mod tests {
 
         let deployment = open(&state, "static_app", None).await.unwrap();
         assert!(!crate::layout::database(&root, "static_app").exists());
+        assert_eq!(crate::http::api_keys_call(&state, &deployment, "api_keys_list", &json!({})).await.unwrap()["keys"], json!([]));
         assert!(!crate::layout::identity(&root, "static_app").exists());
+        assert!(!crate::google::client_set(&state, &deployment).id);
+        let secrets = crate::http::read_secrets(&root, "static_app").unwrap();
+        let list = crate::http::secrets_call(&secrets, "static_app", Some(&deployment), "secrets_list", &json!({})).unwrap();
+        assert_eq!(list["secrets"], json!([]));
+        assert!(!crate::layout::secrets(&root, "static_app").exists());
+        assert_eq!(crate::calls::admin_call(&state, &deployment, &json!({})).await.unwrap()["calls"], json!([]));
+        assert!(!root.join(crate::calls::CALLS_DATABASE).exists());
         assert!(!crate::modules::is_on(&deployment.modules, "actions"));
         let html = crate::read_artifact(&state, &deployment, "index.html").await.unwrap();
         assert!(!String::from_utf8(html).unwrap().contains("runtime.js"));

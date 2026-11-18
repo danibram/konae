@@ -343,7 +343,7 @@ fn client(state: &AppState, deployment: &Deployment) -> Option<Client> {
 }
 
 fn stored_client(state: &AppState, deployment: &Deployment) -> StoredClient {
-    http::secrets_store(&state.data_root, &deployment.id)
+    http::read_secrets(&state.data_root, &deployment.id)
         .and_then(|db| http::google_client(&db))
         .unwrap_or_default()
 }
@@ -401,8 +401,10 @@ fn callback_uri(state: &AppState, deployment: &Deployment, headers: &HeaderMap, 
 // ---------------------------------------------------------------------------
 // Flow store
 
+const GOOGLE_DATABASE: &str = "google.sqlite";
+
 fn open(state: &AppState) -> Result<Connection> {
-    let db = Connection::open(state.data_root.join("google.sqlite"))?;
+    let db = Connection::open(state.data_root.join(GOOGLE_DATABASE))?;
     db.busy_timeout(Duration::from_secs(5))?;
     db.execute_batch(
         "PRAGMA journal_mode = WAL;

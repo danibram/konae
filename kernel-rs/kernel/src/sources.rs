@@ -238,7 +238,7 @@ fn canonical_directories<'a>(directories: impl IntoIterator<Item = &'a str>) -> 
 pub(crate) fn database_schema(root: &Path, id: &str) -> Result<String> {
     let path = layout::database(root, id);
     if !path.is_file() { return Ok(String::new()); }
-    let connection = rusqlite::Connection::open(path)?;
+    let connection = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut statement = connection.prepare("SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 WHEN 'trigger' THEN 3 ELSE 4 END, name")?;
     let statements = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?.into_iter()

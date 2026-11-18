@@ -767,6 +767,7 @@ pub enum SyntheticSubmission {
 /// Returns test-mode calls that are waiting for an operator response.
 pub async fn list_captured_requests(state: &AppState) -> Result<Vec<Value>> {
     anyhow::ensure!(state.execution_mode.is_test(), "Captured calls require test execution mode.");
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(Vec::new()); }
     let data_root = state.data_root.clone();
     tokio::task::spawn_blocking(move || {
         let db = connection(&data_root)?;
@@ -797,6 +798,7 @@ pub async fn list_captured_requests_for_app(state: &AppState, app_id: &str) -> R
 /// Reads pending test calls and continuations whose outcome is uncertain.
 pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<Vec<Value>> {
     anyhow::ensure!(state.execution_mode.is_test(), "Test call readback requires test execution mode.");
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(Vec::new()); }
     let root = state.data_root.clone();
     let app_id = app_id.to_owned();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -840,6 +842,7 @@ pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<V
 /// Completed rows remain as history, and this function never runs a `then`.
 pub async fn retire_after_local_reset(state: &AppState, app_id: &str) -> Result<usize> {
     anyhow::ensure!(state.execution_mode.is_test(), "Call retirement requires test execution mode.");
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(0); }
     let data_root = state.data_root.clone();
     let app_id = app_id.to_owned();
     tokio::task::spawn_blocking(move || -> Result<usize> {
@@ -1102,6 +1105,7 @@ fn finish(data_root: &Path, id: &str, attempt: &Attempt, then: Option<(&str, &st
 
 /// Sends the calls that are due. Returns how many it looked at.
 pub async fn run_once(state: &AppState) -> Result<usize> {
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(0); }
     if state.execution_mode.is_test() {
         mark_interrupted_test_continuations(state).await?;
         let data_root = state.data_root.clone();
@@ -1377,7 +1381,7 @@ async fn send(
     let secret = match &call.auth {
         None => None,
         Some(auth) => {
-            let found = super::http::secrets_store(&state.data_root, &deployment.id).and_then(|db| super::http::project_secret(&db, auth.secret()));
+            let found = super::http::read_secrets(&state.data_root, &deployment.id).and_then(|db| super::http::project_secret(&db, auth.secret()));
             match found {
                 Ok(Some(value)) => Some(value),
                 Ok(None) => return Err(("secret-unset", false)),
@@ -1576,7 +1580,9 @@ pub async fn admin_call(state: &AppState, deployment: &Deployment, a: &Value) ->
 }
 
 fn read_outbox(data_root: &Path, deployment: &str, before: i64) -> Result<Value> {
-    let db = connection(data_root)?;
+    let Some(db) = crate::app_db::read_optional(&data_root.join(CALLS_DATABASE))? else {
+        return Ok(json!({"calls": [], "nextCursor": null}));
+    };
     let mut query = db.prepare(
         "SELECT rowid, id, action, state, attempts, method, url, status, error, answer, then_action, then_state, then_message,
                 created_at, updated_at, next_attempt_at

@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
     }
     if clerk::operator_command()? { return Ok(()); }
     let installation = mcp::installation();
+    if kernel::inventory::command("konae", &installation)? { return Ok(()); }
     if kernel::operator_command(&installation).await? { return Ok(()); }
     if owners::operator_command()? { return Ok(()); }
     if admission::operator_command()? { return Ok(()); }

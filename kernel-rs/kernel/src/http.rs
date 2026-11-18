@@ -175,7 +175,19 @@ pub fn validate_routes(program: &ActionProgram) -> Result<(), Refusal> {
 }
 
 
-/// Opens the app's secrets.
+const SECRETS_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL, use TEXT NOT NULL)";
+
+/// Reads the app's secrets. A project without secrets has an empty store in memory.
+pub fn read_secrets(root: &Path, project: &str) -> Result<Connection> {
+    if let Some(db) = crate::app_db::read_optional(&crate::layout::secrets(root, project))? {
+        return Ok(db);
+    }
+    let db = Connection::open_in_memory()?;
+    db.execute_batch(SECRETS_SCHEMA)?;
+    Ok(db)
+}
+
+/// Opens the app's secrets for writing.
 pub fn secrets_store(root: &Path, project: &str) -> Result<Connection> {
     let path = crate::layout::secrets(root, project);
     if let Some(parent) = path.parent() {
@@ -183,7 +195,7 @@ pub fn secrets_store(root: &Path, project: &str) -> Result<Connection> {
     }
     let db = Connection::open(path)?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL, use TEXT NOT NULL)")?;
+    db.execute_batch(SECRETS_SCHEMA)?;
     Ok(db)
 }
 
@@ -426,7 +438,8 @@ fn key_hash(token: &str) -> String {
 }
 
 fn find_key(state: &AppState, deployment: &Deployment, token: &str) -> Result<Option<ApiKey>> {
-    let db = identity_connection(state, deployment)?;
+    let Some(db) = crate::app_db::read_optional(&crate::layout::identity(&state.data_root, &deployment.id))? else { return Ok(None); };
+    if !table_exists(&db, "api_keys")? { return Ok(None); }
     let row: Option<(String, String, String)> = db
         .query_row(
             "SELECT id, actions, files FROM api_keys WHERE token_hash=?1 AND revoked_at IS NULL",
@@ -478,6 +491,9 @@ fn key_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 /// checked that the owner may act on `deployment`.
 pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str, a: &Value) -> Result<Value> {
     let _identity_guard = database_lock(state, &format!("identity:{}", deployment.id)).await;
+    if name == "api_keys_list" && !crate::layout::identity(&state.data_root, &deployment.id).try_exists()? {
+        return Ok(json!({"deploymentId": deployment.id, "keys": []}));
+    }
     let db = identity_connection(state, deployment)?;
     match name {
         "api_keys_list" => {
@@ -1111,7 +1127,7 @@ async fn run_route(
     }
     let konae = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Konae);
     if let (Some(signature), true) = (konae, signs) {
-        let secret = match secrets_store(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
+        let secret = match read_secrets(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
             Ok(Some(secret)) => secret,
             Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
             Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
@@ -1131,7 +1147,7 @@ async fn run_route(
     let mut delivery = None;
     if let (Some(signature), true) = (&http.signature, signs) {
         if signature.scheme != super::provider::Scheme::Konae {
-            let secret = match secrets_store(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
+            let secret = match read_secrets(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
                 Ok(Some(secret)) => secret,
                 Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
                 Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),

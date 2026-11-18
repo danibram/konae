@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 
 use crate::Settings;
 
-fn registry() -> &'static Value {
+pub(crate) fn registry() -> &'static Value {
     static REGISTRY: OnceLock<Value> = OnceLock::new();
     REGISTRY.get_or_init(|| serde_json::from_str(include_str!("modules.json")).expect("modules.json is generated JSON"))
 }
@@ -131,7 +131,7 @@ pub fn uses_auth(root: &std::path::Path, id: &str) -> bool {
     } else { return true; }
     let identity = crate::layout::data(root, id).join("identity.sqlite");
     if identity.exists() {
-        if let Ok(connection) = rusqlite::Connection::open(identity) {
+        if let Ok(connection) = rusqlite::Connection::open_with_flags(identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
             let has_table = |name: &str| connection.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(())).is_ok();
             if has_table("app_users") && connection.query_row("SELECT COUNT(*) FROM app_users", [], |row| row.get::<_, i64>(0)).unwrap_or(1) > 0 { return true; }
             if has_table("app_invitations") && connection.query_row("SELECT COUNT(*) FROM app_invitations", [], |row| row.get::<_, i64>(0)).unwrap_or(1) > 0 { return true; }

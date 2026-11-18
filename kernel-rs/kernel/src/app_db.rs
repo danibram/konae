@@ -4,6 +4,15 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
+pub(crate) fn read_optional(path: &Path) -> anyhow::Result<Option<Connection>> {
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(Some(connection))
+}
+
 const MAX_KEPT: usize = 64;
 const MAX_KEPT_PER_DATABASE: usize = 8;
 const STATEMENT_CACHE: usize = 64;
