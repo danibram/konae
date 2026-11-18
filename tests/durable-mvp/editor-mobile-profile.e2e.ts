@@ -1019,9 +1019,10 @@ test("legacy rollback retains an owner reader and starts a separate model contex
   const history=page.getByRole("dialog",{name:"Conversation history"});
   await history.locator(".durable-conversation-choice").first().click();
   await expect(history.getByText(durablePrompt,{exact:true})).toBeVisible();
-  if (await history.getByRole("button",{name:/Continue from this saved conversation/i}).count()) {
-    await expect(history.getByRole("button",{name:/Continue from this saved conversation/i})).toBeDisabled();
-  }
+  await expect(history.getByRole("button",{name:/Continue from this saved conversation/i})).toHaveCount(0);
+  await history.getByRole("button",{name:"Inspect candidate files"}).click();
+  await expect(history.getByRole("region",{name:"Read-only candidate comparison"})).toBeVisible();
+  await expect(history.getByRole("button",{name:/Restore as a new proposal/i})).toHaveCount(0);
   await history.getByRole("button",{name:"Close Conversation history",exact:true}).click();
   expect(providerBody).toBe("");
   await askFixture(page,"LEGACY_FRESH_INPUT_FIXTURE");
