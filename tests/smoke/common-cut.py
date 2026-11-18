@@ -133,13 +133,13 @@ def probe(binary, root, marker):
     with server(binary, env) as (port, _proc):
         if marker:
             wait(marker.exists, "slow proxy did not observe 64 KiB")
-            assert any(r["inProgress"] for r in targets(port))
+            assert any(r["kind"] == "s3" and r["inProgress"] for r in targets(port))
             start = time.monotonic()
             for i in range(5):
                 rpc(port, "actions_invoke", {"name": "notes.add", "input": {}})
                 assert app_count(port) == i + 2
             latency = time.monotonic() - start
-            assert any(r["inProgress"] for r in targets(port)), "upload finished before writes"
+            assert any(r["kind"] == "s3" and r["inProgress"] for r in targets(port)), "upload finished before writes"
         reports = wait(lambda: complete(port), "copy did not finish", 90)
         assert len(reports) == (2 if marker else 1)
         copy = reports[0]["lastCopyId"]
@@ -179,11 +179,54 @@ def probe(binary, root, marker):
     print(f"{binary.name} restored {len(sources)} destination(s) at the selected cut", flush=True)
 
 
+def low_disk(binary, root):
+    image = root / "space.dmg"
+    mount = root / "volume"
+    mount.mkdir()
+    subprocess.run(["hdiutil", "create", "-size", "96m", "-fs", "HFS+", "-volname", "CommonCut", image],
+                   check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image],
+                   check=True, stdout=subprocess.DEVNULL)
+    try:
+        live = mount / "live"
+        fixture(live)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("KONAE_", "AWS_"))}
+        env.update(setting(live))
+        with server(binary, env) as (port, _proc):
+            assert app_count(port) == 0
+        # Keep enough space for health and new action rows once the copy fails.
+        with (live / "apps/probe/app/large").open("wb") as source:
+            source.write(b"x" * (8 * 1024 * 1024))
+        filler = mount / "filler"
+        with filler.open("wb", buffering=0) as space:
+            try:
+                while True:
+                    space.write(b"x" * (512 * 1024))
+            except OSError as error:
+                assert error.errno == errno.ENOSPC
+            space.truncate(space.tell() - 2 * 1024 * 1024)
+        env.update(KONAE_COPY_DIR=str(root / "copies"), KONAE_COPY_INTERVAL_SECONDS="2")
+        with server(binary, env) as (port, _proc):
+            wait(lambda: "staging space" in (targets(port)[0]["lastError"] or ""), "disk limit went unreported")
+            assert targets(port)[0]["lastCopyId"] is None
+            rpc(port, "actions_invoke", {"name": "notes.add", "input": {}})
+            assert app_count(port) == 1
+            filler.unlink()
+            report = wait(lambda: (r if (r := targets(port)[0])["lastCopyId"] else None), "next point did not recover")
+            assert not report["lastError"]
+        print("kernel resumed writes on the full-volume trial and made a new point after space was freed", flush=True)
+    finally:
+        subprocess.run(["hdiutil", "detach", mount], check=True, stdout=subprocess.DEVNULL)
+
+
 def read_restart(binary, root):
     live = root / "live"
     fixture(live)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("KONAE_", "AWS_"))}
-    env.update(setting(live), KONAE_COPY_DIR=str(root / "copies"))
+    env.update(setting(live))
+    with server(binary.with_name("kernel"), env) as (port, _proc):
+        assert app_count(port) == 0
+    env["KONAE_COPY_DIR"] = str(root / "copies")
     with server(binary, env) as (port, proc):
         first = wait(lambda: complete(port), "no complete copy")[0]["lastCopyId"]
         pipe = live / "apps/probe/dist/read.txt"
@@ -217,7 +260,47 @@ def read_restart(binary, root):
         second = wait(lambda: (r if (r := targets(port)[0])["lastCopyId"] not in (None, first) else None),
                       "an interrupted GET prevented the next copy")
         assert not second["lastError"]
-    print("kernel completed a new copy after SIGKILL during a GET reading the page", flush=True)
+    print(f"{binary.name} completed a new copy after SIGKILL during a GET reading the page", flush=True)
+
+
+def mutation_restart(binary, root):
+    live = root / "live"
+    fixture(live)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("KONAE_", "AWS_"))}
+    env.update(setting(live))
+    with server(binary.with_name("kernel"), env) as (port, _proc):
+        rpc(port, "actions_invoke", {"name": "notes.add", "input": {}})
+        assert app_count(port) == 1
+    env["KONAE_COPY_DIR"] = str(root / "copies")
+    with server(binary, env) as (port, proc):
+        copy = wait(lambda: complete(port), "no complete point before the mutation")[0]["lastCopyId"]
+        data = live / "apps/probe/data"
+        with ThreadPoolExecutor(1) as executor, closing(sqlite3.connect(data / "usage.sqlite")) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            write = executor.submit(rpc, port, "actions_invoke", {"name": "notes.add", "input": {}})
+            wait(lambda: number(data / "database.sqlite", "SELECT count(*) FROM notes") == 2,
+                 "the action did not commit the row")
+            assert number(data / "usage.sqlite", "SELECT count(*) FROM signals") == 1
+            assert not write.done()
+            proc.kill()
+            proc.wait(timeout=5)
+            blocker.rollback()
+            try:
+                write.result(timeout=5)
+            except OSError:
+                pass
+    with server(binary, env) as (port, _proc):
+        report = wait(lambda: (r if "probe/notes.add" in ((r := targets(port)[0])["lastError"] or "") else None),
+                      "restart did not identify the interrupted action")
+        assert "row and its declared effects" in report["lastError"]
+        assert report["lastCopyId"] == copy
+    restored = root / "recovered"
+    subprocess.run([binary, "restore", "--from", env["KONAE_COPY_DIR"], "--copy", copy],
+                   env=dict(env, KONAE_DATA_DIR=str(restored)), check=True, stdout=subprocess.DEVNULL)
+    data = restored / "apps/probe/data"
+    assert number(data / "database.sqlite", "SELECT count(*) FROM notes") == 1
+    assert number(data / "usage.sqlite", "SELECT count(*) FROM signals") == 1
+    print(f"{binary.name} identified the interrupted row/Signal operation and restored its previous point", flush=True)
 
 
 def suspension(binary, root):
@@ -233,6 +316,13 @@ def suspension(binary, root):
         assert rpc(port, "project_inspect", {"projectId": "probe"}, cookie)
         rpc(port, "project_create", {"projectId": "discard", "name": "Discard"}, cookie)
         assert rpc(port, "project_inspect", {"projectId": "discard"}, cookie)
+        try:
+            rpc(port, "project_delete", {"projectId": "discard", "name": "Wrong"}, cookie)
+        except AssertionError as error:
+            assert "name does not match" in str(error)
+        else:
+            raise AssertionError("deletion with the wrong name succeeded")
+        assert not list((live / ".copy-operations").glob("*.json"))
         rpc(port, "project_delete", {"projectId": "discard", "name": "Discard"}, cookie)
         assert "discard" not in json.dumps(rpc(port, "projects_list", {}, cookie))
         rpc(port, "token_create", {"scopes": ["read"], "projectIds": ["probe"]}, cookie)
@@ -277,13 +367,19 @@ if __name__ == "__main__":
     parser.add_argument("--slow-marker", type=Path)
     parser.add_argument("--binary", choices=("kernel", "konae"))
     parser.add_argument("--minio-lab", type=Path)
+    parser.add_argument("--disk-full", action="store_true", help="test a disposable 96 MiB macOS disk image")
     args = parser.parse_args()
+    if args.disk_full:
+        print("Directory on a disposable disk image. SKIP S3 (run --minio-lab separately).", flush=True)
+        with tempfile.TemporaryDirectory(prefix="cut-space-") as root:
+            low_disk((args.bin_dir / "kernel").resolve(), Path(root))
+        sys.exit(0)
     if args.minio_lab:
         for name in ("kernel", "konae"):
             with tempfile.TemporaryDirectory() as tmp:
                 marker = Path(tmp) / "upload"
                 subprocess.run([args.minio_lab / "with-minio", args.minio_lab / "slow-s3", "--kib-per-second", "128",
-                                "--marker", marker, "--", sys.executable, __file__, "--bin-dir", args.bin_dir,
+                                "--marker", marker, sys.executable, __file__, "--bin-dir", args.bin_dir,
                                 "--binary", name, "--slow-marker", marker], check=True)
         sys.exit(0)
     if not args.slow_marker:
@@ -291,9 +387,11 @@ if __name__ == "__main__":
     for name in ([args.binary] if args.binary else ["kernel", "konae"]):
         with tempfile.TemporaryDirectory(prefix="common-cut-") as root:
             probe((args.bin_dir / name).resolve(), Path(root), args.slow_marker)
-    if args.binary != "konae":
-        with tempfile.TemporaryDirectory(prefix="cut-read-") as root:
-            read_restart((args.bin_dir / "kernel").resolve(), Path(root))
-    if args.binary != "kernel":
+        if not args.slow_marker:
+            with tempfile.TemporaryDirectory(prefix="cut-read-") as root:
+                read_restart((args.bin_dir / name).resolve(), Path(root))
+            with tempfile.TemporaryDirectory(prefix="cut-action-") as root:
+                mutation_restart((args.bin_dir / name).resolve(), Path(root))
+    if args.binary != "kernel" and not args.slow_marker:
         with tempfile.TemporaryDirectory(prefix="cut-suspension-") as root:
             suspension((args.bin_dir / "konae").resolve(), Path(root))
