@@ -167,6 +167,11 @@ def verify(binary, env, dest, model, suspended, counts):
     equal(sorted((f["id"], f["ownerId"], f["visibility"], f["size"]) for f in entries),
           sorted((k, model.users[e], v, len(b)) for k, (e, v, b) in model.files.items()), "file index")
     equal({p.stem for p in assets.glob("*.blob")}, set(model.files), "blob inventory")
+    if binary.name == "konae":
+        owners = query(dest / "owners.sqlite", "SELECT email, id FROM app_users")
+        equal([e for e, _ in owners], ["owner@example.test"], "restored owner")
+        equal(query(dest / "mcp.sqlite", "SELECT id, owner FROM projects ORDER BY id"),
+              sorted((project, owners[0][1]) for project in model.projects), "restored owner catalogue")
     local = {k: v for k, v in env.items() if not k.startswith("KONAE_S3_")}
     with server(binary, dict(local, KONAE_DATA_DIR=str(dest))) as (port, _):
         if binary.name == "konae":
@@ -248,17 +253,27 @@ def campaign(args, root, report):
         remote = uuid.uuid4().hex
         settings["KONAE_COPY_V3_S3"] = remote
         sources["s3-v3"] = "s3://konae-test/copies-v3/" + remote
+    operator = binary.with_name("kernel")
     model = Model()
+    if binary.name == "konae":
+        report["operation"] = "open app folder"
+        with server(operator, env) as (port, _):
+            equal(request(port, "/_konae/health")[0]["ok"], True, "fixture Kernel startup")
     counts = report["operations"]
     with server(binary, env) as (port, _):
         if binary.name == "konae":
+            report["operation"] = "owner signup"
             owner, can = owner_session(port, env, signup=True)
             equal(can["write"], True, "owner project write access")
+            model.projects.add("probe")
+            check_projects(port, owner, model)
+            report["operation"] = "create draft"
             cut["rpc"](port, "project_create", {"projectId": "draft", "name": "Draft"}, owner)
             model.projects.add("draft")
             check_projects(port, owner, model)
             counts["projectsCreated"] += 1
         for email in MEMBERS:
+            report["operation"] = "app signup"
             model.users[email], _ = account(port, email, "signup")
             counts["signups"] += 1
     snapshots = {}
@@ -282,7 +297,7 @@ def campaign(args, root, report):
         save(report, args.report)
         if index in {0, len(dates) // 3, 2 * len(dates) // 3}:
             report["operation"] = "import"
-            import_version(binary, env, live, model, rng, counts["imports"])
+            import_version(operator, env, live, model, rng, counts["imports"])
             counts["imports"] += 1
             if previous:
                 restore(previous)
@@ -290,7 +305,7 @@ def campaign(args, root, report):
             env.update(KONAE_COPY_V3_SECRET=NEXT_KEY, KONAE_COPY_V3_PREVIOUS_SECRETS=json.dumps([FIRST_KEY]))
             counts["rotations"] += 1
             report["operation"] = "suspend"
-            cli(binary, env | settings, "suspend", model.users[MEMBERS[2]], "--app", "probe")
+            cli(operator, env | settings, "suspend", model.users[MEMBERS[2]], "--app", "probe")
             suspended.add(MEMBERS[2])
             counts["revocations"] += 1
             restore(previous)
@@ -362,7 +377,7 @@ def main():
     args = parser.parse_args()
     if not args.s3:
         print("SKIP s3-v3 destination (--s3 requires a disposable MinIO bucket)", flush=True)
-    report = dict(binary=args.binary.name, seed=args.seed, days=365 if args.year else 12,
+    report = dict(binary=args.binary.name, importAndSuspendBinary="kernel", seed=args.seed, days=365 if args.year else 12,
                   skipped=[] if args.s3 else ["s3-v3"], phase="setup", operations=Counter(),
                   restores=Counter(), points=Counter())
     started = time.monotonic()
@@ -370,6 +385,9 @@ def main():
         with tempfile.TemporaryDirectory(prefix="konae-year-") as tmp:
             campaign(args, Path(tmp), report)
     except Exception as error:
+        if isinstance(error, HTTPError):
+            report["httpStatus"] = error.code
+            report["requestPath"] = urlsplit(error.url).path
         report["firstFailure"] = str(error) if isinstance(error, Divergence) else type(error).__name__
         raise
     finally:
