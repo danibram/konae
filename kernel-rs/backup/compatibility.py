@@ -166,7 +166,8 @@ def writer(binary, root, remote):
                 targets = health["targets"]
                 check({t["kind"] for t in targets} == expected, "Copy health omitted a target")
                 check(all(t["lastError"] is None for t in targets), "Copy health reported failure")
-                completed = all(t["lastCopyId"] and t["lastSuccessAt"] >= t["lastAttemptAt"] for t in targets)
+                completed = all(t["lastCopyId"] and not t.get("inProgress")
+                                and t["lastSuccessAt"] >= t["lastAttemptAt"] for t in targets)
                 if completed and len({t["lastCopyId"] for t in targets}) == 1:
                     check(not health["alert"], "Completed copy still reports an alert")
                     break
