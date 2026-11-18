@@ -11,7 +11,9 @@ import subprocess
 import tempfile
 from threading import Condition, Event, Thread
 import time
+from urllib.error import HTTPError
 from urllib.parse import parse_qs
+from urllib.request import urlopen
 import uuid
 
 
@@ -99,6 +101,8 @@ class Traffic:
     def __init__(self, mc):
         self.mc = mc
         self.phase = "setup"
+        self.counters = {}
+        self.before = None
         self.stats = defaultdict(lambda: defaultdict(Counter))
         self.marker = "pilot-marker-" + uuid.uuid4().hex
         self.seen = 0
@@ -120,15 +124,43 @@ class Traffic:
                 counts["receivedBytes"] += row["callStats"]["rx"]
                 counts["sentBytes"] += row["callStats"]["tx"]
 
+    def snapshot(self):
+        metrics = subprocess.check_output([self.mc, "admin", "prometheus", "metrics", "--api-version", "v3",
+                                           "lab", "api"], text=True, timeout=10)
+        counters = {}
+        for line in metrics.splitlines():
+            name = line.partition("{")[0]
+            if 'type="s3"' not in line:
+                continue
+            if name == "minio_api_requests_total":
+                name = re.search(r'name="([^"]+)"', line)[1]
+            elif name in {"minio_api_requests_traffic_received_bytes", "minio_api_requests_traffic_sent_bytes"}:
+                name = name.removeprefix("minio_api_requests_traffic_")
+            else:
+                continue
+            counters[name] = int(float(line.rsplit(" ", 1)[1]))
+        return counters
+
     def boundary(self, phase):
+        if self.before is not None:
+            after = self.snapshot()
+            assert all(after.get(k, 0) >= v for k, v in self.before.items()), "MinIO counter reset"
+            self.counters[self.phase] = {k: v - self.before.get(k, 0) for k, v in after.items()
+                                         if v != self.before.get(k, 0)}
         deadline = time.monotonic() + 20
+        url = os.environ["KONAE_TEST_S3_ENDPOINT"] + "/konae-test/" + self.marker
         while time.monotonic() < deadline:
             with self.condition:
                 previous = self.seen
-            subprocess.run([self.mc, "stat", "lab/konae-test/" + self.marker], capture_output=True, timeout=5)
+            try:
+                with urlopen(url, timeout=3):
+                    raise AssertionError("Unexpected public marker object")
+            except HTTPError as e:
+                assert e.code in (403, 404)
             with self.condition:
                 if self.condition.wait_for(lambda: self.seen > previous, .4):
                     self.phase = phase
+                    self.before = self.snapshot()
                     return
         raise TimeoutError("MinIO trace missed the phase marker")
 
