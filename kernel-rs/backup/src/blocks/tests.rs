@@ -220,3 +220,5 @@ async fn a_reader_holds_the_expiring_point_until_it_closes() -> Result<()> {
     fs::remove_dir_all(scratch)?;
     Ok(())
 }
+
+pub(super) mod write_fault;

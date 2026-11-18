@@ -74,7 +74,10 @@ fn directory_put(root: &Path, group: &str, id: &str, bytes: &[u8]) -> Result<boo
         return Ok(false);
     }
     let temporary = Temporary(dir.join(format!(".write-{}", uuid::Uuid::new_v4())));
-    let mut file = fs::File::create_new(&temporary.0)?;
+    let file = fs::File::create_new(&temporary.0)?;
+    #[cfg(test)]
+    let file = super::tests::write_fault::File::wrap(file, group);
+    let mut file = file;
     file.write_all(bytes)?;
     file.sync_all()?;
     match fs::hard_link(&temporary.0, final_path) {
