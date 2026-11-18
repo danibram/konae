@@ -144,6 +144,7 @@ The editor, the `konae` CLI, the test configurations and an exported folder read
 | Variable | Read by | Default | Meaning |
 | --- | --- | --- | --- |
 | `KONAE_EDITOR_PORT` | `dev:local` | `4173` | Port of the Vite editor. |
+| `KONAE_DEV_AUTO_LOGIN` | `dev:local` | enabled | Signs a browser without an owner session in as `dev@konae.local`, using the normal owner auth endpoints. Credentials stay in `<data dir>/.env.dev-owner`, which Vite refuses to serve. Requires the editor and Kernel on loopback. Set `0` to test manual sign-in, required email verification or Clerk. |
 | `KONAE_KERNEL_URL` | `dev:local`, `vite.config.ts` | `http://127.0.0.1:<kernel port>` under `dev:local`, `http://127.0.0.1:8787` for plain `bun run dev` | The Konae the editor proxies `/mcp`, `/_konae`, `/oauth` and `/.well-known` to. |
 | `KONAE_MCP_TOKEN` | `konae` CLI | unset | Bearer token for every command that needs a credential. When unset, the CLI reads `<folder>/.konae/credentials.json`. |
 | `KONAE_KERNEL_BIN` | `konae dev`, `sql`, `events` | unset | A `kernel` binary built from this checkout. `dev` runs it instead of compiling one with `cargo`. |

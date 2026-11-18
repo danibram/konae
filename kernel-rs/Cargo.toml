@@ -27,3 +27,7 @@ tokio-util = { version = "0.7", features = ["io", "io-util"] }
 tower = { version = "0.5", features = ["util"] }
 uuid = { version = "1", features = ["v4"] }
 url = "2"
+
+[profile.dev]
+# On macOS, unpacked debuginfo leaves .o files in target/debug/deps that cargo never removes (60+ GB). No debuginfo, no leftovers.
+debug = false

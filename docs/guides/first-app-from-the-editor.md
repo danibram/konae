@@ -6,7 +6,9 @@ Describe an app in plain words, apply the change the Validation Gate lets throug
 
 The editor runs at `http://localhost:4173` after `bun run dev:local`, at `http://app.localhost:8080` under Docker Compose, and at `https://app.<domain>` on an installation with `KONAE_DOMAIN` set. The steps are the same in each.
 
-The editor opens on the owner sign-in page. Sign in, or press **Create owner account**. The first owner gives the setup key, which a local install fills in, and later owners use an invitation code from the operator. With required email verification, signup asks for the email first. The verification link opens a password form, then returns the owner to Projects. A Deploy dialog opened while signed out shows **Sign in to deploy** and returns to the app afterwards.
+Under `bun run dev:local`, the editor signs you in as `dev@konae.local` and opens Projects. An existing owner session stays signed in. Run `KONAE_DEV_AUTO_LOGIN=0 bun run dev:local` to test manual sign-in.
+
+On other installations the editor opens on the owner sign-in page. Sign in, or press **Create owner account**. The first owner gives the setup key, which a local install fills in, and later owners use an invitation code from the operator. With required email verification, signup asks for the email first. The verification link opens a password form, then returns the owner to Projects. A Deploy dialog opened while signed out shows **Sign in to deploy** and returns to the app afterwards.
 
 The build agent needs an API key from Anthropic, OpenAI or OpenRouter, and the provider bills the key's account. Step 2 says where to create one.
 

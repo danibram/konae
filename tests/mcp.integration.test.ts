@@ -1392,13 +1392,16 @@ describe("authenticated MCP", () => {
     const attempt = (route: string, client: string, email: string, host?: string) => fetch(`${url}${route}`, { method: "POST", headers: { ...(host ? { host } : {}), "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email, password: "wrong-password-123" }) });
     for (const [route, host] of [["/_konae/auth/login", receipt.hostname], ["/_konae/owner/login", undefined]] as const) {
       const client = freshClient();
-      expect((await Promise.all(Array.from({ length: 10 }, (_, i) => attempt(route, client, `guess${i}@limit.test`, host)))).map(r => r.status)).toEqual(Array(10).fill(401));
-      const refused = await attempt(route, client, "another@limit.test", host);
-      expect(refused.status).toBe(429);
+      // Send the whole burst before password hashing gives the bucket time to refill.
+      const burst = await Promise.all(Array.from({ length: 11 }, (_, i) => attempt(route, client, `guess${i}@limit.test`, host)));
+      expect(burst.filter(response => response.status === 401)).toHaveLength(10);
+      expect(burst.filter(response => response.status === 429)).toHaveLength(1);
+      const refused = burst.find(response => response.status === 429)!;
       expect(Number(refused.headers.get("retry-after"))).toBeGreaterThan(0);
       const guesser = freshClient();
-      expect((await Promise.all(Array.from({ length: 5 }, () => attempt(route, guesser, "target@limit.test", host)))).map(r => r.status)).toEqual(Array(5).fill(401));
-      expect((await attempt(route, guesser, "Target@limit.test", host)).status).toBe(429);
+      const sameEmail = await Promise.all([...Array.from({ length: 5 }, () => attempt(route, guesser, "target@limit.test", host)), attempt(route, guesser, "Target@limit.test", host)]);
+      expect(sameEmail.filter(response => response.status === 401)).toHaveLength(5);
+      expect(sameEmail.filter(response => response.status === 429)).toHaveLength(1);
       expect((await attempt(route, freshClient(), "Target@limit.test", host)).status).toBe(401);
     }
     const client = freshClient();
@@ -1412,9 +1415,9 @@ describe("authenticated MCP", () => {
     for (const [route, host, email] of [["/_konae/auth/login", receipt.hostname, "victim@lockout.test"], ["/_konae/owner/login", undefined, "alice@owner.test"]] as const) {
       const send = (client: string, pw: string) => fetch(`${url}${route}`, { method: "POST", headers: { ...(host ? { host } : {}), "content-type": "application/json", "x-forwarded-for": client }, body: JSON.stringify({ email, password: pw }) });
       const attacker = freshClient();
-      const statuses = [];
-      for (let i = 0; i < 8; i++) statuses.push((await send(attacker, "wrong-password-123")).status);
-      expect(statuses).toEqual([...Array(5).fill(401), ...Array(3).fill(429)]);
+      const statuses = (await Promise.all(Array.from({ length: 8 }, () => send(attacker, "wrong-password-123")))).map(response => response.status);
+      expect(statuses.filter(status => status === 401)).toHaveLength(5);
+      expect(statuses.filter(status => status === 429)).toHaveLength(3);
       expect((await send(freshClient(), password)).status).toBe(200);
     }
   }, 60_000);

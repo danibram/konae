@@ -8,7 +8,8 @@
     "noEmit": true
   },
   "include": [
-    "vite.config.ts"
+    "vite.config.ts",
+    "scripts/dev-owner.ts"
   ],
   "exclude": [
     "**/*.test.ts"

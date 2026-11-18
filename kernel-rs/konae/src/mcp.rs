@@ -201,6 +201,15 @@ fn store_at(root: &Path) -> Result<Connection> {
     if !has_detail {
         db.execute("ALTER TABLE audit ADD COLUMN detail TEXT", [])?;
     }
+    let has_project_sources: bool = db
+        .prepare("PRAGMA table_info(projects)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "sources");
+    if !has_project_sources {
+        db.execute("ALTER TABLE projects ADD COLUMN sources INTEGER NOT NULL DEFAULT 0", [])?;
+    }
     let has_sources: bool = db
         .prepare("PRAGMA table_info(plans)")?
         .query_map([], |r| r.get::<_, String>(1))?
@@ -2205,6 +2214,10 @@ mod tests {
     async fn saved_sources_from_an_older_project_revision_remain_readable() {
         let root = std::env::temp_dir().join(format!("konae-old-sources-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
+        Connection::open(root.join("mcp.sqlite")).unwrap().execute_batch(
+            "CREATE TABLE projects(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO projects(id,owner,body) VALUES('app_existing','o','{}');",
+        ).unwrap();
         let state = Konae::for_test(AppState::for_test(&root));
         store(&state).unwrap().execute(
             "INSERT INTO projects(id,owner,body,revision,sources) VALUES('app_legacy','o','{}',0,0)", [],
@@ -2219,6 +2232,7 @@ mod tests {
         let answer = admin_call(&state, &owner, "owner:o", "project_sources_read", json!({"projectId":"app_legacy"})).await.unwrap();
         assert_eq!(answer["revision"], 0);
         assert!(answer["transfer"].is_object(), "a saved v0.8 source document remains available for the editor to migrate");
+        assert_eq!(store(&state).unwrap().query_row("SELECT sources FROM projects WHERE id='app_existing'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

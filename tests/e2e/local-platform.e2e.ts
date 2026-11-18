@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test, type Page } from "playwright/test";
-import { McpClient, type Transfer } from "../../src/mcp/client";
+import { McpClient, McpError, type Transfer } from "../../src/mcp/client";
 import { publishProject } from "../../src/deployments/release";
 
 test.beforeEach(async ({ page }) => {
@@ -167,7 +167,7 @@ function providerReply(tool?: { name: string; input: Record<string, unknown> }, 
 }
 
 async function installProposalFixture(page: Page) {
-  let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "drift" | "build-fail" | "preview-behind" = "discard";
+  let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "unbounded" | "drift" | "build-fail" | "preview-behind" = "discard";
   let step = 0;
   const html = "<main><h1>PROPOSAL PREVIEW</h1><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>";
   const assetHtml = (useApplied: boolean) => `<link rel='stylesheet' href='/theme.css'><link rel='stylesheet' href='/print.css' media='print'><link rel='stylesheet' href='/disabled.css' media='screen' disabled><main><h1>PROPOSAL PREVIEW</h1><p id='stylesheet-probe' class='asset-stylesheet-probe'>Stylesheet proof</p><p id='media-default-probe'>Default screen style</p><p class='media-print-probe'>Print only</p><p class='media-disabled-probe'>Initially disabled</p><img id='asset-image' alt='Candidate public asset' width='48' height='48' src='/${useApplied ? "applied.png?version=alternate" : "candidate.png?version=candidate"}#proposal'><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>`;
@@ -190,8 +190,11 @@ ${mutate ? "await miniapp.actions.call('tasks.create', { title: 'Scratch row' })
       return;
     }
     let tool: { name: string; input: Record<string, unknown> } | undefined;
-    if (scenario === "blocked") {
-      if (step === 0) tool = { name: "write", input: { path: "/workspace/actions.json", content: invalidActions } };
+    if (scenario === "blocked" || scenario === "unbounded") {
+      const actions = scenario === "unbounded" ? JSON.stringify({ version: 1, actions: {
+        "tasks.list": { kind: "query", access: "anonymous", statement: "SELECT id, title FROM tasks ORDER BY id DESC", bindings: [] },
+      } }) : invalidActions;
+      if (step === 0) tool = { name: "write", input: { path: "/workspace/actions.json", content: actions } };
       else if (step === 1) tool = { name: "validate_capsule", input: {} };
     } else if (step === 0) {
       const path = scenario === "preview-behind" ? "/workspace/schema.sql" : "/workspace/index.html";
@@ -405,6 +408,54 @@ test("a Gate-approved proposal previews before Apply and isolates discarded rows
   await openFile(page, "styles.css");
   expect(await page.getByLabel("styles.css code editor").inputValue()).toContain("Manual owner edit");
   await waitForKernelSave(page);
+});
+
+test("the Gate and Kernel refuse a query without LIMIT with the same code and words", async ({ page }, testInfo) => {
+  const projectPath = await createProject(page, "Unbounded query refusal");
+  const projectId = projectPath.split("/").at(-1)!;
+  const source = await readSavedSources(page, projectId);
+  const program = JSON.parse(source.files["actions.json"]);
+  program.actions = { "tasks.list": {
+    kind: "query", access: "anonymous", statement: "SELECT id, title FROM tasks ORDER BY id DESC", bindings: [],
+  } };
+  const invalid = JSON.stringify(program);
+  const message = "Action tasks.list reads rows and has no LIMIT. Add a LIMIT. A total (count, sum, avg, min or max) with no GROUP BY does not need one.";
+
+  const fixture = await installProposalFixture(page);
+  await connectProposalFixture(page);
+  fixture.setScenario("unbounded");
+  await askFixture(page, "Test the refusal for a row-reading query without LIMIT.");
+  await expect(page.getByText("Check code: query.limit-missing", { exact: true })).toBeVisible();
+  await expect(page.locator(".agent-proposal-detail").filter({ hasText: message })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("gate-limit-refused.png"), fullPage: true });
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, {
+    fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
+  });
+  const session = await client.call<{ can: { publish: boolean } }>("session_inspect");
+  expect(session.can.publish).toBe(true);
+  const inspected = await client.call<{ project: { id: string; name: string; slug: string; manifest: unknown }; sourcesRevision: number }>("project_inspect", { projectId });
+  const artifact = { version: 1, entrypoint: "index.html", files: {
+    "index.html": '<main>Query refusal test</main><script src="app.js"></script>',
+    "app.js": "document.body.dataset.ready = 'yes';",
+  } };
+  let refused: unknown;
+  try {
+    await publishProject(client, inspected.project, () => ({
+      project: { ...inspected.project, files: { ...source.files, "actions.json": invalid } },
+      visibility: "public",
+      artifact,
+    }), async () => false, undefined, undefined, inspected.sourcesRevision);
+  } catch (error) { refused = error; }
+  expect(refused).toBeInstanceOf(McpError);
+  expect((refused as McpError).message).toBe(message);
+  expect((refused as McpError).refusal).toMatchObject({ code: "query.limit-missing", message });
+  expect((await client.call<{ deployment: unknown }>("project_inspect", { projectId })).deployment).toBeNull();
+  await testInfo.attach("kernel-limit-refusal", { body: JSON.stringify((refused as McpError).refusal, null, 2), contentType: "application/json" });
 });
 
 test("public image bytes stay with each proposal through Discard and Apply", async ({ page }) => {

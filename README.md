@@ -55,7 +55,7 @@ bun install
 bun run dev:local
 ```
 
-`dev:local` compiles and starts Konae, with its Kernel, on port `8790` and the editor on port `4173`. `KONAE_KERNEL_PORT` and `KONAE_EDITOR_PORT` change the ports. Open [http://localhost:4173](http://localhost:4173). It opens on the owner sign-in page. Press **Create owner account**, enter an email and a password, and keep the setup key the page fills in for this computer.
+`dev:local` compiles and starts Konae, with its Kernel, on port `8790` and the editor on port `4173`. `KONAE_KERNEL_PORT` and `KONAE_EDITOR_PORT` change the ports. Open [http://localhost:4173](http://localhost:4173). The editor signs you in as `dev@konae.local` and opens Projects. An existing owner session stays signed in. The development owner's generated credentials stay in `data/kernel-local/.env.dev-owner`, which Vite refuses to serve. Automatic sign-in requires the editor and Kernel on loopback. Run `KONAE_DEV_AUTO_LOGIN=0 bun run dev:local` to test signup and manual sign-in instead.
 
 Local data stays under `data/kernel-local`, and `KONAE_DATA_DIR` moves it. Nothing sends real email locally. Account links and invitations land in `data/kernel-local/mailbox.jsonl`, and an app invitation also hands its link to the owner who sent it.
 

@@ -68,11 +68,13 @@ delete kernelEnv.KONAE_COPY_S3;
 const editorEnv = {
   ...process.env,
   KONAE_KERNEL_URL: kernelUrl,
-  };
+  KONAE_DEV_OWNER_FILE: process.env.KONAE_DEV_AUTO_LOGIN === "0" ? undefined : path.join(dataRoot, ".env.dev-owner"),
+};
 
 console.log(`Konae editor: http://localhost:${editorPort}`);
 console.log(`Konae and its Kernel: ${kernelUrl}`);
 console.log(`Local app data: ${dataRoot}`);
+if (editorEnv.KONAE_DEV_OWNER_FILE) console.log("The editor signs in a local development owner automatically. KONAE_DEV_AUTO_LOGIN=0 enables manual sign-in.");
 
 start("cargo", ["run", "--manifest-path", path.join(root, "kernel-rs", "Cargo.toml"), "--bin", "konae"], kernelEnv);
 start(process.execPath, ["run", "dev", "--", "--host", "127.0.0.1", "--port", editorPort, "--strictPort"], editorEnv);

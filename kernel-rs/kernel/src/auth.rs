@@ -1065,6 +1065,7 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
     let current: bool = connection
         .query_row(
             "SELECT (SELECT COUNT(*) FROM pragma_table_info('app_users') WHERE name IN ('state', 'verified_at')) = 2
+               AND EXISTS(SELECT 1 FROM pragma_table_info('app_sessions') WHERE name = 'entered_by')
                AND EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_meta')
                AND (?1 IS NULL OR EXISTS(SELECT 1 FROM account_meta WHERE key = 'verification' AND value = ?1))",
             [verification.map(Verification::as_str)],
@@ -1079,6 +1080,14 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
         return Ok(());
     }
     let transaction = immediate(connection)?;
+    let has_entered_by: bool = transaction
+        .query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('app_sessions') WHERE name = 'entered_by')", [], |row| row.get(0))
+        .map_err(AuthError::Storage)?;
+    if !has_entered_by {
+        transaction
+            .execute("ALTER TABLE app_sessions ADD COLUMN entered_by TEXT", [])
+            .map_err(AuthError::Storage)?;
+    }
     let columns: Vec<String> = transaction
         .prepare("PRAGMA table_info(app_users)")
         .map_err(AuthError::Storage)?
@@ -1751,6 +1760,22 @@ mod tests {
     }
 
     #[test]
+    fn an_identity_database_from_before_operator_sessions_keeps_accounts_and_sessions() {
+        let app = TempDb::new();
+        let local = app.scoped(&deployment_scope("app-one"), Verification::Local);
+        let old = local.signup("legacy@example.test", PASSWORD).unwrap();
+        Connection::open(&app.0).unwrap()
+            .execute_batch("ALTER TABLE app_sessions DROP COLUMN entered_by")
+            .unwrap();
+
+        let reopened = app.scoped(&deployment_scope("app-one"), Verification::Local);
+        let session = sign_in(&reopened, "legacy@example.test", PASSWORD).unwrap();
+        assert_eq!(session.user.user_id, old.user.user_id);
+        assert_eq!(session.user.entered_by, None);
+        assert_eq!(reopened.authenticate(Some(&old.token)).unwrap().unwrap().user_id, old.user.user_id);
+    }
+
+    #[test]
     fn an_identity_database_from_before_states_migrates_in_place() {
         let app = TempDb::new();
         let connection = Connection::open(&app.0).unwrap();
@@ -1759,8 +1784,7 @@ mod tests {
                password_hash TEXT NOT NULL,
                created_at INTEGER NOT NULL);
              CREATE TABLE app_sessions (token_hash TEXT PRIMARY KEY,
-               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL,
-               entered_by TEXT);",
+               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);",
         ).unwrap();
         connection.execute(
             "INSERT INTO app_users (id, email, password_hash, created_at) VALUES ('legacy-id', 'legacy@example.test', ?1, 1)",

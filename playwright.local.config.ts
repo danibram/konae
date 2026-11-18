@@ -21,7 +21,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `KONAE_TRUSTED_PROXIES=127.0.0.1 KONAE_MAIL_TRANSPORT=development KONAE_DATA_DIR='${dataRoot}' KONAE_EDITOR_PORT=${editorPort} KONAE_KERNEL_PORT=${kernelPort} bun run dev:local`,
+    command: `KONAE_DEV_AUTO_LOGIN=0 KONAE_TRUSTED_PROXIES=127.0.0.1 KONAE_MAIL_TRANSPORT=development KONAE_DATA_DIR='${dataRoot}' KONAE_EDITOR_PORT=${editorPort} KONAE_KERNEL_PORT=${kernelPort} bun run dev:local`,
     url: `${baseURL}/_konae/health`,
     reuseExistingServer: Boolean(process.env.KONAE_EDITOR_URL) && !process.env.CI,
     timeout: 120_000,
