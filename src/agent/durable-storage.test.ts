@@ -4,15 +4,18 @@ import type { StorageWrite } from "@earendil-works/pi-durable";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { CompactionEntry } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
-import { openDurableStorage } from "./durable-storage";
+import { openDurableStorage, readDurableBlob } from "./durable-storage";
 
 function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterClaim?: boolean } = {}) {
   const batches: Array<{ sequence: number; writes: StorageWrite[] }> = [];
+  const checkpoints: Array<{ checkpointId: string; sequence: number; payload: Record<string, unknown>; createdAt: number }> = [];
+  const blobs = new Map<string, Uint8Array>();
   const receipts = new Map<string, unknown>();
   const requests: Array<{ url: string; method: string; body?: string; headers: Headers }> = [];
   let generation = 0;
   let highWater = 0;
   let loseAck = options.loseAck ?? false;
+  let refuse = options.refuse;
   const fetcher: typeof fetch = async (input, init = {}) => {
     const url = String(input);
     const method = init.method ?? "GET";
@@ -26,14 +29,15 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
       return Response.json({ generation, claimedAt: 1 });
     }
     if (url.endsWith("/commit")) {
-      if (options.refuse) return Response.json({ error: options.refuse }, { status: 422 });
+      if (refuse) return Response.json({ error: refuse }, { status: 422 });
       const value = JSON.parse(body!) as { requestId: string; expectedSeq: number; writes: StorageWrite[][] };
       const sequences = value.writes.map((writes, index) => {
         const sequence = value.expectedSeq + index;
         batches.push({ sequence, writes });
         return sequence;
       });
-      const receipt = { requestId: value.requestId, stored: sequences.length, sequences, lastSeq: sequences.at(-1), refused: null };
+      if (value.checkpoint) checkpoints.push({ checkpointId: value.checkpoint.id, sequence: sequences.at(-1)!, payload: value.checkpoint.payload, createdAt: 1 });
+      const receipt = { requestId: value.requestId, stored: sequences.length, sequences, lastSeq: sequences.at(-1), refused: null, checkpointStored: Boolean(value.checkpoint) };
       receipts.set(value.requestId, receipt);
       if (loseAck) { loseAck = false; throw new TypeError("connection reset after server commit"); }
       return Response.json(receipt);
@@ -48,9 +52,20 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
       highWater = Math.max(highWater + 1, value.candidate);
       return Response.json({ id: highWater });
     }
+    if (url.endsWith("/checkpoints")) return Response.json({ items: checkpoints });
+    const blobMatch = url.match(/\/blobs\/([a-f0-9]{64})$/);
+    if (blobMatch && method === "PUT") {
+      const bytes = new Uint8Array(await new Response(init.body).arrayBuffer());
+      blobs.set(blobMatch[1], bytes);
+      return Response.json({ stored: true });
+    }
+    if (blobMatch && method === "GET") {
+      const bytes = blobs.get(blobMatch[1]);
+      return bytes ? new Response(bytes) : Response.json({ error: "missing" }, { status: 404 });
+    }
     return Response.json({ error: "unexpected route" }, { status: 404 });
   };
-  return { fetcher, requests, batches };
+  return { fetcher, requests, batches, checkpoints, blobs, setRefuse(value: string | undefined) { refuse = value; } };
 }
 
 const initialConversation = [{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }] as unknown as StorageWrite[];
@@ -58,13 +73,17 @@ const initialConversation = [{ type: "conversation", value: { id: ROOT_CONVERSAT
 describe("authenticated native Durable Storage bridge", () => {
   test("reuses the exact request bytes after a lost acknowledgement and reads the receipt", async () => {
     const api = nativeApi({ loseAck: true });
-    const storage = await openDurableStorage({ projectId: "project-a", conversationId: "conversation-a", ownerId: "owner-a", fetch: api.fetcher });
+    const acknowledged: number[] = [];
+    const storage = await openDurableStorage({ projectId: "project-a", conversationId: "conversation-a", ownerId: "owner-a", fetch: api.fetcher, onAcknowledged: (sequence) => acknowledged.push(sequence) });
     const claimed = await (storage as any).claimWriter(0);
     expect(claimed).toBe(1);
     const seen: number[] = [];
     const result = await storage.commit([initialConversation], (_index, seq) => seen.push(seq), BACKGROUND_CONTEXT);
     expect(result.stored).toBe(1);
     expect(seen).toEqual([1]);
+    expect(acknowledged).toEqual([1]);
+    expect((storage as any).hydratedSequence).toBe(1);
+    expect(await (storage as any).lastSequence()).toBe(1);
     const post = api.requests.find((request) => request.url.endsWith("/commit"))!;
     expect(post.headers.get("x-konae-owner-id")).toBe("owner-a");
     expect(post.body).toContain('"requestId"');
@@ -107,6 +126,46 @@ describe("authenticated native Durable Storage bridge", () => {
     expect(compaction).toMatchObject({ id: 3, conversationId: ROOT_CONVERSATION_ID, head: 2, model: [{ role: "user", content: `Compaction summary: ${summary}`, timestamp: 11 }], data: { reason: "manual" } });
     expect(api.batches[1]?.writes[1]).toMatchObject({ type: "entry", value: { kind: "pi.compaction", head: 2, data: { reason: "manual" } } });
     await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  test("commits immutable binary checkpoint metadata in the same native transaction as its file result", async () => {
+    const api = nativeApi({ loseAck: true });
+    const storage = await openDurableStorage({
+      projectId: "p", conversationId: "c", fetch: api.fetcher,
+      checkpoint: async (_writes, seq) => ({
+        id: "checkpoint-file-result",
+        payload: { formatVersion: 1, sequence: seq, status: "working", blobFiles: { "scratch:public/pixel.png": "" }, blobs: [],
+          context: { messages: [{ role: "user", content: "add an image" }] }, sourcesRevision: 4 },
+        blobs: [{ key: "scratch:public/pixel.png", bytes: new Uint8Array([0, 255, 1, 128]) }],
+      }),
+    });
+    await (storage as any).claimWriter(0);
+    const result = await storage.commit([initialConversation], () => {}, BACKGROUND_CONTEXT);
+    expect(result.stored).toBe(1);
+    expect(api.batches).toHaveLength(1);
+    expect(api.checkpoints).toHaveLength(1);
+    expect(api.checkpoints[0]).toMatchObject({ checkpointId: "checkpoint-file-result", sequence: 1, payload: { sequence: 1, status: "working" } });
+    expect(api.requests.filter((request) => request.url.endsWith("/commit"))).toHaveLength(1);
+    const sent = JSON.parse(api.requests.find((request) => request.url.endsWith("/commit"))!.body!) as { checkpoint: unknown };
+    expect(sent.checkpoint).toBeDefined();
+    const recoveredStorage = await openDurableStorage({ projectId: "p", conversationId: "c", fetch: api.fetcher });
+    const recovered = await (recoveredStorage as any).readCheckpoints();
+    expect(recovered).toMatchObject([{ checkpointId: "checkpoint-file-result", sequence: 1, payload: { context: { messages: [{ role: "user", content: "add an image" }] } } }]);
+    const digest = (recovered[0].payload.blobFiles as Record<string, string>)["scratch:public/pixel.png"];
+    expect([...await readDurableBlob({ projectId: "p", conversationId: "c" }, digest, api.fetcher)]).toEqual([0, 255, 1, 128]);
+    await recoveredStorage.close(BACKGROUND_CONTEXT);
+  });
+
+  test("a refused native batch leaves the previous checkpoint boundary visible", async () => {
+    const api = nativeApi();
+    const storage = await openDurableStorage({ projectId: "p", conversationId: "c", fetch: api.fetcher, checkpoint: async (_writes, sequence) => ({ id: `checkpoint-${sequence}`, payload: { formatVersion: 1, sequence }, blobs: [] }) });
+    await (storage as any).claimWriter(0);
+    await storage.commit([initialConversation], () => {}, BACKGROUND_CONTEXT);
+    api.setRefuse("checkpoint batch refused");
+    const result = await storage.commit([[{ type: "entry", value: { id: 2, conversationId: ROOT_CONVERSATION_ID, kind: "pi.user", model: [] } } as StorageWrite]], () => {}, BACKGROUND_CONTEXT);
+    expect(result.stored).toBe(0);
+    expect(api.checkpoints).toHaveLength(1);
+    expect(await (storage as any).readCheckpoints()).toMatchObject([{ checkpointId: "checkpoint-1", sequence: 1 }]);
   });
 });
 

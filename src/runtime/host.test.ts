@@ -348,6 +348,24 @@ describe("proposal preview host lifecycle", () => {
     expect(applied.getFiles()).toMatchObject([{ name: "photo.png", size: photoBytes }]);
     await lifecycle.dispose();
   });
+
+  test("recovered proposal starts fresh preview rows, files, and actor without resetting ordinary preview", async () => {
+    const lifecycle = new ProposalHostLifecycle("recovered_fresh", { schema, actions });
+    const applied = lifecycle.appliedHost;
+    await applied.handle("actions.invoke", { name: "tasks.create", input: { title: "Saved row" } });
+    applied.setPreviewActor("alice");
+    await applied.handle("files.upload", { name: "saved.txt", type: "text/plain", size: 3, dataUrl: "data:text/plain,old" });
+    const recovered = await lifecycle.prepareRecoveredProposal("proposal:recovered", { schema, actions });
+    expect(recovered).not.toBeNull();
+    expect(recovered).not.toBe(applied);
+    expect(recovered!.getPreviewActor()).toBe("guest");
+    expect(await recovered!.handle("actions.invoke", { name: "tasks.list" })).toEqual([]);
+    expect(await recovered!.handle("files.list")).toEqual([]);
+    expect(await applied.handle("actions.invoke", { name: "tasks.list" })).toMatchObject([{ title: "Saved row" }]);
+    expect(applied.getPreviewActor()).toBe("alice");
+    expect(applied.getFiles()).toHaveLength(1);
+    await lifecycle.dispose();
+  });
 });
 
 describe("the preview refuses miniapp.actions.call with the Kernel's words", () => {

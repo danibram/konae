@@ -57,6 +57,14 @@
 .agent-error span { overflow-wrap: anywhere; }
 .agent-error button { border: 0; background: transparent; color: inherit; display: grid; cursor: pointer; }
 
+.agent-recovery-review { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--ds-warning); background: var(--ds-warning-soft); color: var(--ds-text); font-size: 12px; line-height: 1.45; }
+.agent-recovery-review h2, .agent-recovery-review h3, .agent-recovery-review p { margin: 0; }
+.agent-recovery-review h2 { font-size: 13px; }
+.agent-recovery-review details { display: grid; gap: 8px; }
+.agent-recovery-review summary { cursor: pointer; font-weight: 650; }
+.agent-recovery-review details section { min-width: 0; margin-top: 8px; }
+.agent-recovery-review pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; background: var(--ds-field); font: 11px/1.4 var(--ds-mono); }
+
 .agent-proposal { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 10px; padding: 10px 16px; border-top: 1px solid var(--ds-border); background: var(--ds-subtle); }
 .agent-proposal.validated { background: var(--ds-success-soft); }
 .agent-proposal.blocked { background: var(--ds-danger-soft); }

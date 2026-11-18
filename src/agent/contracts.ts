@@ -50,6 +50,7 @@ export interface CapsuleWorkspace {
   onMutation(callback: (mutation: CapsuleMutation) => void): () => void;
   changedFiles(): ProjectFile[];
   serialize(): CapsuleSnapshot;
+  reset(): void;
 }
 
 

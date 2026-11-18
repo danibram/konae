@@ -55,11 +55,24 @@ try {
       await context.route(origin+"/_konae/**", async route=>{ ownerRequests.push(route.request().url()); await route.fulfill({ status: 401, body: "not used" }); });
       await context.route(origin+"/mcp", async route=>{ ownerRequests.push(route.request().url()); await route.fulfill({ status: 401, body: "not used" }); });
       const requests = [];
+      const recoveryProviderBodies = [];
+      let recoveryStep = 0;
       await context.route("https://api.anthropic.com/**",async route=>{
         const req = route.request();
         const headers = {"access-control-allow-origin":origin,"access-control-allow-headers":"*","access-control-allow-methods":"POST,OPTIONS","content-type":"text/event-stream"};
         if(req.method()==="OPTIONS") return route.fulfill({status:204,headers});
         const body=req.postDataJSON();
+        if(body.model==="fixture-recovery-custom") {
+          const step=recoveryStep++;
+          const tools=[
+            {name:"read",input:{path:"/workspace/index.html"}},
+            {name:"write",input:{path:"/workspace/index.html",content:"<main><h1>Recovered candidate</h1></main>"}},
+            {name:"validate_capsule",input:{}},
+          ];
+          requests.push({body,authorized:req.headers()["x-api-key"]===providerKey});
+          recoveryProviderBodies.push(body);
+          return route.fulfill({status:200,headers:{"access-control-allow-origin":origin,"access-control-allow-headers":"*","access-control-allow-methods":"POST,OPTIONS","content-type":"text/event-stream"},body:response(step,tools[step],"Rejected changes stay rejected.")});
+        }
         const index=requests.length;
         requests.push({body,authorized:req.headers()["x-api-key"]===providerKey});
         const tools=[
@@ -133,7 +146,53 @@ try {
           await interruptedSend;
           interrupted.dispose();
           adapterFacts.interruptedWhileOpening=true;
-          return {settled,transcript,proposal:{...handle.proposal(),validation},project,adapterFacts};
+          const [{createDurableKonaeAgent: createRecoveryAgent},{openDurableStorage},{createCheckpointDraft}] = await Promise.all([
+            import("/src/agent/durable-engine.ts"),import("/src/agent/durable-storage.ts"),import("/src/agent/durable-checkpoints.ts"),
+          ]);
+          const native={batches:[],checkpoints:[],blobs:new Map(),generation:0};
+          const fixtureFetch=async(input,init={})=>{
+            const url=new URL(String(input),location.origin);
+            if(url.pathname.endsWith("/batches")&&(!init.method||init.method==="GET")){
+              const after=Number(url.searchParams.get("after")??0);
+              return Response.json({batches:native.batches.filter(batch=>batch.sequence>after),nextCursor:null});
+            }
+            if(url.pathname.endsWith("/claim")){native.generation++;return Response.json({generation:native.generation});}
+            if(url.pathname.endsWith("/commit")){
+              const request=JSON.parse(init.body);
+              const sequence=request.expectedSeq;
+              native.batches.push({sequence,writes:request.writes[0]});
+              if(request.checkpoint) native.checkpoints.unshift({checkpointId:request.checkpoint.id,sequence,payload:request.checkpoint.payload,createdAt:Date.now()});
+              return Response.json({requestId:request.requestId,stored:1,sequences:[sequence],lastSeq:sequence,refused:null,checkpointStored:Boolean(request.checkpoint)});
+            }
+            if(url.pathname.endsWith("/ids"))return Response.json({id:JSON.parse(init.body).candidate});
+            if(url.pathname.endsWith("/checkpoints"))return Response.json({items:native.checkpoints});
+            if(url.pathname.includes("/blobs/")){
+              const key=url.pathname.split("/blobs/")[1];
+              if(init.method==="PUT"){native.blobs.set(key,new Uint8Array(init.body));return new Response(null,{status:201});}
+              return new Response(native.blobs.get(key),{status:200});
+            }
+            if(url.pathname.includes("/receipts/"))return new Response(null,{status:404});
+            return new Response("fixture route missing: "+url.pathname,{status:404});
+          };
+          let committed={...project.files};let pending={...committed};let gate=null;let status="working";
+          const openStorage=async()=>{
+            const storage=await openDurableStorage({projectId:project.id,conversationId:"browser-recovery",ownerId:"fixture-owner",fetch:fixtureFetch,checkpoint:async(writes,sequence)=>{
+              if(writes.some(write=>write.type==="entry"&&write.value?.kind==="pi.tool-result"))committed={...pending};
+              return createCheckpointDraft({projectId:project.id,sourcesRevision:3,base:{files:project.files},scratch:{files:committed},modelView:{files:committed},modelContext:{sequence},nativeSequence:sequence,validationSettings:{modules:project.modules??{}},historicalGate:gate,status});
+            }});
+            await storage.claimWriter(native.generation);
+            return storage;
+          };
+          const recoveryKeyStore={getKey:()=>secret,setKey(){},clearKey(){}};
+          const recovery=createRecoveryAgent(project,{provider:"anthropic",modelId:"fixture-recovery-custom"},recoveryKeyStore,{conversationId:"browser-recovery",ownerId:"fixture-owner",openStorage,fetch:fixtureFetch,sourceFiles:()=>project,liveDatabase:async()=>({}),onMutation(files){pending={...files};},onValidation(result){gate=result;status=result.ok?"proposal":"working";},onCheckpointStatus(next){status=next;}});
+          await recovery.send("Read and edit the local fixture proposal.");
+          const recoveredProposal=recovery.proposal();
+          if(!recoveredProposal?.validation?.ok)throw new Error("the synthetic provider did not produce a Gate-approved local proposal");
+          await recovery.recordDisposition("discarded",recoveredProposal.files);
+          await recovery.send("Continue from the current saved files.");
+          const recorded=native.checkpoints.some(checkpoint=>checkpoint.payload?.status==="discarded");
+          recovery.dispose();
+          return {settled,transcript,proposal:{...handle.proposal(),validation},project,adapterFacts,recovery:{recorded,checkpointCount:native.checkpoints.length}};
         } finally { await handle.close(); }
       }, {secret:providerKey,source:fileText});
       assert.equal(result.settled.status,"done");
@@ -142,9 +201,11 @@ try {
       assert.equal(result.adapterFacts.platformCalls,2,"the same current project binding works on both turns");
       assert.ok(result.adapterFacts.currentChecks>=4,"the project/session current predicate is checked at both tool boundaries");
       assert.ok(requests.some(({body,authorized})=>authorized&&body.model==="fixture-openai-unqualified"),"the changed provider and unqualified model reach the live request");
-      assert.equal(requests.length,9,"interrupting initialization prevents its provider request");
+      assert.equal(requests.length,14,"interrupting initialization prevents its provider request; recovery submits the edit and a follow-up turn");
       assert.equal(result.proposal.files["index.html"],candidate);
-      assert.equal(requests.length,9);
+      assert.equal(recoveryProviderBodies.length,5,"the wired recovery engine submits the proposed edit and the next request after Discard");
+      assert.equal(result.recovery.recorded,true,"Discard has its own acknowledged immutable checkpoint before later work");
+      assert.ok(JSON.stringify(recoveryProviderBodies.at(-1)?.messages??[]).includes("prior proposal was discarded"),"the next synthetic provider request receives the rejected candidate disposition");
       assert.ok(requests.slice(0,4).every(({authorized,body})=>authorized && body.model==="fixture-unqualified-custom"));
       const persisted=JSON.stringify(result.transcript);
       function check(condition, name) {

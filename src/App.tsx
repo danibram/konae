@@ -33,6 +33,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
 import { applyProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
@@ -79,7 +80,7 @@ import { parseRoute, pushRoute } from "./lib/routing";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
-import { isEncoded, sourceBytes } from "./lib/source-files";
+import { isEncoded, sourceBytes, textFiles } from "./lib/source-files";
 import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, emptyActionProgram, refusedSpot } from "./components/action-readiness";
@@ -88,13 +89,24 @@ import { ProjectSources, SaveSupersededError, type ProjectMetadata } from "./lib
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
-import { ProposalHostLifecycle } from "./runtime/proposal-host";
+import { ProposalHostLifecycle, RECOVERED_PREVIEW_RESET_NOTICE } from "./runtime/proposal-host";
+import { reconcileInterruptedApply } from "./agent/durable-checkpoints";
 
 const WhatHappenedView = heldLazy(() => import("./components/WhatHappenedView").then((module) => module.WhatHappenedView));
 const CapabilityWorkspace = heldLazy(() => import("./components/CapabilityWorkspace").then((module) => module.CapabilityWorkspace));
 const AppSettingsDialog = heldLazy(() => import("./components/AppSettingsDialog").then((module) => module.AppSettingsDialog));
 
 type EditorFile = string;
+type StagedRecoveryReview = { checkpointId: string; reason: string; files: Array<{ path: string; base?: string; candidate?: string }> };
+
+function stagedCheckpointDiff(base: { files: Record<string, string>; encodings?: Record<string, "base64"> }, scratch: { files: Record<string, string>; encodings?: Record<string, "base64"> }) {
+  const paths = new Set([...Object.keys(base.files), ...Object.keys(scratch.files)]);
+  return [...paths].sort().filter((path) => base.files[path] !== scratch.files[path] || base.encodings?.[path as never] !== scratch.encodings?.[path as never]).map((path) => ({
+    path,
+    ...(Object.hasOwn(base.files, path) ? { base: base.files[path] } : {}),
+    ...(Object.hasOwn(scratch.files, path) ? { candidate: scratch.files[path] } : {}),
+  }));
+}
 
 const knownFileMeta: Record<string, { label: string; icon: typeof FileText; language: string }> = {
   "index.html": { label: "index.html", icon: FileCode2, language: "HTML" },
@@ -203,6 +215,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [saveError, setSaveError] = useState("");
   const [sourceConflict, setSourceConflict] = useState(false);
   const [operationError, setOperationError] = useState("");
+  const [staleRecoveryReview, setStaleRecoveryReview] = useState<StagedRecoveryReview | null>(null);
+  const [durableApplyBlocked, setDurableApplyBlocked] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [appSettingsSection, setAppSettingsSection] = useState<AppSettingsSection>("addresses");
@@ -219,6 +233,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const codeTabEscape = useRef(false);
   const agentRef = useRef<KonaeAgentHandle | null>(null);
   const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
+  const durableRecoveryRef = useRef(false);
+  const recoveredProposalRef = useRef(false);
+  const durableSourceRevisionRef = useRef<number | null>(null);
+  const stagedParentCheckpointRef = useRef<string | null>(null);
   const projectRef = useRef(project);
   const hostLifecycleRef = useRef<{ projectId: string; lifecycle: ProposalHostLifecycle } | null>(null);
   if (hostLifecycleRef.current?.projectId !== project.id) {
@@ -777,17 +795,225 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return () => window.clearTimeout(timer);
   }, []);
 
+  const durableRecoveryStaging = (import.meta.env.DEV || import.meta.env.VITE_KONAE_DURABLE_STAGING === "true")
+    && new URLSearchParams(window.location.search).get("agent") === "durable-recovery";
+
   const ensureAgent = () => {
     if (agentRef.current) return Promise.resolve<KonaeAgentHandle | null>(agentRef.current);
     if (!agentLoad.current) {
-      const stagingDurable = (import.meta.env.DEV || import.meta.env.VITE_KONAE_DURABLE_STAGING === "true")
-        && new URLSearchParams(window.location.search).get("agent") === "durable-local";
+      const agentMode = new URLSearchParams(window.location.search).get("agent");
+      const stagingDurable = (import.meta.env.DEV || import.meta.env.VITE_KONAE_DURABLE_STAGING === "true") && agentMode === "durable-local";
+      const stagingRecovery = durableRecoveryStaging;
       agentLoad.current = import("./agent/harness")
         .then(async ({ createKonaeAgent, createDurableKonaeAgent }) => {
-          const selectedProject = projectRef.current;
+          let selectedProject = projectRef.current;
           const projectId = selectedProject.id;
           const selectedConfig = agentSession;
           const current = () => projectRef.current.id === projectId;
+          let durableRecoveryOptions: Record<string, unknown> = {};
+          let recoveredFiles: Record<string, string> | undefined;
+          let dispositionAfterInitialize: import("./agent/durable-checkpoints").CheckpointStatus | null = null;
+          let recoveredSavedReadback: { revision: number; project: MiniAppProject } | undefined;
+          if (stagingRecovery) {
+            const [{ createDurableConversation, readDurableConversation, openDurableStorage, readDurableCheckpoints, readDurableBlob }, { openDurableHistory }, { createCheckpointDraft, recoverCheckpoint, reconcileInterruptedApply }, { ToolResultEntry }] = await Promise.all([
+              import("./agent/durable-storage"), import("./agent/durable-engine"), import("./agent/durable-checkpoints"), import("@earendil-works/pi-durable"),
+            ]);
+            const key = `konae:durable-recovery:${ownerSession.ownerId}:${projectId}`;
+            const params = new URLSearchParams(window.location.search);
+            let conversationId = params.get("conversation") ?? localStorage.getItem(key) ?? "";
+            let info = conversationId ? await readDurableConversation(projectId, conversationId, ownerSession.ownerId).catch(() => null) : null;
+            let parentCheckpointId: string | undefined = stagedParentCheckpointRef.current ?? undefined;
+            let requiresLinkedAttempt = false;
+            let checkpointStatus: import("./agent/durable-checkpoints").CheckpointStatus = "working";
+            let historicalGate: import("./agent/contracts").ValidationResult | undefined;
+            let candidateId: string | undefined;
+            const observedAtOpen = await sources.observeSaved(projectId);
+            if (!observedAtOpen.project) throw new Error("Saved sources could not be read for proposal recovery.");
+            const savedRevision = observedAtOpen.revision;
+            recoveredSavedReadback = { revision: observedAtOpen.revision, project: observedAtOpen.project };
+            sources.markPublished(projectId, savedRevision, observedAtOpen.project);
+            setProject(observedAtOpen.project);
+            projectRef.current = observedAtOpen.project;
+            selectedProject = observedAtOpen.project;
+            let base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
+            let committedScratch: Record<string, string> = textFiles(observedAtOpen.project);
+            let pendingScratch: Record<string, string> = { ...committedScratch };
+            const readNativePrefix = async (id: string, throughSequence: number) => {
+              const history = await openDurableHistory(projectId, id, ownerSession.ownerId);
+              try {
+                if (history.info.lastSeq !== throughSequence) throw new Error("The native conversation advanced beyond this checkpoint.");
+                if (!history.conversation) throw new Error("The native conversation context is unavailable.");
+                const contextView = await history.conversation.context(BACKGROUND_CONTEXT);
+                return { ...contextView, sequence: throughSequence };
+              } finally { await history.close(); }
+            };
+            if (info) {
+              const checkpoints = await readDurableCheckpoints({ projectId, conversationId, ownerId: ownerSession.ownerId });
+              const latest = checkpoints[0];
+              if (latest) {
+                stagedParentCheckpointRef.current = latest.checkpointId;
+                const recovered = await recoverCheckpoint(latest, (digest) => readDurableBlob({ projectId, conversationId, ownerId: ownerSession.ownerId }, digest), { revision: savedRevision, files: base }, (sequence) => readNativePrefix(conversationId, sequence));
+                historicalGate = recovered.historicalGate as import("./agent/contracts").ValidationResult | undefined;
+                candidateId = recovered.candidateId;
+                if (recovered.readable && latest.sequence === info.lastSeq) {
+                  let acceptedSavedApply = false;
+                  if ((recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") && recovered.stale) {
+                    const outcome = await reconcileInterruptedApply(recovered, { revision: observedAtOpen.revision, files: observedAtOpen.project });
+                    if (outcome === "saved") {
+                      checkpointStatus = "saved";
+                      dispositionAfterInitialize = "saved";
+                      acceptedSavedApply = true;
+                      durableSourceRevisionRef.current = observedAtOpen.revision;
+                      base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
+                      committedScratch = textFiles(observedAtOpen.project);
+                      pendingScratch = { ...committedScratch };
+                    } else {
+                      parentCheckpointId = latest.checkpointId;
+                      const reason = "The interrupted Apply conflicts with current saved sources. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                      setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                      setOperationError(reason);
+                      setDurableApplyBlocked(true);
+                      requiresLinkedAttempt = true;
+                      conversationId = "";
+                      info = null;
+                    }
+                  } else if (recovered.stale) {
+                    parentCheckpointId = latest.checkpointId;
+                    const reason = "Saved sources advanced. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                    setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                    setOperationError(reason);
+                    setDurableApplyBlocked(true);
+                    requiresLinkedAttempt = true;
+                    conversationId = "";
+                    info = null;
+                  }
+                  if (info && !acceptedSavedApply) {
+                    if (["working", "proposal", "applied-unsaved", "apply-unknown"].includes(recovered.status)) {
+                      recoveredFiles = Object.fromEntries(Object.entries(recovered.scratch.files).filter(([path]) => recovered.scratch.encodings?.[path as never] !== "base64"));
+                      committedScratch = { ...recoveredFiles };
+                      pendingScratch = { ...recoveredFiles };
+                      checkpointStatus = recovered.status;
+                      durableSourceRevisionRef.current = recovered.sourcesRevision;
+                    }
+                    const sourceText = textFiles(observedAtOpen.project);
+                    if (recovered.status === "proposal" || recovered.status === "applied-unsaved" || recovered.status === "apply-unknown" || JSON.stringify(recovered.scratch.files) !== JSON.stringify(sourceText)) {
+                      recoveredProposalRef.current = true;
+                      setOperationError(RECOVERED_PREVIEW_RESET_NOTICE);
+                    }
+                    if (recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") {
+                      const result = await reconcileInterruptedApply(recovered, { revision: observedAtOpen.revision, files: observedAtOpen.project });
+                      if (result === "saved") { checkpointStatus = "saved"; dispositionAfterInitialize = "saved"; }
+                      else if (result === "unchanged") { checkpointStatus = "proposal"; dispositionAfterInitialize = "proposal"; }
+                      else {
+                        parentCheckpointId = latest.checkpointId;
+                        const reason = "The interrupted Apply conflicts with current saved sources. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                        setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                        setOperationError(reason);
+                        setDurableApplyBlocked(true);
+                        requiresLinkedAttempt = true;
+                        conversationId = "";
+                        info = null;
+                      }
+                    }
+                  }
+                } else {
+                  parentCheckpointId = latest.checkpointId;
+                  const reason = recovered.error ?? "Saved sources or conversation history advanced. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                  setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                  setOperationError(reason);
+                  setDurableApplyBlocked(true);
+                  requiresLinkedAttempt = true;
+                  conversationId = "";
+                  info = null;
+                }
+              } else if (info.lastSeq === 0) {
+                parentCheckpointId = stagedParentCheckpointRef.current ?? undefined;
+                durableSourceRevisionRef.current = savedRevision;
+                checkpointStatus = "working";
+              } else {
+                setOperationError("This conversation has no readable checkpoint. Its history is preserved and a new attempt starts from current saved sources.");
+                setStaleRecoveryReview({ checkpointId: stagedParentCheckpointRef.current ?? "", reason: "This conversation has no readable checkpoint. Its history is preserved; start a linked attempt from current saved sources.", files: [] });
+                conversationId = "";
+                info = null;
+                requiresLinkedAttempt = true;
+              }
+            }
+            if (requiresLinkedAttempt) return null;
+            if (!info) {
+              const created = await createDurableConversation(projectId, ownerSession.ownerId);
+              conversationId = created.id;
+              info = created;
+              recoveredFiles = undefined;
+              recoveredProposalRef.current = false;
+              setStaleRecoveryReview(null);
+              setDurableApplyBlocked(false);
+              durableSourceRevisionRef.current = savedRevision;
+              base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
+              committedScratch = textFiles(observedAtOpen.project);
+              pendingScratch = { ...committedScratch };
+              checkpointStatus = "working";
+              if (parentCheckpointId) {
+                const updated = new URL(window.location.href);
+                updated.searchParams.set("conversation", conversationId);
+                history.replaceState(null, "", updated);
+              }
+            }
+            localStorage.setItem(key, conversationId);
+            durableRecoveryRef.current = true;
+            let acknowledgedSequence = info?.lastSeq ?? 0;
+            const openStorage = async () => {
+              const currentInfo = await readDurableConversation(projectId, conversationId, ownerSession.ownerId);
+              const expectedSequence = acknowledgedSequence;
+              if (currentInfo.lastSeq !== expectedSequence) throw new Error("Conversation history advanced beyond the inspected checkpoint. Reload recovery before continuing.");
+              const storage = await openDurableStorage({
+                projectId, conversationId, ownerId: ownerSession.ownerId,
+                onAcknowledged(sequence) { acknowledgedSequence = sequence; },
+                checkpoint: async (writes, sequence) => {
+                  const currentRevision = await sources.inspectRevision(projectId);
+                  if (currentRevision !== (durableSourceRevisionRef.current ?? savedRevision)) throw new Error("Saved sources changed during this conversation. Start a linked attempt from the current revision before continuing.");
+                  if (writes.some((write: any) => write.type === "entry" && write.value?.kind === ToolResultEntry.kind)) committedScratch = { ...pendingScratch };
+                  const mergedScratch: Record<string, string> = Object.create(null);
+                  for (const [path, value] of Object.entries(committedScratch)) mergedScratch[path] = value;
+                  for (const [path, value] of Object.entries(base.files)) if (base.encodings?.[path as never] === "base64" && !Object.hasOwn(committedScratch, path)) mergedScratch[path] = value;
+                  const mergedEncodings = Object.fromEntries(Object.entries(base.encodings ?? {}).filter(([path, encoding]) => encoding === "base64" && !Object.hasOwn(committedScratch, path) && Object.hasOwn(mergedScratch, path)));
+                  const committedFiles = { files: mergedScratch, ...(Object.keys(mergedEncodings).length ? { encodings: mergedEncodings } : {}) };
+                  const input = await createCheckpointDraft({
+                    projectId, sourcesRevision: durableSourceRevisionRef.current ?? savedRevision,
+                    base, scratch: committedFiles,
+                    modelView: committedFiles, modelContext: { sequence }, nativeSequence: sequence,
+                    validationSettings: { modules: selectedProject.modules ?? {} },
+                    historicalGate, ...(candidateId ? { candidateId } : {}),
+                    status: checkpointStatus, ...(parentCheckpointId ? { parentCheckpointId } : {}),
+                  });
+                  return input;
+                },
+              });
+              const replayedSequence = (storage as any).hydratedSequence as number;
+              const nativeSequence = await (storage as any).lastSequence();
+              if (replayedSequence !== expectedSequence || nativeSequence !== expectedSequence) throw new Error("Conversation history changed while opening its checkpoint. Reload recovery before continuing.");
+              await (storage as any).claimWriter(currentInfo.generation);
+              return storage;
+            };
+            durableRecoveryOptions = {
+              ownerId: ownerSession.ownerId, conversationId, sourceRevision: savedRevision, recoveredFiles,
+              openStorage,
+              onMutation(files: Record<string, string>) { pendingScratch = { ...files }; },
+              onValidation(result: import("./agent/contracts").ValidationResult) {
+                historicalGate = result;
+                checkpointStatus = result.ok ? "proposal" : "working";
+                if (result.ok) candidateId ??= crypto.randomUUID();
+              },
+              onCheckpointStatus(status: import("./agent/durable-checkpoints").CheckpointStatus, files: Record<string, string>, saved?: { revision: number; project: MiniAppProject }) {
+                checkpointStatus = status;
+                if (status === "saved" && saved) {
+                  durableSourceRevisionRef.current = saved.revision;
+                  base = { files: { ...saved.project.files }, encodings: saved.project.encodings };
+                  committedScratch = textFiles(saved.project);
+                } else committedScratch = { ...files };
+                pendingScratch = { ...committedScratch };
+              },
+            };
+          }
           const options: KonaeAgentOptions & { isCurrent: () => boolean } = {
             isCurrent: current,
             liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
@@ -829,18 +1055,25 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               onChanged: () => setDomainVersion((version) => version + 1),
             },
           };
-          const handle = stagingDurable
+          const handle = stagingRecovery
+            ? createDurableKonaeAgent(selectedProject, selectedConfig, keyStore, { ...options, ...durableRecoveryOptions, isCurrent: current })
+            : stagingDurable
             ? createDurableKonaeAgent(selectedProject, selectedConfig, keyStore, {
-              ...options,
               isCurrent: current,
+              liveDatabase: options.liveDatabase,
+              previewErrors: options.previewErrors,
+              sourceFiles: options.sourceFiles,
             })
             : createKonaeAgent(selectedProject, selectedConfig, keyStore, options);
+          if (stagingRecovery) await handle.initialize?.();
+          if (stagingRecovery && dispositionAfterInitialize && recoveredSavedReadback) await handle.recordDisposition?.(dispositionAfterInitialize, recoveredFiles ?? textFiles(projectRef.current), recoveredSavedReadback);
           agentRef.current = handle;
           setAgent(handle);
           return handle;
         })
-        .catch(() => {
+        .catch((error) => {
           agentLoad.current = null;
+          if (stagingRecovery) setOperationError(error instanceof Error ? error.message : String(error));
           return null;
         });
     }
@@ -912,12 +1145,115 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
-  const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean> => {
+  const startLinkedRecoveryAttempt = async () => {
+    const review = staleRecoveryReview;
+    if (!review || !review.checkpointId || !durableRecoveryStaging) return;
+    try {
+      const observed = await sources.observeSaved(project.id);
+      if (!observed.project) throw new Error("Current saved sources could not be read for the linked attempt.");
+      const { createDurableConversation } = await import("./agent/durable-storage");
+      sources.markPublished(project.id, observed.revision, observed.project);
+      projectRef.current = observed.project;
+      setProject(observed.project);
+      const created = await createDurableConversation(project.id, ownerSession.ownerId);
+      stagedParentCheckpointRef.current = review.checkpointId;
+      const key = `konae:durable-recovery:${ownerSession.ownerId}:${project.id}`;
+      localStorage.setItem(key, created.id);
+      const updated = new URL(window.location.href);
+      updated.searchParams.set("conversation", created.id);
+      history.replaceState(null, "", updated);
+      agentRef.current?.dispose();
+      agentRef.current = null;
+      agentLoad.current = null;
+      setAgent(null);
+      setThreadResetToken((token) => token + 1);
+      setOperationError("");
+      const handle = await ensureAgent();
+      if (!handle) throw new Error("The linked attempt could not be initialized.");
+      setStaleRecoveryReview(null);
+      setDurableApplyBlocked(false);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean | { applied: false; message: string; preserveProposal: true }> => {
     const applied = applyProposal(project, proposal);
     if (!applied) return false;
     const approvedPreview = proposalPreview?.proposal === proposal ? proposalPreview : null;
     if (!approvedPreview || !hostLifecycle.isProposalReady(approvedPreview.id)) return false;
-    const next = applied.project;
+    let next = applied.project;
+    if (durableRecoveryRef.current && agentRef.current?.recordDisposition) {
+      const expectedRevision = durableSourceRevisionRef.current ?? sources.revision(project.id);
+      if (expectedRevision === undefined) return false;
+      try { await agentRef.current.recordDisposition("applied-unsaved", proposal.files); }
+      catch (error) {
+        setDurableApplyBlocked(true);
+        const message = `Apply was not sent because its checkpoint was not acknowledged. The saved sources are unchanged. ${error instanceof Error ? error.message : String(error)}`;
+        setOperationError(message);
+        return { applied: false, preserveProposal: true, message };
+      }
+      let saveError: unknown;
+      let revision: number | null = null;
+      try {
+        revision = await sources.saveExpected(next, expectedRevision);
+      } catch (error) { saveError = error; }
+      let observed: Awaited<ReturnType<typeof sources.observeSaved>> | null = null;
+      try { observed = await sources.observeSaved(project.id); }
+      catch (error) { saveError ??= error; }
+      const reconciled = await reconcileInterruptedApply(
+        { sourcesRevision: expectedRevision, base: { files: project.files, encodings: project.encodings }, scratch: { files: next.files, encodings: next.encodings } },
+        observed?.project ? { revision: observed.revision, files: observed.project } : null,
+      );
+      if (reconciled !== "saved" || !observed?.project || (revision !== null && observed.revision !== revision)) {
+        const disposition = reconciled === "unchanged" ? "proposal" : reconciled === "conflict" ? "stale" : "apply-unknown";
+        let dispositionError: unknown;
+        try { await agentRef.current.recordDisposition(disposition, proposal.files); }
+        catch (error) { dispositionError = error; }
+        let message: string;
+        if (reconciled === "conflict" && observed?.project) {
+          let checkpointId = stagedParentCheckpointRef.current ?? "";
+          try {
+            const conversationId = new URLSearchParams(window.location.search).get("conversation") ?? localStorage.getItem(`konae:durable-recovery:${ownerSession.ownerId}:${project.id}`) ?? "";
+            if (conversationId) {
+              const { readDurableCheckpoints } = await import("./agent/durable-storage");
+              checkpointId = (await readDurableCheckpoints({ projectId: project.id, conversationId, ownerId: ownerSession.ownerId }))[0]?.checkpointId ?? checkpointId;
+            }
+          } catch { /* Keep the prior immutable parent when the latest receipt cannot be read. */ }
+          const reason = "Saved sources changed while Apply was in flight. The old candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+          setStaleRecoveryReview({ checkpointId, reason, files: stagedCheckpointDiff({ files: project.files, encodings: project.encodings }, { files: next.files, encodings: next.encodings }) });
+          setDurableApplyBlocked(true);
+          sources.markPublished(project.id, observed.revision, observed.project);
+          projectRef.current = observed.project;
+          setProject(observed.project);
+          setPreviewProject(observed.project);
+          const observedSnapshot = JSON.stringify(observed.project);
+          synchronized.current.set(project.id, observedSnapshot);
+          serverSnapshots.current.set(project.id, observedSnapshot);
+          setOperationError(reason);
+          message = reason;
+        } else if (reconciled === "unknown" || dispositionError) {
+          setDurableApplyBlocked(true);
+          message = `Apply outcome is unobserved. Do not retry until current saved sources have been read back and the conversation checkpoint is reconciled. ${saveError instanceof Error ? saveError.message : saveError ? String(saveError) : ""}${dispositionError instanceof Error ? ` ${dispositionError.message}` : ""}`;
+          setOperationError(message);
+        } else {
+          setDurableApplyBlocked(false);
+          message = `Apply was not saved; read-back confirms the base revision is still current, so the proposal remains ready for review. ${saveError instanceof Error ? saveError.message : saveError ? String(saveError) : ""}`;
+          setOperationError(message);
+        }
+        return { applied: false, preserveProposal: true, message };
+      }
+      next = observed.project;
+      durableSourceRevisionRef.current = observed.revision;
+      sources.markPublished(project.id, observed.revision, observed.project);
+      setDurableApplyBlocked(false);
+      setStaleRecoveryReview(null);
+      try { await agentRef.current.recordDisposition("saved", proposal.files, { revision: observed.revision, project: observed.project }); }
+      catch (error) { setOperationError(`Saved sources were read back at revision ${observed.revision}, but the saved lifecycle checkpoint did not receive acknowledgement. Recovery will reconcile it on reopen. ${error instanceof Error ? error.message : String(error)}`); }
+      const snapshot = JSON.stringify(next);
+      synchronized.current.set(project.id, snapshot);
+      serverSnapshots.current.set(project.id, snapshot);
+    }
     const hostApplied = await hostLifecycle.applyProposal(approvedPreview.id, {
       schema: next.files["schema.sql"],
       actions: next.files["actions.json"],
@@ -943,11 +1279,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     threadResetToken,
     keyVersion,
     onApply: applyAgentProposal,
-    onDiscard: () => {
-      void hostLifecycle.discardProposal(proposalPreview?.id);
+    onDiscard: async () => {
+      const proposal = agentRef.current?.proposal();
+      try {
+        if (proposal && agentRef.current?.recordDisposition) await agentRef.current.recordDisposition("discarded", proposal.files);
+        else agentRef.current?.discard();
+      } catch (error) {
+        const message = `Discard could not be saved to conversation history. The proposal and Preview remain available. ${error instanceof Error ? error.message : String(error)}`;
+        setOperationError(message);
+        throw new Error(message);
+      }
+      await hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
       setProposalPreparation(null);
-      agentRef.current?.discard();
     },
     providers: PROVIDERS,
     draftKey: project.id,
@@ -956,6 +1300,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   useEffect(() => {
     const proposal = agentThread.state.proposal;
+    if (staleRecoveryReview) {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
+      setProposalPreview(null);
+      setProposalPreparation(null);
+      return;
+    }
     if (agentThread.footer.kind !== "validated" || !proposal) {
       void hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
@@ -975,11 +1325,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setProposalPreparation({ proposal });
     setOperationError("");
     const id = `proposal:${project.id}:${crypto.randomUUID()}`;
+    const recoveredCandidate = recoveredProposalRef.current;
     void (async () => {
       try {
         const compiled = await compileProjectInBrowser(candidate);
         if (!current) return;
-        const host = await hostLifecycle.prepareProposal(id, {
+        const prepareHost = recoveredCandidate ? hostLifecycle.prepareRecoveredProposal.bind(hostLifecycle) : hostLifecycle.prepareProposal.bind(hostLifecycle);
+        const host = await prepareHost(id, {
           schema: candidate.files["schema.sql"],
           actions: candidate.files["actions.json"],
           fileAccess: candidate.modules?.files?.fileAccess as "app-users" | undefined,
@@ -997,6 +1349,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           },
         });
         setProposalPreparation(null);
+        if (recoveredCandidate) {
+          recoveredProposalRef.current = false;
+          setOperationError(RECOVERED_PREVIEW_RESET_NOTICE);
+        }
         setStage("preview");
       } catch (error) {
         if (current) setProposalPreparation({ proposal, error: error instanceof Error ? error.message : String(error) });
@@ -1007,7 +1363,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       current = false;
       void hostLifecycle.discardProposal(id);
     };
-  }, [agentThread.footer.kind, agentThread.state.proposal, project, hostLifecycle]);
+  }, [agentThread.footer.kind, agentThread.state.proposal, project, hostLifecycle, staleRecoveryReview]);
 
   const activeProposalPreview = proposalPreview?.project.id === project.id
     && proposalPreview.proposal === agentThread.state.proposal
@@ -1542,7 +1898,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   };
 
-  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} />;
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} recoverAvailable={durableRecoveryStaging} staleRecovery={staleRecoveryReview} applyBlocked={durableApplyBlocked} onStartLinkedAttempt={() => void startLinkedRecoveryAttempt()} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",

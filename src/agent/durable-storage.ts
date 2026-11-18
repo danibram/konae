@@ -20,9 +20,20 @@ export type DurableStorageOptions = {
   ownerId?: string;
   fetch?: typeof fetch;
   localOnly?: boolean;
+  /** Adds a checkpoint atomically with each batch. Build it from captured state; never await this Harness's context here. */
+  checkpoint?: (writes: readonly StorageWrite[], sequence: number) => Promise<DurableCheckpointDraft | null>;
+  /** Advances the caller's inspected boundary only after the native receipt and local apply are complete. */
+  onAcknowledged?: (sequence: number) => void;
 };
 
-type NativeReceipt = { requestId: string; stored: number; sequences: number[]; lastSeq: number; refused: string | null };
+export type DurableCheckpointDraft = {
+  id?: string;
+  payload: Record<string, unknown>;
+  blobs?: readonly { key: string; bytes: Uint8Array }[];
+};
+export type DurableCheckpoint = { checkpointId: string; sequence: number; payload: Record<string, unknown>; createdAt: number };
+
+type NativeReceipt = { requestId: string; stored: number; sequences: number[]; lastSeq: number; refused: string | null; checkpointStored?: boolean };
 type NativeBatch = { sequence: number; writes: StorageWrite[] };
 
 /**
@@ -38,6 +49,7 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
   let generation: number | null = null;
   let hydratedSeq = 0;
   let tail = Promise.resolve();
+  const uploadedBlobs = new Map<string, Promise<string>>();
   const headers = () => {
     const value: Record<string, string> = { "content-type": "application/json" };
     if (options.ownerId) value["x-konae-owner-id"] = options.ownerId;
@@ -90,7 +102,9 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
           try { prepared = target.prepareCommit(batches[index], (hydratedSeq + 1) as never); }
           catch (refused) { acknowledge(); return { stored, refused }; }
           const requestId = crypto.randomUUID();
-          const exactBody = JSON.stringify({ requestId, expectedSeq: prepared.seq, generation, writes: [prepared.writes] });
+          const draft = await options.checkpoint?.(batches[index], prepared.seq);
+          const checkpoint = draft ? await prepareAtomicCheckpoint(options, draft, uploadedBlobs) : undefined;
+          const exactBody = JSON.stringify({ requestId, expectedSeq: prepared.seq, generation, writes: [prepared.writes], ...(checkpoint ? { checkpoint } : {}) });
           let receipt: NativeReceipt;
           try { receipt = await sendCommit(exactBody, requestId); }
           catch (failure) {
@@ -127,13 +141,14 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
               }
             }
           }
-          if (receipt.requestId !== requestId || receipt.stored !== 1 || receipt.sequences.length !== 1 || receipt.sequences[0] !== prepared.seq || receipt.lastSeq !== prepared.seq) {
+          if (receipt.requestId !== requestId || receipt.stored !== 1 || receipt.sequences.length !== 1 || receipt.sequences[0] !== prepared.seq || receipt.lastSeq !== prepared.seq || (checkpoint !== undefined && receipt.checkpointStored !== true)) {
             closed = true;
             await target.close(BACKGROUND_CONTEXT);
             throw new Error("Native conversation receipt does not match the committed Pi batch.");
           }
           prepared.apply();
           hydratedSeq = prepared.seq;
+          options.onAcknowledged?.(prepared.seq);
           acknowledgements.push(prepared.seq);
           stored += 1;
         }
@@ -148,6 +163,9 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
         const response = await request(`${base}/ids`, { method: "POST", body: JSON.stringify({ generation, candidate }) });
         return (await response.json() as { id: number }).id as never;
       });
+      if (property === "readCheckpoints") return async () => readDurableCheckpoints(options, fetcher);
+      if (property === "hydratedSequence") return hydratedSeq;
+      if (property === "lastSequence") return async () => readLastSeq();
       if (property === "close") return async (context: Context = BACKGROUND_CONTEXT) => {
         closed = true;
         const value = Reflect.get(target, property, target);
@@ -188,6 +206,49 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
     const all = await fetchAllBatches();
     return all.at(-1)?.sequence ?? 0;
   }
+}
+
+async function prepareAtomicCheckpoint(options: DurableStorageOptions, draft: DurableCheckpointDraft, cache: Map<string, Promise<string>>) {
+  const blobs: Record<string, string> = Object.create(null);
+  for (const blob of draft.blobs ?? []) {
+    const digest = await sha256(blob.bytes);
+    let uploaded = cache.get(digest);
+    if (!uploaded) { uploaded = uploadDurableBlob(options, blob.bytes, options.fetch ?? fetch, digest); cache.set(digest, uploaded); }
+    blobs[blob.key] = await uploaded;
+  }
+  return { id: draft.id ?? crypto.randomUUID(), payload: { ...draft.payload, blobFiles: { ...(draft.payload.blobFiles as Record<string, string> | undefined), ...blobs }, blobs: [...new Set([...(Array.isArray(draft.payload.blobs) ? draft.payload.blobs as string[] : []), ...Object.values(blobs)])] } };
+}
+
+export async function uploadDurableBlob(options: Pick<DurableStorageOptions, "projectId" | "conversationId" | "ownerId">, bytes: Uint8Array, fetcher: typeof fetch = fetch, knownDigest?: string) {
+  const digest = knownDigest ?? await sha256(bytes);
+  const headers: Record<string, string> = { "content-type": "application/octet-stream" };
+  if (options.ownerId) headers["x-konae-owner-id"] = options.ownerId;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/blobs/${digest}`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers, body: bytes.slice().buffer as ArrayBuffer });
+  if (!response.ok) throw new Error(`Could not store immutable conversation file (${response.status}).`);
+  return digest;
+}
+
+export async function readDurableBlob(options: Pick<DurableStorageOptions, "projectId" | "conversationId" | "ownerId">, digest: string, fetcher: typeof fetch = fetch) {
+  if (!/^[a-f0-9]{64}$/i.test(digest)) throw new Error("Invalid immutable file digest.");
+  const headers = options.ownerId ? { "x-konae-owner-id": options.ownerId } : undefined;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/blobs/${digest}`, { credentials: "same-origin", cache: "no-store", headers });
+  if (!response.ok) throw new Error(`Could not read immutable conversation file (${response.status}).`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (await sha256(bytes) !== digest.toLowerCase()) throw new Error("Immutable conversation file digest does not match its content.");
+  return bytes;
+}
+
+export async function readDurableCheckpoints(options: Pick<DurableStorageOptions, "projectId" | "conversationId" | "ownerId">, fetcher: typeof fetch = fetch): Promise<DurableCheckpoint[]> {
+  const headers = options.ownerId ? { "x-konae-owner-id": options.ownerId } : undefined;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/checkpoints`, { credentials: "same-origin", cache: "no-store", headers });
+  if (!response.ok) throw new Error(`Could not read conversation checkpoints (${response.status}).`);
+  const page = await response.json() as { items: Array<{ checkpointId: string; sequence: number; payload: Record<string, unknown>; createdAt: number }> };
+  return page.items;
+}
+
+async function sha256(bytes: Uint8Array) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.slice().buffer as ArrayBuffer));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 class MissingReceipt extends Error {}

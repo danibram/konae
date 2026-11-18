@@ -28,9 +28,13 @@ type Props = {
   suggestions?: string[];
   proposalReady?: boolean;
   proposalError?: string;
+  recoverAvailable?: boolean;
+  applyBlocked?: boolean;
+  staleRecovery?: { reason: string; checkpointId: string; files: Array<{ path: string; base?: string; candidate?: string }> } | null;
+  onStartLinkedAttempt?: () => void;
 };
 
-export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError, recoverAvailable = false, applyBlocked = false, staleRecovery, onStartLinkedAttempt }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -72,6 +76,21 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
   return (
     <div className="agent-panel">
       <div className="messages agent-thread" ref={threadRef} aria-live="polite" aria-busy={running}>
+        {staleRecovery && (
+          <section className="agent-recovery-review" aria-label="Preserved stale proposal">
+            <h2>Saved sources changed</h2>
+            <p>{staleRecovery.reason}</p>
+            <details>
+              <summary>Inspect preserved proposal ({staleRecovery.files.length} changed files)</summary>
+              {staleRecovery.files.map((file) => <section key={file.path}>
+                <h3>{file.path}</h3>
+                <strong>Saved base</strong><pre>{file.base ?? "(file did not exist)"}</pre>
+                <strong>Candidate</strong><pre>{file.candidate ?? "(file removed)"}</pre>
+              </section>)}
+            </details>
+            <Button variant="secondary" onClick={onStartLinkedAttempt} disabled={!staleRecovery.checkpointId}>Start linked attempt from current saved sources</Button>
+          </section>
+        )}
         {state.messages.length === 0 && (
           <div className="agent-thread-empty">
             {descriptionReady ? <>
@@ -86,6 +105,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
             <p>{live
               ? "Describe it in one sentence. A change that passes the Gate appears in Preview before you apply it."
               : "Describe it in one sentence. A model you connect makes the change, and you apply it after you see it."}</p>
+            {recoverAvailable && !staleRecovery && !thread.recoveryAttempted && <Button variant="secondary" onClick={() => void thread.recover()} disabled={running}>Recover saved proposal</Button>}
             {suggestions.length > 0 && <>
               <p className="agent-examples-label">Try one</p>
               <ExamplePrompts sentences={suggestions} onPick={pick} />
@@ -145,7 +165,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
           )}
           <div className="agent-proposal-actions">
             <button className="agent-discard" onClick={thread.discard}>Discard</button>
-            <button className="agent-apply" disabled={!footer.canApply || running || (footer.kind === "validated" && !proposalReady)} onClick={() => void thread.apply()}>
+            <button className="agent-apply" disabled={applyBlocked || !footer.canApply || running || (footer.kind === "validated" && !proposalReady)} onClick={() => void thread.apply()}>
               <Send size={12} /> Apply
             </button>
           </div>

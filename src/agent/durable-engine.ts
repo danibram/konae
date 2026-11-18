@@ -18,6 +18,14 @@ export const SHARED_DURABLE_ACTIVATION = false;
 export type DurableEngineOptions = {
   project: MiniAppProject;
   ownerId?: string;
+  /** The Konae conversation UUID; Pi's numeric conversation id is not the owner-route address. */
+  conversationId?: string;
+  expectedGeneration?: number;
+  sourceRevision?: number;
+  recoveredFiles?: CapsuleFiles;
+  storage?: import("@earendil-works/pi-durable").Storage;
+  openStorage?: () => Promise<import("@earendil-works/pi-durable").Storage>;
+  fetch?: typeof fetch;
   keyStore: AgentKeyStore;
   sessionConfig: AgentSessionConfig;
   platform?: AgentPlatformBinding;
@@ -31,12 +39,19 @@ export type DurableEngineOptions = {
   sourceFiles?: CapsuleToolHooks["sourceFiles"];
   onModelEvent?: (event: any) => void;
   onValidation?: (result: ValidationResult) => void;
+  onCheckpointStatus?: (status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) => void;
 };
 
 /** Opens a reader with scheduler recovery disabled; history inspection never starts provider work. */
 export async function openDurableHistory(projectId: string, conversationId: string, ownerId?: string) {
   const info = await readDurableConversation(projectId, conversationId, ownerId);
   const storage = await openDurableStorage({ projectId, conversationId, ownerId });
+  const nativeBoundary = (storage as any).hydratedSequence as number;
+  const reportedBoundary = await (storage as any).lastSequence() as number;
+  if (nativeBoundary !== info.lastSeq || reportedBoundary !== info.lastSeq) {
+    await storage.close(BACKGROUND_CONTEXT);
+    throw new Error("Native conversation replay does not match its reported high-water sequence.");
+  }
   const registry = createRegistry();
   const models = createDurableModels(emptyKeyStore());
   const harness = await Harness.open(storage, { models, registry, readOnly: true }, BACKGROUND_CONTEXT);
@@ -45,9 +60,9 @@ export async function openDurableHistory(projectId: string, conversationId: stri
 
 /** Browser-owned local engine candidate. The editor still selects the legacy adapter until #29/#30 validation. */
 export async function openLocalDurableEngine(options: DurableEngineOptions) {
-  if (!options.localOnly) throw new Error("Shared Durable activation is held for the checkpoint and coordination follow-ups.");
+  if (!options.localOnly && !options.storage && !options.openStorage) throw new Error("Shared Durable activation is held for the checkpoint and coordination follow-ups.");
   const files = textFiles(options.project);
-  const workspace = createCapsuleWorkspace(files);
+  const workspace = createCapsuleWorkspace(files, options.recoveredFiles ?? files);
   const validator = createCapsuleValidator(options.loadSql);
   workspace.onMutation(() => options.onMutation?.(workspace.serialize().files));
   const platformBoundaries = new Map<string, unknown>();
@@ -56,7 +71,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     liveDatabase: options.liveDatabase,
     previewErrors: options.previewErrors,
     releaseFacts: options.releaseFacts,
-    onValidated: (_files, result) => options.onValidation?.(result),
+      onValidated: (_files, result) => options.onValidation?.(result),
   });
   const projectId = options.project.id;
   if (options.platform) {
@@ -97,7 +112,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   });
   const registry = createRegistry();
   registry.install(extension);
-  const storage = await openDurableStorage({ projectId, conversationId: "local-only", localOnly: true });
+  const storage = options.openStorage ? await options.openStorage() : options.storage ?? await openDurableStorage({ projectId, conversationId: "local-only", localOnly: true });
   const harnessModels = modelsWithConfiguredModel(durableModels, options.sessionConfig, options.keyStore, options.onModelEvent);
   const harness = await Harness.open(storage, { models: () => harnessModels, registry, settings: { toolExecution: "sequential" } }, BACKGROUND_CONTEXT);
   const conversation = await harness.root(BACKGROUND_CONTEXT, {
@@ -108,11 +123,19 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       instructions: `${buildSystemPrompt(options.project)}${options.sessionConfig.systemAppend ? `\n\n${options.sessionConfig.systemAppend}` : ""}`,
     },
   });
+  if (options.recoveredFiles) {
+    const result = await validator.validate(
+      workspace.serialize().files,
+      await readLiveDatabase({ liveDatabase: options.liveDatabase }),
+      await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => options.project) }),
+    );
+    options.onValidation?.(result);
+  }
   return {
     conversation,
     harness,
     async send(text: string) {
-      const submitted = await conversation.submit({ type: "input", content: text, entry: { kind: "konae.owner-message" } }, BACKGROUND_CONTEXT);
+      const submitted = await conversation.submit({ type: "input", content: redactDurableValue(text, currentCredentials(options)) as string, entry: { kind: "konae.owner-message" } }, BACKGROUND_CONTEXT);
       const settled = await submitted.wait(BACKGROUND_CONTEXT);
       const changedFiles = workspace.changedFiles();
       if (changedFiles.length) {
@@ -123,16 +146,36 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
         );
         options.onValidation?.(result);
       }
+      if (options.storage || options.openStorage) await appendDurableEntry(conversation, { kind: "konae.checkpoint" });
       return settled;
     },
     async interrupt() { await conversation.abort(BACKGROUND_CONTEXT); },
     async close() { await harness.close(BACKGROUND_CONTEXT); },
+    async recordDisposition(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) {
+      const { proposalDisposition } = await import("./durable-checkpoints");
+      if (status === "discarded") {
+        options.onCheckpointStatus?.(status, textFiles(options.project));
+      } else {
+        options.onCheckpointStatus?.(status, files, saved);
+      }
+      try {
+        await appendDurableEntry(conversation, { kind: "konae.proposal-disposition", content: proposalDisposition(status, { files }) });
+      } catch (error) {
+        if (status === "discarded") options.onCheckpointStatus?.("proposal", files);
+        throw error;
+      }
+      if (status === "discarded") {
+        workspace.reset();
+        options.onMutation?.(workspace.serialize().files);
+        options.onValidation?.({ ok: false, errors: [], checked: [] });
+      }
+    },
     proposal: () => ({ files: workspace.serialize().files, changedFiles: workspace.changedFiles() }),
   };
 }
 
 /** KonaeAgent adapter used only by the explicit local Durable staging opt-in. */
-export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void } {
+export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
   let currentProject = project;
   const modelConfig = { ...sessionConfig };
   let engine: Awaited<ReturnType<typeof openLocalDurableEngine>> | null = null;
@@ -153,7 +196,7 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
         project: currentProject,
         sessionConfig: modelConfig,
         keyStore,
-        localOnly: true,
+        localOnly: !(options.storage || options.openStorage),
         // Stable project/session predicate: tool bindings survive multiple turns;
         // the per-send token below only suppresses stale UI updates.
         isCurrent: () => options.isCurrent?.() !== false,
@@ -167,10 +210,11 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
         },
         onValidation: (result) => {
           validation = result;
-          validationSignature = signature(engine?.proposal().files ?? textFiles(currentProject));
+          validationSignature = signature(engine?.proposal().files ?? options.recoveredFiles ?? textFiles(currentProject));
+          options.onValidation?.(result);
           emit({ type: "validation", result });
         },
-        onMutation: () => { /* snapshots are read after tool boundaries and at turn end */ },
+        onMutation: (files) => options.onMutation?.(files),
       }).then(async (value) => {
         if (token !== runToken) { await value.close(); throw new Error("The current project or agent run changed. Ask again in the current project."); }
         engine = value;
@@ -197,8 +241,16 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
 
   return {
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback); },
+    async initialize() {
+      await ensure();
+      if (validation) emit({ type: "validation", result: validation });
+    },
     proposal,
     applyGateStatus,
+    async recordDisposition(status, files, saved) {
+      const current = await ensure();
+      await current.recordDisposition(status, files, saved);
+    },
     async send(prompt) {
       const token = ++runToken;
       const run = serial.then(async () => {
@@ -266,6 +318,12 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
 }
 
 function signature(files: CapsuleFiles) { return JSON.stringify(files); }
+
+async function appendDurableEntry(conversation: any, input: { kind: string; content?: string }) {
+  const submission = await conversation.submit({ type: "write", entry: { kind: input.kind, ...(input.content ? { model: [{ role: "user", content: input.content, timestamp: Date.now() }] } : {}) } }, BACKGROUND_CONTEXT);
+  const settled = await submission.wait(BACKGROUND_CONTEXT);
+  if (settled.status !== "done") throw new Error(`Conversation lifecycle write was not stored: ${"reason" in settled ? String(settled.reason) : settled.status}.`);
+}
 function safeString(value: unknown) {
   return typeof value === "string" ? value : JSON.stringify(redactDurableValue(value)) ?? String(value);
 }
@@ -305,7 +363,7 @@ function durableTool(tool: any, options: DurableEngineOptions, platformBoundarie
       };
       const detail = options.localOnly
         ? payload
-        : await uploadDurableDetail({ projectId: options.project.id, conversationId: String(api.conversationId), ownerId: options.ownerId }, payload);
+        : await uploadDurableDetail({ projectId: options.project.id, conversationId: options.conversationId ?? String(api.conversationId), ownerId: options.ownerId }, payload, options.fetch ?? fetch);
       if (bounded.truncated || bounded.redacted) api.diagnostic({ severity: "info", code: bounded.truncated ? "konae.output_truncated" : "konae.output_redacted", message: `Stored model output ${bounded.truncated ? "was bounded" : "was redacted"}; original structured details are stored separately.` });
       return {
         output: [{ type: "text", text: bounded.text }],

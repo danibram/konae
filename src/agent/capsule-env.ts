@@ -58,8 +58,8 @@ export function isTemplatePath(path: string): boolean {
   return (normalizePath(path) ?? path).startsWith(`${templateRoot}/`);
 }
 
-export function createCapsuleWorkspace(seed: CapsuleFiles): CapsuleWorkspace {
-  return new CapsuleEnvWorkspace(seed);
+export function createCapsuleWorkspace(seed: CapsuleFiles, initial: CapsuleFiles = seed): CapsuleWorkspace {
+  return new CapsuleEnvWorkspace(seed, initial);
 }
 
 type Located = { path: string; file: ProjectFile | null; kind: FileKind | null };
@@ -75,11 +75,12 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
   private readonly mtimes = new Map<ProjectFile, number>();
   private current: CapsuleFiles;
 
-  constructor(seed: CapsuleFiles) {
+  constructor(seed: CapsuleFiles, initial: CapsuleFiles = seed) {
     this.seed = { ...seed };
-    this.current = { ...seed };
+    this.current = { ...initial };
     const created = Date.now();
-    for (const name of Object.keys(seed)) this.mtimes.set(name, created);
+    for (const name of Object.keys(initial)) this.mtimes.set(name, created);
+    for (const name of new Set([...Object.keys(seed), ...Object.keys(initial)])) if (seed[name] !== initial[name]) this.writeOrder.push(name);
     this.env = this.createEnv();
   }
 
@@ -100,6 +101,13 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
 
   serialize(): CapsuleSnapshot {
     return { files: { ...this.current }, changedFiles: this.changedFiles() };
+  }
+
+  reset(): void {
+    this.current = { ...this.seed };
+    this.writeOrder.length = 0;
+    const created = Date.now();
+    for (const name of Object.keys(this.current)) this.mtimes.set(name, created);
   }
 
   private write(file: ProjectFile, content: string) {

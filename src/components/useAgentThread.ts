@@ -26,12 +26,14 @@ export type AgentThreadInput = {
   keyStore: AgentKeyStore;
   threadResetToken: number;
   keyVersion: number;
-  onApply: (proposal: AgentProposal) => boolean | Promise<boolean>;
-  onDiscard: () => void;
+  onApply: (proposal: AgentProposal) => boolean | ProposalApplyResult | Promise<boolean | ProposalApplyResult>;
+  onDiscard: () => void | Promise<void>;
   providers?: readonly ProviderConfig[];
   draftKey?: string;
   draftStorage?: DraftStorage;
 };
+
+export type ProposalApplyResult = boolean | { applied: boolean; message?: string; preserveProposal?: boolean };
 
 export type DraftStorage = { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void; removeItem: (key: string) => void };
 
@@ -61,8 +63,10 @@ export type AgentThread = {
   running: boolean;
   canSend: boolean;
   submit: () => Promise<void>;
+  recover: () => Promise<void>;
+  recoveryAttempted: boolean;
   apply: () => Promise<void>;
-  discard: () => void;
+  discard: () => Promise<void>;
   dismissError: () => void;
   interrupt: () => void;
 };
@@ -81,6 +85,7 @@ export function useAgentThread({
   draftStorage,
 }: AgentThreadInput): AgentThread {
   const [state, dispatch] = useReducer(agentThreadReducer, initialAgentThreadState);
+  const [recoveryAttempted, setRecoveryAttempted] = useState(false);
   const [draft, setDraftState] = useState(() => readDraft(draftStorage, draftKey));
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
@@ -106,6 +111,7 @@ export function useAgentThread({
         dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined }),
       ),
     };
+    dispatch({ type: "settled", snapshot: readSnapshot(next) });
   }
 
   useEffect(() => {
@@ -116,6 +122,7 @@ export function useAgentThread({
 
   useEffect(() => {
     dispatch({ type: "reset" });
+    setRecoveryAttempted(false);
     setDraftState(readDraft(draftStorage, draftKey));
   }, [threadResetToken, draftKey]);
 
@@ -135,10 +142,34 @@ export function useAgentThread({
     dispatch({ type: "settled", snapshot: readSnapshot(handle) });
   }
 
+  async function recover() {
+    if (running || recoveryAttempted) return;
+    setRecoveryAttempted(true);
+    const handle = await ensureAgent();
+    if (!handle) {
+      setRecoveryAttempted(false);
+      dispatch({ type: "event", event: { type: "error", message: "The saved proposal could not be recovered." } });
+      return;
+    }
+    attach(handle);
+    dispatch({ type: "settled", snapshot: readSnapshot(handle) });
+  }
+
   async function apply() {
     if (!footer.canApply || !state.proposal?.validation?.ok) return;
     const files = state.proposal.changedFiles.join(", ");
-    if (!await onApply(state.proposal)) {
+    let result: Awaited<ReturnType<typeof onApply>>;
+    try { result = await onApply(state.proposal); }
+    catch (error) {
+      dispatch({ type: "note", text: error instanceof Error ? error.message : "Apply could not be confirmed. The proposal remains available." });
+      return;
+    }
+    const applied = typeof result === "boolean" ? result : result.applied;
+    if (!applied) {
+      if (typeof result !== "boolean" && result.preserveProposal) {
+        if (result.message) dispatch({ type: "note", text: result.message });
+        return;
+      }
       dispatch({ type: "discard" });
       dispatch({ type: "note", text: "The Capsule changed after this was validated, so nothing was applied. Ask again to redo it against the current files." });
       return;
@@ -147,10 +178,14 @@ export function useAgentThread({
     dispatch({ type: "note", text: `Applied ${files} to the project.` });
   }
 
-  function discard() {
+  async function discard() {
+    try { await onDiscard(); }
+    catch (error) {
+      dispatch({ type: "event", event: { type: "error", message: error instanceof Error ? error.message : "Discard could not be saved." } });
+      return;
+    }
     dispatch({ type: "discard" });
     dispatch({ type: "note", text: "Discarded the pending changes." });
-    onDiscard();
   }
 
   return {
@@ -164,6 +199,8 @@ export function useAgentThread({
     running,
     canSend: canSubmit(state, draft, false, blocker),
     submit,
+    recover,
+    recoveryAttempted,
     apply,
     discard,
     dismissError: () => dispatch({ type: "dismiss-error" }),

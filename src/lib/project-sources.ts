@@ -10,7 +10,22 @@ type SourceResult = { revision: number; transfer: Parameters<McpClient["download
 export type ReloadedSources = { revision: number; project: MiniAppProject | null; serverSnapshot?: string };
 export class SaveSupersededError extends Error { constructor() { super("This save was replaced by a newer draft before it reached the server."); } }
 
-type SaveJob = { project: MiniAppProject; snapshot: string; epoch: number; resolve: (revision: number) => void; reject: (error: unknown) => void };
+export function sourceSavePayload(previous: MiniAppProject | undefined, next: MiniAppProject, cachedRevision: number | undefined, expectedRevision: number | undefined, hasSavedSources: boolean): unknown {
+  if (!previous || !hasSavedSources || (expectedRevision !== undefined && cachedRevision !== expectedRevision)) return next;
+  const files: Record<string, string> = Object.create(null);
+  const encodings: Record<string, "base64"> = Object.create(null);
+  for (const [path, contents] of Object.entries(next.files)) {
+    const wasEncoded = isEncoded(previous, path as never);
+    const nowEncoded = isEncoded(next, path as never);
+    if (previous.files[path as never] === contents && wasEncoded === nowEncoded) continue;
+    files[path] = contents;
+    if (nowEncoded) encodings[path] = "base64";
+  }
+  const removedPaths = Object.keys(previous.files).filter((path) => !(path in next.files));
+  return { format: "delta", metadata: { name: next.name, slug: next.slug, directories: next.directories, manifest: next.manifest, updatedAt: next.updatedAt }, files, ...(Object.keys(encodings).length ? { encodings } : {}), removedPaths };
+}
+
+type SaveJob = { project: MiniAppProject; snapshot: string; epoch: number; expectedRevision?: number; resolve: (revision: number) => void; reject: (error: unknown) => void };
 
 export async function readOwnerProjectCount(ownerId?: string): Promise<number> {
   const client = ownerId ? new McpClient("/mcp", { ownerId }) : platformMcp;
@@ -31,7 +46,7 @@ export class ProjectSources {
   private readonly downloads = new Map<string, Set<AbortController>>();
   private readonly sourcesExist = new Set<string>();
 
-  constructor(ownerId: string, endpoint = "/mcp") { this.client = new McpClient(endpoint, { ownerId }); }
+  constructor(ownerId: string, endpoint = "/mcp", fetcher?: typeof fetch) { this.client = new McpClient(endpoint, { ownerId, fetch: fetcher }); }
 
   revision(projectId: string) { return this.revisions.get(projectId); }
   isLoaded(projectId: string) { return this.documents.has(projectId); }
@@ -107,6 +122,19 @@ export class ProjectSources {
     return inspected.sourcesRevision;
   }
 
+  /** Read the current saved sources without changing this instance's cache or canceling queued saves. */
+  async observeSaved(projectId: string): Promise<{ revision: number; project: MiniAppProject | null }> {
+    const requestId = crypto.randomUUID();
+    const saved = await this.client.call<SourceResult>("project_sources_read", { projectId, requestId });
+    try {
+      if (!saved.transfer) return { revision: saved.revision, project: null };
+      const bytes = await this.client.download(saved.transfer);
+      const project = JSON.parse(new TextDecoder().decode(bytes)) as MiniAppProject;
+      if (project.id !== projectId) throw new Error("The saved source does not match its project.");
+      return { revision: saved.revision, project };
+    } finally { if (saved.transfer) await this.client.cancel(saved.transfer.transferId).catch(() => {}); }
+  }
+
   async reload(projectId: string): Promise<ReloadedSources> {
     if (this.reloading.has(projectId)) throw new Error("Saved sources are already loading.");
     const epoch = (this.epochs.get(projectId) ?? 0) + 1;
@@ -180,6 +208,26 @@ export class ProjectSources {
     });
   }
 
+  /** Save a recovered proposal against the revision it was validated against. */
+  saveExpected(project: MiniAppProject, expectedRevision: number): Promise<number> {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return Promise.reject(new Error("The proposal's saved source revision is invalid."));
+    if (this.reloading.has(project.id)) return Promise.reject(new Error("Saved sources are loading. Resolve the source conflict before saving this draft."));
+    try { checkSourceFiles(project); checkSourceUpload(new TextEncoder().encode(JSON.stringify(project)).length); }
+    catch (error) { return Promise.reject(error); }
+    const snapshot = JSON.stringify(project);
+    const epoch = this.epochs.get(project.id) ?? 0;
+    return new Promise((resolve, reject) => {
+      const obsolete = this.pending.get(project.id);
+      if (obsolete && obsolete.expectedRevision === undefined) {
+        reject(new Error("A hand-edited source save is already queued. Keep that draft and revalidate the recovered proposal against its saved result."));
+        return;
+      }
+      if (obsolete) obsolete.reject(new SaveSupersededError());
+      this.pending.set(project.id, { project, snapshot, epoch, expectedRevision, resolve, reject });
+      void this.pump(project.id);
+    });
+  }
+
   private async pump(projectId: string): Promise<void> {
     if (this.running.has(projectId)) return;
     this.running.add(projectId);
@@ -188,7 +236,7 @@ export class ProjectSources {
         const job = this.pending.get(projectId)!;
         this.pending.delete(projectId);
         try {
-          if (this.snapshots.get(projectId) === job.snapshot && this.revisions.has(projectId)) job.resolve(this.revisions.get(projectId)!);
+          if (job.expectedRevision === undefined && this.snapshots.get(projectId) === job.snapshot && this.revisions.has(projectId)) job.resolve(this.revisions.get(projectId)!);
           else job.resolve(await this.saveOne(projectId, job));
         }
         catch (error) { job.reject(error); }
@@ -208,7 +256,7 @@ export class ProjectSources {
     this.controllers.set(projectId, controller);
     const project = job.project;
     try {
-      const revision = this.revisions.get(projectId);
+      const revision = job.expectedRevision ?? this.revisions.get(projectId);
       if (revision === undefined) {
         const bytes = new TextEncoder().encode(job.snapshot);
         const upload = await this.client.upload(bytes, undefined, undefined, controller.signal);
@@ -221,8 +269,9 @@ export class ProjectSources {
           return created.sourcesRevision;
         } finally { await this.client.cancel(upload.transferId).catch(() => {}); }
       }
-      let payload: unknown = project;
-      if (this.sourcesExist.has(projectId) && this.snapshots.has(projectId)) payload = this.delta(JSON.parse(this.snapshots.get(projectId)!), project);
+      const cachedRevision = this.revisions.get(projectId);
+      const previous = this.snapshots.has(projectId) ? JSON.parse(this.snapshots.get(projectId)!) as MiniAppProject : undefined;
+      const payload = sourceSavePayload(previous, project, cachedRevision, job.expectedRevision, this.sourcesExist.has(projectId));
       const bytes = new TextEncoder().encode(JSON.stringify(payload));
       checkSourceUpload(bytes.length);
       const upload = await this.client.upload(bytes, projectId, undefined, controller.signal);
@@ -240,20 +289,6 @@ export class ProjectSources {
     } finally {
       if (this.controllers.get(projectId) === controller) this.controllers.delete(projectId);
     }
-  }
-
-  private delta(previous: MiniAppProject, next: MiniAppProject) {
-    const files: Record<string, string> = {};
-    const encodings: Record<string, "base64"> = {};
-    for (const [path, contents] of Object.entries(next.files)) {
-      const wasEncoded = isEncoded(previous, path);
-      const nowEncoded = isEncoded(next, path);
-      if (previous.files[path] === contents && wasEncoded === nowEncoded) continue;
-      files[path] = contents;
-      if (nowEncoded) encodings[path] = "base64";
-    }
-    const removedPaths = Object.keys(previous.files).filter((path) => !(path in next.files));
-    return { format: "delta", metadata: { name: next.name, slug: next.slug, directories: next.directories, manifest: next.manifest, updatedAt: next.updatedAt }, files, ...(Object.keys(encodings).length ? { encodings } : {}), removedPaths };
   }
 
   private commitSnapshot(projectId: string, job: SaveJob, revision: number) {

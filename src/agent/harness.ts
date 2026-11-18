@@ -32,6 +32,8 @@ export type KonaeAgentHandle = KonaeAgent & {
   reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void;
   retarget(project: MiniAppProject): void;
   dispose(): void;
+  initialize?(): Promise<void>;
+  recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void>;
 };
 
 // Durable 1.5.2 candidate entry points live behind the same lazy editor-agent
@@ -431,6 +433,10 @@ class WorkspaceHolder implements CapsuleWorkspace {
 
   serialize() {
     return this.workspace.serialize();
+  }
+
+  reset() {
+    this.workspace.reset();
   }
 
   private forward() {
