@@ -1,0 +1,2079 @@
+//! Dormant, owner-only transport for browser-owned Pi Durable 1.5.2 storage.
+//!
+//! This module stores the public StorageWrite records verbatim as ordered
+//! batches. It does not run Pi's harness or introduce a server-side scheduler.
+//! These tables live in the installation's mcp.sqlite root database, which is
+//! copied with the installation and is deliberately outside app-folder export.
+//! RawValue keeps opaque JSON slices intact across write, replay and download,
+//! including JSON-escaped lone UTF-16 code units.
+
+use super::*;
+use axum::{
+    body::to_bytes,
+    extract::{Path as AxumPath, Query, Request, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use base64::Engine;
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, value::RawValue, Value};
+use sha2::{Digest, Sha256};
+
+const BODY_LIMIT: usize = 4 * 1024 * 1024;
+const DETAIL_LIMIT: usize = 1024 * 1024;
+const OWNER_METADATA_LIMIT: i64 = 16 * 1024 * 1024;
+const OWNER_BLOB_LIMIT: i64 = 64 * 1024 * 1024;
+const BLOB_LIMIT: usize = 20 * 1024 * 1024;
+const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+const SUPPORTED_FORMAT: i64 = 1;
+const SUPPORTED_PI_VERSION: &str = "1.5.2";
+// Registry "1" is the only tool/document registry this prototype may resume.
+// Other values remain opaque and readable through the owner timeline.
+const SUPPORTED_REGISTRY_VERSION: &str = "1";
+
+pub(super) fn routes() -> Router<Konae> {
+    Router::new()
+        .route(
+            "/_konae/projects/{project}/conversations",
+            get(list).post(create),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}",
+            get(read).delete(remove),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/claim",
+            post(claim),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/commit",
+            post(commit),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/ids",
+            post(mint_id),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/records",
+            get(records),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/records/{record}/details",
+            get(details),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/batches",
+            get(batches),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/receipts/{request_id}",
+            get(receipt),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/checkpoints",
+            get(checkpoints).post(checkpoint),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/blobs/{digest}",
+            get(blob).put(put_blob),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/download",
+            get(download),
+        )
+}
+
+pub(super) fn schema(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(
+        "PRAGMA foreign_keys=ON;
+        CREATE TABLE IF NOT EXISTS conversation_project_epochs(
+          owner TEXT NOT NULL, project TEXT NOT NULL, epoch INTEGER NOT NULL,
+          PRIMARY KEY(owner,project));
+        CREATE TABLE IF NOT EXISTS conversation_id_highwater(
+          owner TEXT NOT NULL, project TEXT NOT NULL, high_water INTEGER NOT NULL,
+          PRIMARY KEY(owner,project));
+        CREATE TABLE IF NOT EXISTS conversation_used_ids(
+          owner TEXT NOT NULL, project TEXT NOT NULL, id INTEGER NOT NULL,
+          conversation TEXT NOT NULL, PRIMARY KEY(owner,project,id));
+        CREATE TABLE IF NOT EXISTS conversations(
+          id TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL,
+          project_epoch INTEGER NOT NULL DEFAULT 1,
+          format_version INTEGER NOT NULL, pi_version TEXT NOT NULL,
+          registry_version TEXT NOT NULL, title TEXT NOT NULL,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          byte_size INTEGER NOT NULL DEFAULT 0,
+          current_generation INTEGER NOT NULL DEFAULT 0, last_seq INTEGER NOT NULL DEFAULT 0,
+          deleted INTEGER NOT NULL DEFAULT 0, UNIQUE(owner,project,id));
+        CREATE INDEX IF NOT EXISTS conversations_owner_project ON conversations(owner,project,updated_at DESC);
+        CREATE TABLE IF NOT EXISTS conversation_live_authority(
+          conversation TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL,
+          generation INTEGER NOT NULL, claimed_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS conversation_batches(
+          conversation TEXT NOT NULL, owner TEXT NOT NULL, project TEXT NOT NULL,
+          request_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+          expected_seq INTEGER NOT NULL, generation INTEGER NOT NULL, receipt TEXT NOT NULL,
+          created_at INTEGER NOT NULL, PRIMARY KEY(conversation,request_id));
+        CREATE TABLE IF NOT EXISTS conversation_records(
+          conversation TEXT NOT NULL, seq INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+          record_id INTEGER, record_type TEXT NOT NULL, format_version INTEGER NOT NULL,
+          payload TEXT NOT NULL, byte_size INTEGER NOT NULL,
+          PRIMARY KEY(conversation,seq,ordinal));
+        CREATE UNIQUE INDEX IF NOT EXISTS conversation_record_ids
+          ON conversation_records(conversation,record_id) WHERE record_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS conversation_checkpoints(
+          conversation TEXT NOT NULL, checkpoint_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          payload TEXT NOT NULL, byte_size INTEGER NOT NULL, created_at INTEGER NOT NULL,
+          PRIMARY KEY(conversation,checkpoint_id));
+        CREATE TABLE IF NOT EXISTS conversation_blob_refs(
+          conversation TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL,
+          PRIMARY KEY(conversation,digest));
+        CREATE TABLE IF NOT EXISTS conversation_blobs(
+          digest TEXT PRIMARY KEY, bytes BLOB NOT NULL, size INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS conversation_tombstones(
+          owner TEXT NOT NULL, project TEXT NOT NULL, conversation TEXT NOT NULL,
+          deleted_at INTEGER NOT NULL, PRIMARY KEY(owner,project,conversation));"
+    )
+    ?;
+    let columns: Vec<String> = db
+        .prepare("PRAGMA table_info(conversations)")?
+        .query_map([], |r| r.get(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !columns.iter().any(|c| c == "project_epoch") {
+        db.execute(
+            "ALTER TABLE conversations ADD COLUMN project_epoch INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !columns.iter().any(|c| c == "byte_size") {
+        db.execute(
+            "ALTER TABLE conversations ADD COLUMN byte_size INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn metadata_bytes(db: &Connection, owner: &str) -> rusqlite::Result<i64> {
+    db.query_row(
+        "SELECT COALESCE((SELECT SUM(c.byte_size) FROM conversations c WHERE c.owner=?1),0)+COALESCE((SELECT SUM(r.byte_size) FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE c.owner=?1),0)+COALESCE((SELECT SUM(p.byte_size) FROM conversation_checkpoints p JOIN conversations c ON c.id=p.conversation WHERE c.owner=?1),0)+COALESCE((SELECT SUM(length(b.receipt)) FROM conversation_batches b WHERE b.owner=?1),0)",
+        [owner],
+        |r| r.get(0),
+    )
+}
+
+async fn owner_request(
+    state: &Konae,
+    headers: HeaderMap,
+    project: &str,
+) -> Result<(String, Connection), Response> {
+    if !kernel::same_origin(&headers)
+        || !kernel::runtime::valid_host(&state.kernel, &headers)
+        || super::security::from_app_origin(state, &headers).await
+        || !super::oauth::valid_owner_host(&state, &headers).await
+    {
+        return Err(fail(
+            StatusCode::FORBIDDEN,
+            "Cross-origin or app-origin conversation request rejected.",
+        ));
+    }
+    if headers.get(header::AUTHORIZATION).is_some() {
+        return Err(fail(
+            StatusCode::FORBIDDEN,
+            "Conversation history requires an owner browser session.",
+        ));
+    }
+    let owner = match super::mcp::authenticate_owner(state, &headers) {
+        Ok(Some(owner)) if owner.session => owner,
+        Ok(_) => {
+            return Err(fail(
+                StatusCode::UNAUTHORIZED,
+                "An owner browser session is required.",
+            ))
+        }
+        Err(_) => {
+            return Err(fail(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Owner identity is unavailable.",
+            ))
+        }
+    };
+    if headers
+        .get("x-konae-owner-id")
+        .is_some_and(|expected| expected.as_bytes() != owner.id.as_bytes())
+    {
+        return Err(fail(
+            StatusCode::CONFLICT,
+            "The signed-in owner changed. Reload before continuing.",
+        ));
+    }
+    let db = super::mcp::store(state).map_err(internal)?;
+    schema(&db).map_err(internal)?;
+    let exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND owner=?2)",
+            params![project, owner.id],
+            |r| r.get(0),
+        )
+        .map_err(internal)?;
+    if !exists {
+        return Err(fail(
+            StatusCode::NOT_FOUND,
+            "Project is not available to this owner.",
+        ));
+    }
+    Ok((owner.id, db))
+}
+
+fn fail(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({"error":message}))).into_response()
+}
+fn internal(error: impl std::fmt::Display) -> Response {
+    fail(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
+}
+fn json_response(value: Value) -> Response {
+    let mut response = Json(value).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+}
+fn raw_response(body: String) -> Response {
+    let mut response = body.into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    response
+}
+
+#[derive(Deserialize)]
+struct Page {
+    before: Option<i64>,
+    before_id: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn list(
+    State(state): State<Konae>,
+    AxumPath(project): AxumPath<String>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    let page = Query::<Page>::try_from_uri(request.uri())
+        .map(|q| q.0)
+        .unwrap_or(Page {
+            before: None,
+            before_id: None,
+            limit: None,
+        });
+    let limit = page.limit.unwrap_or(50);
+    if !(1..=50).contains(&limit) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Conversation page limit must be between 1 and 50.",
+        );
+    }
+    let before = page.before.unwrap_or(MAX_SAFE_INTEGER);
+    match db.prepare("SELECT id,format_version,pi_version,registry_version,title,created_at,updated_at,last_seq,current_generation FROM conversations WHERE owner=?1 AND project=?2 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?1 AND project=?2) AND deleted=0 AND (updated_at<?3 OR (updated_at=?3 AND id<?4)) ORDER BY updated_at DESC,id DESC LIMIT ?5") {
+        Ok(mut q) => match q.query_map(params![owner,project,before,page.before_id.unwrap_or_default(),limit as i64], |r| Ok(json!({"id":r.get::<_,String>(0)?,"formatVersion":r.get::<_,i64>(1)?,"piVersion":r.get::<_,String>(2)?,"registryVersion":r.get::<_,String>(3)?,"title":r.get::<_,String>(4)?,"createdAt":r.get::<_,i64>(5)?,"updatedAt":r.get::<_,i64>(6)?,"lastSeq":r.get::<_,i64>(7)?,"generation":r.get::<_,i64>(8)?}))) {
+            Ok(rows) => match rows.collect::<rusqlite::Result<Vec<_>>>() { Ok(items) => {
+                let next=if items.len()==limit {items.last().map(|v|json!({"before":v["updatedAt"],"beforeId":v["id"]}))}else{None};
+                json_response(json!({"items":items,"nextCursor":next}))
+            }, Err(e) => internal(e) },
+            Err(e) => internal(e),
+        }, Err(e) => internal(e)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateConversation {
+    id: String,
+    format_version: i64,
+    pi_version: String,
+    registry_version: String,
+    title: Option<String>,
+}
+
+async fn create(
+    State(state): State<Konae>,
+    AxumPath(project): AxumPath<String>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), 16 * 1024).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Conversation envelope exceeds 16 KiB.",
+            )
+        }
+    };
+    let input: CreateConversation = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid conversation envelope."),
+    };
+    if input.id.is_empty()
+        || input.id.len() > 128
+        || input.format_version <= 0
+        || input.pi_version.len() > 64
+        || input.registry_version.len() > 128
+    {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Conversation ID or version fields are invalid.",
+        );
+    }
+    let now = now_ms();
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(tx) => tx,
+        Err(e) => return internal(e),
+    };
+    let _ = tx.execute(
+        "INSERT OR IGNORE INTO conversation_project_epochs(owner,project,epoch) VALUES(?1,?2,1)",
+        params![owner, project],
+    );
+    let existing_metadata = match metadata_bytes(&tx, &owner) {
+        Ok(value) => value,
+        Err(error) => return internal(error),
+    };
+    if existing_metadata.saturating_add(bytes.len() as i64) > OWNER_METADATA_LIMIT {
+        return fail(StatusCode::INSUFFICIENT_STORAGE, "Owner conversation metadata quota is 16 MiB. Delete or download conversations before creating another conversation.");
+    }
+    let inserted=tx.execute("INSERT OR IGNORE INTO conversations(id,owner,project,project_epoch,format_version,pi_version,registry_version,title,created_at,updated_at,byte_size) SELECT ?1,?2,?3,(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3),?4,?5,?6,?7,?8,?8,?9 WHERE EXISTS(SELECT 1 FROM projects WHERE id=?3 AND owner=?2) AND NOT EXISTS(SELECT 1 FROM conversation_tombstones WHERE owner=?2 AND project=?3 AND conversation=?1)",params![input.id,owner,project,input.format_version,input.pi_version,input.registry_version,input.title.unwrap_or_default(),now,bytes.len() as i64]);
+    match inserted {
+        Ok(1) => {
+            if let Err(e) = tx.commit() {
+                return internal(e);
+            };
+            json_response(json!({"id":input.id,"createdAt":now,"lastSeq":0,"generation":0}))
+        }
+        Ok(_) => fail(
+            StatusCode::CONFLICT,
+            "Conversation ID already exists or is tombstoned.",
+        ),
+        Err(e) => internal(e),
+    }
+}
+
+async fn read(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match db.query_row("SELECT id,format_version,pi_version,registry_version,title,created_at,updated_at,last_seq,current_generation FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",params![conversation,owner,project],|r|Ok(json!({"id":r.get::<_,String>(0)? ,"formatVersion":r.get::<_,i64>(1)? ,"piVersion":r.get::<_,String>(2)? ,"registryVersion":r.get::<_,String>(3)? ,"title":r.get::<_,String>(4)? ,"createdAt":r.get::<_,i64>(5)? ,"updatedAt":r.get::<_,i64>(6)? ,"lastSeq":r.get::<_,i64>(7)? ,"generation":r.get::<_,i64>(8)?}))) { Ok(v)=>json_response(v),Err(_)=>fail(StatusCode::NOT_FOUND,"Conversation is not available.") }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Claim {
+    expected_generation: i64,
+}
+async fn claim(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), 4096).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Claim request exceeds 4 KiB.",
+            )
+        }
+    };
+    let input: Claim = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid generation claim."),
+    };
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let current:Option<(i64,i64,String,String)>=tx.query_row("SELECT current_generation,format_version,pi_version,registry_version FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",params![conversation,owner,project],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().unwrap_or(None);
+    let Some((current, format, pi, registry)) = current else {
+        return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
+    };
+    if format != SUPPORTED_FORMAT
+        || pi != SUPPORTED_PI_VERSION
+        || registry != SUPPORTED_REGISTRY_VERSION
+    {
+        return fail(StatusCode::CONFLICT,"This conversation record or registry version is readable but cannot be resumed by this Konae storage adapter.");
+    }
+    if current != input.expected_generation {
+        return fail(
+            StatusCode::CONFLICT,
+            "Conversation generation changed; reload before claiming.",
+        );
+    }
+    let Some(next) = current.checked_add(1).filter(|v| *v <= MAX_SAFE_INTEGER) else {
+        return fail(
+            StatusCode::CONFLICT,
+            "Conversation generation namespace exhausted.",
+        );
+    };
+    let now = now_ms();
+    if let Err(e) = tx.execute(
+        "UPDATE conversations SET current_generation=?2,updated_at=?3 WHERE id=?1",
+        params![conversation, next, now],
+    ) {
+        return internal(e);
+    }
+    if let Err(e)=tx.execute("INSERT INTO conversation_live_authority(conversation,owner,project,generation,claimed_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(conversation) DO UPDATE SET owner=excluded.owner,project=excluded.project,generation=excluded.generation,claimed_at=excluded.claimed_at",params![conversation,owner,project,next,now]){return internal(e)}
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(json!({"generation":next,"claimedAt":now}))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MintId {
+    generation: i64,
+    candidate: i64,
+}
+async fn mint_id(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), 4096).await {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::PAYLOAD_TOO_LARGE, "ID request exceeds 4 KiB."),
+    };
+    let input: MintId = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid native ID reservation."),
+    };
+    if input.generation < 1
+        || input.generation > MAX_SAFE_INTEGER
+        || input.candidate < 0
+        || input.candidate > MAX_SAFE_INTEGER
+    {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Pi IDs and generation must be safe integers.",
+        );
+    }
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_live_authority l JOIN conversations c ON c.id=l.conversation WHERE l.conversation=?1 AND l.owner=?2 AND l.project=?3 AND l.generation=?4 AND c.current_generation=?4 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.format_version=?5 AND c.pi_version=?6 AND c.registry_version=?7)",params![conversation,owner,project,input.generation,SUPPORTED_FORMAT,SUPPORTED_PI_VERSION,SUPPORTED_REGISTRY_VERSION],|r|r.get(0)).unwrap_or(false);
+    if !live {
+        return fail(
+            StatusCode::CONFLICT,
+            "Conversation writer generation is stale, unsupported or has no live authority.",
+        );
+    }
+    let old: Option<i64> = tx
+        .query_row(
+            "SELECT high_water FROM conversation_id_highwater WHERE owner=?1 AND project=?2",
+            params![owner, project],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap_or(None);
+    let next = old.unwrap_or(0).saturating_add(1).max(input.candidate);
+    if next <= 0 || next > MAX_SAFE_INTEGER {
+        return fail(StatusCode::CONFLICT, "Pi ID namespace exhausted.");
+    }
+    if let Err(e)=tx.execute("INSERT INTO conversation_id_highwater(owner,project,high_water) VALUES(?1,?2,?3) ON CONFLICT(owner,project) DO UPDATE SET high_water=excluded.high_water",params![owner,project,next]){return internal(e)}
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(json!({"id":next}))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CommitRequest {
+    request_id: String,
+    expected_seq: i64,
+    generation: i64,
+    writes: Vec<Vec<Box<RawValue>>>,
+    checkpoint: Option<CommitCheckpoint>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CommitCheckpoint {
+    id: String,
+    payload: Box<RawValue>,
+}
+#[derive(Deserialize)]
+struct WriteProjection {
+    #[serde(rename = "type")]
+    kind: String,
+    id: Option<i64>,
+    value: Option<IdProjection>,
+    record: Option<IdProjection>,
+    content: Option<Box<RawValue>>,
+}
+#[derive(Deserialize)]
+struct IdProjection {
+    id: Option<i64>,
+}
+#[derive(Deserialize)]
+struct BlobProjection {
+    blobs: Option<Vec<String>>,
+}
+
+async fn commit(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), BODY_LIMIT).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Conversation commit exceeds 4 MiB; upload large immutable files separately.",
+            )
+        }
+    };
+    let input: CommitRequest = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid ordered storage commit."),
+    };
+    if input.request_id.is_empty()
+        || input.request_id.len() > 128
+        || input.expected_seq < 1
+        || input.expected_seq > MAX_SAFE_INTEGER
+        || input.generation < 1
+        || input.generation > MAX_SAFE_INTEGER
+        || input.writes.is_empty()
+    {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Request ID, sequence, generation or ordered writes are invalid.",
+        );
+    }
+    // Hash the exact wire body. RawValue preserves opaque records, including
+    // JSON-escaped lone UTF-16 code units, without passing them through Value.
+    let content_hash = hex::encode(Sha256::digest(&bytes));
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let current:Option<(i64,i64)>=tx.query_row("SELECT last_seq,current_generation FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",params![conversation,owner,project],|r|Ok((r.get(0)?,r.get(1)?))).optional().unwrap_or(None);
+    let Some((last_seq, generation)) = current else {
+        return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
+    };
+    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_live_authority WHERE conversation=?1 AND owner=?2 AND project=?3 AND generation=?4)",params![conversation,owner,project,input.generation],|r|r.get(0)).unwrap_or(false);
+    if !live || generation != input.generation {
+        return fail(
+            StatusCode::CONFLICT,
+            "Conversation writer generation is stale or has no live authority.",
+        );
+    }
+    let prior:Option<(String,String)>=tx.query_row("SELECT content_hash,receipt FROM conversation_batches WHERE conversation=?1 AND request_id=?2 AND owner=?3 AND project=?4",params![conversation,input.request_id,owner,project],|r|Ok((r.get(0)?,r.get(1)?))).optional().unwrap_or(None);
+    if let Some((previous, receipt)) = prior {
+        if previous != content_hash {
+            return fail(
+                StatusCode::CONFLICT,
+                "Request ID was already used for different conversation content.",
+            );
+        }
+        return match serde_json::from_str::<Value>(&receipt) {
+            Ok(v) => json_response(v),
+            Err(e) => internal(e),
+        };
+    }
+    if last_seq + 1 != input.expected_seq {
+        return fail(StatusCode::CONFLICT,"Conversation sequence changed; read the saved receipt and current sequence before retrying.");
+    }
+    let now = now_ms();
+    let mut accepted = Vec::new();
+    let mut refusal: Option<String> = None;
+    let mut seq = input.expected_seq - 1;
+    let mut total_added = 0_i64;
+    let mut highest_id = 0_i64;
+    let total = match metadata_bytes(&tx, &owner) {
+        Ok(value) => value,
+        Err(error) => return internal(error),
+    };
+    'batches: for (batch_index, batch) in input.writes.iter().enumerate() {
+        if batch.is_empty() {
+            refusal = Some("Pi StorageWrite batch cannot be empty.".into());
+            break;
+        }
+        let mut encoded = Vec::with_capacity(batch.len());
+        for (ordinal, record) in batch.iter().enumerate() {
+            let projection: WriteProjection = match serde_json::from_str(record.get()) {
+                Ok(value) => value,
+                Err(_) => {
+                    refusal = Some(
+                        "Pi StorageWrite record must name its type and indexed fields.".into(),
+                    );
+                    break 'batches;
+                }
+            };
+            let kind = projection.kind.as_str();
+            let record_id = if kind == "entry" {
+                match projection
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.id)
+                    .filter(|id| *id >= 0 && *id <= MAX_SAFE_INTEGER)
+                {
+                    Some(id) => Some(id),
+                    None => {
+                        refusal = Some("Pi entry IDs must be safe nonnegative integers.".into());
+                        break 'batches;
+                    }
+                }
+            } else {
+                None
+            };
+            if kind.starts_with("document.") {
+                let document_id = if kind == "document.create" {
+                    projection.record.as_ref().and_then(|r| r.id)
+                } else {
+                    projection.id
+                };
+                if document_id.is_none_or(|id| id < 0 || id > MAX_SAFE_INTEGER) {
+                    refusal = Some(
+                        "Pi document StorageWrite must preserve its native safe integer record id."
+                            .into(),
+                    );
+                    break 'batches;
+                }
+                if matches!(kind, "document.create" | "document.change")
+                    && projection.content.is_none()
+                {
+                    refusal = Some("Pi document StorageWrite must preserve its content.".into());
+                    break 'batches;
+                }
+            }
+            let payload = record.get().to_owned();
+            let size = payload.len() as i64;
+            if kind == "entry" && size > DETAIL_LIMIT as i64 {
+                refusal=Some("A native entry exceeds the 1 MiB structured-detail limit; pause and offer an explicit recovery path.".into());
+                break 'batches;
+            }
+            if let Some(id) = record_id {
+                let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_used_ids WHERE owner=?1 AND project=?2 AND id=?3)",params![owner,project,id],|r|r.get(0)).unwrap_or(false);
+                if exists {
+                    refusal = Some(format!("Pi entry ID {id} already exists."));
+                    break 'batches;
+                }
+            }
+            encoded.push((ordinal as i64, record_id, kind.to_owned(), payload, size));
+        }
+        if refusal.is_some() {
+            break;
+        }
+        let batch_bytes: i64 = encoded.iter().map(|r| r.4).sum();
+        if total
+            .saturating_add(total_added)
+            .saturating_add(batch_bytes)
+            > OWNER_METADATA_LIMIT
+        {
+            refusal=Some("Owner conversation metadata quota is 16 MiB. Delete or download conversations before writing more.".into());
+            break;
+        }
+        seq = seq.saturating_add(1);
+        if seq > MAX_SAFE_INTEGER {
+            refusal = Some("Pi sequence namespace exhausted.".into());
+            break;
+        }
+        if let Err(e) = tx.execute_batch("SAVEPOINT pi_storage_batch") {
+            refusal = Some(e.to_string());
+            break;
+        }
+        let batch_start = total_added;
+        for (ordinal, record_id, kind, payload, size) in encoded {
+            if let Err(e)=tx.execute("INSERT INTO conversation_records(conversation,seq,ordinal,record_id,record_type,format_version,payload,byte_size) VALUES(?1,?2,?3,?4,?5,(SELECT format_version FROM conversations WHERE id=?1),?6,?7)",params![conversation,seq,ordinal,record_id,kind,payload,size]){refusal=Some(if e.to_string().contains("UNIQUE"){"A Pi entry ID already exists.".into()}else{e.to_string()});let _=tx.execute_batch("ROLLBACK TO pi_storage_batch; RELEASE pi_storage_batch");total_added=batch_start;break 'batches}
+            total_added += size;
+            if let Some(id) = record_id {
+                highest_id = highest_id.max(id);
+            }
+            if let Some(id) = record_id {
+                if let Err(e)=tx.execute("INSERT INTO conversation_used_ids(owner,project,id,conversation) VALUES(?1,?2,?3,?4)",params![owner,project,id,conversation]){refusal=Some(if e.to_string().contains("UNIQUE"){format!("Pi entry ID {id} was already allocated in this project.")}else{e.to_string()});let _=tx.execute_batch("ROLLBACK TO pi_storage_batch; RELEASE pi_storage_batch");break 'batches}
+            }
+        }
+        if let Err(e) = tx.execute_batch("RELEASE pi_storage_batch") {
+            refusal = Some(e.to_string());
+            let _ = tx.execute_batch("ROLLBACK TO pi_storage_batch; RELEASE pi_storage_batch");
+            total_added = batch_start;
+            break;
+        }
+        accepted.push(seq);
+        let _ = batch_index;
+    }
+    if accepted.is_empty() {
+        return fail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            refusal.as_deref().unwrap_or("No Pi batches were accepted."),
+        );
+    }
+    if highest_id > 0 {
+        if let Err(e)=tx.execute("INSERT INTO conversation_id_highwater(owner,project,high_water) VALUES(?1,?2,?3) ON CONFLICT(owner,project) DO UPDATE SET high_water=max(high_water,excluded.high_water)",params![owner,project,highest_id]){return internal(e)}
+    }
+    let final_seq = *accepted.last().unwrap_or(&last_seq);
+    let mut checkpoint_stored = false;
+    let mut checkpoint_bytes_added = 0_i64;
+    if refusal.is_none() {
+        if let Some(checkpoint) = input.checkpoint {
+            if checkpoint.id.is_empty() || checkpoint.id.len() > 128 {
+                return fail(StatusCode::BAD_REQUEST, "Atomic checkpoint ID is invalid.");
+            }
+            let checkpoint_payload = checkpoint.payload.get().to_owned();
+            if checkpoint_payload.len() > 256 * 1024 {
+                return fail(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "Atomic checkpoint metadata exceeds 256 KiB.",
+                );
+            }
+            if total
+                .saturating_add(total_added)
+                .saturating_add(checkpoint_payload.len() as i64)
+                > OWNER_METADATA_LIMIT
+            {
+                return fail(StatusCode::INSUFFICIENT_STORAGE,"Owner conversation metadata quota is 16 MiB. Delete or download conversations before writing more.");
+            }
+            let projection: BlobProjection = match serde_json::from_str(checkpoint.payload.get()) {
+                Ok(value) => value,
+                Err(_) => {
+                    return fail(
+                        StatusCode::BAD_REQUEST,
+                        "Checkpoint blob references are invalid.",
+                    )
+                }
+            };
+            let refs = projection.blobs.unwrap_or_default();
+            if refs.iter().any(|value| !is_digest(value)) {
+                return fail(
+                    StatusCode::BAD_REQUEST,
+                    "Checkpoint blob references must be SHA-256 digests.",
+                );
+            }
+            for digest in &refs {
+                let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM conversation_blob_refs r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND r.digest=?2 AND c.owner=?3 AND c.project=?4 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?3 AND project=?4) AND c.deleted=0)",
+                    params![conversation,digest,owner,project],
+                    |r| r.get(0),
+                )
+                .unwrap_or(false);
+                if !exists {
+                    return fail(
+                        StatusCode::CONFLICT,
+                        "Checkpoint references an immutable file that has not been uploaded.",
+                    );
+                }
+            }
+            if let Err(e)=tx.execute("INSERT INTO conversation_checkpoints(conversation,checkpoint_id,seq,payload,byte_size,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![conversation,checkpoint.id,final_seq,checkpoint_payload,checkpoint_payload.len() as i64,now]){return fail(StatusCode::CONFLICT,&format!("Atomic checkpoint already exists or could not be stored: {e}"))}
+            checkpoint_bytes_added = checkpoint_payload.len() as i64;
+            for digest in &refs {
+                let size: i64 = tx
+                    .query_row(
+                        "SELECT size FROM conversation_blobs WHERE digest=?1",
+                        [digest],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                if let Err(e)=tx.execute("INSERT OR IGNORE INTO conversation_blob_refs(conversation,digest,size) VALUES(?1,?2,?3)",params![conversation,digest,size]){return internal(e)}
+            }
+            checkpoint_stored = true;
+        }
+    }
+    let receipt = json!({"requestId":input.request_id,"stored":accepted.len(),"sequences":accepted,"lastSeq":final_seq,"refused":refusal,"checkpointStored":checkpoint_stored});
+    let receipt_text = serde_json::to_string(&receipt).unwrap();
+    if total
+        .saturating_add(total_added)
+        .saturating_add(checkpoint_bytes_added)
+        .saturating_add(receipt_text.len() as i64)
+        > OWNER_METADATA_LIMIT
+    {
+        return fail(StatusCode::INSUFFICIENT_STORAGE,"Owner conversation metadata quota is 16 MiB. Delete or download conversations before writing more.");
+    }
+    if let Err(e) = tx.execute(
+        "UPDATE conversations SET last_seq=?2,updated_at=?3 WHERE id=?1",
+        params![conversation, final_seq, now],
+    ) {
+        return internal(e);
+    }
+    if let Err(e)=tx.execute("INSERT INTO conversation_batches(conversation,owner,project,request_id,content_hash,expected_seq,generation,receipt,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![conversation,owner,project,input.request_id,content_hash,input.expected_seq,input.generation,receipt_text,now]){return internal(e)}
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(receipt)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordPage {
+    before: Option<i64>,
+    before_ordinal: Option<i64>,
+    limit: Option<usize>,
+}
+async fn records(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    Query(page): Query<RecordPage>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(response) = require_conversation(&db, &owner, &project, &conversation) {
+        return response;
+    }
+    let limit = page.limit.unwrap_or(50);
+    if !(1..=50).contains(&limit) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Conversation page limit must be between 1 and 50.",
+        );
+    }
+    let before = page.before.unwrap_or(MAX_SAFE_INTEGER);
+    let sql="SELECT r.seq,r.ordinal,r.record_id,r.record_type,r.format_version FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0 AND (r.seq<?4 OR (r.seq=?4 AND r.ordinal<COALESCE(?5,9223372036854775807))) ORDER BY r.seq DESC,r.ordinal DESC LIMIT ?6";
+    let rows=match db.prepare(sql){Ok(mut q)=>match q.query_map(params![conversation,owner,project,before,page.before_ordinal,limit as i64],|r|{
+        let record_id:Option<i64>=r.get(2)?;let record_type:String=r.get(3)?;
+        Ok(json!({"sequence":r.get::<_,i64>(0)?,"ordinal":r.get::<_,i64>(1)?,"id":record_id,"type":record_type,"formatVersion":r.get::<_,i64>(4)?,"summary":{"id":record_id,"kind":record_type}}))
+    }){Ok(v)=>match v.collect::<rusqlite::Result<Vec<_>>>(){Ok(v)=>v,Err(e)=>return internal(e)},Err(e)=>return internal(e)},Err(e)=>return internal(e)};
+    let next = if rows.len() == limit {
+        rows.last()
+            .map(|r| json!({"before":r["sequence"],"beforeOrdinal":r["ordinal"]}))
+    } else {
+        None
+    };
+    json_response(json!({"items":rows,"nextCursor":next}))
+}
+
+fn require_conversation(
+    db: &Connection,
+    owner: &str,
+    project: &str,
+    conversation: &str,
+) -> Result<(), Response> {
+    match db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversations c WHERE c.id=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0)",
+        params![conversation, owner, project],
+        |r| r.get::<_, bool>(0),
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(fail(StatusCode::NOT_FOUND, "Conversation is not available.")),
+        Err(error) => Err(internal(error)),
+    }
+}
+
+async fn details(
+    State(state): State<Konae>,
+    AxumPath((project, conversation, record)): AxumPath<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let id = match record.parse::<i64>() {
+        Ok(v) if v >= 0 && v <= MAX_SAFE_INTEGER => v,
+        _ => {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "Pi entry ID must be a safe integer.",
+            )
+        }
+    };
+    let payload:Option<String>=db.query_row("SELECT r.payload FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND r.record_id=?2 AND c.owner=?3 AND c.project=?4 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?3 AND project=?4) AND c.deleted=0",params![conversation,id,owner,project],|r|r.get(0)).optional().unwrap_or(None);
+    match payload {
+        Some(v) => raw_response(v),
+        None => fail(
+            StatusCode::NOT_FOUND,
+            "Conversation detail is not available.",
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct BatchPage {
+    after: Option<i64>,
+    limit: Option<usize>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeBatchResponse {
+    sequence: i64,
+    writes: Vec<Box<RawValue>>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeBatchesResponse {
+    batches: Vec<NativeBatchResponse>,
+    next_cursor: Option<i64>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadBlob {
+    digest: String,
+    base64: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadEnvelope {
+    version: i64,
+    format_version: i64,
+    pi_version: String,
+    registry_version: String,
+    conversation_id: String,
+    project_id: String,
+    title: String,
+    records: Vec<Box<RawValue>>,
+    checkpoints: Vec<Box<RawValue>>,
+    blobs: Vec<DownloadBlob>,
+}
+async fn batches(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    Query(page): Query<BatchPage>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(response) = require_conversation(&db, &owner, &project, &conversation) {
+        return response;
+    }
+    let limit = page.limit.unwrap_or(50);
+    if !(1..=50).contains(&limit) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Native batch page limit must be between 1 and 50.",
+        );
+    }
+    let after = page.after.unwrap_or(0);
+    let mut statement=match db.prepare("SELECT DISTINCT r.seq FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0 AND r.seq>?4 ORDER BY r.seq LIMIT ?5"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let sequences = match statement.query_map(
+        params![conversation, owner, project, after, limit as i64],
+        |r| r.get::<_, i64>(0),
+    ) {
+        Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() {
+            Ok(v) => v,
+            Err(e) => return internal(e),
+        },
+        Err(e) => return internal(e),
+    };
+    let mut grouped: Vec<NativeBatchResponse> = Vec::new();
+    for sequence in sequences {
+        let mut q=match db.prepare("SELECT payload FROM conversation_records WHERE conversation=?1 AND seq=?2 ORDER BY ordinal"){Ok(v)=>v,Err(e)=>return internal(e)};
+        let writes = match q.query_map(params![conversation, sequence], |r| {
+            let payload: String = r.get(0)?;
+            RawValue::from_string(payload).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })
+        }) {
+            Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() {
+                Ok(v) => v,
+                Err(e) => return internal(e),
+            },
+            Err(e) => return internal(e),
+        };
+        grouped.push(NativeBatchResponse { sequence, writes });
+    }
+    let next_cursor = grouped.last().map(|batch| batch.sequence);
+    match serde_json::to_string(&NativeBatchesResponse {
+        batches: grouped,
+        next_cursor,
+    }) {
+        Ok(body) => raw_response(body),
+        Err(error) => internal(error),
+    }
+}
+
+async fn receipt(
+    State(state): State<Konae>,
+    AxumPath((project, conversation, request_id)): AxumPath<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(response) = require_conversation(&db, &owner, &project, &conversation) {
+        return response;
+    }
+    let live: Option<i64> = match db.query_row(
+        "SELECT generation FROM conversation_live_authority WHERE conversation=?1 AND owner=?2 AND project=?3",
+        params![conversation, owner, project],
+        |r| r.get(0),
+    ).optional() {
+        Ok(value) => value,
+        Err(error) => return internal(error),
+    };
+    let current: Option<i64> = match db.query_row(
+        "SELECT current_generation FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",
+        params![conversation, owner, project],
+        |r| r.get(0),
+    ).optional() {
+        Ok(value) => value,
+        Err(error) => return internal(error),
+    };
+    if live.is_none() || live != current {
+        return fail(
+            StatusCode::CONFLICT,
+            "Conversation has no current live generation; claim it before reading writer receipts.",
+        );
+    }
+    match db.query_row("SELECT receipt FROM conversation_batches WHERE conversation=?1 AND owner=?2 AND project=?3 AND request_id=?4",params![conversation,owner,project,request_id],|r|r.get::<_,String>(0)).optional(){Ok(Some(v))=>match serde_json::from_str(&v){Ok(v)=>json_response(v),Err(e)=>internal(e)},Ok(None)=>fail(StatusCode::NOT_FOUND,"Conversation receipt is not available."),Err(e)=>internal(e)}
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CheckpointInput {
+    checkpoint_id: String,
+    sequence: i64,
+    payload: Box<RawValue>,
+}
+async fn checkpoint(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), 256 * 1024).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Checkpoint metadata exceeds 256 KiB.",
+            )
+        }
+    };
+    let input: CheckpointInput = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid immutable checkpoint."),
+    };
+    if input.checkpoint_id.is_empty()
+        || input.checkpoint_id.len() > 128
+        || input.sequence < 0
+        || input.sequence > MAX_SAFE_INTEGER
+    {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Checkpoint ID or sequence is invalid.",
+        );
+    }
+    let encoded = input.payload.get().to_owned();
+    let projection: BlobProjection = match serde_json::from_str(input.payload.get()) {
+        Ok(value) => value,
+        Err(_) => {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "Checkpoint blob references are invalid.",
+            )
+        }
+    };
+    let refs = projection.blobs.unwrap_or_default();
+    if refs.iter().any(|value| !is_digest(value)) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Checkpoint blob references must be SHA-256 digests.",
+        );
+    }
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_live_authority l JOIN conversations c ON c.id=l.conversation WHERE l.conversation=?1 AND l.owner=?2 AND l.project=?3 AND l.generation=c.current_generation AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3))",params![conversation,owner,project],|r|r.get(0)).unwrap_or(false);
+    if !live {
+        return fail(
+            StatusCode::CONFLICT,
+            "Checkpoint requires the current live writer generation.",
+        );
+    }
+    let checkpoint_seq:Option<i64>=tx.query_row("SELECT last_seq FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND deleted=0",params![conversation,owner,project],|r|r.get(0)).optional().unwrap_or(None);
+    if checkpoint_seq.is_none_or(|last| input.sequence > last) {
+        return fail(
+            StatusCode::CONFLICT,
+            "Checkpoint sequence is ahead of acknowledged native history.",
+        );
+    }
+    for digest in &refs {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM conversation_blob_refs r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND r.digest=?2 AND c.owner=?3 AND c.project=?4 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?3 AND project=?4) AND c.deleted=0)",
+                params![conversation,digest,owner,project],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if !exists {
+            return fail(
+                StatusCode::CONFLICT,
+                "Checkpoint references an immutable file that has not been uploaded.",
+            );
+        }
+    }
+    let total = match metadata_bytes(&tx, &owner) {
+        Ok(value) => value,
+        Err(error) => return internal(error),
+    };
+    if total.saturating_add(encoded.len() as i64) > OWNER_METADATA_LIMIT {
+        return fail(StatusCode::INSUFFICIENT_STORAGE,"Owner conversation metadata quota is 16 MiB. Delete or download conversations before storing this checkpoint.");
+    }
+    if let Err(e)=tx.execute("INSERT INTO conversation_checkpoints(conversation,checkpoint_id,seq,payload,byte_size,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![conversation,input.checkpoint_id,input.sequence,encoded,bytes.len() as i64,now_ms()]){return fail(StatusCode::CONFLICT,&format!("Checkpoint is immutable and already exists or could not be stored: {e}"))}
+    for digest in &refs {
+        let size: i64 = tx
+            .query_row(
+                "SELECT size FROM conversation_blobs WHERE digest=?1",
+                [digest],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if let Err(e)=tx.execute("INSERT OR IGNORE INTO conversation_blob_refs(conversation,digest,size) VALUES(?1,?2,?3)",params![conversation,digest,size]){return internal(e)}
+    }
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(
+        json!({"checkpointId":input.checkpoint_id,"sequence":input.sequence,"stored":true}),
+    )
+}
+
+async fn checkpoints(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(response) = require_conversation(&db, &owner, &project, &conversation) {
+        return response;
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Item {
+        checkpoint_id: String,
+        sequence: i64,
+        payload: Box<RawValue>,
+        created_at: i64,
+    }
+    #[derive(Serialize)]
+    struct Page {
+        items: Vec<Item>,
+    }
+    let mut q=match db.prepare("SELECT p.checkpoint_id,p.seq,p.payload,p.created_at FROM conversation_checkpoints p JOIN conversations c ON c.id=p.conversation WHERE p.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.deleted=0 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) ORDER BY p.seq DESC,p.checkpoint_id DESC LIMIT 50"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let items = match q.query_map(params![conversation, owner, project], |r| {
+        let payload: String = r.get(2)?;
+        let payload = RawValue::from_string(payload).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        Ok(Item {
+            checkpoint_id: r.get(0)?,
+            sequence: r.get(1)?,
+            payload,
+            created_at: r.get(3)?,
+        })
+    }) {
+        Ok(rows) => match rows.collect::<rusqlite::Result<Vec<_>>>() {
+            Ok(v) => v,
+            Err(e) => return internal(e),
+        },
+        Err(e) => return internal(e),
+    };
+    match serde_json::to_string(&Page { items }) {
+        Ok(body) => raw_response(body),
+        Err(e) => internal(e),
+    }
+}
+
+fn is_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+async fn put_blob(
+    State(state): State<Konae>,
+    AxumPath((project, conversation, digest)): AxumPath<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if !is_digest(&digest) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Blob path must be a SHA-256 digest.",
+        );
+    }
+    let bytes = match to_bytes(request.into_body(), BLOB_LIMIT).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Immutable file exceeds 20 MiB.",
+            )
+        }
+    };
+    if hex::encode(Sha256::digest(&bytes)) != digest.to_lowercase() {
+        return fail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Uploaded immutable file does not match its SHA-256 digest.",
+        );
+    }
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let current:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversations c WHERE c.id=?1 AND c.owner=?2 AND c.project=?3 AND c.deleted=0 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3))",params![conversation,owner,project],|r|r.get(0)).unwrap_or(false);
+    if !current {
+        return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
+    }
+    let existing: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT bytes FROM conversation_blobs WHERE digest=?1",
+            [&digest],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap_or(None);
+    let owner_has_digest:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_blob_refs r JOIN conversations c ON c.id=r.conversation WHERE r.digest=?1 AND c.owner=?2)",params![digest,owner],|r|r.get(0)).unwrap_or(false);
+    if !owner_has_digest {
+        let total:i64=tx.query_row("SELECT COALESCE(SUM(size),0) FROM (SELECT DISTINCT b.digest,b.size FROM conversation_blobs b JOIN conversation_blob_refs r ON r.digest=b.digest JOIN conversations c ON c.id=r.conversation WHERE c.owner=?1)",[&owner],|r|r.get(0)).unwrap_or(0);
+        if total.saturating_add(bytes.len() as i64) > OWNER_BLOB_LIMIT {
+            return fail(StatusCode::INSUFFICIENT_STORAGE,"Owner conversation file quota is 64 MiB. Delete or download conversations before uploading more.");
+        }
+    }
+    if let Some(old) = existing {
+        if old != bytes.as_ref() {
+            return fail(
+                StatusCode::CONFLICT,
+                "Content-addressed immutable blob digest collision.",
+            );
+        }
+    } else {
+        if let Err(e) = tx.execute(
+            "INSERT INTO conversation_blobs(digest,bytes,size) VALUES(?1,?2,?3)",
+            params![digest, bytes.as_ref(), bytes.len() as i64],
+        ) {
+            return internal(e);
+        }
+    }
+    if let Err(e) = tx.execute(
+        "INSERT OR IGNORE INTO conversation_blob_refs(conversation,digest,size) VALUES(?1,?2,?3)",
+        params![conversation, digest, bytes.len() as i64],
+    ) {
+        return internal(e);
+    }
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(json!({"digest":digest,"size":bytes.len(),"stored":true}))
+}
+
+async fn blob(
+    State(state): State<Konae>,
+    AxumPath((project, conversation, digest)): AxumPath<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes:Option<Vec<u8>>=db.query_row("SELECT b.bytes FROM conversation_blobs b JOIN conversation_blob_refs r ON r.digest=b.digest JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND r.digest=?2 AND c.owner=?3 AND c.project=?4 AND c.deleted=0 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?3 AND project=?4)",params![conversation,digest,owner,project],|r|r.get(0)).optional().unwrap_or(None);
+    match bytes {
+        Some(bytes) => {
+            let mut response = bytes.into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                "application/octet-stream".parse().unwrap(),
+            );
+            response
+        }
+        None => fail(
+            StatusCode::NOT_FOUND,
+            "Immutable conversation file is not available.",
+        ),
+    }
+}
+
+async fn download(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let record:Option<(i64,String,String,String,String)>=db.query_row("SELECT format_version,pi_version,registry_version,title,project FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",params![conversation,owner,project],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().unwrap_or(None);
+    let Some((format, pi, registry, title, project_id)) = record else {
+        return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
+    };
+    let mut q = match db.prepare(
+        "SELECT payload FROM conversation_records WHERE conversation=?1 ORDER BY seq,ordinal",
+    ) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let records = match q.query_map([&conversation], |r| {
+        let payload: String = r.get(0)?;
+        RawValue::from_string(payload).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })
+    }) {
+        Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() {
+            Ok(v) => v,
+            Err(e) => return internal(e),
+        },
+        Err(e) => return internal(e),
+    };
+    let mut q=match db.prepare("SELECT payload FROM conversation_checkpoints WHERE conversation=?1 ORDER BY seq,checkpoint_id"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let checkpoints = match q.query_map([&conversation], |r| {
+        let payload: String = r.get(0)?;
+        RawValue::from_string(payload).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })
+    }) {
+        Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() {
+            Ok(v) => v,
+            Err(e) => return internal(e),
+        },
+        Err(e) => return internal(e),
+    };
+    let mut q=match db.prepare("SELECT b.digest,b.bytes FROM conversation_blob_refs r JOIN conversation_blobs b ON b.digest=r.digest WHERE r.conversation=?1 ORDER BY b.digest"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let file_values = match q.query_map([&conversation], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+    }) {
+        Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() {
+            Ok(v) => v,
+            Err(e) => return internal(e),
+        },
+        Err(e) => return internal(e),
+    };
+    let total: usize = file_values.iter().map(|(_, b)| b.len()).sum();
+    if total > OWNER_BLOB_LIMIT as usize {
+        return fail(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "Conversation download exceeds the 64 MiB file limit.",
+        );
+    }
+    let blobs = file_values
+        .into_iter()
+        .map(|(digest, bytes)| DownloadBlob {
+            digest,
+            base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+        .collect();
+    let envelope = DownloadEnvelope {
+        version: 1,
+        format_version: format,
+        pi_version: pi,
+        registry_version: registry,
+        conversation_id: conversation,
+        project_id,
+        title,
+        records,
+        checkpoints,
+        blobs,
+    };
+    let bytes = match serde_json::to_vec(&envelope) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    if bytes.len() > 112 * 1024 * 1024 {
+        return fail(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "Versioned conversation download exceeds 112 MiB, the encoded bound for 64 MiB of files plus the 16 MiB metadata allowance.",
+        );
+    }
+    raw_response(String::from_utf8(bytes).expect("serde_json emits UTF-8"))
+}
+
+async fn remove(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let found:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3))",params![conversation,owner,project],|r|r.get(0)).unwrap_or(false);
+    if !found {
+        return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
+    }
+    if let Err(e)=tx.execute("INSERT OR REPLACE INTO conversation_tombstones(owner,project,conversation,deleted_at) VALUES(?1,?2,?3,?4)",params![owner,project,conversation,now_ms()]){return internal(e)}
+    for table in [
+        "conversation_live_authority",
+        "conversation_batches",
+        "conversation_records",
+        "conversation_checkpoints",
+        "conversation_blob_refs",
+    ] {
+        if let Err(e) = tx.execute(
+            &format!("DELETE FROM {table} WHERE conversation=?1"),
+            [&conversation],
+        ) {
+            return internal(e);
+        }
+    }
+    if let Err(e) = tx.execute("DELETE FROM conversations WHERE id=?1", [&conversation]) {
+        return internal(e);
+    }
+    if let Err(e)=tx.execute("DELETE FROM conversation_blobs WHERE NOT EXISTS(SELECT 1 FROM conversation_blob_refs r WHERE r.digest=conversation_blobs.digest)",[]){return internal(e)}
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(json!({"deleted":true,"conversationId":conversation}))
+}
+
+pub(super) fn delete_project_tx(
+    tx: &rusqlite::Transaction<'_>,
+    owner: &str,
+    project: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    schema(tx)?;
+    tx.execute(
+        "INSERT OR IGNORE INTO conversation_project_epochs(owner,project,epoch) VALUES(?1,?2,1)",
+        params![owner, project],
+    )?;
+    tx.execute("UPDATE conversation_project_epochs SET epoch=epoch+1 WHERE owner=?1 AND project=?2 AND epoch<?3",params![owner,project,MAX_SAFE_INTEGER])?;
+    tx.execute("INSERT OR IGNORE INTO conversation_tombstones(owner,project,conversation,deleted_at) SELECT owner,project,id,?3 FROM conversations WHERE owner=?1 AND project=?2",params![owner,project,now])?;
+    for table in [
+        "conversation_live_authority",
+        "conversation_batches",
+        "conversation_records",
+        "conversation_checkpoints",
+        "conversation_blob_refs",
+    ] {
+        tx.execute(&format!("DELETE FROM {table} WHERE conversation IN (SELECT id FROM conversations WHERE owner=?1 AND project=?2)"),params![owner,project])?;
+    }
+    tx.execute(
+        "DELETE FROM conversations WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    )?;
+    tx.execute(
+        "DELETE FROM conversation_used_ids WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    )?;
+    tx.execute(
+        "DELETE FROM conversation_id_highwater WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    )?;
+    tx.execute("DELETE FROM conversation_blobs WHERE NOT EXISTS(SELECT 1 FROM conversation_blob_refs r WHERE r.digest=conversation_blobs.digest)",[])?;
+    Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    async fn fixture() -> (
+        PathBuf,
+        AppState,
+        Konae,
+        kernel::auth::AuthSession,
+        kernel::auth::AuthSession,
+    ) {
+        let root =
+            std::env::temp_dir().join(format!("konae-conversation-routes-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let state = AppState::for_test(&root);
+        let konae = Konae::for_test(state.clone());
+        let auth = super::super::owners::creator_store(&konae).unwrap();
+        let alice = auth
+            .signup("alice@example.test", "fixture-A-password-2026")
+            .unwrap();
+        let bob = auth
+            .signup("bob@example.test", "fixture-B-password-2026")
+            .unwrap();
+        let db = super::super::mcp::store(&konae).unwrap();
+        db.execute(
+            "INSERT INTO projects(id,owner,body) VALUES('project_alice',?1,'{}')",
+            [&alice.user.user_id],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO projects(id,owner,body) VALUES('project_bob',?1,'{}')",
+            [&bob.user.user_id],
+        )
+        .unwrap();
+        (root, state, konae, alice, bob)
+    }
+
+    async fn call(
+        state: &AppState,
+        konae: &Konae,
+        session: &kernel::auth::AuthSession,
+        owner: &str,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        extra: Option<(&str, &str)>,
+    ) -> Response {
+        let authority = url::Url::parse(&state.public_origin).unwrap();
+        let host = authority.host_str().unwrap();
+        let host = authority
+            .port()
+            .map(|p| format!("{host}:{p}"))
+            .unwrap_or_else(|| host.to_owned());
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, host)
+            .header(header::ORIGIN, &state.public_origin)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(
+                header::COOKIE,
+                format!(
+                    "{}={}",
+                    super::super::mcp::owner_cookie_name(konae),
+                    session.token
+                ),
+            )
+            .header("x-konae-owner-id", owner);
+        if let Some((name, value)) = extra {
+            builder = builder.header(name, value);
+        }
+        let payload = body
+            .map(|v| Body::from(v.to_string()))
+            .unwrap_or_else(Body::empty);
+        crate::stack(state.clone(), crate::owner_routes(konae.clone()))
+            .oneshot(builder.body(payload).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn call_raw(
+        state: &AppState,
+        konae: &Konae,
+        session: &kernel::auth::AuthSession,
+        owner: &str,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Response {
+        let authority = url::Url::parse(&state.public_origin).unwrap();
+        let host = authority.host_str().unwrap();
+        let host = authority
+            .port()
+            .map(|p| format!("{host}:{p}"))
+            .unwrap_or_else(|| host.to_owned());
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, host)
+            .header(header::ORIGIN, &state.public_origin)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(
+                header::COOKIE,
+                format!(
+                    "{}={}",
+                    super::super::mcp::owner_cookie_name(konae),
+                    session.token
+                ),
+            )
+            .header("x-konae-owner-id", owner)
+            .body(Body::from(body.to_owned()))
+            .unwrap();
+        crate::stack(state.clone(), crate::owner_routes(konae.clone()))
+            .oneshot(request)
+            .await
+            .unwrap()
+    }
+
+    async fn json(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    }
+
+    async fn make_conversation(
+        state: &AppState,
+        konae: &Konae,
+        session: &kernel::auth::AuthSession,
+        owner: &str,
+        project: &str,
+        id: &str,
+    ) -> Value {
+        let response=call(state,konae,session,owner,"POST",&format!("/_konae/projects/{project}/conversations"),Some(json!({"id":id,"formatVersion":1,"piVersion":"1.5.2","registryVersion":"1","title":"Fixture conversation"})),None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        json(response).await
+    }
+
+    #[tokio::test]
+    async fn owner_routes_scope_guessed_ids_and_refuse_delegated_app_and_forged_origins() {
+        let (root, state, konae, alice, bob) = fixture().await;
+        let alice_id = &alice.user.user_id;
+        let bob_id = &bob.user.user_id;
+        make_conversation(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "project_alice",
+            "conversation_a",
+        )
+        .await;
+        let db = super::super::mcp::store(&konae).unwrap();
+        let envelope_bytes: i64 = db
+            .query_row(
+                "SELECT byte_size FROM conversations WHERE id='conversation_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        db.execute(
+            "INSERT INTO conversation_records(conversation,seq,ordinal,record_type,format_version,payload,byte_size) VALUES('conversation_a',1,0,'fixture',1,'null',?1)",
+            [OWNER_METADATA_LIMIT - envelope_bytes - 1],
+        ).unwrap();
+        let over_quota = call(&state,&konae,&alice,alice_id,"POST","/_konae/projects/project_alice/conversations",Some(json!({"id":"empty-over-quota","formatVersion":1,"piVersion":"1.5.2","registryVersion":"1"})),None).await;
+        assert_eq!(over_quota.status(), StatusCode::INSUFFICIENT_STORAGE);
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM conversations WHERE id='empty-over-quota'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        let guessed = "conversation_a";
+        let paths = [
+            format!("/_konae/projects/project_bob/conversations/{guessed}"),
+            format!("/_konae/projects/project_bob/conversations/{guessed}/records"),
+            format!("/_konae/projects/project_bob/conversations/{guessed}/records/7/details"),
+            format!("/_konae/projects/project_bob/conversations/{guessed}/batches"),
+            format!("/_konae/projects/project_bob/conversations/{guessed}/receipts/lost-ack"),
+            format!("/_konae/projects/project_bob/conversations/{guessed}/checkpoints"),
+            format!(
+                "/_konae/projects/project_bob/conversations/{guessed}/blobs/{}",
+                "a".repeat(64)
+            ),
+            format!("/_konae/projects/project_bob/conversations/{guessed}/download"),
+        ];
+        for path in paths {
+            let response = call(&state, &konae, &bob, bob_id, "GET", &path, None, None).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        let listed = call(
+            &state,
+            &konae,
+            &bob,
+            bob_id,
+            "GET",
+            "/_konae/projects/project_bob/conversations",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert!(json(listed).await["items"].as_array().unwrap().is_empty());
+        let cross = call(
+            &state,
+            &konae,
+            &bob,
+            bob_id,
+            "GET",
+            "/_konae/projects/project_alice/conversations/conversation_a/download",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(cross.status(), StatusCode::NOT_FOUND);
+        let delegated = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "GET",
+            "/_konae/projects/project_alice/conversations",
+            None,
+            Some((header::AUTHORIZATION.as_str(), "Bearer delegated-read")),
+        )
+        .await;
+        assert_eq!(delegated.status(), StatusCode::FORBIDDEN);
+        let app_only = Request::builder()
+            .method("GET")
+            .uri("/_konae/projects/project_alice/conversations")
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::COOKIE, "konae_app_session=app-account-token")
+            .body(Body::empty())
+            .unwrap();
+        let response = crate::stack(state.clone(), crate::owner_routes(konae.clone()))
+            .oneshot(app_only)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let forged = Request::builder()
+            .method("GET")
+            .uri("/_konae/projects/project_alice/conversations")
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "https://attacker.example")
+            .header(
+                header::COOKIE,
+                format!("konae_owner_session={}", alice.token),
+            )
+            .header("x-konae-owner-id", alice_id)
+            .body(Body::empty())
+            .unwrap();
+        let response = crate::stack(state.clone(), crate::owner_routes(konae.clone()))
+            .oneshot(forged)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn native_bootstrap_ack_replay_checkpoint_refs_fencing_copy_and_delete_are_atomic() {
+        let (root, state, konae, alice, bob) = fixture().await;
+        let alice_id = &alice.user.user_id;
+        let bob_id = &bob.user.user_id;
+        make_conversation(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "project_alice",
+            "native_conversation",
+        )
+        .await;
+        make_conversation(
+            &state,
+            &konae,
+            &bob,
+            bob_id,
+            "project_bob",
+            "bob_conversation",
+        )
+        .await;
+        let base = "/_konae/projects/project_alice/conversations/native_conversation";
+        let claim = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/claim"),
+            Some(json!({"expectedGeneration":0})),
+            None,
+        )
+        .await;
+        assert_eq!(claim.status(), StatusCode::OK);
+        let generation = json(claim).await["generation"].as_i64().unwrap();
+        let payload = b"immutable scratch fixture";
+        let digest = hex::encode(Sha256::digest(payload));
+        let upload = Request::builder()
+            .method("PUT")
+            .uri(format!("{base}/blobs/{digest}"))
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(
+                header::COOKIE,
+                format!("konae_owner_session={}", alice.token),
+            )
+            .header("x-konae-owner-id", alice_id)
+            .body(Body::from(payload.as_slice()))
+            .unwrap();
+        let response = crate::stack(state.clone(), crate::owner_routes(konae.clone()))
+            .oneshot(upload)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let batch = json!([
+          {"type":"conversation","value":{"id":1}},
+          {"type":"document.create","record":{"id":2,"kind":"pi.live","scope":{"kind":"conversation","conversationId":1},"history":"latest","fork":"initial"},"content":{"version":3,"kind":"base","value":{}}},
+          {"type":"document.create","record":{"id":3,"kind":"pi.inbox","scope":{"kind":"conversation","conversationId":1},"history":"latest","fork":"initial"},"content":{"version":1,"kind":"base","value":{"items":[]}}},
+          {"type":"document.change","id":2,"content":{"version":3,"kind":"base","value":{"run":{"taskId":9}}}},
+          {"type":"entry","value":{"id":7,"conversationId":1,"kind":"pi.user","model":[{"role":"user","content":"fixture","timestamp":1000}]}},
+          {"type":"task","value":{"id":9,"conversationId":1,"kind":"pi.generation","version":2,"input":{},"background":false,"abortRequested":false,"state":{"status":"pending"}}}
+        ]);
+        let commit = json!({"requestId":"stable-write-1","expectedSeq":1,"generation":generation,"writes":[batch],"checkpoint":{"id":"checkpoint-1","payload":{"sourceRevision":8,"baseFiles":{"index.html":""},"scratchFiles":{"index.html":"proposal"},"blobs":[digest]}}});
+        let response = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/commit"),
+            Some(commit.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt = json(response).await;
+        assert_eq!(receipt["stored"], 1);
+        assert_eq!(receipt["checkpointStored"], true);
+        let duplicate = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/commit"),
+            Some(commit.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        assert_eq!(json(duplicate).await, receipt);
+        let changed = json!({"requestId":"stable-write-1","expectedSeq":1,"generation":generation,"writes":[[{"type":"entry","value":{"id":8,"kind":"pi.user"}}]]});
+        let response = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/commit"),
+            Some(changed),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bob_checkpoint =
+            json!({"checkpointId":"forged","sequence":0,"payload":{"blobs":[digest]}});
+        let response = call(
+            &state,
+            &konae,
+            &bob,
+            bob_id,
+            "POST",
+            "/_konae/projects/project_bob/conversations/bob_conversation/checkpoints",
+            Some(bob_checkpoint),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let response = call(
+            &state,
+            &konae,
+            &bob,
+            bob_id,
+            "GET",
+            &format!("/_konae/projects/project_bob/conversations/bob_conversation/blobs/{digest}"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let replay = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "GET",
+            &format!("{base}/batches?limit=1"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::OK);
+        let replay = json(replay).await;
+        assert_eq!(replay["batches"][0]["sequence"], 1);
+        assert_eq!(replay["batches"][0]["writes"], batch);
+        let detail = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "GET",
+            &format!("{base}/records/7/details"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            json(detail).await["value"]["model"][0]["content"],
+            "fixture"
+        );
+        let surrogate_commit = r#"{"requestId":"utf16-wire-identities","expectedSeq":2,"generation":1,"writes":[[{"type":"entry","value":{"id":11,"kind":"pi.user","identity":"\ud800"}},{"type":"entry","value":{"id":12,"kind":"pi.user","identity":"\ud801"}}]]}"#;
+        let accepted = call_raw(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/commit"),
+            surrogate_commit,
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let replay = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "GET",
+            &format!("{base}/batches?after=1&limit=50"),
+            None,
+            None,
+        )
+        .await;
+        let replay = axum::body::to_bytes(replay.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+        let replay_text = std::str::from_utf8(&replay).unwrap();
+        assert!(replay_text.contains(r#"\ud800"#));
+        assert!(replay_text.contains(r#"\ud801"#));
+        assert!(!replay_text.contains('\u{fffd}'));
+        let next = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/claim"),
+            Some(json!({"expectedGeneration":generation})),
+            None,
+        )
+        .await;
+        let next_generation = json(next).await["generation"].as_i64().unwrap();
+        let stale=call(&state,&konae,&alice,alice_id,"POST",&format!("{base}/commit"),Some(json!({"requestId":"stale","expectedSeq":2,"generation":generation,"writes":[[{"type":"entry","value":{"id":10,"kind":"pi.user"}}]]})),None).await;
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let db = super::super::mcp::store(&konae).unwrap();
+        let copy = root.join("mcp-copy.sqlite");
+        db.execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()])
+            .unwrap();
+        let restored = Connection::open(&copy).unwrap();
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_live_authority WHERE conversation='native_conversation'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        restored
+            .execute("DELETE FROM conversation_live_authority", [])
+            .unwrap();
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_records WHERE conversation='native_conversation'",[],|r|r.get::<_,i64>(0)).unwrap(),8);
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_checkpoints WHERE conversation='native_conversation'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_batches WHERE conversation='native_conversation' AND request_id='stable-write-1'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_live_authority WHERE conversation='native_conversation'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        let _ = next_generation;
+        let delete = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "DELETE",
+            &format!("{base}"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(delete.status(), StatusCode::OK);
+        let recreated=call(&state,&konae,&alice,alice_id,"POST","/_konae/projects/project_alice/conversations",Some(json!({"id":"native_conversation","formatVersion":1,"piVersion":"1.5.2","registryVersion":"1"})),None).await;
+        assert_eq!(recreated.status(), StatusCode::CONFLICT);
+        let download = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "GET",
+            &format!("{base}/download"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(download.status(), StatusCode::NOT_FOUND);
+        make_conversation(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "project_alice",
+            "project_delete_conversation",
+        )
+        .await;
+        let deleted_project_conversation =
+            "/_konae/projects/project_alice/conversations/project_delete_conversation";
+        let claim = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{deleted_project_conversation}/claim"),
+            Some(json!({"expectedGeneration":0})),
+            None,
+        )
+        .await;
+        assert_eq!(claim.status(), StatusCode::OK);
+        let old_generation = json(claim).await["generation"].as_i64().unwrap();
+        let mut project_db = super::super::mcp::store(&konae).unwrap();
+        let tx = project_db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        super::delete_project_tx(&tx, alice_id, "project_alice", now_ms()).unwrap();
+        tx.execute("DELETE FROM projects WHERE id='project_alice'", [])
+            .unwrap();
+        tx.commit().unwrap();
+        let stale = call(&state, &konae, &alice, alice_id, "POST", &format!("{deleted_project_conversation}/commit"), Some(json!({"requestId":"stale-after-project-delete","expectedSeq":1,"generation":old_generation,"writes":[[{"type":"entry","value":{"id":11,"kind":"pi.user"}}]]})), None).await;
+        assert_eq!(stale.status(), StatusCode::NOT_FOUND);
+        project_db
+            .execute(
+                "INSERT INTO projects(id,owner,body) VALUES('project_alice',?1,'{}')",
+                [alice_id],
+            )
+            .unwrap();
+        let old_id = call(&state, &konae, &alice, alice_id, "POST", "/_konae/projects/project_alice/conversations", Some(json!({"id":"project_delete_conversation","formatVersion":1,"piVersion":"1.5.2","registryVersion":"1"})), None).await;
+        assert_eq!(old_id.status(), StatusCode::CONFLICT);
+        make_conversation(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "project_alice",
+            "fresh_project_conversation",
+        )
+        .await;
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+}

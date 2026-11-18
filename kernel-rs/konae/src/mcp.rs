@@ -157,7 +157,7 @@ pub(super) fn installation() -> super::installation::Installation {
     let mut installation = super::installation::Installation::kernel();
     installation.databases.splice(0..0, [
         RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
-        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans"] },
+        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans", "conversation_live_authority"] },
     ]);
     installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
     installation.mail_group = project_owner;
@@ -402,6 +402,10 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     park(&folder, &trash, id).await?;
     let mut db = store(state)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let owner: Option<String> = tx.query_row("SELECT owner FROM projects WHERE id=?1", [id], |r| r.get(0)).optional()?;
+    if let Some(owner) = owner {
+        super::conversations::delete_project_tx(&tx, &owner, id, now_ms() as i64)?;
+    }
     for (table, column) in [("plans", "project"), ("package_imports", "project")] {
         let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0))?;
         if present {

@@ -26,6 +26,7 @@ use kernel::limits::Guards;
 
 mod admission;
 mod clerk;
+mod conversations;
 mod editor;
 mod guide;
 mod mcp;
@@ -81,6 +82,7 @@ async fn main() -> Result<()> {
 
 fn owner_routes(konae: Konae) -> Router<AppState> {
     Router::<Konae>::new()
+        .merge(conversations::routes())
         .merge(mcp::routes())
         .merge(oauth::routes())
         .merge(owners::routes())
