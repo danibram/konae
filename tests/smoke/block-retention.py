@@ -26,6 +26,7 @@ def list_fault(endpoint, mode):
     """Change one response to the real MinIO client's list request."""
     origin = urlsplit(endpoint)
     seen = []
+    release = threading.Event()
 
     class Proxy(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -45,6 +46,10 @@ def list_fault(endpoint, mode):
                                      b"<IsTruncated>true</IsTruncated></ListBucketResult>")
                 else:
                     self.send_error(403)
+                return
+            if mode == "timeout" and self.command == "PUT" and "/points/" in self.path:
+                seen.append(mode)
+                release.wait(30)
                 return
             if mode == "full" and self.command == "PUT" and "/points/" in self.path:
                 seen.append(mode)
@@ -73,6 +78,7 @@ def list_fault(endpoint, mode):
             yield f"http://127.0.0.1:{server.server_port}"
             assert seen, f"Fault {mode} did not fire"
         finally:
+            release.set()
             server.shutdown()
             thread.join()
 
@@ -83,12 +89,15 @@ class Lab:
         self.env = dict(os.environ, KONAE_LAB_ROOT=str(root), KONAE_LAB_TARGET=target,
                         TOKIO_WORKER_THREADS="2", AWS_EC2_METADATA_DISABLED="true")
         self.remote = target == "s3"
+        self.summary = {"phase": "setup", "checks": {}, "expectedRefusals": 0}
         self.start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.env["KONAE_LAB_DAYS"] = "365" if args.year else "45"
         self.env["KONAE_LAB_START"] = str(int(self.start.timestamp()) * 1000)
         self.command = [args.worker, "--exact", WORKER, "--ignored", "--nocapture"]
         self.data = root / "copies-v3" / REPO
 
     def run(self, phase, error=None, measure=False, **settings):
+        self.summary["phase"] = phase
         env = dict(self.env, KONAE_LAB_PHASE=phase, **settings)
         if env["KONAE_LAB_TARGET"] == "directory":
             env = {k:v for k,v in env.items() if not k.startswith(("AWS_", "KONAE_TEST_S3_", "MC_", "MINIO_"))}
@@ -101,6 +110,9 @@ class Lab:
             assert result.returncode and error in output, (phase, output[-3000:])
         else:
             assert result.returncode == 0 and "1 passed" in output, (phase, output[-3000:])
+        checks = self.summary["checks"]
+        checks[phase] = checks.get(phase, 0) + 1
+        self.summary["expectedRefusals"] += int(error is not None)
         for line in output.splitlines():
             if line.startswith(('{"processExit"', 'Reachable objects', 'Expired roots')):
                 print(self.target, phase, line, flush=True)
@@ -231,17 +243,25 @@ class Lab:
         assert self.inventory() == before
         self.replace(root_name, original)
         if self.remote:
-            for fault, error in [("no-token", "pagination"), ("page-two", "Listing"), ("full", "did not confirm")]:
+            for fault, error in [("no-token", "pagination"), ("page-two", "Listing"),
+                                 ("full", "did not confirm"), ("timeout", "timeout")]:
+                publishing = fault in ("full", "timeout")
+                options = {"KONAE_LAB_STALL_PUT": "1"} if fault == "timeout" else {}
                 with list_fault(self.env["KONAE_TEST_S3_ENDPOINT"], fault) as endpoint:
-                    self.run("next" if fault == "full" else "prune", error, KONAE_TEST_S3_ENDPOINT=endpoint)
-                if fault == "full":
+                    self.run("next" if publishing else "prune", error, KONAE_TEST_S3_ENDPOINT=endpoint, **options)
+                if publishing:
                     self.recover_abandoned("users")
                 assert self.inventory() == before
         self.run("prune", measure=True)
         retained, survivors = self.inventory()
-        cutoff = self.start + timedelta(hours=1079)
+        days = int(self.env["KONAE_LAB_DAYS"])
+        cutoff = self.start + timedelta(days=days, hours=-1)
+        assert ids[0] == self.start.strftime("%Y-%m-%dT%H-%M-%S.000Z")
+        assert ids[-1] == cutoff.strftime("%Y-%m-%dT%H-%M-%S.000Z")
         expected = set(ids[-24:]) | {ids[1079-24*i] for i in range(31)}
         assert len(retained) == 54 and set(retained) == expected and len(survivors) == 56
+        self.summary.update(seededPoints=len(ids), retainedPoints=len(retained),
+                            retainedObjects=len(survivors), simulatedDays=days)
         if self.args.oracle:
             all_file = self.root/"all.json"
             all_file.write_text(json.dumps(ids))
@@ -271,6 +291,7 @@ class Lab:
         self.run("next-prune")
         self.run("reachable")
         self.run("grace")
+        self.summary["phase"] = "complete"
         print(f"PASS {self.target} retained 54/1080 roots and 56/1083 objects; stable publication reused both blocks", flush=True)
 
 
@@ -317,7 +338,9 @@ def historical(args, root):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--worker", required=True, type=Path)
+    p.add_argument("--year", action="store_true", help="spread the 1,080 cuts across 365 simulated days")
     p.add_argument("--mc", type=Path)
+    p.add_argument("--report", type=Path, help="write aggregate results for the retention campaign")
     p.add_argument("--measure", type=Path)
     p.add_argument("--oracle", type=Path)
     p.add_argument("--require-s3", action="store_true")
@@ -344,6 +367,7 @@ def main():
         print("PASS directory ENOSPC preserved the complete root and its restored bytes")
         print("SKIP S3 destination (directory capacity case)")
         return
+    report = {"targets": {}, "skipped": []}
     targets = ["directory"]
     if args.mc and os.environ.get("KONAE_TEST_S3_ENDPOINT"):
         endpoint = urlsplit(os.environ["KONAE_TEST_S3_ENDPOINT"])
@@ -352,6 +376,7 @@ def main():
         assert os.environ["KONAE_TEST_S3_BUCKET"] == "konae-test"
         targets.append("s3")
     else:
+        report["skipped"].append("s3")
         print("SKIP S3 destination (requires --mc inside with-minio)", flush=True)
         if args.require_s3 or args.historical_kernel:
             p.error("S3 destination required")
@@ -361,7 +386,13 @@ def main():
         return
     for target in targets:
         with tempfile.TemporaryDirectory(prefix="konae-v3-prune-") as tmp:
-            Lab(args, Path(tmp), target).exercise()
+            lab = Lab(args, Path(tmp), target)
+            report["targets"][target] = lab.summary
+            try:
+                lab.exercise()
+            finally:
+                if args.report:
+                    args.report.write_text(json.dumps(report, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

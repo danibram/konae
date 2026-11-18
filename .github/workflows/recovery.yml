@@ -1,0 +1,79 @@
+name: Installation recovery
+
+on:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      year:
+        description: Run the 365-day history and paginated retention cases
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.0
+      CARGO_BUILD_JOBS: 2
+      RUST_TEST_THREADS: 2
+      TOKIO_WORKER_THREADS: 2
+      PYTHONDONTWRITEBYTECODE: 1
+      CARGO_TARGET_DIR: ${{ github.workspace }}/kernel-rs/target
+      YEAR: ${{ github.event_name == 'schedule' || inputs.year }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the test dependencies
+        shell: bash
+        run: |
+          rustup toolchain install 1.91.0 --profile minimal
+          mkdir -p "$RUNNER_TEMP/lab-bin" reports
+          cd "$RUNNER_TEMP/lab-bin"
+          server=RELEASE.2025-09-07T16-13-09Z
+          client=RELEASE.2025-08-13T08-35-41Z
+          curl -fsSL --retry 3 "https://github.com/minio/minio/releases/download/$server/minio.linux-amd64.$server" -o minio
+          curl -fsSL --retry 3 "https://github.com/minio/mc/releases/download/$client/mc.linux-amd64.$client" -o mc
+          sha256sum -c <<'SUMS'
+          7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f  minio
+          01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891  mc
+          SUMS
+          chmod +x minio mc
+          echo "$PWD" >> "$GITHUB_PATH"
+      - name: Build both installation profiles
+        run: cargo build --release --locked --manifest-path kernel-rs/Cargo.toml --bins
+      - name: Exercise writes, timeouts and interrupted activation
+        working-directory: kernel-rs
+        run: |
+          cargo test --release --locked -p konae-backup --features s3 --lib publication_after_a_short_write_or_failed_sync
+          cargo test --release --locked -p kernel --lib copies::tests::activation
+          cargo test --release --locked -p kernel --lib common_cut_timeout_and_abort_reopen_admission_in_drain_and_staging
+      - name: Restore each profile from directory and MinIO
+        shell: bash
+        run: |
+          length=()
+          if [[ "$YEAR" == true ]]; then length+=(--year); fi
+          for profile in kernel konae; do
+            python3 tests/smoke/with-minio.py python3 tests/smoke/recovery-year.py \
+              --binary "$CARGO_TARGET_DIR/release/$profile" --seed 44 --s3 "${length[@]}" --report "reports/$profile.json"
+          done
+      - name: Interrupt writers and collectors across a year of v3 points
+        if: env.YEAR == 'true'
+        shell: bash
+        run: |
+          worker=$(cargo test --release --locked --manifest-path kernel-rs/Cargo.toml -p konae-backup \
+            --features s3 --lib --no-run --message-format=json | python3 -c \
+            'import json,sys; rows=list(map(json.loads,sys.stdin)); print(next(r["executable"] for r in rows if r.get("executable") and r["profile"]["test"]))')
+          python3 tests/smoke/with-minio.py python3 tests/smoke/block-retention.py \
+            --worker "$worker" --mc "$(command -v mc)" --require-s3 --year --report reports/retention.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovery-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/*.json
+          retention-days: 90
+          if-no-files-found: warn

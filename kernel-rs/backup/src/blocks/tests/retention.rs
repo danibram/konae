@@ -6,7 +6,7 @@ use std::env;
 use std::path::PathBuf;
 
 const HOUR: u64 = 3_600_000;
-const HOURS: usize = 45 * 24;
+const POINTS: usize = 45 * 24;
 
 fn setting(name: &str) -> Result<String> {
     env::var(name).with_context(|| format!("Missing test setting {name}"))
@@ -26,7 +26,7 @@ fn source(root: &Path) -> Result<Source> {
             && bucket == "konae-test",
         "Expected the disposable loopback bucket."
     );
-    let config = aws_sdk_s3::Config::builder()
+    let mut config = aws_sdk_s3::Config::builder()
         .behavior_version(BehaviorVersion::latest())
         .region(Region::new("us-east-1"))
         .endpoint_url(endpoint)
@@ -37,10 +37,16 @@ fn source(root: &Path) -> Result<Source> {
             None,
             None,
             "disposable-lab",
-        ))
-        .build();
+        ));
+    if env::var_os("KONAE_LAB_STALL_PUT").is_some() {
+        config = config.timeout_config(
+            aws_sdk_s3::config::timeout::TimeoutConfig::builder()
+                .operation_timeout(std::time::Duration::from_secs(3))
+                .build(),
+        );
+    }
     Ok(Source::S3 {
-        client: aws_sdk_s3::Client::from_conf(config),
+        client: aws_sdk_s3::Client::from_conf(config.build()),
         bucket,
         prefix: format!("copies-v3/{REPO}/"),
     })
@@ -59,8 +65,20 @@ async fn worker() -> Result<()> {
     let stage = root.join(format!("stage-{}", std::process::id()));
     fs::create_dir(&stage)?;
     let start: u64 = setting("KONAE_LAB_START")?.parse()?;
-    let at = |i: usize| start + i as u64 * HOUR;
-    let now = at(HOURS - 1);
+    let year = env::var("KONAE_LAB_DAYS").as_deref() == Ok("365");
+    let at = |i: usize| {
+        // The last 31 days stay hourly to exercise both sides of the retention boundary.
+        let early = POINTS - 31 * 24;
+        let hour = if !year {
+            i
+        } else if i < early {
+            i * 334 * 24 / early
+        } else {
+            334 * 24 + i - early
+        };
+        start + hour as u64 * HOUR
+    };
+    let now = at(POINTS - 1);
     let last = copy_id(now);
     let scope = |p: &str| p == "asset" || p == "hour";
     let phase = setting("KONAE_LAB_PHASE")?;
@@ -74,7 +92,7 @@ async fn worker() -> Result<()> {
             drop(asset);
             repo.publish(
                 &stage,
-                &Manifest::capture(&stage, at(HOURS + 1))?,
+                &Manifest::capture(&stage, at(POINTS + 1))?,
                 &scope,
                 16,
                 &HashMap::new(),
@@ -104,17 +122,17 @@ async fn worker() -> Result<()> {
         }
         "seed" | "retry" | "next" => {
             let (begin, end) = match phase.as_str() {
-                "seed" => (0, HOURS),
-                "retry" => (HOURS - 1, HOURS),
-                _ => (HOURS, HOURS + 1),
+                "seed" => (0, POINTS),
+                "retry" => (POINTS - 1, POINTS),
+                _ => (POINTS, POINTS + 1),
             };
             for i in begin..end {
                 fs::write(
                     stage.join("asset"),
                     b"shared bytes first stored in this epoch's oldest copy",
                 )?;
-                fs::write(stage.join("hour"), (i.min(HOURS - 1) as u64).to_le_bytes())?;
-                let writer = if i < HOURS / 2 { &first } else { &repo };
+                fs::write(stage.join("hour"), (i.min(POINTS - 1) as u64).to_le_bytes())?;
+                let writer = if i < POINTS / 2 { &first } else { &repo };
                 let stats = writer
                     .publish(
                         &stage,
@@ -136,7 +154,7 @@ async fn worker() -> Result<()> {
                 repo
             };
             let time = if phase == "next-prune" {
-                at(HOURS)
+                at(POINTS)
             } else {
                 now
             };
@@ -168,17 +186,17 @@ async fn worker() -> Result<()> {
         }
         "oldest" | "latest" | "original" | "newest" => {
             let i = match phase.as_str() {
-                "oldest" => HOURS - 1 - 30 * 24,
-                "latest" => HOURS - 1,
+                "oldest" => POINTS - 1 - 30 * 24,
+                "latest" => POINTS - 1,
                 "original" => 0,
-                _ => HOURS,
+                _ => POINTS,
             };
             let point = repo.open(&copy_id(at(i)), &scope).await?;
             let output = stage.join("restored");
             repo.restore(&point, &output).await?;
             assert_eq!(
                 fs::read(output.join("hour"))?,
-                (i.min(HOURS - 1) as u64).to_le_bytes()
+                (i.min(POINTS - 1) as u64).to_le_bytes()
             );
             assert_eq!(
                 fs::read(output.join("asset"))?,
