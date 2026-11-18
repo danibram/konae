@@ -23,7 +23,8 @@ def trial(args, mode, s3):
     binary = args.binary.resolve(strict=True)
     apps = json.loads((args.six / "apps.json").read_bytes())
     assert len(apps) == 6
-    result = {"mode": mode, "store": args.store, "observation": {}}
+    result = {"mode": mode, "store": args.store, "observation": {}, "startUtc": datetime.now(timezone.utc).isoformat(),
+              "loadAverageBefore": os.getloadavg()}
     with tempfile.TemporaryDirectory(prefix="pilot-load-") as folder:
         root = Path(folder).resolve()
         live = root / "live"
@@ -96,6 +97,8 @@ def trial(args, mode, s3):
                                                          for at, (last, _) in attempts.items())
                                                      for start, stop in intervals)
             result["loadMs"] = end - begin
+    result["loadAverageAfter"] = os.getloadavg()
+    result["endUtc"] = datetime.now(timezone.utc).isoformat()
     result.update(samplesMs=[round(t, 4) for t in samples], n=len(samples), p99Ms=p99(samples), maxMs=max(samples))
     return result
 

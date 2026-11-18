@@ -1,4 +1,5 @@
 """Prepare and check the synthetic installations used by the writer pilot."""
+import base64
 from collections import Counter
 from contextlib import closing
 import hashlib
@@ -15,6 +16,41 @@ from urllib.request import Request, urlopen
 smoke = Path(__file__).resolve().parents[2] / "tests/smoke"
 year = runpy.run_path(str(smoke / "recovery-year.py"))
 cut = year["cut"]
+
+
+DRAFT = "<main>Unpublished edit</main>"
+
+
+def save_draft(port, cookie, html, revision):
+    def rpc(name, args):
+        return cut["rpc"](port, name, args, cookie)
+
+    document = dict(id="draft", slug="draft", name="Draft", manifest={"version": 1, "visibility": "public"},
+                    files={"index.html": html}, directories=[], updatedAt=1)
+    raw = json.dumps(document).encode()
+    upload = rpc("transfer_begin", {"projectId": "draft", "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+    transfer = {"transferId": upload["transferId"]}
+    assert len(raw) <= upload["chunkBytes"]
+    rpc("transfer_write", dict(transfer, offset=0, data=base64.b64encode(raw).decode()))
+    rpc("transfer_complete", transfer)
+    rpc("project_sources_save", dict(transfer, projectId="draft", expectedRevision=revision))
+    read = rpc("project_sources_read", {"projectId": "draft"})
+    assert read["revision"] == revision + 1
+    download = {"transferId": read["transfer"]["transferId"]}
+    data = rpc("transfer_read", dict(download, offset=0))
+    assert json.loads(base64.b64decode(data["data"]))["files"]["index.html"] == html
+    rpc("transfer_cancel", download)
+    rpc("transfer_cancel", transfer)
+    return read["revision"]
+
+
+def edit_restored_draft(binary, env, dest):
+    with cut["server"](binary, dict(env, KONAE_DATA_DIR=str(dest))) as (port, _):
+        cookie, can = year["owner_session"](port, env)
+        assert can["write"]
+        inspected = cut["rpc"](port, "project_inspect", {"projectId": "draft"}, cookie)
+        assert inspected["deployment"] is None and inspected["sourcesRevision"] == 1
+        return save_draft(port, cookie, "<main>Edited after restore</main>", 1)
 
 
 def small_profile(binary, live, env):
@@ -37,16 +73,13 @@ def small_profile(binary, live, env):
             assert can["write"]
             cut["rpc"](port, "project_create", {"projectId": "draft", "name": "Draft"}, cookie)
             assert cut["rpc"](port, "project_inspect", {"projectId": "draft"}, cookie)["deployment"] is None
+            save_draft(port, cookie, DRAFT, 0)
             model.published.update(["probe", "public-a", "public-b"])
             model.projects.update(model.published | {"draft"})
             year["check_projects"](port, cookie, model)
         for email in year["MEMBERS"][:2]:
             model.users[email], cookie = year["account"](port, email, "signup")
             year["check_rows"](port, cookie, email, model)
-    if binary.name == "konae":
-        folder = live / "apps/draft/app"
-        folder.mkdir(exist_ok=True)
-        (folder / "index.html").write_text("<main>Unpublished edit</main>")
     year["import_version"](binary.with_name("kernel"), env, live, model, random.Random(45), 1)
     return model
 
@@ -170,7 +203,7 @@ def check_access(binary, clean, dest, profile, model):
     year["verify"](binary, clean, dest, model, set(), counts)
     if binary.name == "konae":
         draft = dest / "apps/draft"
-        assert (draft / "app/index.html").read_text() == "<main>Unpublished edit</main>"
+        assert (draft / "app/index.html").read_text() == DRAFT
         assert not (draft / "dist").exists() and not list(draft.glob("data/*.sqlite"))
     else:
         assert not any((dest / p).exists() for p in ("owners.sqlite", "mcp.sqlite"))
