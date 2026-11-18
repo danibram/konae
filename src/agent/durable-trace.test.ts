@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { boundModelText, declaredIntent, redactDurableValue, redactText } from "./durable-trace";
+import { boundModelText, declaredIntent, durableOwnerMessage, redactDurableValue, redactText } from "./durable-trace";
 
 describe("durable trace privacy and model boundary", () => {
   test("scrubs known credentials, credential fields, URL userinfo and invitation/verification values", () => {
@@ -46,5 +46,36 @@ describe("durable trace privacy and model boundary", () => {
     expect(result.text).not.toContain("sk-real-credential");
     expect(declaredIntent("owner-message", undefined, "objective", 1)).toBeUndefined();
     expect(declaredIntent("owner-message", "entry-1", " objective ", 1)).toEqual({ origin: "owner-message", sourceEntryId: "entry-1", text: "objective", declaredAt: 1 });
+  });
+
+  test("an explicit Objective line adds redacted self-sourced metadata without rewriting the prompt", () => {
+    const prompt = "Objective: Keep the app portable with sk-proj-abcdefgh\n\nBuild a checklist.";
+    const prepared = durableOwnerMessage(prompt, 1_700_000_000_123, ["owner-secret-value"]);
+    expect(prepared.content).toBe("Objective: Keep the app portable with [redacted credential]\n\nBuild a checklist.");
+    expect(prepared.entry).toEqual({
+      kind: "konae.owner-message",
+      data: { intent: { origin: "owner-message", sourceEntryId: "$self", text: "Keep the app portable with [redacted credential]", declaredAt: 1_700_000_000_123 } },
+    });
+  });
+
+  test("ordinary owner input has no inferred declaration", () => {
+    expect(durableOwnerMessage("Build a checklist.", 1_700_000_000_123)).toEqual({
+      content: "Build a checklist.",
+      entry: { kind: "konae.owner-message" },
+    });
+    expect(durableOwnerMessage("A note\nObjective: hidden as a declaration", 1)).toEqual({
+      content: "A note\nObjective: hidden as a declaration",
+      entry: { kind: "konae.owner-message" },
+    });
+  });
+
+  test("redacts credential assignments in the declaration and admitted prompt and bounds the metadata", () => {
+    const credential = "fixture-pasted-password-value";
+    const tail = "\n\nUse the current checklist.";
+    const prompt = `Objective: Password=${credential}; preserve the checklist ${"x".repeat(600)}${tail}`;
+    const prepared = durableOwnerMessage(prompt, 2);
+    const prefix = "Password=[redacted]; preserve the checklist ";
+    expect(prepared.entry.data?.intent.text).toBe(`${prefix}${"x".repeat(500 - prefix.length)}`);
+    expect(prepared.content).toBe(`Objective: ${prefix}${"x".repeat(600)}${tail}`);
   });
 });

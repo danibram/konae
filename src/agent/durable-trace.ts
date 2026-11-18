@@ -3,6 +3,7 @@ const credentialMarker = /\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-or-v1-[A-Fa-f0-9]{16,
 const sensitiveParameter = /^(?:token|key|api[_-]?key|code|invite|invitation|invitation[_-]?code|verification|verification[_-]?token|email[_-]?verification|auth|authorization|signature)$/i;
 
 export type BoundedText = { text: string; originalLength: number; retainedLength: number; truncated: boolean; redacted: boolean; method: "head" };
+export const DURABLE_SELF_ENTRY = "$self";
 
 /** Redact before persistence. This is trace hygiene, not an authorization boundary. */
 export function redactDurableValue(value: unknown, knownCredentials: readonly string[] = []): unknown {
@@ -43,9 +44,32 @@ function structuredText(value: unknown, knownCredentials: readonly string[]) {
   catch { return value; }
 }
 
-export function declaredIntent(origin: "owner-message" | "assistant-declaration", sourceEntryId: string | undefined, text: string, declaredAt: number) {
+export function declaredIntent(origin: "owner-message" | "assistant-declaration", sourceEntryId: string | undefined, text: string, declaredAt: number, knownCredentials: readonly string[] = []) {
   if (!sourceEntryId || !text.trim()) return undefined;
-  return { origin, sourceEntryId, text: redactText(text.trim()).slice(0, 500), declaredAt };
+  const safe = redactCredentialAssignments(redactText(text.trim(), knownCredentials));
+  return { origin, sourceEntryId, text: safe.slice(0, 500), declaredAt };
+}
+
+/**
+ * An explicit first-line `Objective: ...` convention. The full, credential-redacted
+ * owner prompt remains model-visible; this adds only redacted trace metadata to
+ * that same native entry. `declaredAt` is the browser's assertion time, not a
+ * trusted or server-observed clock.
+ */
+export function durableOwnerMessage(text: string, declaredAt: number, knownCredentials: readonly string[] = []) {
+  const safe = redactText(text, knownCredentials);
+  const firstLine = safe.split(/\r?\n/, 1)[0];
+  const declaration = /^Objective:[ \t]*(.+)$/.exec(firstLine)?.[1];
+  const intent = declaration
+    ? declaredIntent("owner-message", DURABLE_SELF_ENTRY, declaration, declaredAt)
+    : undefined;
+  return {
+    content: intent ? redactCredentialAssignments(firstLine) + safe.slice(firstLine.length) : safe,
+    entry: {
+      kind: "konae.owner-message",
+      ...(intent ? { data: { intent } } : {}),
+    },
+  };
 }
 
 function redactUrl(value: string) {
@@ -67,4 +91,11 @@ function redactUrl(value: string) {
 function isSensitiveParameter(key: string) {
   const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
   return secretAliases.has(normalized) || sensitiveParameter.test(key);
+}
+
+function redactCredentialAssignments(value: string) {
+  return value.replace(
+    /(^|\s)(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|authorization|cookie|client[_ -]?secret|secret|password|invitation[_ -]?code|verification[_ -]?token)\b([ \t]*[:=][ \t]*)(?:\[redacted(?: credential)?\]|Bearer[ \t]+[^\s,;]+|"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+    "$1$2$3[redacted]",
+  );
 }

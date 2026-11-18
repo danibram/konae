@@ -22,8 +22,13 @@ The independent #31 1,000-entry iPhone WebKit reader probe measured a 13,044-byt
 
 The native HTTP projection fixture on this implementation measured 50 items / 13,222 bytes in 94.89 ms locally; applying the same 120 ms and 10 Mbps synthetic profile estimated 225.47 ms. It confirmed the older page and explicit detail/blob fetch, and an independent owner session remained isolated. That server-only estimate excludes real owner login, browser rendering, and mobile-device scheduling. The independent browser measurement above was from the parent draft; #32 should rerun it against the locked commit SHA.
 
-## Remainders for #32
+## Declared owner intent contract
+
+An owner can explicitly place `Objective: ...` on the first line of a Durable prompt. The whole prompt, including that line, remains the model-visible user message subject to the existing credential redaction. The browser adds the separately redacted declaration and its client assertion time to that same native `konae.owner-message` entry; `$self` marks its source as that entry. The read-only history projection resolves `$self` to the entry's actual persisted Pi ID. It does not change raw records or create IDs. An ordinary prompt has no intent. The client clock may be wrong or changed, so `declaredAt` is descriptive evidence, not trusted server time. Only owner-authored declarations are captured; assistant private reasoning is never used as a declaration.
+
+This focused write/read contract does not change the independent #32 rollout, rollback, offline, privacy/authentication or in-flight Deploy checks. `SHARED_DURABLE_ACTIVATION` remains false until the integrated gate passes.
+
+## Remaining #32 gate
 
 - Run the complete integrated gate on the exact landed SHA across independent Chromium owner sessions and iPhone WebKit, including delayed A/B selection, stop/release, permissions loss, stale source diffs, partial response, unknown write outcome and source read-back. Do not infer rollout readiness from these isolated fixture measurements.
-- The optional `declaredIntent` helper exists, and the reader/download preserve intent when present, but the current runtime has no writer that binds an owner declaration to its actual source entry ID and clock. #32 should define and test that write contract before claiming all effects have source-linked owner intent. Existing persisted message/effect timestamps are surfaced where available.
 - Keep aggregate gate and production activation in #32. This slice leaves `SHARED_DURABLE_ACTIVATION` false.

@@ -6,7 +6,7 @@ import { textFiles } from "../lib/source-files";
 import { buildSystemPrompt } from "./system-prompt";
 import { createDurableModels, durableModelFor, modelsWithConfiguredModel } from "./durable-models";
 import { openDurableStorage, readDurableConversation, uploadDurableDetail, type DurableStorageOptions } from "./durable-storage";
-import { boundModelText, redactDurableValue } from "./durable-trace";
+import { boundModelText, durableOwnerMessage, redactDurableValue } from "./durable-trace";
 import { createCapsuleWorkspace } from "./capsule-env";
 import { createCapsuleValidator, type SqlJsLoader } from "./gate";
 import { createCapsuleTools, readLiveDatabase, readValidationFacts, type CapsuleToolHooks } from "./tools";
@@ -146,7 +146,8 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     harness,
     async send(text: string, requestId = crypto.randomUUID()) {
       await pendingConfiguration;
-      const submitted = await conversation.submit({ requestId, type: "input", content: redactDurableValue(text, currentCredentials(options)) as string, entry: { kind: "konae.owner-message" } }, BACKGROUND_CONTEXT);
+      const admission = durableOwnerMessage(text, Date.now(), currentCredentials(options));
+      const submitted = await conversation.submit({ requestId, type: "input", ...admission }, BACKGROUND_CONTEXT);
       const settled = await submitted.wait(BACKGROUND_CONTEXT);
       const changedFiles = workspace.changedFiles();
       if (changedFiles.length) {

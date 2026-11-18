@@ -1229,7 +1229,17 @@ fn record_summary(payload: &str) -> Value {
     }).take(8).collect::<Vec<_>>()).unwrap_or_default();
     let data = value.get("data").and_then(Value::as_object);
     let mut summary = json!({"kind":kind,"messages":messages});
-    if let Some(intent) = data.and_then(|data| data.get("intent")).filter(|intent| !intent.is_null()) { summary["intent"] = intent.clone(); }
+    if let Some(intent) = data.and_then(|data| data.get("intent")).and_then(Value::as_object) {
+        let mut intent = intent.clone();
+        if intent.get("sourceEntryId").and_then(Value::as_str) == Some("$self") {
+            let source_id = value.get("id").filter(|id| !id.is_null());
+            if let Some(source_id) = source_id {
+                intent.insert("sourceEntryId".into(), Value::String(source_id.as_str().map(str::to_owned).unwrap_or_else(|| source_id.to_string())));
+            }
+        }
+        let self_source_resolved = intent.get("sourceEntryId").and_then(Value::as_str) != Some("$self");
+        if !intent.is_empty() && self_source_resolved { summary["intent"] = Value::Object(intent); }
+    }
     summary
 }
 
@@ -2218,6 +2228,17 @@ mod tests {
         let clipped = record_summary(&json!({"type":"entry","value":{"kind":"pi.user","model":[{"role":"user","content":long}]}}).to_string());
         assert_eq!(clipped["messages"][0]["content"][0]["text"].as_str().unwrap().chars().count(), 1_200);
         assert_eq!(clipped["messages"][0]["content"][0]["clipped"], true);
+    }
+
+    #[test]
+    fn summary_resolves_owner_intent_self_source_to_the_actual_entry_id_without_running_it() {
+        let payload = json!({"type":"entry","value":{"id":"entry-actual-17","kind":"konae.owner-message","data":{"intent":{"origin":"owner-message","sourceEntryId":"$self","text":"Keep the app portable","declaredAt":1700000000123_i64}},"model":[{"role":"user","content":"Objective: Keep the app portable\n\nBuild a checklist.","timestamp":1700000000124_i64}]}}).to_string();
+        let summary = record_summary(&payload);
+        assert_eq!(summary["intent"], json!({"origin":"owner-message","sourceEntryId":"entry-actual-17","text":"Keep the app portable","declaredAt":1700000000123_i64}));
+        assert_eq!(summary["messages"][0]["content"][0]["text"], "Objective: Keep the app portable\n\nBuild a checklist.");
+
+        let ordinary = json!({"type":"entry","value":{"id":"entry-actual-18","kind":"konae.owner-message","model":[{"role":"user","content":"Build a checklist."}]}}).to_string();
+        assert!(record_summary(&ordinary).get("intent").is_none());
     }
 
     async fn fixture() -> (

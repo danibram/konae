@@ -1026,6 +1026,75 @@ test("confirmed fixture publish advances the Durable baseline before the provide
   expect(await page.getByText(/SessionFailed/).count()).toBe(0);
 });
 
+test("only an explicitly declared objective appears in history, linked to its saved message", async ({ page }) => {
+  const app = await createProject(page, "Declared objective fixture");
+  const projectId = app.split("/").at(-1)!;
+  const path = `/_konae/projects/${projectId}/conversations`;
+  const providerKey = "owner-intent-synthetic-provider-key";
+  const pastedPassword = "fixture-only-pasted-password-marker";
+  const objective = "Keep the fixture app portable";
+  const otherPrompt = "Use the existing template and explain the result";
+  const providerBodies: string[] = [];
+  const backendBodies: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith(path)) backendBodies.push(request.postData() ?? "");
+  });
+  await page.route("https://api.anthropic.com/**", async (route) => {
+    const request = route.request();
+    const headers = {
+      "access-control-allow-origin": request.headers().origin ?? "*",
+      "access-control-allow-methods": "POST,OPTIONS",
+      "access-control-allow-headers": "*",
+    };
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+    expect(request.headers()["x-api-key"]).toBe(providerKey);
+    providerBodies.push(request.postData() ?? "");
+    await route.fulfill({
+      status: 200, headers, contentType: "text/event-stream",
+      body: providerReply(undefined, `Answer to synthetic turn ${providerBodies.length}`),
+    });
+  });
+  await page.goto(app + "?agent=durable-recovery");
+  await connectProposalFixture(page, providerKey);
+  const visiblePrompt = `Objective: ${objective} ${providerKey} Password=${pastedPassword}\n\nUse the current checklist.`;
+  await askFixture(page, visiblePrompt);
+  await expect(page.getByText("Answer to synthetic turn 1", { exact: true })).toBeVisible({ timeout: 35_000 });
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+  await askFixture(page, otherPrompt);
+  await expect(page.getByText("Answer to synthetic turn 2", { exact: true })).toBeVisible({ timeout: 35_000 });
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+
+  const list = await (await page.request.get(path)).json();
+  expect(list.items).toHaveLength(1);
+  const conversation = `${path}/${list.items[0].id}`;
+  type Declaration = { origin: string; sourceEntryId: string; text: string; declaredAt: number };
+  const timeline: { items: Array<{ id: number; summary: { kind: string; intent?: Declaration } }> } =
+    await (await page.request.get(conversation + "/records")).json();
+  const ownerMessages = timeline.items.filter((row) => row.summary.kind === "konae.owner-message");
+  expect(ownerMessages).toHaveLength(2);
+  const declarations = ownerMessages.filter((row) => row.summary.intent);
+  expect(declarations).toHaveLength(1);
+  const [declared] = declarations;
+  const safeObjective = `${objective} [redacted credential] Password=[redacted]`;
+  expect(declared.summary.intent).toMatchObject({ origin: "owner-message", sourceEntryId: String(declared.id), text: safeObjective });
+  expect(declared.summary.intent?.declaredAt).toBeGreaterThan(0);
+  expect(providerBodies[0]).toContain(`Objective: ${safeObjective}\\n\\nUse the current checklist.`);
+  expect(providerBodies[1]).toContain(otherPrompt);
+
+  const downloaded = JSON.stringify(await (await page.request.get(conversation + "/download")).json());
+  expect(downloaded).toContain(safeObjective);
+  for (const evidence of [downloaded, providerBodies.join("\n"), backendBodies.join("\n")]) {
+    expect(evidence).not.toContain(providerKey);
+    expect(evidence).not.toContain(pastedPassword);
+  }
+  await page.getByRole("button", { name: "Read saved conversations", exact: true }).click();
+  const history = page.getByRole("dialog", { name: "Conversation history" });
+  await history.locator(".durable-conversation-choice").first().click();
+  await expect(history.getByText("Declared intent", { exact: true })).toHaveCount(1);
+  await expect(history.locator(".durable-intent pre")).toContainText(String(declared.id));
+  expect(providerBodies).toHaveLength(2);
+});
+
 test("one staged browser can advance and the expired browser's late provider message is fenced", async ({ page, browser }) => {
   const projectPath = await createProject(page, "Owner browser lease race", "tasks");
   const projectId = projectPath.split("/").at(-1)!;
