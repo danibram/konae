@@ -800,6 +800,8 @@ pub async fn state_from_env(
     } else {
         file_store::Files::from_env(&data_root).await?
     };
+    let copies = copies::CopyStatus::open(copy_config.as_ref(), &copies::status_directory(&data_root),
+        &file_store::env_var("KONAE_S3_ENDPOINT").unwrap_or_default(), &data_bucket);
     let state = AppState {
         execution_mode: startup.execution_mode,
         deployments: Arc::new(RwLock::new(deployments)),
@@ -808,7 +810,7 @@ pub async fn state_from_env(
         data_bucket,
         data_root,
         files,
-        copies: Arc::new(copies::CopyStatus::new(copy_config.as_ref())),
+        copies: Arc::new(copies),
         public_origin,
         own_origins,
         host_suffix: startup.hosts.host_suffix.clone(),
@@ -2033,6 +2035,13 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
             Err(response) => return response,
         }
     }
+    let path = source.to_owned();
+    let sha256 = match tokio::task::spawn_blocking(move || copies::checksum_file(&path)).await {
+        Ok(Ok((length, digest))) if length == size => digest,
+        Ok(Ok(_)) => return error(StatusCode::INTERNAL_SERVER_ERROR, "The upload changed size before storage."),
+        Ok(Err(e)) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
     let id = Uuid::new_v4().to_string();
     if let Err(e) = state.files.store.put(&deployment.id, &id, source).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The file could not be stored: {e:#}"));
@@ -2042,6 +2051,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
         "name": name,
         "type": content_type,
         "size": size,
+        "sha256": sha256,
         "visibility": visibility,
         "ownerId": actor.user_id,
         "createdAt": now_ms(),
@@ -3584,6 +3594,7 @@ pub fn file_view(deployment: &Deployment, file: &Value, actor_id: Option<&str>) 
     let mut view = file.clone();
     if let Some(object) = view.as_object_mut() {
         object.remove("url");
+        object.remove("sha256");
         if app_user_files(deployment) {
             object.insert("visibility".into(), json!("app-users"));
         }
@@ -6238,10 +6249,12 @@ pub mod tests {
         let request = Request::builder().body(Body::from(body.to_string())).unwrap();
         let response = upload_file(State(state), headers, request).await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert!(response_json(response).await["result"].get("sha256").is_none());
         let index: Vec<Value> =
             serde_json::from_slice(&tokio::fs::read(files.join("index.json")).await.unwrap()).unwrap();
         assert_eq!(index.len(), 1);
         assert_eq!(index[0]["visibility"], "private");
+        assert_eq!(index[0]["sha256"], digest(b"hi"));
         let leftovers = std::fs::read_dir(&files)
             .unwrap()
             .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains(".tmp-"))

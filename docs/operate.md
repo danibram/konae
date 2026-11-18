@@ -123,6 +123,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_COPY_DIR` | unset | Directory, on another disk, that receives scheduled copies of the data directory. It must be outside `KONAE_DATA_DIR`. |
 | `KONAE_COPY_S3` | unset | `1` sends scheduled copies to `copies/` in `KONAE_S3_BUCKET`. |
 | `KONAE_COPY_INTERVAL_SECONDS` | `3600` | Seconds between copies when a copy target is set. The first copy runs at startup. |
+| `KONAE_COPY_HEALTH_DIR` | `$KONAE_DATA_DIR/.copy-health` | Directory for per-target attempt records and verified restore receipts. |
 | `KONAE_COPY_SECRET` | unset | Secret of at least 32 characters that encrypts every file of a copy sent to S3 with AES-256-GCM. `restore` needs the same secret to open such a copy. The secret also signs each copy's manifest and each revocation entry sent to S3, and `restore` from S3 refuses a copy or an entry whose signature is missing or wrong. Directory copies stay unencrypted and unsigned. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are refused. |
 | `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0014). The public origin, and on `konae` the MCP origin, become `<scheme>://app.<domain>`, and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
@@ -177,13 +178,28 @@ Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.r
     └── .konae/             # the installation's part: the Deployment record, addresses, maintenance and backups
 ```
 
-The data root may also hold `mailbox.jsonl` with the development transport, `files-store.json` once the file store is recorded, `.copy-state.json` for the previous copy's file hashes, store metadata and signed S3 manifests used by pruning, `kernel.lock` while a Kernel serves, and `.copy-staging/` while a copy runs. Restore does not install `.copy-state.json`, so the first copy after restore reads every file blob again. [Who owns which store](./architecture.md#who-owns-which-store) says which of them an export carries.
+The data root may also hold `mailbox.jsonl` with the development transport, `files-store.json` once the file store is recorded, `.copy-state.json` for the previous copy's file hashes and cached S3 manifests, `kernel.lock` while a Kernel serves, and `.copy-staging/` while a copy runs. Restore leaves the copy cache and attempt records on the original installation. [Who owns which store](./architecture.md#who-owns-which-store) says which of them an export carries.
 
 Set `KONAE_COPY_DIR`, `KONAE_COPY_S3=1` or both to copy the data directory off the volume, every hour by default. Each copy takes every app's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when it is complete, and an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. It stages each copy under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
 
 Directory copies stay complete folders. The Kernel hard-links unchanged files to the preceding copy when possible and writes a separate file when linking fails. S3 copies can refer to file objects stored under an earlier copy ID. Restore reads each object from its recorded home copy and checks it against the current signed manifest. A home copy's manifest may expire while its objects remain in use. Do not delete S3 copy objects by hand. Removing an object that a retained manifest names makes that copy unrestorable. Pruning removes expired manifests first, then deletes only objects that no retained manifest references. It keeps an object's group even when that group has no manifest if a retained manifest still names an object there.
 
-A failed copy never stops the Kernel from serving. The Kernel logs it, and `/_konae/health` reports it under `copies`: each target's `lastAttemptAt`, `lastSuccessAt`, `lastCopyId` and `lastError`, and an `alert` message while any target's last attempt failed. `copies.targets` is empty when no target is set.
+The Kernel reads each blob the captured file index names. It checks the store inventory, the number of bytes read and the SHA-256 recorded at upload or import. Older indexes carry only a size. For those files the Kernel compares the bytes with the previous copy cache and the preceding manifest on each target when available. The first capture without a recorded hash establishes a baseline. It cannot detect a same-size substitution that predates that baseline. Removing an entry before capture excludes the blob even if its bytes still await deletion.
+
+Before publishing, the Kernel checks each directory file and downloads each referenced S3 object, including reused objects. An encrypted target also has to decrypt each object. S3 still uploads only changed files. Budget for a full read from each target on every copy. The writer checks the final manifest against the reader's 4 MiB limit, including S3 references, encryption fields and the signature.
+
+A copy failure leaves the Kernel serving. Read `copies.targets` on `/_konae/health` for the result on each target. Dates use Unix milliseconds.
+
+| Field | Meaning |
+| --- | --- |
+| `lastAttemptAt`, `inProgress`, `lastError` | Start of the latest attempt, whether the worker is still running it, and the last recorded error. A restart reports an interrupted attempt. |
+| `lastCopyId`, `lastCutAt`, `lastSuccessAt` | Last complete point, start of its capture and time of publication. A failed send preserves these values. |
+| `cutAgeMs`, `stale`, `alert` | Health measures age at request time. It alerts when there is no recorded complete point or its cut is older than the copy interval plus five minutes. An hourly copy goes stale after 65 minutes, including upload time. |
+| `lastVerifiedRestoreAt`, `lastVerifiedRestoreCopyId` | Completion time and point of the last restore that checked the files and SQLite databases, installed the copy and applied the revocation record. Both fields are null until a receipt is available. |
+
+The top-level `copies.alert` includes each target's alert. With no targets, `copies.targets` is empty. Keep the status directory across restarts. A directory path or S3 endpoint, bucket and prefix identify each target. On upgrade, the first attempt starts the record for that target.
+
+A restore writes its receipt under `KONAE_COPY_HEALTH_DIR`, which defaults to `.copy-health/` in the restored data directory. A drill may read its copy with read-only credentials. To report the drill on the running Kernel, copy the new `*.restore.json` receipt into its status directory or give both commands the same operator-controlled status directory. Use the same absolute directory path or S3 address in both environments. A failed restore or a restore held in maintenance leaves the last verified result in place.
 
 A copy moves an installation. To move one app, export it and import it ([Export and import an app](./reference/export-and-import.md#export-and-import-an-app)).
 

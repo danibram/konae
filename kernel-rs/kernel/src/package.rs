@@ -574,17 +574,32 @@ fn unpack_files(
         ensure!(order.get(seen).is_some_and(|next| next == id), "The files component is out of index order.");
         ensure!(size == declared, "The data of file {id} does not match its indexed size.");
         let mut body = (&mut input).take(size);
+        let verify_digest = |digest: &str| -> Result<()> {
+            if let Some(expected) = index[seen].get("sha256") {
+                ensure!(expected.as_str() == Some(digest), "File {id} does not match its indexed SHA-256.");
+            }
+            Ok(())
+        };
         let copied = match destination {
             Some((directory, blobs)) => {
                 let temp = directory.join(format!(".{id}.import-{}", Uuid::new_v4()));
                 let stored = (|| {
                     let copied = std::io::copy(&mut body, &mut std::fs::File::create(&temp)?)?;
                     ensure!(copied == size, "The files component ends early.");
+                    let (_, digest) = copies::checksum_file(&temp)?;
+                    verify_digest(&digest)?;
+                    normalized[seen]["sha256"] = json!(digest);
                     blobs.put(id, &temp)?;
                     Ok(copied)
                 })();
                 let _ = std::fs::remove_file(&temp);
                 stored?
+            }
+            None if index[seen].get("sha256").is_some() => {
+                let mut hasher = sha2::Sha256::default();
+                let length = std::io::copy(&mut body, &mut hasher)?;
+                verify_digest(&hex::encode(sha2::Digest::finalize(hasher)))?;
+                length
             }
             None => std::io::copy(&mut body, &mut std::io::sink())?,
         };
@@ -1085,6 +1100,14 @@ mod tests {
                 unpack_files(&archive, Some(&accounts), None, &tiny).unwrap_err().to_string(),
                 format!("File {b} exceeds this installation's 999 bytes limit per file.")
             );
+
+            let mut damaged_index = index.clone();
+            damaged_index[1]["sha256"] = json!("0".repeat(64));
+            std::fs::write(source.join("index.json"), damaged_index.to_string()).unwrap();
+            let damaged = root.join("wrong-digest.tar");
+            write_files_tar(&source, &damaged, |id| blobs.open(id)).unwrap();
+            assert!(unpack_files(&damaged, Some(&accounts), None, &Default::default())
+                .unwrap_err().to_string().contains("indexed SHA-256"));
 
             let mut bytes = std::fs::read(&archive).unwrap();
             bytes.truncate(bytes.len() - 1024);
