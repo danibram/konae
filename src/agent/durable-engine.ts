@@ -58,7 +58,7 @@ export async function openDurableHistory(projectId: string, conversationId: stri
   const registry = createRegistry();
   const models = createDurableModels(emptyKeyStore());
   const harness = await Harness.open(storage, { models, registry, readOnly: true }, BACKGROUND_CONTEXT);
-  return { info, harness, conversation: await harness.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT), close: () => harness.close(BACKGROUND_CONTEXT) };
+  return { info, harness, conversation: await harness.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT), nativeSnapshot: (storage as any).nativeSnapshot as import("./durable-storage").NativeBatchSnapshot, close: () => harness.close(BACKGROUND_CONTEXT) };
 }
 
 /** Browser-owned local engine candidate. The editor still selects the legacy adapter until #29/#30 validation. */
@@ -130,6 +130,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       instructions: `${buildSystemPrompt(options.project)}${options.sessionConfig.systemAppend ? `\n\n${options.sessionConfig.systemAppend}` : ""}`,
     },
   });
+  let pendingConfiguration = Promise.resolve();
   if (options.recoveredFiles) {
     const result = await validator.validate(
       workspace.serialize().files,
@@ -142,6 +143,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     conversation,
     harness,
     async send(text: string, requestId = crypto.randomUUID()) {
+      await pendingConfiguration;
       const submitted = await conversation.submit({ requestId, type: "input", content: redactDurableValue(text, currentCredentials(options)) as string, entry: { kind: "konae.owner-message" } }, BACKGROUND_CONTEXT);
       const settled = await submitted.wait(BACKGROUND_CONTEXT);
       const changedFiles = workspace.changedFiles();
@@ -177,12 +179,18 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
         options.onValidation?.({ ok: false, errors: [], checked: [] });
       }
     },
+    reseed(project: MiniAppProject, config: AgentSessionConfig = options.sessionConfig) {
+      workspace.reseed(textFiles(project));
+      const configured = modelsWithConfiguredModel(durableModels, config, options.keyStore);
+      const configuredModel = durableModelFor(config, configured);
+      pendingConfiguration = conversation.configure({ model: { provider: config.provider, modelId: configuredModel.id }, thinkingLevel: "off", instructions: `${buildSystemPrompt(project)}${config.systemAppend ? `\n\n${config.systemAppend}` : ""}` }, BACKGROUND_CONTEXT).catch((error) => { options.onModelEvent?.({ type: "error", error }); });
+    },
     proposal: () => ({ files: workspace.serialize().files, changedFiles: workspace.changedFiles() }),
   };
 }
 
 /** KonaeAgent adapter used only by the explicit local Durable staging opt-in. */
-export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void; assertExecution(): Promise<void>; execution(callId: string, observesCallId?: string): AgentExecution | null; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
+export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void; assertExecution(): Promise<void>; exportLocalHistory(): Promise<{ version: 1; createdAt: number; title: string; records: any[] }>; execution(callId: string, observesCallId?: string): AgentExecution | null; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
   let currentProject = project;
   const modelConfig = { ...sessionConfig };
   let engine: Awaited<ReturnType<typeof openLocalDurableEngine>> | null = null;
@@ -264,6 +272,40 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
       await run;
     },
     async assertExecution() { await options.assertExecution?.(); },
+    async exportLocalHistory() {
+      if (options.openStorage || options.storage || options.ownerId) throw new Error("Only a browser-local conversation can use the explicit local attachment flow.");
+      const current = await ensure();
+      const records: any[] = [];
+      let cursor: any;
+      do {
+        const page = await current.conversation.entries({}, 50, cursor, BACKGROUND_CONTEXT);
+        records.push(...page.items);
+        cursor = page.next;
+      } while (cursor);
+      records.reverse();
+      const context = await current.conversation.context(BACKGROUND_CONTEXT);
+      const candidate = proposal();
+      const candidateFiles = candidate ? { ...candidate.files } : undefined;
+      const currentFiles = { ...currentProject.files };
+      // A local transcript can contain task IDs or opaque details that this
+      // versioned owner envelope cannot faithfully reattach to native tasks.
+      // Preserve files and messages, but keep such a copy inspection-only.
+      const hasTaskRecords = records.some((entry) => entry && (entry.byTaskId !== undefined || entry.kind === "task" || entry.kind === "submission"));
+      const hasOpaqueDetails = records.some((entry) => JSON.stringify(entry).includes('"kind":"immutable-detail"'));
+      const reasons = [
+        ...(hasTaskRecords ? ["Local native task state is not preserved by this attachment format."] : []),
+        ...(hasOpaqueDetails ? ["Some pre-attachment tool details are stored as opaque blobs and are not copied with this attachment."] : []),
+      ];
+      const exportValue = {
+        version: 1 as const, createdAt: Date.now(), title: "Local browser conversation", records,
+        modelContext: { messages: Array.isArray((context as any)?.messages) ? (context as any).messages : [] },
+        files: { current: currentFiles, ...(currentProject.encodings ? { encodings: currentProject.encodings } : {}), ...(candidateFiles ? { candidate: candidateFiles, ...(currentProject.encodings ? { candidateEncodings: currentProject.encodings } : {}) } : {}), changedFiles: candidate ? [...new Set([...Object.keys(currentFiles), ...Object.keys(candidateFiles!)])].filter((path) => currentFiles[path] !== candidateFiles![path]).sort() : [] },
+        continuation: { eligible: reasons.length === 0, reasons },
+      };
+      const encoded = JSON.stringify(exportValue);
+      if (new TextEncoder().encode(encoded).byteLength > 4 * 1024 * 1024) throw new Error("This local conversation is too large for a safe browser handoff. Download it or shorten it before attaching.");
+      return exportValue;
+    },
     execution(callId: string, observesCallId?: string) {
       const identity = options.executionIdentity?.();
       return identity ? { ...identity, callId, ...(observesCallId ? { observesCallId } : {}) } : null;
@@ -326,11 +368,15 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
       if (old) void old.close();
     },
     reseed(files, encodings) {
-      currentProject = { ...currentProject, files: { ...currentProject.files, ...files }, encodings };
-      this.discard();
+      const next = { ...currentProject, files: { ...currentProject.files, ...files }, encodings };
+      if (JSON.stringify(currentProject.files) === JSON.stringify(next.files) && JSON.stringify(currentProject.encodings ?? {}) === JSON.stringify(next.encodings ?? {})) return;
+      currentProject = next;
+      validation = null;
+      validationSignature = "";
+      engine?.reseed(currentProject, modelConfig);
     },
     retarget(next) {
-      const changed = JSON.stringify(currentProject) !== JSON.stringify(next);
+      const changed = currentProject.id !== next.id || JSON.stringify(currentProject.files) !== JSON.stringify(next.files) || JSON.stringify(currentProject.encodings ?? {}) !== JSON.stringify(next.encodings ?? {});
       currentProject = next;
       if (changed) this.discard();
     },

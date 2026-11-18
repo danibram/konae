@@ -29,12 +29,14 @@ type Props = {
   proposalReady?: boolean;
   proposalError?: string;
   recoverAvailable?: boolean;
+  historyAvailable?: boolean;
   applyBlocked?: boolean;
   staleRecovery?: { reason: string; checkpointId: string; files: Array<{ path: string; base?: string; candidate?: string }> } | null;
   onStartLinkedAttempt?: () => void;
+  onOpenHistory?: () => void;
 };
 
-export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError, recoverAvailable = false, applyBlocked = false, staleRecovery, onStartLinkedAttempt }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError, recoverAvailable = false, historyAvailable = false, applyBlocked = false, staleRecovery, onStartLinkedAttempt, onOpenHistory }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -75,6 +77,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
 
   return (
     <div className="agent-panel">
+      {historyAvailable && onOpenHistory && <div className="agent-history-link"><Button variant="secondary" size="sm" onClick={onOpenHistory}>Read saved conversations</Button><span>Read only · no provider request</span></div>}
       <div className="messages agent-thread" ref={threadRef} aria-live="polite" aria-busy={running}>
         {staleRecovery && (
           <section className="agent-recovery-review" aria-label="Preserved stale proposal">

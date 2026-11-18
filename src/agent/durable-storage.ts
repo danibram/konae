@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory";
+import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 
 /** Browser transport for Konae's authenticated native Pi batch API. */
@@ -12,9 +13,66 @@ export type DurableConversationInfo = {
   title: string;
   lastSeq: number;
   generation: number;
+  createdAt?: number;
+  updatedAt?: number;
 };
+export type DurableConversationCursor = { before: number; beforeId: string };
+export type DurableRecordCursor = { before: number; beforeOrdinal: number };
+export type DurableRecordSummary = { kind: string; messages?: Array<{ role?: string; content?: Array<{ text: string; clipped?: boolean }>; toolCalls?: Array<{ id?: string; name?: string; timestamp?: number }>; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string; timestamp?: number }>; intent?: unknown };
+export type DurableRecordSummaryItem = { sequence: number; ordinal: number; id: number | null; type: string; formatVersion: number; summary: DurableRecordSummary };
+export type DurableCheckpointSummary = { checkpointId: string; sequence: number; createdAt: number; status: string | null; sourcesRevision: number | null; candidateId: string | null; inspectionOnly?: boolean };
+
+function ownerHeaders(ownerId?: string) { return ownerId ? { "x-konae-owner-id": ownerId } : undefined; }
+
+export async function listDurableConversations(projectId: string, ownerId?: string, cursor?: DurableConversationCursor, fetcher: typeof fetch = fetch) {
+  const query = new URLSearchParams({ limit: "50" });
+  if (cursor) { query.set("before", String(cursor.before)); query.set("before_id", cursor.beforeId); }
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations?${query}`, { credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not read recent conversations (${response.status}).`);
+  return await response.json() as { items: DurableConversationInfo[]; nextCursor: DurableConversationCursor | null };
+}
+
+export async function readDurableRecords(projectId: string, conversationId: string, ownerId?: string, cursor?: DurableRecordCursor, fetcher: typeof fetch = fetch) {
+  const query = new URLSearchParams({ limit: "50" });
+  if (cursor) { query.set("before", String(cursor.before)); query.set("beforeOrdinal", String(cursor.beforeOrdinal)); }
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/records?${query}`, { credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not read conversation history (${response.status}).`);
+  return await response.json() as { items: DurableRecordSummaryItem[]; nextCursor: DurableRecordCursor | null };
+}
+
+export async function readDurableRecordIds(projectId: string, conversationId: string, ownerId?: string, cursor?: DurableRecordCursor, fetcher: typeof fetch = fetch) {
+  const query = new URLSearchParams({ limit: "50", idsOnly: "true" });
+  if (cursor) { query.set("before", String(cursor.before)); query.set("beforeOrdinal", String(cursor.beforeOrdinal)); }
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/records?${query}`, { credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not verify native conversation entry IDs (${response.status}).`);
+  return await response.json() as { items: Array<{ sequence: number; ordinal: number; id: number | null; type: string }>; nextCursor: DurableRecordCursor | null };
+}
+
+export async function readDurableCheckpointSummary(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch) {
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/checkpoints?summary=true`, { credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not read the latest proposal checkpoint (${response.status}).`);
+  return await response.json() as { item: DurableCheckpointSummary | null };
+}
+
+export async function readDurableRecord(projectId: string, conversationId: string, recordId: number, ownerId?: string, fetcher: typeof fetch = fetch) {
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/records/${recordId}/details`, { credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not read expanded conversation entry (${response.status}).`);
+  return await response.json() as Record<string, unknown>;
+}
+
+export async function deleteDurableConversation(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch) {
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE", credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not delete conversation (${response.status}).`);
+  return await response.json() as { deleted: boolean; conversationId: string };
+}
+
+export async function downloadDurableConversation(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch) {
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/download`, { credentials: "same-origin", cache: "no-store", headers: ownerHeaders(ownerId) });
+  if (!response.ok) throw new Error(`Could not download conversation (${response.status}).`);
+  return await response.blob();
+}
 export type DurableExecutionLease = { generation: number; conversationId?: string | null; executorId: string | null; expiresAt: number | null; live: boolean; unresolvedEffects: boolean; stopRequested?: boolean; serverNow: number };
-export type DurableEffectReceipt = { callId: string; executorId: string; generation: number; tool: string; effectClass: string; state: string; observationCallId: string | null; createdAt: number; updatedAt: number };
+export type DurableEffectReceipt = { callId: string; executorId: string; generation: number; tool: string; effectClass: string; state: string; observationCallId: string | null; createdAt: number; updatedAt: number; intent?: { origin?: string; sourceEntryId?: string; text?: string; declaredAt?: number } | null; refusal?: string | null };
 
 export async function readDurableLease(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch): Promise<DurableExecutionLease> {
   const headers: Record<string,string> = {};
@@ -47,6 +105,8 @@ export type DurableStorageOptions = {
   ownerId?: string;
   executorId?: string;
   fetch?: typeof fetch;
+  /** Previously inspected immutable prefix. Writer claim still rechecks the live high-water mark. */
+  nativeSnapshot?: readonly { sequence: number; writes: StorageWrite[] }[];
   localOnly?: boolean;
   /** Adds a checkpoint atomically with each batch. Build it from captured state; never await this Harness's context here. */
   checkpoint?: (writes: readonly StorageWrite[], sequence: number) => Promise<DurableCheckpointDraft | null>;
@@ -64,6 +124,7 @@ export type DurableCheckpoint = { checkpointId: string; sequence: number; payloa
 
 type NativeReceipt = { requestId: string; stored: number; sequences: number[]; lastSeq: number; refused: string | null; checkpointStored?: boolean };
 type NativeBatch = { sequence: number; writes: StorageWrite[] };
+export type NativeBatchSnapshot = readonly NativeBatch[];
 
 /**
  * The local MemoryStorage is only Pi's public materialized view. The authenticated
@@ -79,6 +140,7 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
   let generation: number | null = null;
   let leaseTimer: ReturnType<typeof setInterval> | null = null;
   let hydratedSeq = 0;
+  const nativeSnapshot: NativeBatch[] = [];
   let tail = Promise.resolve();
   const uploadedBlobs = new Map<string, Promise<string>>();
   const headers = () => {
@@ -97,15 +159,24 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
 
   // Read pages in sequence order and feed them through the public MemoryStorage
   // checker. Never decode, redact, or rewrite native records in this transport.
-  let after = 0;
-  for (;;) {
-    const page = await (await request(`${base}/batches?after=${after}&limit=50`, { method: "GET" })).json() as { batches: NativeBatch[]; nextCursor: number | null };
-    for (const batch of page.batches) {
+  if (options.nativeSnapshot) {
+    for (const batch of options.nativeSnapshot) {
       memory.prepareCommit(batch.writes, batch.sequence as never).apply();
-      after = batch.sequence;
+      nativeSnapshot.push(batch);
       hydratedSeq = batch.sequence;
     }
-    if (page.batches.length < 50 || page.nextCursor === null || page.nextCursor === after && page.batches.length === 0) break;
+  } else {
+    let after = 0;
+    for (;;) {
+      const page = await (await request(`${base}/batches?after=${after}&limit=50`, { method: "GET" })).json() as { batches: NativeBatch[]; nextCursor: number | null };
+      for (const batch of page.batches) {
+        memory.prepareCommit(batch.writes, batch.sequence as never).apply();
+        nativeSnapshot.push(batch);
+        after = batch.sequence;
+        hydratedSeq = batch.sequence;
+      }
+      if (page.batches.length < 50 || page.nextCursor === null || page.nextCursor === after && page.batches.length === 0) break;
+    }
   }
 
   return new Proxy(memory, {
@@ -213,6 +284,7 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
       });
       if (property === "readCheckpoints") return async () => readDurableCheckpoints(options, fetcher);
       if (property === "hydratedSequence") return hydratedSeq;
+      if (property === "nativeSnapshot") return nativeSnapshot;
       if (property === "lastSequence") return async () => readLastSeq();
       if (property === "close") return async (context: Context = BACKGROUND_CONTEXT) => {
         if (closed) return;
@@ -267,8 +339,8 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
     }
   }
   async function readLastSeq() {
-    const all = await fetchAllBatches();
-    return all.at(-1)?.sequence ?? 0;
+    const info = await (await request(base, { method: "GET" })).json() as DurableConversationInfo;
+    return info.lastSeq;
   }
 }
 
@@ -328,15 +400,132 @@ function refusalMessage(failure: HttpFailure) {
   return failure.body || failure.message;
 }
 
-export async function createDurableConversation(projectId: string, ownerId?: string, fetcher: typeof fetch = fetch): Promise<DurableConversationInfo> {
-  const id = crypto.randomUUID();
+export async function createDurableConversation(projectId: string, ownerId?: string, fetcher: typeof fetch = fetch, title = "New conversation", id: string = crypto.randomUUID()): Promise<DurableConversationInfo> {
   const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations`, {
     method: "POST", credentials: "same-origin", cache: "no-store",
     headers: { "content-type": "application/json", ...(ownerId ? { "x-konae-owner-id": ownerId } : {}) },
-    body: JSON.stringify({ id, formatVersion: 1, piVersion: "1.5.2", registryVersion: "1", title: "New conversation" }),
+    body: JSON.stringify({ id, formatVersion: 1, piVersion: "1.5.2", registryVersion: "1", title }),
   });
   if (!response.ok) throw new Error(`Could not create conversation (${response.status}).`);
   return await response.json() as DurableConversationInfo;
+}
+
+export type LocalHistoryAttachment = {
+  version: 1;
+  attachmentId: string;
+  recordIdMap: Record<string, number>;
+  createdAt: number;
+  title: string;
+  records: Array<Record<string, any>>;
+  modelContext: { messages: unknown[] };
+  files: { current: Record<string, string>; encodings?: Record<string, "base64">; candidate?: Record<string, string>; candidateEncodings?: Record<string, "base64">; changedFiles?: string[] };
+  continuation: { eligible: boolean; reasons: string[] };
+};
+
+/** Explicitly copy a local transcript and its proposal checkpoint into an owned Project. Never saves Project sources. */
+export async function attachLocalHistory(options: {
+  project: { id: string; revision: number; files: Record<string, string>; encodings?: Record<string, "base64">; modules?: Record<string, unknown> };
+  ownerId: string;
+  attachment: LocalHistoryAttachment;
+  fetch?: typeof fetch;
+}): Promise<{ conversation: DurableConversationInfo; copiedEntries: number; checkpointStored: boolean; inspectionOnly: boolean }> {
+  const fetcher = options.fetch ?? fetch;
+  const title = `Local attachment · ${options.attachment.title}`.slice(0, 120);
+  let conversation = await readDurableConversation(options.project.id, options.attachment.attachmentId, options.ownerId, fetcher).catch(() => null);
+  if (!conversation) conversation = await createDurableConversation(options.project.id, options.ownerId, fetcher, title, options.attachment.attachmentId);
+  else {
+    let saved = await readDurableRecordIds(options.project.id, conversation.id, options.ownerId, undefined, fetcher);
+    const savedIds = new Set<string>();
+    for (;;) {
+      for (const item of saved.items) savedIds.add(String(item.id));
+      if (!saved.nextCursor) break;
+      saved = await readDurableRecordIds(options.project.id, conversation.id, options.ownerId, saved.nextCursor, fetcher);
+    }
+    const expectedIds = options.attachment.records.map((entry) => String(options.attachment.recordIdMap[String(entry.id)]));
+    if (expectedIds.every((id) => savedIds.has(id)) && savedIds.size === expectedIds.length) {
+      const expectedLastSeq = expectedIds.length ? 2 : 1;
+      const summary = await readDurableCheckpointSummary(options.project.id, conversation.id, options.ownerId, fetcher);
+      if (conversation.lastSeq !== expectedLastSeq || !summary.item || summary.item.sequence !== expectedLastSeq) throw new Error("The prior attachment's stable ID is present, but its checkpoint/boundary read-back is incomplete. Inspect it before retrying.");
+      return { conversation, copiedEntries: expectedIds.length, checkpointStored: true, inspectionOnly: !options.attachment.continuation.eligible };
+    }
+    if (expectedIds.some((id) => savedIds.has(id))) throw new Error("The prior attachment has a partial native entry set. No second copy was written; inspect this stable attachment before retrying.");
+  }
+  const executorId = `local-attachment-${crypto.randomUUID()}`;
+  let storage: Storage | null = null;
+  let checkpointStored = false;
+  try {
+    const lease = await readDurableLease(options.project.id, conversation.id, options.ownerId, fetcher);
+    if (lease.live) throw new Error("Another browser is actively writing this Project. Read its status and finish the handoff before attaching local history.");
+    if (lease.unresolvedEffects) throw new Error("An admitted or unknown write is unresolved. Reconcile it before attaching local history.");
+    const eligible = options.attachment.continuation.eligible;
+    storage = await openDurableStorage({ projectId: options.project.id, conversationId: conversation.id, ownerId: options.ownerId, executorId, fetch: fetcher,
+      checkpoint: async (writes, sequence) => {
+        if (!writes.some((write) => write.type === "entry" || write.type === "conversation")) return null;
+        const { createCheckpointDraft } = await import("./durable-checkpoints");
+        const candidateFiles = options.attachment.files.candidate ?? options.attachment.files.current;
+        const hasProposal = JSON.stringify(candidateFiles) !== JSON.stringify(options.project.files);
+        return createCheckpointDraft({
+          projectId: options.project.id, sourcesRevision: options.project.revision,
+          base: { files: options.project.files, encodings: options.project.encodings },
+          scratch: { files: candidateFiles, encodings: options.attachment.files.candidateEncodings ?? options.attachment.files.encodings }, modelView: { files: candidateFiles, encodings: options.attachment.files.candidateEncodings ?? options.attachment.files.encodings },
+          modelContext: { sequence, messages: options.attachment.modelContext.messages }, nativeSequence: sequence,
+          validationSettings: { modules: options.project.modules ?? {} }, status: hasProposal ? "proposal" : "working",
+          ...(hasProposal ? { candidateId: crypto.randomUUID() } : {}),
+          lifecycle: { origin: "local-attachment", inspectionOnly: !eligible, reasons: options.attachment.continuation.reasons },
+        });
+      },
+    });
+    const generation = await readDurableLease(options.project.id, conversation.id, options.ownerId, fetcher);
+    if (generation.live || generation.unresolvedEffects) throw new Error("Project execution changed before local attachment. No local provider or source operation was started.");
+    await (storage as any).claimWriter(generation.generation, executorId, true);
+    const hasRoot = conversation.lastSeq > 0;
+    if (!hasRoot) {
+      const root = { type: "conversation", value: { id: ROOT_CONVERSATION_ID } } as StorageWrite;
+      const rootReceipt = await storage.commit([[root]], () => {}, BACKGROUND_CONTEXT);
+      if (rootReceipt.stored !== 1 || rootReceipt.refused) throw new Error(`Local attachment root was not acknowledged: ${String(rootReceipt.refused ?? "unknown refusal")}`);
+      checkpointStored = true;
+    }
+
+    const ids = new Map(options.attachment.records.map((entry) => [String(entry.id), options.attachment.recordIdMap[String(entry.id)]]));
+    if (ids.size !== options.attachment.records.length || [...ids.values()].some((id) => !Number.isSafeInteger(id) || id <= ROOT_CONVERSATION_ID)) throw new Error("The stable attachment ID map is incomplete or invalid.");
+    const entries = options.attachment.records.map((entry) => {
+      const value: Record<string, unknown> = { ...entry, id: ids.get(String(entry.id)), conversationId: ROOT_CONVERSATION_ID };
+      delete value.byTaskId;
+      if (typeof entry.head === "number") value.head = ids.get(String(entry.head));
+      if (Array.isArray(entry.edits)) value.edits = entry.edits.flatMap((edit: Record<string, unknown>) => {
+        const target = ids.get(String(edit.target));
+        return target === undefined ? [] : [{ ...edit, target }];
+      });
+      return { type: "entry", value } as StorageWrite;
+    });
+    if (entries.length) {
+      const receipt = await storage.commit([entries], () => {}, BACKGROUND_CONTEXT);
+      if (receipt.stored !== 1 || receipt.refused) throw new Error(`Local history entries were not acknowledged: ${String(receipt.refused ?? "unknown refusal")}`);
+      checkpointStored = true;
+    }
+    await storage.close(BACKGROUND_CONTEXT);
+    storage = null;
+    const observed = await readDurableConversation(options.project.id, conversation.id, options.ownerId, fetcher);
+    const expectedLastSeq = entries.length ? 2 : 1;
+    if (observed.lastSeq !== expectedLastSeq) throw new Error(`Local attachment read-back expected native sequence ${expectedLastSeq}, but saw ${observed.lastSeq}.`);
+    let readBack = await readDurableRecordIds(options.project.id, conversation.id, options.ownerId, undefined, fetcher);
+    const observedIds = new Set<number>();
+    for (;;) {
+      for (const item of readBack.items) if (item.id !== null) observedIds.add(item.id);
+      if (!readBack.nextCursor) break;
+      readBack = await readDurableRecordIds(options.project.id, conversation.id, options.ownerId, readBack.nextCursor, fetcher);
+    }
+    if (!entries.every((entry) => entry.type === "entry" && observedIds.has(Number(entry.value.id)))) throw new Error("The owner batch read-back did not confirm every attached native entry. Keep this stable handoff and reconcile before retrying.");
+    if (checkpointStored) {
+      const summary = await readDurableCheckpointSummary(options.project.id, conversation.id, options.ownerId, fetcher);
+      checkpointStored = summary.item?.sequence === expectedLastSeq;
+      if (!checkpointStored) throw new Error("The local attachment's proposal checkpoint was not visible after commit.");
+    }
+    return { conversation: observed, copiedEntries: entries.length, checkpointStored, inspectionOnly: !eligible };
+  } catch (error) {
+    if (storage) await storage.close(BACKGROUND_CONTEXT).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function readDurableConversation(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch) {
@@ -346,6 +535,7 @@ export async function readDurableConversation(projectId: string, conversationId:
   if (!response.ok) throw new Error(`Could not read conversation (${response.status}).`);
   return await response.json() as DurableConversationInfo;
 }
+
 
 /** Store private result detail out of first-page native records; callers keep the exact model text separately. */
 export async function uploadDurableDetail(options: DurableStorageOptions, value: unknown, fetcher: typeof fetch = fetch) {

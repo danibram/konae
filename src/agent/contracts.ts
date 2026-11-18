@@ -51,6 +51,7 @@ export interface CapsuleWorkspace {
   changedFiles(): ProjectFile[];
   serialize(): CapsuleSnapshot;
   reset(): void;
+  reseed(files: CapsuleFiles): void;
 }
 
 

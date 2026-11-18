@@ -110,6 +110,16 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
     for (const name of Object.keys(this.current)) this.mtimes.set(name, created);
   }
 
+  reseed(files: CapsuleFiles): void {
+    this.current = { ...files };
+    for (const key of Object.keys(this.seed) as ProjectFile[]) delete this.seed[key];
+    Object.assign(this.seed, files);
+    this.writeOrder.length = 0;
+    const created = Date.now();
+    this.mtimes.clear();
+    for (const name of Object.keys(this.current)) this.mtimes.set(name, created);
+  }
+
   private write(file: ProjectFile, content: string) {
     if (!this.writeOrder.includes(file)) this.writeOrder.push(file);
     this.current = { ...this.current, [file]: content };

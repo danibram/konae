@@ -48,6 +48,22 @@ try {
   for (const [engine, device] of [[chromium, {}], [webkit,devices["iPhone 13"]]]) {
     const browser = await engine.launch();
     try {
+      for (const withOwnerCookie of [false, true]) {
+        const localContext = await browser.newContext(device);
+        if (withOwnerCookie) await localContext.addCookies([{ name: "owner-session-fixture", value: "valid-fixture-cookie", url: origin }]);
+        const localOwnerRequests = [];
+        const localProviderRequests = [];
+        await localContext.route(origin+"/_konae/**", async route=>{ localOwnerRequests.push(route.request().url()); await route.fulfill({ status: 401, body: "must not be requested" }); });
+        await localContext.route(origin+"/mcp", async route=>{ localOwnerRequests.push(route.request().url()); await route.fulfill({ status: 401, body: "must not be requested" }); });
+        for (const host of ["api.anthropic.com", "api.openai.com", "openrouter.ai"]) await localContext.route(`https://${host}/**`, async route=>{ localProviderRequests.push(route.request().url()); await route.abort(); });
+        const localPage = await localContext.newPage();
+        await localPage.goto(origin+"/local");
+        assert.equal(await localPage.getByRole("heading", { name: "Make a small app here first." }).count(), 1);
+        assert.equal(await localPage.getByText("Local only · this tab").count(), 1);
+        assert.deepEqual(localOwnerRequests, [], `explicit /local made no owner or MCP requests (cookie=${withOwnerCookie})`);
+        assert.deepEqual(localProviderRequests, [], `opening /local made no provider request (cookie=${withOwnerCookie})`);
+        await localContext.close();
+      }
       const context = await browser.newContext(device);
       await context.addCookies([{ name: "owner-session-fixture", value: "present", url: origin }]);
       await context.route(origin+"/__gate28_probe",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>Local durable fixture</title>"}));
@@ -152,6 +168,7 @@ try {
           const native={batches:[],checkpoints:[],blobs:new Map(),generation:0};
           const fixtureFetch=async(input,init={})=>{
             const url=new URL(String(input),location.origin);
+            if(url.pathname.endsWith("/browser-recovery")&&(!init.method||init.method==="GET"))return Response.json({id:"browser-recovery",lastSeq:native.batches.at(-1)?.sequence??0,generation:native.generation,title:"fixture"});
             if(url.pathname.endsWith("/batches")&&(!init.method||init.method==="GET")){
               const after=Number(url.searchParams.get("after")??0);
               return Response.json({batches:native.batches.filter(batch=>batch.sequence>after),nextCursor:null});

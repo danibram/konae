@@ -48,6 +48,9 @@ import { switcherProjects } from "./components/project-list";
 import { suggestedChanges } from "./components/agent-suggestions";
 import "./components/workbench.css";
 import { AgentPanel } from "./components/AgentPanel";
+import { LocalFirstRun } from "./components/LocalFirstRun";
+import { DurableHistoryDialog } from "./components/DurableHistoryDialog";
+import { LocalHistoryAttachmentDialog } from "./components/LocalHistoryAttachmentDialog";
 import type { AppSettingsSection } from "./components/AppSettingsDialog";
 import { proposalPreviewProject, type ProposalPreview } from "./components/proposal-preview";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
@@ -123,6 +126,7 @@ const DesignSystem = lazy(() => import("./components/DesignSystem").then((module
 const modKey = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
 
 export function App() {
+  if (window.location.pathname === "/local") return <LocalFirstRun />;
   if (window.location.pathname === "/platform-access") return <PlatformAccess />;
   if (window.location.pathname === "/design-system") return <PublicDesignSystem />;
   return <PlatformGate />;
@@ -217,6 +221,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [operationError, setOperationError] = useState("");
   const [staleRecoveryReview, setStaleRecoveryReview] = useState<StagedRecoveryReview | null>(null);
   const [durableApplyBlocked, setDurableApplyBlocked] = useState(false);
+  const [durableHistoryOpen, setDurableHistoryOpen] = useState(false);
+  const [localAttachment, setLocalAttachment] = useState<unknown>(null);
+  const [pendingDurableContinue, setPendingDurableContinue] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [appSettingsSection, setAppSettingsSection] = useState<AppSettingsSection>("addresses");
@@ -299,6 +306,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const keyStore = useMemo(() => createAgentKeyStore(localStorage, ownerSession.ownerId), [ownerSession.ownerId]);
+  const durableKeyReady = Boolean(keyStore.getKey(agentSession.provider));
   const [explorerOpen, setExplorerOpen] = useState(false);
   const compact = useMediaQuery("(max-width: 900px)");
   const wide = useMediaQuery("(min-width: 1200px)");
@@ -321,6 +329,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setToasts((current) => [...current, { id, tone, message }]);
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 7000);
   };
+
+  useEffect(() => {
+    try {
+      const pending = sessionStorage.getItem("konae:local-history-attachment:v1");
+      if (pending) setLocalAttachment(JSON.parse(pending));
+    } catch { setOperationError("The local attachment handoff could not be read. Nothing was uploaded; return to /local and prepare it again."); }
+  }, [ownerSession.ownerId]);
 
   useEffect(() => {
     setAppSettingsOpen(false);
@@ -850,11 +865,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             let base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
             let committedScratch: Record<string, string> = textFiles(observedAtOpen.project);
             let pendingScratch: Record<string, string> = { ...committedScratch };
+            let inspectedNativeSnapshot: import("./agent/durable-storage").NativeBatchSnapshot | undefined;
             const readNativePrefix = async (id: string, throughSequence: number) => {
               const history = await openDurableHistory(projectId, id, ownerSession.ownerId);
               try {
                 if (history.info.lastSeq !== throughSequence) throw new Error("The native conversation advanced beyond this checkpoint.");
                 if (!history.conversation) throw new Error("The native conversation context is unavailable.");
+                inspectedNativeSnapshot = history.nativeSnapshot;
                 const contextView = await history.conversation.context(BACKGROUND_CONTEXT);
                 return { ...contextView, sequence: throughSequence };
               } finally { await history.close(); }
@@ -863,6 +880,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               const checkpoints = await readDurableCheckpoints({ projectId, conversationId, ownerId: ownerSession.ownerId });
               const latest = checkpoints[0];
               if (latest) {
+                if ((latest.payload as any)?.lifecycle?.origin === "local-attachment" && (latest.payload as any)?.lifecycle?.inspectionOnly === true) {
+                  throw new Error("This local attachment is preserved for reading only: its native pending work or pre-attachment tool details were not preserved, so it cannot be continued. The attached files remain an inspection-only proposal checkpoint.");
+                }
                 stagedParentCheckpointRef.current = latest.checkpointId;
                 const recovered = await recoverCheckpoint(latest, (digest) => readDurableBlob({ projectId, conversationId, ownerId: ownerSession.ownerId }, digest), { revision: savedRevision, files: base }, (sequence) => readNativePrefix(conversationId, sequence));
                 historicalGate = recovered.historicalGate as import("./agent/contracts").ValidationResult | undefined;
@@ -957,6 +977,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               const created = await createDurableConversation(projectId, ownerSession.ownerId);
               conversationId = created.id;
               info = created;
+              inspectedNativeSnapshot = undefined;
               recoveredFiles = undefined;
               recoveredProposalRef.current = false;
               setStaleRecoveryReview(null);
@@ -1005,6 +1026,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               if (lease.unresolvedEffects) throw new Error("An admitted or ambiguous write needs read-back and reconciliation before this project can continue.");
               const storage = await openDurableStorage({
                 projectId, conversationId, ownerId: ownerSession.ownerId, executorId,
+                nativeSnapshot: inspectedNativeSnapshot,
                 onLeaseLost: (error) => {
                   leaseLost = true;
                   setOperationError(`Shared execution is stopping. ${error instanceof Error ? error.message : String(error)}`);
@@ -1142,6 +1164,43 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         });
     }
     return agentLoad.current;
+  };
+
+  useEffect(() => {
+    if (!pendingDurableContinue || !durableRecoveryStaging) return;
+    let active = true;
+    void ensureAgent().then((handle) => {
+      if (!active) return;
+      if (!handle) setOperationError("Continue could not be started. The saved conversation remains readable.");
+      else { setDurableHistoryOpen(false); setOperationError(RECOVERED_PREVIEW_RESET_NOTICE); }
+    }).finally(() => { if (active) setPendingDurableContinue(""); });
+    return () => { active = false; };
+  }, [pendingDurableContinue, durableRecoveryStaging]);
+
+  const beginDurableContinue = (conversationId: string) => {
+    if (!durableRecoveryStaging) return;
+    if (!durableKeyReady) {
+      setOperationError("Add a provider key saved in this browser before continuing. Reading shared history does not need a key.");
+      setSettingsOpen(true);
+      return;
+    }
+    void platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect", {}).then((session) => {
+      if (session.can?.read !== true) throw new Error("Current session_inspect.can.read permission is not granted. History remains readable; continuation did not start.");
+      const updated = new URL(window.location.href);
+      updated.searchParams.set("agent", "durable-recovery");
+      updated.searchParams.set("conversation", conversationId);
+      history.replaceState(null, "", updated);
+      const executorKey = `konae:durable-executor:${ownerSession.ownerId}:${project.id}`;
+      if (!localStorage.getItem(executorKey)) localStorage.setItem(executorKey, crypto.randomUUID());
+      agentRef.current?.dispose();
+      agentRef.current = null;
+      agentLoad.current = null;
+      setAgent(null);
+      setThreadResetToken((token) => token + 1);
+      setOperationError("");
+      setDurableApplyBlocked(false);
+      setPendingDurableContinue(conversationId);
+    }).catch((error) => setOperationError(error instanceof Error ? error.message : String(error)));
   };
 
   useEffect(() => {
@@ -1687,7 +1746,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
+    return <><ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />
+      {localAttachment !== null && <LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
+        sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
+      }} />}
+    </>;
   }
 
   if (screen === "editor" && missing.some((item) => item.id === route.projectId)) return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>Could not open this app</h1><p role="alert">This app has no readable app/ source folder. The editor did not replace its files.</p><Button onClick={() => window.location.reload()}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></section></div></main>;
@@ -2007,7 +2070,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   };
 
-  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} recoverAvailable={durableRecoveryStaging} staleRecovery={staleRecoveryReview} applyBlocked={durableApplyBlocked} onStartLinkedAttempt={() => void startLinkedRecoveryAttempt()} />;
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} recoverAvailable={durableRecoveryStaging && durableKeyReady} historyAvailable={durableRecoveryStaging} staleRecovery={staleRecoveryReview} applyBlocked={durableApplyBlocked} onStartLinkedAttempt={() => void startLinkedRecoveryAttempt()} onOpenHistory={() => setDurableHistoryOpen(true)} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",
@@ -2124,6 +2187,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       )}
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
+
+      {durableRecoveryStaging && <DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} />}
+      {localAttachment !== null && <LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
+        sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
+      }} />}
 
       <AgentSettingsModal
         open={settingsOpen}

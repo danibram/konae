@@ -708,8 +708,11 @@ async fn list_effects(
         Ok(v) => v,
         Err(e) => return e,
     };
-    match db.prepare("SELECT call_id,executor_id,generation,tool,effect_class,state,observation_call_id,created_at,updated_at FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 ORDER BY created_at DESC,call_id DESC LIMIT 50") {
-        Ok(mut q)=>match q.query_map(params![owner,project,conversation],|r|Ok(json!({"callId":r.get::<_,String>(0)?,"executorId":r.get::<_,String>(1)?,"generation":r.get::<_,i64>(2)?,"tool":r.get::<_,String>(3)?,"effectClass":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"observationCallId":r.get::<_,Option<String>>(6)?,"createdAt":r.get::<_,i64>(7)?,"updatedAt":r.get::<_,i64>(8)?}))) {
+    match db.prepare("SELECT call_id,executor_id,generation,tool,effect_class,state,observation_call_id,created_at,updated_at,intent,refusal FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 ORDER BY created_at DESC,call_id DESC LIMIT 50") {
+        Ok(mut q)=>match q.query_map(params![owner,project,conversation],|r| {
+            let intent: Option<String> = r.get(9)?;
+            Ok(json!({"callId":r.get::<_,String>(0)?,"executorId":r.get::<_,String>(1)?,"generation":r.get::<_,i64>(2)?,"tool":r.get::<_,String>(3)? ,"effectClass":r.get::<_,String>(4)? ,"state":r.get::<_,String>(5)? ,"observationCallId":r.get::<_,Option<String>>(6)? ,"createdAt":r.get::<_,i64>(7)? ,"updatedAt":r.get::<_,i64>(8)? ,"intent":intent.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"refusal":r.get::<_,Option<String>>(10)?}))
+        }) {
             Ok(rows)=>match rows.collect::<rusqlite::Result<Vec<_>>>() {Ok(items)=>json_response(json!({"items":items,"limit":50})),Err(e)=>internal(e)},Err(e)=>internal(e)
         },Err(e)=>internal(e)
     }
@@ -1181,7 +1184,55 @@ struct RecordPage {
     before: Option<i64>,
     before_ordinal: Option<i64>,
     limit: Option<usize>,
+    ids_only: Option<bool>,
 }
+
+/// A bounded, inert reader projection. Raw records stay behind the explicit details route.
+fn record_summary(payload: &str) -> Value {
+    const TEXT_LIMIT: usize = 1_200;
+    let Ok(record) = serde_json::from_str::<Value>(payload) else {
+        return json!({"kind":"unreadable"});
+    };
+    let Some(value) = record.get("value") else {
+        return json!({"kind":record.get("type").and_then(Value::as_str).unwrap_or("record")});
+    };
+    let kind = value.get("kind").and_then(Value::as_str).unwrap_or("entry");
+    let messages = value.get("model").and_then(Value::as_array).map(|items| items.iter().filter_map(|message| {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("unknown");
+        if role == "system" || matches!(kind, "pi.system" | "pi.configuration") { return None; }
+        let content = message.get("content").and_then(Value::as_array).map(|parts| parts.iter().take(8).filter_map(|part| {
+            if part.get("type").and_then(Value::as_str) != Some("text") { return None; }
+            part.get("text").and_then(Value::as_str).map(|text| {
+                let clipped = text.chars().take(TEXT_LIMIT).collect::<String>();
+                let was_clipped = text.chars().count() > TEXT_LIMIT;
+                if was_clipped { json!({"text":clipped,"clipped":true}) } else { json!({"text":clipped}) }
+            })
+        }).collect::<Vec<_>>()).unwrap_or_default();
+        let calls = message.get("content").and_then(Value::as_array).map(|parts| parts.iter().filter(|part| part.get("type").and_then(Value::as_str)==Some("toolCall")).map(|part| {
+            let mut call = serde_json::Map::new();
+            for key in ["id", "name"] { if let Some(value) = part.get(key) { call.insert(key.to_owned(), value.clone()); } }
+            if let Some(timestamp) = message.get("timestamp") { call.insert("timestamp".into(), timestamp.clone()); }
+            Value::Object(call)
+        }).collect::<Vec<_>>()).unwrap_or_default();
+        let string_content = message.get("content").and_then(Value::as_str).map(|text| {
+            let clipped = text.chars().take(TEXT_LIMIT).collect::<String>();
+            json!([{"text":clipped,"clipped":text.chars().count()>TEXT_LIMIT}])
+        });
+        let mut summary = serde_json::Map::new();
+        summary.insert("role".into(), Value::String(role.to_owned()));
+        summary.insert("content".into(), string_content.unwrap_or(Value::Array(content)));
+        if !calls.is_empty() { summary.insert("toolCalls".into(), Value::Array(calls)); }
+        for key in ["toolCallId", "toolName", "isError", "stopReason", "timestamp"] {
+            if let Some(value) = message.get(key).filter(|value| !value.is_null()) { summary.insert(key.to_owned(), value.clone()); }
+        }
+        Some(Value::Object(summary))
+    }).take(8).collect::<Vec<_>>()).unwrap_or_default();
+    let data = value.get("data").and_then(Value::as_object);
+    let mut summary = json!({"kind":kind,"messages":messages});
+    if let Some(intent) = data.and_then(|data| data.get("intent")).filter(|intent| !intent.is_null()) { summary["intent"] = intent.clone(); }
+    summary
+}
+
 async fn records(
     State(state): State<Konae>,
     AxumPath((project, conversation)): AxumPath<(String, String)>,
@@ -1203,10 +1254,15 @@ async fn records(
         );
     }
     let before = page.before.unwrap_or(MAX_SAFE_INTEGER);
-    let sql="SELECT r.seq,r.ordinal,r.record_id,r.record_type,r.format_version FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0 AND (r.seq<?4 OR (r.seq=?4 AND r.ordinal<COALESCE(?5,9223372036854775807))) ORDER BY r.seq DESC,r.ordinal DESC LIMIT ?6";
+    let ids_only = page.ids_only.unwrap_or(false);
+    let sql = if ids_only {
+        "SELECT r.seq,r.ordinal,r.record_id,r.record_type,r.format_version,r.payload FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0 AND r.record_type='entry' AND (r.seq<?4 OR (r.seq=?4 AND r.ordinal<COALESCE(?5,9223372036854775807))) ORDER BY r.seq DESC,r.ordinal DESC LIMIT ?6"
+    } else {
+        "SELECT r.seq,r.ordinal,r.record_id,r.record_type,r.format_version,r.payload FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0 AND r.record_type='entry' AND COALESCE(json_extract(r.payload,'$.value.kind'),'') NOT IN ('pi.tool','pi.generation','pi.document.change','pi.system','pi.live','pi.inbox','pi.usage','pi.provider') AND (r.seq<?4 OR (r.seq=?4 AND r.ordinal<COALESCE(?5,9223372036854775807))) ORDER BY r.seq DESC,r.ordinal DESC LIMIT ?6"
+    };
     let rows=match db.prepare(sql){Ok(mut q)=>match q.query_map(params![conversation,owner,project,before,page.before_ordinal,limit as i64],|r|{
-        let record_id:Option<i64>=r.get(2)?;let record_type:String=r.get(3)?;
-        Ok(json!({"sequence":r.get::<_,i64>(0)?,"ordinal":r.get::<_,i64>(1)?,"id":record_id,"type":record_type,"formatVersion":r.get::<_,i64>(4)?,"summary":{"id":record_id,"kind":record_type}}))
+        let record_id:Option<i64>=r.get(2)?;let record_type:String=r.get(3)?;let payload:String=r.get(5)?;
+        Ok(if ids_only { json!({"sequence":r.get::<_,i64>(0)? ,"ordinal":r.get::<_,i64>(1)? ,"id":record_id,"type":record_type,"formatVersion":r.get::<_,i64>(4)?}) } else { json!({"sequence":r.get::<_,i64>(0)? ,"ordinal":r.get::<_,i64>(1)? ,"id":record_id,"type":record_type,"formatVersion":r.get::<_,i64>(4)? ,"summary":record_summary(&payload)}) })
     }){Ok(v)=>match v.collect::<rusqlite::Result<Vec<_>>>(){Ok(v)=>v,Err(e)=>return internal(e)},Err(e)=>return internal(e)},Err(e)=>return internal(e)};
     let next = if rows.len() == limit {
         rows.last()
@@ -1287,6 +1343,14 @@ struct DownloadBlob {
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DownloadCheckpoint {
+    checkpoint_id: String,
+    sequence: i64,
+    created_at: i64,
+    payload: Box<RawValue>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DownloadEnvelope {
     version: i64,
     format_version: i64,
@@ -1296,7 +1360,8 @@ struct DownloadEnvelope {
     project_id: String,
     title: String,
     records: Vec<Box<RawValue>>,
-    checkpoints: Vec<Box<RawValue>>,
+    checkpoints: Vec<DownloadCheckpoint>,
+    effects: Vec<Value>,
     blobs: Vec<DownloadBlob>,
 }
 async fn batches(
@@ -1494,9 +1559,12 @@ async fn checkpoint(
     )
 }
 
+#[derive(Deserialize)]
+struct CheckpointQuery { summary: Option<bool> }
 async fn checkpoints(
     State(state): State<Konae>,
     AxumPath((project, conversation)): AxumPath<(String, String)>,
+    Query(query): Query<CheckpointQuery>,
     request: Request,
 ) -> Response {
     let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
@@ -1505,6 +1573,18 @@ async fn checkpoints(
     };
     if let Err(response) = require_conversation(&db, &owner, &project, &conversation) {
         return response;
+    }
+    if query.summary.unwrap_or(false) {
+        let latest: Option<(String, i64, String, i64)> = db.query_row(
+            "SELECT checkpoint_id,seq,payload,created_at FROM conversation_checkpoints WHERE conversation=?1 ORDER BY seq DESC,checkpoint_id DESC LIMIT 1",
+            [&conversation],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+        ).optional().unwrap_or(None);
+        let item = latest.and_then(|(checkpoint_id, sequence, payload, created_at)| {
+            let value = serde_json::from_str::<Value>(&payload).ok()?;
+            Some(json!({"checkpointId":checkpoint_id,"sequence":sequence,"createdAt":created_at,"status":value.get("status"),"sourcesRevision":value.get("sourcesRevision"),"candidateId":value.get("candidateId"),"inspectionOnly":value.pointer("/lifecycle/inspectionOnly")}))
+        });
+        return json_response(json!({"item":item}));
     }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -1686,17 +1766,27 @@ async fn download(
         },
         Err(e) => return internal(e),
     };
-    let mut q=match db.prepare("SELECT payload FROM conversation_checkpoints WHERE conversation=?1 ORDER BY seq,checkpoint_id"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let mut q=match db.prepare("SELECT checkpoint_id,seq,payload,created_at FROM conversation_checkpoints WHERE conversation=?1 ORDER BY seq,checkpoint_id"){Ok(v)=>v,Err(e)=>return internal(e)};
     let checkpoints = match q.query_map([&conversation], |r| {
-        let payload: String = r.get(0)?;
-        RawValue::from_string(payload).map_err(|e| {
+        let payload: String = r.get(2)?;
+        let payload = RawValue::from_string(payload).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-        })
+        })?;
+        Ok(DownloadCheckpoint { checkpoint_id: r.get(0)?, sequence: r.get(1)?, payload, created_at: r.get(3)? })
     }) {
         Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() {
             Ok(v) => v,
             Err(e) => return internal(e),
         },
+        Err(e) => return internal(e),
+    };
+    let mut q=match db.prepare("SELECT call_id,executor_id,generation,tool,effect_class,args_hash,intent,state,result,refusal,observation_call_id,created_at,updated_at FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 ORDER BY created_at,call_id"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let effects = match q.query_map(params![owner,project,conversation], |r| {
+        let intent: Option<String> = r.get(6)?;
+        let result: Option<String> = r.get(8)?;
+        Ok(json!({"callId":r.get::<_,String>(0)?,"executorId":r.get::<_,String>(1)?,"generation":r.get::<_,i64>(2)?,"tool":r.get::<_,String>(3)?,"effectClass":r.get::<_,String>(4)?,"argsHash":r.get::<_,String>(5)?,"intent":intent.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"state":r.get::<_,String>(7)?,"result":result.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"refusal":r.get::<_,Option<String>>(9)?,"observationCallId":r.get::<_,Option<String>>(10)?,"createdAt":r.get::<_,i64>(11)?,"updatedAt":r.get::<_,i64>(12)?}))
+    }) {
+        Ok(v) => match v.collect::<rusqlite::Result<Vec<_>>>() { Ok(v) => v, Err(e) => return internal(e) },
         Err(e) => return internal(e),
     };
     let mut q=match db.prepare("SELECT b.digest,b.bytes FROM conversation_blob_refs r JOIN conversation_blobs b ON b.digest=r.digest WHERE r.conversation=?1 ORDER BY b.digest"){Ok(v)=>v,Err(e)=>return internal(e)};
@@ -1733,6 +1823,7 @@ async fn download(
         title,
         records,
         checkpoints,
+        effects,
         blobs,
     };
     let bytes = match serde_json::to_vec(&envelope) {
@@ -2079,6 +2170,28 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use tower::ServiceExt;
+
+    #[test]
+    fn summary_projects_owner_text_and_text_parts_but_hides_system_and_caps_content() {
+        let exact = "owner request";
+        let payload = json!({"type":"entry","value":{"id":1,"kind":"konae.owner-message","model":[
+            {"role":"user","content":exact,"timestamp":123},
+            {"role":"assistant","content":[{"type":"text","text":"visible answer"},{"type":"thinking","thinking":"private internal text"}],"stopReason":"stop"},
+            {"role":"system","content":"private configuration"}
+        ]}}).to_string();
+        let summary = record_summary(&payload);
+        assert_eq!(summary["kind"], "konae.owner-message");
+        assert_eq!(summary["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(summary["messages"][0]["content"][0]["text"], exact);
+        assert_eq!(summary["messages"][1]["content"][0]["text"], "visible answer");
+        assert_eq!(summary["messages"][1]["stopReason"], "stop");
+        assert!(!summary.to_string().contains("private internal text"));
+        assert!(!summary.to_string().contains("private configuration"));
+        let long = "x".repeat(1_300);
+        let clipped = record_summary(&json!({"type":"entry","value":{"kind":"pi.user","model":[{"role":"user","content":long}]}}).to_string());
+        assert_eq!(clipped["messages"][0]["content"][0]["text"].as_str().unwrap().chars().count(), 1_200);
+        assert_eq!(clipped["messages"][0]["content"][0]["clipped"], true);
+    }
 
     async fn fixture() -> (
         PathBuf,

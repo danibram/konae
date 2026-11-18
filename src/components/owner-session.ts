@@ -9,6 +9,28 @@ export type OwnerSession =
   | { state: "unavailable"; message: string };
 
 const emailKey = "konae:owner-email";
+const cacheOwnerKey = "konae:active-owner-cache";
+
+/** Remove only one owner's cached workspace and durable route identities. Provider keys are credentials, not caches. */
+export function clearOwnerCaches(ownerId: string, storage: Storage = localStorage) {
+  const owner = encodeURIComponent(ownerId);
+  const prefixes = [`konae:owner:${owner}:`, `konae:durable-recovery:${owner}:`, `konae:durable-executor:${owner}:`];
+  try {
+    for (let index = storage.length - 1; index >= 0; index--) {
+      const key = storage.key(index);
+      if (key && prefixes.some((prefix) => key.startsWith(prefix))) storage.removeItem(key);
+    }
+  } catch { /* Private-mode storage denial must not interrupt sign-out. */ }
+}
+
+function syncOwnerCaches(ownerId: string | null) {
+  try {
+    const previous = localStorage.getItem(cacheOwnerKey);
+    if (previous && previous !== ownerId) clearOwnerCaches(previous);
+    if (ownerId) localStorage.setItem(cacheOwnerKey, ownerId);
+    else localStorage.removeItem(cacheOwnerKey);
+  } catch { /* Owner cache cleanup is best-effort when storage is unavailable. */ }
+}
 
 export function rememberOwnerEmail(email: string | null) {
   try {
@@ -47,7 +69,11 @@ export function useOwnerSession(): [OwnerSession, () => void] {
     lastCheck.current = Date.now();
     const generation = ++checkGeneration.current;
     void checkOwnerSession().then((result) => {
-      if (generation === checkGeneration.current) setSession(result);
+      if (generation === checkGeneration.current) {
+        if (result.state === "signed-in") syncOwnerCaches(result.ownerId);
+        else if (result.state === "signed-out") syncOwnerCaches(null);
+        setSession(result);
+      }
     });
   }, []);
 

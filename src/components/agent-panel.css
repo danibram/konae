@@ -104,3 +104,5 @@
 @keyframes agent-blink { to { opacity: 0; } }
 @keyframes agent-bounce { to { translate: 0 -4px; } }
 @media (prefers-reduced-motion: reduce) { .agent-caret, .thinking i { animation: none; } }
+.agent-history-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 0; }
+.agent-history-link span { color: var(--muted, #666); font-size: 11px; }

@@ -24,6 +24,7 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
     const body = typeof init.body === "string" ? init.body : undefined;
     const headers = new Headers(init.headers);
     requests.push({ url, method, body, headers });
+    if (/\/conversations\/[^/]+$/.test(new URL(url, "http://local").pathname)) return Response.json({ lastSeq: batches.at(-1)?.sequence ?? 0 });
     if (url.includes("/batches?")) return Response.json({ batches: [...batches].filter((batch) => batch.sequence > Number(new URL(url, "http://local").searchParams.get("after"))).sort((a, b) => a.sequence - b.sequence), nextCursor: batches.at(-1)?.sequence ?? null });
     if (url.endsWith("/claim")) {
       const claim = JSON.parse(body!) as { executorId?: string; continueExplicitly?: boolean };
@@ -115,6 +116,7 @@ describe("authenticated native Durable Storage bridge", () => {
     expect(acknowledged).toEqual([1]);
     expect((storage as any).hydratedSequence).toBe(1);
     expect(await (storage as any).lastSequence()).toBe(1);
+    expect(api.requests.filter((request) => /\/conversations\/[^/]+$/.test(new URL(request.url, "http://local").pathname))).toHaveLength(2);
     const post = api.requests.find((request) => request.url.endsWith("/commit"))!;
     expect(post.headers.get("x-konae-owner-id")).toBe("owner-a");
     expect(post.body).toContain('"requestId"');
