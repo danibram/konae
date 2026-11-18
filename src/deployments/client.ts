@@ -5,7 +5,7 @@ import type { DeploymentRecord, DeploymentVisibility } from "./manifest";
 import type { BuildArtifact } from "../runtime/artifact";
 import { defaultModuleStates } from "../lib/app-folder";
 import { sourcesUseAuth } from "../lib/module-use";
-import { McpError, platformMcp, type Transfer } from "../mcp/client";
+import { McpError, platformMcp, type McpClient, type Transfer } from "../mcp/client";
 import { publishProject, type ConfirmSchema } from "./release";
 
 export type DeploymentReceipt = DeploymentRecord;
@@ -40,13 +40,13 @@ export async function setModule(projectId: string, name: string, state: Record<s
 }
 
 
-export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number, initialModules?: MiniAppProject["modules"]): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
+export async function deployProject(project: MiniAppProject, visibility: DeploymentVisibility, artifact: BuildArtifact, confirmSchema: ConfirmSchema, initialSignupPolicy?: Pick<SignupPolicy, "mode" | "allowlist">, observedSourcesRevision?: number, initialModules?: MiniAppProject["modules"], client: Pick<McpClient, "call" | "upload" | "cancel"> = platformMcp): Promise<{ receipt: DeploymentReceipt; sourcesRevision: number }> {
   const moduleStates = initialModules ? defaultModuleStates(initialModules) : undefined;
   if (moduleStates?.auth) {
     moduleStates.auth.signupPolicy = initialSignupPolicy ?? { mode: visibility === "public" ? "open" : "closed", allowlist: [] };
     if (visibility === "private" || initialSignupPolicy || sourcesUseAuth(Object.values(project.files ?? {}))) moduleStates.auth.on = true;
   }
-  const { plan, receipt } = await publishProject<DeploymentReceipt>(platformMcp, project, () => ({ project, visibility, artifact, initialSignupPolicy, ...(moduleStates ? { initialModules: moduleStates } : {}) }), confirmSchema, () => {}, undefined, observedSourcesRevision);
+  const { plan, receipt } = await publishProject<DeploymentReceipt>(client, project, () => ({ project, visibility, artifact, initialSignupPolicy, ...(moduleStates ? { initialModules: moduleStates } : {}) }), confirmSchema, () => {}, undefined, observedSourcesRevision);
   return { receipt, sourcesRevision: plan.expectedSourcesRevision + 1 };
 }
 

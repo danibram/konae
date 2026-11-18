@@ -16,6 +16,26 @@ function endpoint() {
 }
 
 describe("McpClient.upload", () => {
+  test("binds agent MCP calls to the server-fenced execution identity", async () => {
+    let headers: Headers | undefined;
+    const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      headers = new Headers(init?.headers);
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 });
+      const result = request.method === "initialize" ? { protocolVersion: "2025-11-25" } : { structuredContent: { result: { ok: true } } };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    }) as typeof globalThis.fetch;
+    const client = new McpClient("/mcp", { ownerId: "fixture-owner", fetch });
+    await client.callForAgent("module_set", { projectId: "project-a", module: "files", on: true }, { projectId: "project-a", conversationId: "conversation-a", executorId: "device-a", generation: 8, callId: "tool-call-1", observesCallId: "original-write-1" });
+    expect(headers?.get("x-konae-owner-id")).toBe("fixture-owner");
+    expect(headers?.get("x-konae-execution-project")).toBe("project-a");
+    expect(headers?.get("x-konae-execution-conversation")).toBe("conversation-a");
+    expect(headers?.get("x-konae-execution-id")).toBe("device-a");
+    expect(headers?.get("x-konae-execution-generation")).toBe("8");
+    expect(headers?.get("x-konae-execution-call")).toBe("tool-call-1");
+    expect(headers?.get("x-konae-execution-observes")).toBe("original-write-1");
+  });
+
   test("names a package component in transfer_begin when asked", async () => {
     const { calls, client } = endpoint();
     await client.upload(new Uint8Array([1, 2, 3]), "app_1", "identity");

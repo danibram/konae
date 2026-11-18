@@ -1,4 +1,4 @@
-import { McpClient, platformMcp } from "../mcp/client";
+import { McpClient, platformMcp, type AgentExecution } from "../mcp/client";
 import type { MiniAppProject } from "./types";
 import type { DeploymentReceipt } from "../deployments/client";
 import { checkSourceFiles } from "./source-rules";
@@ -25,7 +25,7 @@ export function sourceSavePayload(previous: MiniAppProject | undefined, next: Mi
   return { format: "delta", metadata: { name: next.name, slug: next.slug, directories: next.directories, manifest: next.manifest, updatedAt: next.updatedAt }, files, ...(Object.keys(encodings).length ? { encodings } : {}), removedPaths };
 }
 
-type SaveJob = { project: MiniAppProject; snapshot: string; epoch: number; expectedRevision?: number; resolve: (revision: number) => void; reject: (error: unknown) => void };
+type SaveJob = { project: MiniAppProject; snapshot: string; epoch: number; expectedRevision?: number; execution?: AgentExecution; resolve: (revision: number) => void; reject: (error: unknown) => void };
 
 export async function readOwnerProjectCount(ownerId?: string): Promise<number> {
   const client = ownerId ? new McpClient("/mcp", { ownerId }) : platformMcp;
@@ -123,9 +123,9 @@ export class ProjectSources {
   }
 
   /** Read the current saved sources without changing this instance's cache or canceling queued saves. */
-  async observeSaved(projectId: string): Promise<{ revision: number; project: MiniAppProject | null }> {
+  async observeSaved(projectId: string, execution?: AgentExecution): Promise<{ revision: number; project: MiniAppProject | null }> {
     const requestId = crypto.randomUUID();
-    const saved = await this.client.call<SourceResult>("project_sources_read", { projectId, requestId });
+    const saved = await (execution ? this.client.callForAgent<SourceResult>("project_sources_read", { projectId, requestId }, execution) : this.client.call<SourceResult>("project_sources_read", { projectId, requestId }));
     try {
       if (!saved.transfer) return { revision: saved.revision, project: null };
       const bytes = await this.client.download(saved.transfer);
@@ -209,9 +209,10 @@ export class ProjectSources {
   }
 
   /** Save a recovered proposal against the revision it was validated against. */
-  saveExpected(project: MiniAppProject, expectedRevision: number): Promise<number> {
+  saveExpected(project: MiniAppProject, expectedRevision: number, execution?: AgentExecution): Promise<number> {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return Promise.reject(new Error("The proposal's saved source revision is invalid."));
     if (this.reloading.has(project.id)) return Promise.reject(new Error("Saved sources are loading. Resolve the source conflict before saving this draft."));
+    if (this.snapshots.get(project.id) === JSON.stringify(project) && this.revisions.has(project.id) && !this.running.has(project.id) && !this.pending.has(project.id)) return Promise.resolve(this.revisions.get(project.id)!);
     try { checkSourceFiles(project); checkSourceUpload(new TextEncoder().encode(JSON.stringify(project)).length); }
     catch (error) { return Promise.reject(error); }
     const snapshot = JSON.stringify(project);
@@ -223,7 +224,7 @@ export class ProjectSources {
         return;
       }
       if (obsolete) obsolete.reject(new SaveSupersededError());
-      this.pending.set(project.id, { project, snapshot, epoch, expectedRevision, resolve, reject });
+      this.pending.set(project.id, { project, snapshot, epoch, expectedRevision, execution, resolve, reject });
       void this.pump(project.id);
     });
   }
@@ -277,7 +278,8 @@ export class ProjectSources {
       const upload = await this.client.upload(bytes, projectId, undefined, controller.signal);
       try {
         checkEpoch();
-        const result = await this.client.call<{ revision: number }>("project_sources_save", { projectId, transferId: upload.transferId, expectedRevision: revision }, controller.signal);
+        const saveArgs = { projectId, transferId: upload.transferId, expectedRevision: revision };
+        const result = await (job.execution ? this.client.callForAgent<{ revision: number }>("project_sources_save", saveArgs, job.execution, controller.signal) : this.client.call<{ revision: number }>("project_sources_save", saveArgs, controller.signal));
         checkEpoch();
         this.commitSnapshot(projectId, job, result.revision);
         this.sourcesExist.add(projectId);

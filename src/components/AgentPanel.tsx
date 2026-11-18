@@ -105,7 +105,7 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
             <p>{live
               ? "Describe it in one sentence. A change that passes the Gate appears in Preview before you apply it."
               : "Describe it in one sentence. A model you connect makes the change, and you apply it after you see it."}</p>
-            {recoverAvailable && !staleRecovery && !thread.recoveryAttempted && <Button variant="secondary" onClick={() => void thread.recover()} disabled={running}>Recover saved proposal</Button>}
+            {recoverAvailable && !staleRecovery && !thread.recoveryAttempted && <Button variant="secondary" onClick={() => void thread.recover()} disabled={running}>Continue from saved conversation</Button>}
             {suggestions.length > 0 && <>
               <p className="agent-examples-label">Try one</p>
               <ExamplePrompts sentences={suggestions} onPick={pick} />

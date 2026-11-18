@@ -13,17 +13,46 @@ export type DurableConversationInfo = {
   lastSeq: number;
   generation: number;
 };
+export type DurableExecutionLease = { generation: number; conversationId?: string | null; executorId: string | null; expiresAt: number | null; live: boolean; unresolvedEffects: boolean; stopRequested?: boolean; serverNow: number };
+export type DurableEffectReceipt = { callId: string; executorId: string; generation: number; tool: string; effectClass: string; state: string; observationCallId: string | null; createdAt: number; updatedAt: number };
+
+export async function readDurableLease(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch): Promise<DurableExecutionLease> {
+  const headers: Record<string,string> = {};
+  if (ownerId) headers["x-konae-owner-id"] = ownerId;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/lease`, { credentials:"same-origin", cache:"no-store", headers });
+  if (!response.ok) throw new Error(`Could not inspect project execution lease (${response.status}).`);
+  return await response.json() as DurableExecutionLease;
+}
+
+/** Ask the currently live browser for a cooperative stop, drain and release. */
+export async function requestDurableStop(projectId: string, conversationId: string, generation: number, requestId = crypto.randomUUID(), ownerId?: string, fetcher: typeof fetch = fetch): Promise<{ requested: boolean; requestId: string; executorId: string; generation: number }> {
+  const headers: Record<string,string> = { "content-type": "application/json" };
+  if (ownerId) headers["x-konae-owner-id"] = ownerId;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/stop`, { method:"POST", credentials:"same-origin", cache:"no-store", headers, body:JSON.stringify({ requestId, generation }) });
+  if (!response.ok) throw new Error(`Could not request project execution stop (${response.status}).`);
+  return await response.json() as { requested: boolean; requestId: string; executorId: string; generation: number };
+}
+
+export async function readDurableEffects(projectId: string, conversationId: string, ownerId?: string, fetcher: typeof fetch = fetch): Promise<DurableEffectReceipt[]> {
+  const headers: Record<string,string> = {};
+  if (ownerId) headers["x-konae-owner-id"] = ownerId;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/effects`, { credentials:"same-origin", cache:"no-store", headers });
+  if (!response.ok) throw new Error(`Could not inspect project effect receipts (${response.status}).`);
+  return (await response.json() as { items: DurableEffectReceipt[] }).items;
+}
 
 export type DurableStorageOptions = {
   projectId: string;
   conversationId: string;
   ownerId?: string;
+  executorId?: string;
   fetch?: typeof fetch;
   localOnly?: boolean;
   /** Adds a checkpoint atomically with each batch. Build it from captured state; never await this Harness's context here. */
   checkpoint?: (writes: readonly StorageWrite[], sequence: number) => Promise<DurableCheckpointDraft | null>;
   /** Advances the caller's inspected boundary only after the native receipt and local apply are complete. */
   onAcknowledged?: (sequence: number) => void;
+  onLeaseLost?: (error: unknown) => void;
 };
 
 export type DurableCheckpointDraft = {
@@ -46,7 +75,9 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
   const fetcher = options.fetch ?? fetch;
   const base = `/_konae/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}`;
   let closed = false;
+  let stopRequested = false;
   let generation: number | null = null;
+  let leaseTimer: ReturnType<typeof setInterval> | null = null;
   let hydratedSeq = 0;
   let tail = Promise.resolve();
   const uploadedBlobs = new Map<string, Promise<string>>();
@@ -79,8 +110,9 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
 
   return new Proxy(memory, {
     get(target, property) {
-      if (property === "claimWriter") return async (expectedGeneration: number) => {
-        const response = await request(`${base}/claim`, { method: "POST", body: JSON.stringify({ expectedGeneration }) });
+      if (property === "claimWriter") return async (expectedGeneration: number, executorId = options.executorId, continueExplicitly = false) => {
+        if (!executorId || !continueExplicitly) throw new Error("Explicit Continue and a stable executor ID are required to start shared work.");
+        const response = await request(`${base}/claim`, { method: "POST", body: JSON.stringify({ expectedGeneration, executorId, continueExplicitly }) });
         const value = await response.json() as { generation: number };
         const boundary = await readLastSeq();
         if (boundary !== hydratedSeq) {
@@ -89,7 +121,23 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
           throw new Error("Conversation history changed while claiming. Reload the conversation before continuing.");
         }
         generation = value.generation;
+        leaseTimer = setInterval(() => {
+          if (closed || generation === null) return;
+          void request(`${base}/renew`, { method: "POST", body: JSON.stringify({ generation, executorId }) }).then(async (renewal) => {
+            const state = await renewal.json() as { stopRequested?: boolean };
+            if (state.stopRequested) await loseLease(new Error("Another device requested a cooperative stop. The current turn is draining before release."), true);
+          }).catch((error) => loseLease(error));
+        }, 15_000);
         return value.generation;
+      };
+      if (property === "assertLease") return async () => {
+        if (closed || stopRequested || generation === null || !options.executorId) throw new Error("Shared project execution is no longer active.");
+        const renewal = await request(`${base}/renew`, { method: "POST", body: JSON.stringify({ generation, executorId: options.executorId }) });
+        const state = await renewal.json() as { stopRequested?: boolean };
+        if (state.stopRequested) {
+          await loseLease(new Error("Another device requested a cooperative stop. The current turn is draining before release."), true);
+          throw new Error("A cooperative stop was requested for this project.");
+        }
       };
       if (property === "commit") return (batches: readonly (readonly StorageWrite[])[], receive: (index: number, seq: never) => void, _context: Context) => ordered(async () => {
         if (closed) throw new Error("Conversation storage is closed.");
@@ -167,14 +215,30 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
       if (property === "hydratedSequence") return hydratedSeq;
       if (property === "lastSequence") return async () => readLastSeq();
       if (property === "close") return async (context: Context = BACKGROUND_CONTEXT) => {
+        if (closed) return;
         closed = true;
+        if (leaseTimer) clearInterval(leaseTimer);
+        leaseTimer = null;
         const value = Reflect.get(target, property, target);
         if (typeof value === "function") await value.call(target, context);
+        if (generation !== null && options.executorId) {
+          await request(`${base}/release`, { method: "POST", body: JSON.stringify({ generation, executorId: options.executorId }) }).catch(() => undefined);
+        }
       };
       const value = Reflect.get(target, property, target);
       return typeof value === "function" ? (...args: unknown[]) => ordered(() => Promise.resolve(Reflect.apply(value, target, args))) : value;
     },
   }) as Storage;
+
+  async function loseLease(error: unknown, cooperative = false) {
+    if (closed || stopRequested) return;
+    if (cooperative) stopRequested = true;
+    else closed = true;
+    if (leaseTimer) clearInterval(leaseTimer);
+    leaseTimer = null;
+    if (!cooperative) await memory.close(BACKGROUND_CONTEXT).catch(() => undefined);
+    options.onLeaseLost?.(error);
+  }
 
   function ordered<T>(run: () => Promise<T>): Promise<T> {
     const result = tail.then(run);

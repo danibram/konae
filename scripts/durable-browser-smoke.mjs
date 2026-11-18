@@ -156,7 +156,9 @@ try {
               const after=Number(url.searchParams.get("after")??0);
               return Response.json({batches:native.batches.filter(batch=>batch.sequence>after),nextCursor:null});
             }
-            if(url.pathname.endsWith("/claim")){native.generation++;return Response.json({generation:native.generation});}
+            if(url.pathname.endsWith("/claim")){const claim=JSON.parse(init.body);if(!claim.executorId||!claim.continueExplicitly)throw new Error("fixture Continue identity missing");native.generation++;return Response.json({generation:native.generation});}
+            if(url.pathname.endsWith("/renew"))return Response.json({generation:native.generation,expiresAt:Date.now()+60_000});
+            if(url.pathname.endsWith("/release"))return Response.json({generation:native.generation,released:true});
             if(url.pathname.endsWith("/commit")){
               const request=JSON.parse(init.body);
               const sequence=request.expectedSeq;
@@ -180,19 +182,29 @@ try {
               if(writes.some(write=>write.type==="entry"&&write.value?.kind==="pi.tool-result"))committed={...pending};
               return createCheckpointDraft({projectId:project.id,sourcesRevision:3,base:{files:project.files},scratch:{files:committed},modelView:{files:committed},modelContext:{sequence},nativeSequence:sequence,validationSettings:{modules:project.modules??{}},historicalGate:gate,status});
             }});
-            await storage.claimWriter(native.generation);
+            await storage.claimWriter(native.generation,"browser-smoke-executor",true);
             return storage;
           };
           const recoveryKeyStore={getKey:()=>secret,setKey(){},clearKey(){}};
-          const recovery=createRecoveryAgent(project,{provider:"anthropic",modelId:"fixture-recovery-custom"},recoveryKeyStore,{conversationId:"browser-recovery",ownerId:"fixture-owner",openStorage,fetch:fixtureFetch,sourceFiles:()=>project,liveDatabase:async()=>({}),onMutation(files){pending={...files};},onValidation(result){gate=result;status=result.ok?"proposal":"working";},onCheckpointStatus(next){status=next;}});
+          let recoveryProviderEvents=0;
+          const bootstrapCalls=[];
+          const recoveryPlatform={
+            async listTools(){return [];},
+            async call(name){bootstrapCalls.push(name);return name==="session_inspect"?{can:{read:true}}:{readBack:{map:{project_sources_save:"project_sources_read"}}};},
+            async callAgent(){if(native.generation===0)throw new Error("agent MCP call started before the project lease");return {};},
+          };
+          const recovery=createRecoveryAgent(project,{provider:"anthropic",modelId:"fixture-recovery-custom"},recoveryKeyStore,{conversationId:"browser-recovery",ownerId:"fixture-owner",openStorage,fetch:fixtureFetch,sourceFiles:()=>project,liveDatabase:async()=>({}),platform:recoveryPlatform,onMutation(files){pending={...files};},onValidation(result){gate=result;status=result.ok?"proposal":"working";},onCheckpointStatus(next){status=next;},onModelEvent(event){if(event.type==="text_delta"){if(native.generation===0)throw new Error("provider streamed before the lease was claimed");recoveryProviderEvents++;}}});
           await recovery.send("Read and edit the local fixture proposal.");
           const recoveredProposal=recovery.proposal();
           if(!recoveredProposal?.validation?.ok)throw new Error("the synthetic provider did not produce a Gate-approved local proposal");
           await recovery.recordDisposition("discarded",recoveredProposal.files);
-          await recovery.send("Continue from the current saved files.");
+          await recovery.send("Continue from the current saved files.", "fixture-stable-native-submission");
+          const providerEventsAfterAdmission = recoveryProviderEvents;
+          await recovery.send("Continue from the current saved files.", "fixture-stable-native-submission");
+          const replayDidNotDispatch = recoveryProviderEvents === providerEventsAfterAdmission;
           const recorded=native.checkpoints.some(checkpoint=>checkpoint.payload?.status==="discarded");
           recovery.dispose();
-          return {settled,transcript,proposal:{...handle.proposal(),validation},project,adapterFacts,recovery:{recorded,checkpointCount:native.checkpoints.length}};
+          return {settled,transcript,proposal:{...handle.proposal(),validation},project,adapterFacts,recovery:{recorded,replayDidNotDispatch,bootstrapCalls,recordedLeaseGeneration:native.generation,checkpointCount:native.checkpoints.length}};
         } finally { await handle.close(); }
       }, {secret:providerKey,source:fileText});
       assert.equal(result.settled.status,"done");
@@ -201,6 +213,9 @@ try {
       assert.equal(result.adapterFacts.platformCalls,2,"the same current project binding works on both turns");
       assert.ok(result.adapterFacts.currentChecks>=4,"the project/session current predicate is checked at both tool boundaries");
       assert.ok(requests.some(({body,authorized})=>authorized&&body.model==="fixture-openai-unqualified"),"the changed provider and unqualified model reach the live request");
+      assert.equal(result.recovery.replayDidNotDispatch,true,"a repeated stable native submission ID returns its existing submission without another provider dispatch");
+      assert.deepEqual(result.recovery.bootstrapCalls,["session_inspect","platform_guide"],"authenticated session and guide reads bootstrap before claim");
+      assert.equal(result.recovery.recordedLeaseGeneration,1,"the fixture provider turn begins only after the lease claim");
       assert.equal(requests.length,14,"interrupting initialization prevents its provider request; recovery submits the edit and a follow-up turn");
       assert.equal(result.proposal.files["index.html"],candidate);
       assert.equal(recoveryProviderBodies.length,5,"the wired recovery engine submits the proposed edit and the next request after Discard");

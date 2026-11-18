@@ -87,6 +87,7 @@ export function useAgentThread({
   const [state, dispatch] = useReducer(agentThreadReducer, initialAgentThreadState);
   const [recoveryAttempted, setRecoveryAttempted] = useState(false);
   const [draft, setDraftState] = useState(() => readDraft(draftStorage, draftKey));
+  const submitting = useRef(false);
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
   const setDraft = (value: string) => {
@@ -108,10 +109,10 @@ export function useAgentThread({
     subscription.current = {
       agent: next,
       off: next.subscribe((event) =>
-        dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined }),
+        dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined, keepBusy: submitting.current }),
       ),
     };
-    dispatch({ type: "settled", snapshot: readSnapshot(next) });
+    if (!submitting.current) dispatch({ type: "settled", snapshot: readSnapshot(next) });
   }
 
   useEffect(() => {
@@ -128,22 +129,29 @@ export function useAgentThread({
 
   async function submit() {
     const text = draft.trim();
-    if (!text || running || blocker) return;
+    if (!text || running || submitting.current || blocker) return;
+    submitting.current = true;
     setDraft("");
     dispatch({ type: "prompt", text });
-
-    const handle = await ensureAgent();
-    if (!handle) {
-      dispatch({ type: "event", event: { type: "error", message: "The agent failed to load." } });
-      return;
+    let handle: KonaeAgent | null = null;
+    try {
+      handle = await ensureAgent();
+      if (!handle) {
+        dispatch({ type: "event", event: { type: "error", message: "The agent failed to load." }, keepBusy: true });
+        return;
+      }
+      attach(handle);
+      await handle.send(text);
+    } catch (error) {
+      dispatch({ type: "event", event: { type: "error", message: error instanceof Error ? error.message : String(error) }, keepBusy: true });
+    } finally {
+      submitting.current = false;
+      dispatch({ type: "settled", snapshot: handle ? readSnapshot(handle) : undefined });
     }
-    attach(handle);
-    await handle.send(text);
-    dispatch({ type: "settled", snapshot: readSnapshot(handle) });
   }
 
   async function recover() {
-    if (running || recoveryAttempted) return;
+    if (running || submitting.current || recoveryAttempted) return;
     setRecoveryAttempted(true);
     const handle = await ensureAgent();
     if (!handle) {
@@ -156,7 +164,7 @@ export function useAgentThread({
   }
 
   async function apply() {
-    if (!footer.canApply || !state.proposal?.validation?.ok) return;
+    if (submitting.current || running || !footer.canApply || !state.proposal?.validation?.ok) return;
     const files = state.proposal.changedFiles.join(", ");
     let result: Awaited<ReturnType<typeof onApply>>;
     try { result = await onApply(state.proposal); }
@@ -179,6 +187,7 @@ export function useAgentThread({
   }
 
   async function discard() {
+    if (submitting.current || running) return;
     try { await onDiscard(); }
     catch (error) {
       dispatch({ type: "event", event: { type: "error", message: error instanceof Error ? error.message : "Discard could not be saved." } });

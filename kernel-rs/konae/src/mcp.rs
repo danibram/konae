@@ -157,7 +157,7 @@ pub(super) fn installation() -> super::installation::Installation {
     let mut installation = super::installation::Installation::kernel();
     installation.databases.splice(0..0, [
         RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
-        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans", "conversation_live_authority"] },
+        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans", "conversation_live_authority", "conversation_execution_leases", "conversation_stop_requests"] },
     ]);
     installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
     installation.mail_group = project_owner;
@@ -1045,6 +1045,39 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
             if let Err(e) = validate_arguments(&arguments, &definition["inputSchema"]) {
                 return rpc_error(id, -32602, &e.to_string());
             }
+            let execution_headers = [
+                "x-konae-execution-project",
+                "x-konae-execution-conversation",
+                "x-konae-execution-id",
+                "x-konae-execution-generation",
+                "x-konae-execution-call",
+            ];
+            let any_execution = execution_headers
+                .iter()
+                .any(|name| headers.contains_key(*name));
+            let mut execution: Option<(String, String, String, i64, String, Option<String>, bool)> = None;
+            if any_execution {
+                let get = |name: &str| {
+                    headers.get(name).and_then(|value| value.to_str().ok())
+                };
+                let (Some(project), Some(conversation), Some(executor), Some(generation), Some(call_id)) = (
+                    get(execution_headers[0]), get(execution_headers[1]), get(execution_headers[2]),
+                    get(execution_headers[3]), get(execution_headers[4]),
+                ) else { return rpc_error(id, -32602, "Incomplete agent execution identity."); };
+                let generation = match generation.parse::<i64>() {
+                    Ok(value) => value,
+                    Err(_) => return rpc_error(id, -32602, "Invalid agent execution generation."),
+                };
+                let observes = get("x-konae-execution-observes").map(str::to_owned);
+                let write = match super::conversations::authorize_agent_mcp_call(
+                    &state, &owner.id, project, conversation, executor, generation, call_id,
+                    name, &arguments, observes.as_deref(),
+                ) {
+                    Ok(value) => value,
+                    Err(message) => return rpc_error(id, -32000, &message),
+                };
+                execution = Some((project.to_owned(), conversation.to_owned(), executor.to_owned(), generation, call_id.to_owned(), observes, write));
+            }
             let package_transfer = (name.starts_with("transfer_") && name != "transfer_begin")
                 .then(|| transfer(&state, &principal, &arguments).ok())
                 .flatten();
@@ -1119,6 +1152,18 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     if let Ok(db) = store(&state) {
                         let _ = db.execute("DELETE FROM source_read_requests WHERE transfer=?1", [transfer_id]);
                     }
+                }
+            }
+            if let Some((project, conversation, _executor, _generation, call_id, observes, write)) = &execution {
+                let message = result.as_ref().err().map(|error| format!("{error:#}"));
+                let definitive_refusal = message.as_deref().is_some_and(|value| {
+                    value.contains("Permission denied") || value.contains("Sources changed since revision")
+                });
+                if let Err(message) = super::conversations::finish_agent_mcp_call(
+                    &state, &owner.id, project, conversation, call_id, *write, result.is_ok(),
+                    definitive_refusal, observes.as_deref(), name,
+                ) {
+                    result = Err(anyhow::anyhow!(message));
                 }
             }
             match export_transfer.as_ref().filter(|_| name == "transfer_read") {

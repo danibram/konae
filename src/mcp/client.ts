@@ -1,6 +1,7 @@
 import { UPLOAD_BYTES, uploadRefused } from "../lib/size";
 
 export type Transfer = { transferId: string; size: number; sha256: string; chunkBytes: number };
+export type AgentExecution = { projectId: string; conversationId: string; executorId: string; generation: number; callId: string; observesCallId?: string };
 
 export type McpRefusal = { code: string; message: string; hint?: { fix: string; remedy: string; tool?: string } };
 
@@ -32,6 +33,21 @@ export class McpClient {
   async call<T = unknown>(name: string, args: object = {}, signal?: AbortSignal): Promise<T> {
     await this.connect();
     const result = await this.request("tools/call", { name, arguments: args }, false, signal);
+    if (result.isError) throw new McpError(result.content?.[0]?.text ?? "MCP tool failed.", undefined, result.structuredContent?.error);
+    if (!result.structuredContent || !("result" in result.structuredContent)) throw new McpError("The MCP tool returned no structured result.");
+    return result.structuredContent.result as T;
+  }
+
+  async callForAgent<T = unknown>(name: string, args: object, execution: AgentExecution, signal?: AbortSignal): Promise<T> {
+    await this.connect();
+    const result = await this.request("tools/call", { name, arguments: args }, false, signal, {
+      "x-konae-execution-project": execution.projectId,
+      "x-konae-execution-conversation": execution.conversationId,
+      "x-konae-execution-id": execution.executorId,
+      "x-konae-execution-generation": String(execution.generation),
+      "x-konae-execution-call": execution.callId,
+      ...(execution.observesCallId ? { "x-konae-execution-observes": execution.observesCallId } : {}),
+    });
     if (result.isError) throw new McpError(result.content?.[0]?.text ?? "MCP tool failed.", undefined, result.structuredContent?.error);
     if (!result.structuredContent || !("result" in result.structuredContent)) throw new McpError("The MCP tool returned no structured result.");
     return result.structuredContent.result as T;
@@ -88,7 +104,7 @@ export class McpClient {
     return this.connecting ? this.request("tools/call", params) : this.call("project_sources_read", params.arguments);
   }
 
-  private async request(method: string, params?: object, notification = false, signal?: AbortSignal): Promise<any> {
+  private async request(method: string, params?: object, notification = false, signal?: AbortSignal, extraHeaders: Record<string,string> = {}): Promise<any> {
     const id = crypto.randomUUID();
     const toolCall = params as { name?: string; arguments?: { cancelRequestId?: string } } | undefined;
     const response = await (this.options.fetch ?? globalThis.fetch)(this.endpoint, {
@@ -98,6 +114,7 @@ export class McpClient {
         "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25",
         ...(this.options.token ? { authorization: `Bearer ${this.options.token}` } : {}),
         ...(this.options.ownerId ? { "x-konae-owner-id": this.options.ownerId } : {}),
+        ...extraHeaders,
       },
       body: JSON.stringify({ jsonrpc: "2.0", ...(!notification ? { id } : {}), method, ...(params ? { params } : {}) }),
     });

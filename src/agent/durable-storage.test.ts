@@ -4,7 +4,7 @@ import type { StorageWrite } from "@earendil-works/pi-durable";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { CompactionEntry } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
-import { openDurableStorage, readDurableBlob } from "./durable-storage";
+import { openDurableStorage, readDurableBlob, requestDurableStop } from "./durable-storage";
 
 function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterClaim?: boolean } = {}) {
   const batches: Array<{ sequence: number; writes: StorageWrite[] }> = [];
@@ -13,6 +13,8 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
   const receipts = new Map<string, unknown>();
   const requests: Array<{ url: string; method: string; body?: string; headers: Headers }> = [];
   let generation = 0;
+  let leaseLive = false;
+  let stopRequested = false;
   let highWater = 0;
   let loseAck = options.loseAck ?? false;
   let refuse = options.refuse;
@@ -24,10 +26,16 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
     requests.push({ url, method, body, headers });
     if (url.includes("/batches?")) return Response.json({ batches: [...batches].filter((batch) => batch.sequence > Number(new URL(url, "http://local").searchParams.get("after"))).sort((a, b) => a.sequence - b.sequence), nextCursor: batches.at(-1)?.sequence ?? null });
     if (url.endsWith("/claim")) {
+      const claim = JSON.parse(body!) as { executorId?: string; continueExplicitly?: boolean };
+      if (!claim.executorId || !claim.continueExplicitly || leaseLive) return Response.json({ error: "lease held or explicit Continue missing" }, { status: 409 });
       generation += 1;
+      leaseLive = true;
       if (options.changeAfterClaim && batches.length === 0) batches.push({ sequence: 1, writes: [{ type: "conversation", value: { id: 1 } } as StorageWrite] });
-      return Response.json({ generation, claimedAt: 1 });
+      return Response.json({ generation, claimedAt: 1, expiresAt: 60_001 });
     }
+    if (url.endsWith("/renew")) return leaseLive ? Response.json({ generation, expiresAt: 60_001, stopRequested }) : Response.json({ error: "expired" }, { status: 409 });
+    if (url.endsWith("/stop")) { stopRequested = true; return Response.json({ requested: true, requestId: JSON.parse(body!).requestId, executorId: "fixture-executor", generation }); }
+    if (url.endsWith("/release")) { leaseLive = false; return Response.json({ generation, released: true }); }
     if (url.endsWith("/commit")) {
       if (refuse) return Response.json({ error: refuse }, { status: 422 });
       const value = JSON.parse(body!) as { requestId: string; expectedSeq: number; writes: StorageWrite[][] };
@@ -71,11 +79,34 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
 const initialConversation = [{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }] as unknown as StorageWrite[];
 
 describe("authenticated native Durable Storage bridge", () => {
+  test("requires explicit Continue, renews with the stable executor, and cooperatively releases", async () => {
+    const api = nativeApi();
+    const storage = await openDurableStorage({ projectId: "lease-project", conversationId: "lease-conversation", executorId: "stable-device", fetch: api.fetcher });
+    await expect((storage as any).claimWriter(0)).rejects.toThrow("Explicit Continue");
+    await (storage as any).claimWriter(0, "stable-device", true);
+    await (storage as any).assertLease();
+    expect(api.requests.filter(({ url }) => url.endsWith("/renew"))).toHaveLength(1);
+    await storage.close(BACKGROUND_CONTEXT);
+    expect(api.requests.find(({ url }) => url.endsWith("/release"))?.body).toContain("stable-device");
+  });
+
+  test("a project-scoped stop request fences further provider admission and leaves release to drain", async () => {
+    const api = nativeApi();
+    const storage = await openDurableStorage({ projectId: "stop-project", conversationId: "stop-conversation", executorId: "stable-device", fetch: api.fetcher });
+    await (storage as any).claimWriter(0, "stable-device", true);
+    const stop = await requestDurableStop("stop-project", "stop-conversation", 1, "stop-request-1", undefined, api.fetcher);
+    expect(stop).toMatchObject({ requested: true, requestId: "stop-request-1" });
+    await expect((storage as any).assertLease()).rejects.toThrow("cooperative stop");
+    expect(api.requests.some(({ url }) => url.endsWith("/release"))).toBe(false);
+    await storage.close(BACKGROUND_CONTEXT);
+    expect(api.requests.some(({ url }) => url.endsWith("/release"))).toBe(true);
+  });
+
   test("reuses the exact request bytes after a lost acknowledgement and reads the receipt", async () => {
     const api = nativeApi({ loseAck: true });
     const acknowledged: number[] = [];
     const storage = await openDurableStorage({ projectId: "project-a", conversationId: "conversation-a", ownerId: "owner-a", fetch: api.fetcher, onAcknowledged: (sequence) => acknowledged.push(sequence) });
-    const claimed = await (storage as any).claimWriter(0);
+    const claimed = await (storage as any).claimWriter(0, "fixture-executor", true);
     expect(claimed).toBe(1);
     const seen: number[] = [];
     const result = await storage.commit([initialConversation], (_index, seq) => seen.push(seq), BACKGROUND_CONTEXT);
@@ -94,7 +125,7 @@ describe("authenticated native Durable Storage bridge", () => {
   test("does not expose optimistic records after a definitive backend refusal", async () => {
     const api = nativeApi({ refuse: "A Pi entry ID already exists." });
     const storage = await openDurableStorage({ projectId: "p", conversationId: "c", fetch: api.fetcher });
-    await (storage as any).claimWriter(0);
+    await (storage as any).claimWriter(0, "fixture-executor", true);
     const result = await storage.commit([initialConversation], () => {}, BACKGROUND_CONTEXT);
     expect(result.stored).toBe(0);
     expect((result.refused as Error).message).toContain("A Pi entry ID already exists.");
@@ -105,13 +136,13 @@ describe("authenticated native Durable Storage bridge", () => {
   test("refuses writer activation when the history advances after claim", async () => {
     const api = nativeApi({ changeAfterClaim: true });
     const storage = await openDurableStorage({ projectId: "p", conversationId: "c", fetch: api.fetcher });
-    await expect((storage as any).claimWriter(0)).rejects.toThrow("Conversation history changed while claiming");
+    await expect((storage as any).claimWriter(0, "fixture-executor", true)).rejects.toThrow("Conversation history changed while claiming");
   });
 
   test("round-trips compaction summary, head provenance and reason through the authenticated batch log", async () => {
     const api = nativeApi();
     const storage = await openDurableStorage({ projectId: "p", conversationId: "c", fetch: api.fetcher });
-    await (storage as any).claimWriter(0);
+    await (storage as any).claimWriter(0, "fixture-executor", true);
     const root = [{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }] as unknown as StorageWrite[];
     await storage.commit([root], () => {}, BACKGROUND_CONTEXT);
     const summary = "The owner asked for a checked preview. The last retained entry is the new source of truth.";
@@ -139,7 +170,7 @@ describe("authenticated native Durable Storage bridge", () => {
         blobs: [{ key: "scratch:public/pixel.png", bytes: new Uint8Array([0, 255, 1, 128]) }],
       }),
     });
-    await (storage as any).claimWriter(0);
+    await (storage as any).claimWriter(0, "fixture-executor", true);
     const result = await storage.commit([initialConversation], () => {}, BACKGROUND_CONTEXT);
     expect(result.stored).toBe(1);
     expect(api.batches).toHaveLength(1);
@@ -159,7 +190,7 @@ describe("authenticated native Durable Storage bridge", () => {
   test("a refused native batch leaves the previous checkpoint boundary visible", async () => {
     const api = nativeApi();
     const storage = await openDurableStorage({ projectId: "p", conversationId: "c", fetch: api.fetcher, checkpoint: async (_writes, sequence) => ({ id: `checkpoint-${sequence}`, payload: { formatVersion: 1, sequence }, blobs: [] }) });
-    await (storage as any).claimWriter(0);
+    await (storage as any).claimWriter(0, "fixture-executor", true);
     await storage.commit([initialConversation], () => {}, BACKGROUND_CONTEXT);
     api.setRefuse("checkpoint batch refused");
     const result = await storage.commit([[{ type: "entry", value: { id: 2, conversationId: ROOT_CONVERSATION_ID, kind: "pi.user", model: [] } } as StorageWrite]], () => {}, BACKGROUND_CONTEXT);
@@ -172,7 +203,7 @@ describe("authenticated native Durable Storage bridge", () => {
 registerStorageConformance({ describe, expect, it: test }, "authenticated native batch bridge", async (use) => {
   const api = nativeApi();
   const storage = await openDurableStorage({ projectId: "conformance-project", conversationId: "conformance-conversation", fetch: api.fetcher });
-  await (storage as any).claimWriter(0);
+  await (storage as any).claimWriter(0, "fixture-executor", true);
   try { await use(storage); }
   finally { await storage.close(BACKGROUND_CONTEXT); }
 });

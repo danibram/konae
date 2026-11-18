@@ -224,6 +224,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
   const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
   const resolveAgentPublish = useRef<((outcome: PublishOutcome) => void) | null>(null);
+  const agentPublishCallId = useRef<string | null>(null);
   const deploymentsRef = useRef(deployments);
   deploymentsRef.current = deployments;
   const [agent, setAgent] = useState<KonaeAgentHandle | null>(null);
@@ -330,6 +331,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       resolvePlatformConfirmation.current = null;
       resolveAgentPublish.current?.({ status: "declined" });
       resolveAgentPublish.current = null;
+      agentPublishCallId.current = null;
     };
   }, [project.id]);
 
@@ -809,16 +811,26 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           let selectedProject = projectRef.current;
           const projectId = selectedProject.id;
           const selectedConfig = agentSession;
-          const current = () => projectRef.current.id === projectId;
+          let leaseLost = false;
+          let activeLeaseCheck: (() => Promise<void>) | null = null;
+          const current = () => projectRef.current.id === projectId && !leaseLost;
           let durableRecoveryOptions: Record<string, unknown> = {};
+          let activeGeneration: number | null = null;
+          let activeExecutorId: string | null = null;
+          let activeConversationId: string | null = null;
           let recoveredFiles: Record<string, string> | undefined;
           let dispositionAfterInitialize: import("./agent/durable-checkpoints").CheckpointStatus | null = null;
           let recoveredSavedReadback: { revision: number; project: MiniAppProject } | undefined;
+          let lateApplyCandidate: any = null;
           if (stagingRecovery) {
             const [{ createDurableConversation, readDurableConversation, openDurableStorage, readDurableCheckpoints, readDurableBlob }, { openDurableHistory }, { createCheckpointDraft, recoverCheckpoint, reconcileInterruptedApply }, { ToolResultEntry }] = await Promise.all([
               import("./agent/durable-storage"), import("./agent/durable-engine"), import("./agent/durable-checkpoints"), import("@earendil-works/pi-durable"),
             ]);
             const key = `konae:durable-recovery:${ownerSession.ownerId}:${projectId}`;
+            const executorKey = `konae:durable-executor:${ownerSession.ownerId}:${projectId}`;
+            const executorId = localStorage.getItem(executorKey) ?? crypto.randomUUID();
+            localStorage.setItem(executorKey, executorId);
+            activeExecutorId = executorId;
             const params = new URLSearchParams(window.location.search);
             let conversationId = params.get("conversation") ?? localStorage.getItem(key) ?? "";
             let info = conversationId ? await readDurableConversation(projectId, conversationId, ownerSession.ownerId).catch(() => null) : null;
@@ -856,12 +868,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                 historicalGate = recovered.historicalGate as import("./agent/contracts").ValidationResult | undefined;
                 candidateId = recovered.candidateId;
                 if (recovered.readable && latest.sequence === info.lastSeq) {
+                  if (recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") lateApplyCandidate = recovered;
                   let acceptedSavedApply = false;
                   if ((recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") && recovered.stale) {
                     const outcome = await reconcileInterruptedApply(recovered, { revision: observedAtOpen.revision, files: observedAtOpen.project });
                     if (outcome === "saved") {
                       checkpointStatus = "saved";
                       dispositionAfterInitialize = "saved";
+                      lateApplyCandidate = recovered;
                       acceptedSavedApply = true;
                       durableSourceRevisionRef.current = observedAtOpen.revision;
                       base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
@@ -902,7 +916,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                     }
                     if (recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") {
                       const result = await reconcileInterruptedApply(recovered, { revision: observedAtOpen.revision, files: observedAtOpen.project });
-                      if (result === "saved") { checkpointStatus = "saved"; dispositionAfterInitialize = "saved"; }
+                      if (result === "saved") { checkpointStatus = "saved"; dispositionAfterInitialize = "saved"; lateApplyCandidate = recovered; }
                       else if (result === "unchanged") { checkpointStatus = "proposal"; dispositionAfterInitialize = "proposal"; }
                       else {
                         parentCheckpointId = latest.checkpointId;
@@ -959,14 +973,43 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               }
             }
             localStorage.setItem(key, conversationId);
+            activeConversationId = conversationId;
             durableRecoveryRef.current = true;
             let acknowledgedSequence = info?.lastSeq ?? 0;
             const openStorage = async () => {
               const currentInfo = await readDurableConversation(projectId, conversationId, ownerSession.ownerId);
               const expectedSequence = acknowledgedSequence;
               if (currentInfo.lastSeq !== expectedSequence) throw new Error("Conversation history advanced beyond the inspected checkpoint. Reload recovery before continuing.");
+              const durableStorage = await import("./agent/durable-storage");
+              let lease = await durableStorage.readDurableLease(projectId, conversationId, ownerSession.ownerId);
+              if (lease.live) throw new Error("Another device still holds this project's live execution lease. Ask it to stop and release before continuing.");
+              if (lease.unresolvedEffects) {
+                const pending = (await durableStorage.readDurableEffects(projectId, conversationId, ownerSession.ownerId)).find((effect) => effect.state === "unknown" && effect.tool === "project_sources_save");
+                if (!pending || !lateApplyCandidate) throw new Error("An admitted or ambiguous write needs its documented read-back and reconciliation before this project can continue.");
+                const observed = await sources.observeSaved(projectId, {
+                  projectId, conversationId, executorId: pending.executorId, generation: pending.generation,
+                  callId: crypto.randomUUID(), observesCallId: pending.callId,
+                });
+                if (!observed.project) throw new Error("The authorized source read-back did not return the saved project. Its outcome remains unknown; no save was replayed.");
+                const applyOutcome = await reconcileInterruptedApply(lateApplyCandidate, { revision: observed.revision, files: observed.project });
+                if (applyOutcome === "conflict" || applyOutcome === "unknown") throw new Error("The authorized source read-back found a changed or incomplete source state. The candidate remains preserved; no save was replayed.");
+                checkpointStatus = applyOutcome === "saved" ? "saved" : "proposal";
+                dispositionAfterInitialize = checkpointStatus;
+                durableSourceRevisionRef.current = observed.revision;
+                recoveredSavedReadback = { revision: observed.revision, project: observed.project };
+                base = { files: { ...observed.project.files }, encodings: observed.project.encodings };
+                committedScratch = textFiles(observed.project);
+                pendingScratch = { ...committedScratch };
+                lease = await durableStorage.readDurableLease(projectId, conversationId, ownerSession.ownerId);
+              }
+              if (lease.unresolvedEffects) throw new Error("An admitted or ambiguous write needs read-back and reconciliation before this project can continue.");
               const storage = await openDurableStorage({
-                projectId, conversationId, ownerId: ownerSession.ownerId,
+                projectId, conversationId, ownerId: ownerSession.ownerId, executorId,
+                onLeaseLost: (error) => {
+                  leaseLost = true;
+                  setOperationError(`Shared execution is stopping. ${error instanceof Error ? error.message : String(error)}`);
+                  agentRef.current?.interrupt();
+                },
                 onAcknowledged(sequence) { acknowledgedSequence = sequence; },
                 checkpoint: async (writes, sequence) => {
                   const currentRevision = await sources.inspectRevision(projectId);
@@ -991,12 +1034,20 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               const replayedSequence = (storage as any).hydratedSequence as number;
               const nativeSequence = await (storage as any).lastSequence();
               if (replayedSequence !== expectedSequence || nativeSequence !== expectedSequence) throw new Error("Conversation history changed while opening its checkpoint. Reload recovery before continuing.");
-              await (storage as any).claimWriter(currentInfo.generation);
+              activeGeneration = await (storage as any).claimWriter(lease.generation, executorId, true);
+              activeLeaseCheck = () => (storage as any).assertLease();
               return storage;
             };
             durableRecoveryOptions = {
               ownerId: ownerSession.ownerId, conversationId, sourceRevision: savedRevision, recoveredFiles,
               openStorage,
+              assertExecution: async () => {
+                if (!current() || activeGeneration === null || !activeLeaseCheck) throw new Error("Shared execution has stopped. Continue again from the current saved conversation.");
+                await activeLeaseCheck();
+              },
+              executionIdentity: () => activeGeneration !== null && activeExecutorId && activeConversationId
+                ? { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration }
+                : null,
               onMutation(files: Record<string, string>) { pendingScratch = { ...files }; },
               onValidation(result: import("./agent/contracts").ValidationResult) {
                 historicalGate = result;
@@ -1030,6 +1081,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             platform: {
               listTools: (signal) => platformMcp.listTools(signal),
               call: (name, args, signal) => platformMcp.call(name, args, signal),
+              ...(stagingRecovery ? { callAgent: (name: string, args: Record<string, unknown>, callId: string, signal?: AbortSignal, observesCallId?: string) => {
+                if (!current() || activeGeneration === null || !activeExecutorId) throw new Error("Shared execution is not active. Choose Continue from the current project's saved conversation.");
+                if (!activeConversationId) throw new Error("Shared conversation identity is unavailable.");
+                return platformMcp.callForAgent(name, args, { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration, callId, ...(observesCallId ? { observesCallId } : {}) }, signal);
+              } } : {}),
               deploymentForProject: (projectId) => deploymentsRef.current[projectId]?.id ?? null,
               confirm: (request) => new Promise<boolean>((resolve) => {
                 if (request.projectId !== projectRef.current.id) { resolve(false); return; }
@@ -1040,10 +1096,17 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                 setAppSettingsOpen(false);
                 setPlatformConfirmation(request);
               }),
-              publish: (projectId) => new Promise<PublishOutcome>((resolve) => {
-                if (projectId !== projectRef.current.id) { resolve({ status: "declined" }); return; }
+              publish: async (projectId, callId) => {
+                if (projectId !== projectRef.current.id) return { status: "declined" };
+                if (activeGeneration === null || !activeExecutorId || !activeConversationId) return { status: "failed", error: "Shared execution is not active. Continue from the current saved conversation." };
+                try {
+                  const inspect = await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration, callId: `${callId ?? crypto.randomUUID()}-permissions` });
+                  if (inspect.can?.publish !== true) return { status: "failed", error: "session_inspect.can.publish is no longer granted. The Deploy dialog was not opened." };
+                } catch (error) { return { status: "failed", error: error instanceof Error ? error.message : String(error) }; }
+                return new Promise<PublishOutcome>((resolve) => {
                 resolveAgentPublish.current?.({ status: "declined" });
                 resolveAgentPublish.current = resolve;
+                agentPublishCallId.current = callId ?? crypto.randomUUID();
                 resolvePlatformConfirmation.current?.(false);
                 resolvePlatformConfirmation.current = null;
                 setPlatformConfirmation(null);
@@ -1051,7 +1114,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                 setDeployError("");
                 setDeployOpen(true);
                 refreshOwnerSession();
-              }),
+                });
+              },
               onChanged: () => setDomainVersion((version) => version + 1),
             },
           };
@@ -1186,6 +1250,14 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (durableRecoveryRef.current && agentRef.current?.recordDisposition) {
       const expectedRevision = durableSourceRevisionRef.current ?? sources.revision(project.id);
       if (expectedRevision === undefined) return false;
+      const applyCallId = crypto.randomUUID();
+      const applyExecution = agentRef.current.execution?.(applyCallId) ?? undefined;
+      try {
+        await agentRef.current.assertExecution?.();
+        if (!applyExecution) throw new Error("Shared execution identity is unavailable.");
+        const session = await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, { ...applyExecution, callId: `${applyCallId}-permissions` });
+        if (session.can?.write !== true) throw new Error("session_inspect.can.write is no longer granted. Apply was not sent.");
+      } catch (error) { return { applied: false, preserveProposal: true, message: error instanceof Error ? error.message : "Shared execution is no longer active." }; }
       try { await agentRef.current.recordDisposition("applied-unsaved", proposal.files); }
       catch (error) {
         setDurableApplyBlocked(true);
@@ -1196,10 +1268,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       let saveError: unknown;
       let revision: number | null = null;
       try {
-        revision = await sources.saveExpected(next, expectedRevision);
+        await agentRef.current.assertExecution?.();
+        revision = await sources.saveExpected(next, expectedRevision, applyExecution);
       } catch (error) { saveError = error; }
       let observed: Awaited<ReturnType<typeof sources.observeSaved>> | null = null;
-      try { observed = await sources.observeSaved(project.id); }
+      try { observed = await sources.observeSaved(project.id, applyExecution ? agentRef.current.execution?.(crypto.randomUUID(), applyCallId) ?? undefined : undefined); }
       catch (error) { saveError ??= error; }
       const reconciled = await reconcileInterruptedApply(
         { sourcesRevision: expectedRevision, base: { files: project.files, encodings: project.encodings }, scratch: { files: next.files, encodings: next.encodings } },
@@ -1418,11 +1491,24 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const deploy = async (visibility: DeploymentVisibility, signupMode?: SignupMode) => {
+    const agentPublish = resolveAgentPublish.current !== null;
+    const publishCallId = agentPublishCallId.current ?? crypto.randomUUID();
+    const sourceSaveExecution = agentPublish ? agentRef.current?.execution?.(`${publishCallId}-sources`) ?? undefined : undefined;
     setPublishing(true);
     setDeployError("");
     try {
       synchronized.current.set(project.id, JSON.stringify(project));
-      const observedSourcesRevision = await sources.save(project);
+      let observedSourcesRevision: number;
+      if (agentPublish) {
+        await agentRef.current?.assertExecution?.();
+        const permissionIdentity = agentRef.current?.execution?.(`${publishCallId}-permissions`);
+        if (!permissionIdentity) throw new Error("Shared execution identity is unavailable for publication.");
+        const session = await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, permissionIdentity);
+        if (session.can?.publish !== true || session.can?.write !== true) throw new Error("session_inspect.can.publish or session_inspect.can.write changed while Deploy was open. Nothing was published.");
+        const expected = sources.revision(project.id);
+        if (expected === undefined || !sourceSaveExecution) throw new Error("Shared execution identity is unavailable for the source save.");
+        observedSourcesRevision = await sources.saveExpected(project, expected, sourceSaveExecution);
+      } else observedSourcesRevision = await sources.save(project);
       serverSnapshots.current.set(project.id, JSON.stringify(project));
       const deployment = deploymentsRef.current[project.id];
       const buildProject = deployment
@@ -1431,7 +1517,29 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const artifact = await buildProjectInBrowser(buildProject);
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
-      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules);
+      const fencedClient = agentPublish ? {
+        call: async <T,>(name: string, args: object = {}, signal?: AbortSignal): Promise<T> => {
+          if (name === "release_apply") {
+            await agentRef.current?.assertExecution?.();
+            const execution = agentRef.current?.execution?.(publishCallId);
+            if (!execution) throw new Error("Shared execution identity is unavailable for publication.");
+            const receipt = await platformMcp.callForAgent<T>(name, args, execution, signal);
+            try {
+              await agentRef.current?.assertExecution?.();
+              const observed = await platformMcp.callForAgent<{ deployment?: { id?: string } | null }>("project_inspect", { projectId: project.id }, { ...execution, callId: `${publishCallId}-readback`, observesCallId: publishCallId }, signal);
+              const receiptId = (receipt as { id?: string } | null)?.id;
+              if (!observed.deployment || (receiptId && observed.deployment.id !== receiptId)) throw new Error("Published deployment did not match the release receipt.");
+            } catch (error) {
+              throw new Error(`Deploy outcome is unknown because the authorized project_inspect read-back did not verify the release: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return receipt;
+          }
+          return platformMcp.call<T>(name, args, signal);
+        },
+        upload: platformMcp.upload.bind(platformMcp),
+        cancel: platformMcp.cancel.bind(platformMcp),
+      } : undefined;
+      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules, fencedClient);
       const record = published.receipt;
       const releasedProject = { ...project, manifest: record.manifest };
       const releasedSnapshot = JSON.stringify(releasedProject);
@@ -1445,6 +1553,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setDeployments((current) => ({ ...current, [project.id]: record }));
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
       resolveAgentPublish.current = null;
+      agentPublishCallId.current = null;
     } catch (error) {
       if (error instanceof SchemaChangeDeclined) return;
       if (isSignedOutError(error)) refreshOwnerSession();
@@ -2033,7 +2142,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; agentPublishCallId.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
       {/* After the Deploy dialog, so it paints over it. */}
       {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 

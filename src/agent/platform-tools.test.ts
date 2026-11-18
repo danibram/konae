@@ -123,6 +123,19 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(decline.calls).toEqual([]);
   });
 
+  test("rechecks the operation's current permission after the owner confirmation", async () => {
+    const dispatches: string[] = [];
+    let canWrite = true;
+    const platform = binding({
+      confirm: async () => { canWrite = false; return true; },
+      callAgent: async (name) => { dispatches.push(name); return { can: { read: true, write: canWrite, publish: false }, projectIds: ["p1"] }; },
+    });
+    const tools = await toolsFor(platform.value);
+    await expect(run(tools.module_set, { module: "seo", on: true, expected: { on: false } })).rejects.toThrow("session_inspect.can.publish is not granted");
+    expect(dispatches).toEqual(["session_inspect"]);
+    expect(platform.calls).toEqual([]);
+  });
+
   test("auth policy changes ask the owner and name the policy in the confirmation", async () => {
     const { value, confirmations } = binding();
     const tools = await toolsFor(value);
@@ -149,7 +162,8 @@ describe("the build agent's tools from the owner's MCP", () => {
     } });
     const tools = await toolsFor(value);
     const result = await run(tools.module_set, { module: "seo", on: true, expected: { on: false } });
-    expect(result.content[0]?.text).toContain("module_set succeeded; modules_read failed");
+    expect(result.content[0]?.text).toContain('"outcome": "unknown"');
+    expect(result.content[0]?.text).toContain("has not been verified");
     expect(calls.map(({ name }) => name)).toEqual(["module_set", "modules_read"]);
   });
 

@@ -44,7 +44,7 @@ export type AgentThreadSnapshot = {
 
 export type AgentThreadAction =
   | { type: "prompt"; text: string }
-  | { type: "event"; event: AgentUiEvent; snapshot?: AgentThreadSnapshot }
+  | { type: "event"; event: AgentUiEvent; snapshot?: AgentThreadSnapshot; keepBusy?: boolean }
   | { type: "settled"; snapshot?: AgentThreadSnapshot }
   | { type: "note"; text: string }
   | { type: "dismiss-error" }
@@ -78,7 +78,7 @@ export function agentThreadReducer(state: AgentThreadState, action: AgentThreadA
       };
     }
     case "event":
-      return applyEvent(withSnapshot(state, action.snapshot), action.event);
+      return applyEvent(withSnapshot(state, action.snapshot), action.event, action.keepBusy);
     case "settled":
       return { ...settleRun(withSnapshot(state, action.snapshot)), busy: false };
     case "note": {
@@ -99,7 +99,7 @@ export function agentThreadReducer(state: AgentThreadState, action: AgentThreadA
   }
 }
 
-function applyEvent(state: AgentThreadState, event: AgentUiEvent): AgentThreadState {
+function applyEvent(state: AgentThreadState, event: AgentUiEvent, keepBusy = false): AgentThreadState {
   switch (event.type) {
     case "assistant-delta":
       return appendDelta(state, event.text);
@@ -113,7 +113,7 @@ function applyEvent(state: AgentThreadState, event: AgentUiEvent): AgentThreadSt
     case "turn-end":
       return { ...state, messages: closeStream(state.messages) };
     case "error":
-      return { ...settleRun(state), busy: false, error: event.message };
+      return { ...settleRun(state), busy: keepBusy ? state.busy : false, error: event.message };
     case "validation":
       return { ...state, validation: event.result };
   }

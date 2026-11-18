@@ -169,6 +169,13 @@ describe("agent thread tool chips", () => {
 });
 
 describe("agent thread errors", () => {
+  test("an initialization error does not end an active submission before send settles", () => {
+    const started = agentThreadReducer(initialAgentThreadState, { type: "prompt", text: "change the app" });
+    const failed = agentThreadReducer(started, { type: "event", event: { type: "error", message: "temporary provider error" }, keepBusy: true });
+    expect(failed.busy).toBe(true);
+    expect(agentThreadReducer(failed, { type: "settled" }).busy).toBe(false);
+  });
+
   test("an error event ends the run, closes the stream and can be dismissed", () => {
     const failed = run([
       { type: "prompt", text: "x" },

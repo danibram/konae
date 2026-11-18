@@ -22,9 +22,10 @@ export type PublishOutcome =
 export type AgentPlatformBinding = {
   listTools(signal?: AbortSignal): Promise<McpToolDefinition[]>;
   call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  callAgent?(name: string, args: Record<string, unknown>, callId: string, signal?: AbortSignal, observesCallId?: string): Promise<unknown>;
   deploymentForProject(projectId: string): string | null;
   confirm(request: PlatformConfirmation): Promise<boolean>;
-  publish?(projectId: string): Promise<PublishOutcome>;
+  publish?(projectId: string, callId?: string): Promise<PublishOutcome>;
   onChanged?(tool: string): void;
 };
 
@@ -32,6 +33,7 @@ export type PlatformToolContext = {
   projectId: string;
   isCurrent(): boolean;
   binding: AgentPlatformBinding;
+  refreshSession?: boolean;
   onCallBoundary?(callId: string, boundary: { arguments: Record<string, unknown>; effectiveArguments: Record<string, unknown>; confirmation: "not-required" | "requested" | "approved" | "declined" }): void;
 };
 
@@ -72,6 +74,14 @@ export function databaseCallWrites(args: Record<string, unknown>): boolean {
 function needsConfirmation(name: string, args: Record<string, unknown>): boolean {
   if (name === "database_execute") return databaseCallWrites(args);
   return platformToolPolicy[name] !== "read";
+}
+
+function requiredScope(name: string, args: Record<string, unknown>): string {
+  if (name === "project_export") return "export_data";
+  if (["app_invitations_create", "app_invitation_resend", "app_invitation_revoke", "app_user_suspend", "app_user_resume", "app_user_enter"].includes(name)) return "manage_users";
+  if (name === "module_set") return sdkContract.modules.find((item) => item.name === String(args.module))?.permission ?? "publish";
+  if (["release_apply", "project_import", "api_keys_create", "api_keys_revoke", "hostname_set", "domain_set", "domain_clear", "path_set", "path_clear"].includes(name)) return "publish";
+  return needsConfirmation(name, args) ? "write" : "read";
 }
 
 export function describeCall(name: string, args: Record<string, unknown>): string {
@@ -151,6 +161,15 @@ function explain(error: unknown): Error {
 
 export async function createPlatformTools(context: PlatformToolContext, signal?: AbortSignal): Promise<AgentTool<any>[]> {
   const { binding, projectId } = context;
+  let readBackMap: Record<string,string> = {};
+  if (context.refreshSession) {
+    // This bootstrap runs while Durable is hydrating and before openStorage
+    // claims the project lease. These are authenticated reads; the execution
+    // identity is attached to every later agent operation.
+    await binding.call("session_inspect", {}, signal);
+    const guide = await binding.call("platform_guide", { topic: "rules" }, signal) as { readBack?: { map?: Record<string, unknown> } };
+    readBackMap = Object.fromEntries(Object.entries(guide.readBack?.map ?? {}).filter((entry): entry is [string,string] => typeof entry[1] === "string"));
+  }
   const listed = await binding.listTools(signal);
   const tools = listed
     .filter((tool) => tool.name in platformToolPolicy)
@@ -203,19 +222,44 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
           }
         }
         if (!confirm) context.onCallBoundary?.(_id, { arguments: given, effectiveArguments: args, confirmation: "not-required" });
+        if (binding.callAgent && needsConfirmation(tool.name, given)) {
+          const inspect = await binding.callAgent("session_inspect", {}, `${_id}-permissions`, signal);
+          const session = inspect as { can?: Record<string, unknown>; projectIds?: unknown; ownerId?: unknown };
+          const scope = requiredScope(tool.name, given);
+          if (session.can?.[scope] !== true) throw new Error(`Permission changed while the confirmation was open. session_inspect.can.${scope} is not granted; ${tool.name} was not sent.`);
+          if (Array.isArray(session.projectIds) && session.projectIds.length > 0 && !session.projectIds.includes(projectId)) throw new Error(`Project access changed while the confirmation was open. ${tool.name} was not sent.`);
+        }
         let result: unknown;
         try {
-          result = await binding.call(tool.name, args, signal);
+          result = await (binding.callAgent ? binding.callAgent(tool.name, args, _id, signal) : binding.call(tool.name, args, signal));
         } catch (error) {
           if (tool.name === "module_set" && (error as { refusal?: { code?: string } } | null)?.refusal?.code === "module.changed") {
-            const current = await binding.call("modules_read", { projectId }, signal).catch(() => null);
+            const current = await (binding.callAgent ? binding.callAgent("modules_read", { projectId }, `${_id}-readback`, signal, _id) : binding.call("modules_read", { projectId }, signal)).catch(() => null);
             throw new Error(`${explain(error).message}${current ? ` Current modules_read state: ${text(current)}` : ""}`);
+          }
+          const transport = error as { status?: number; refusal?: unknown } | null;
+          if (binding.callAgent && confirm && transport?.status === undefined && !transport?.refusal) {
+            throw new Error(`The response to ${tool.name} was lost after dispatch may have begun. Its outcome is unknown. Read it back through platform_guide rules before taking a deliberate follow-up; Konae will not replay it.`);
           }
           throw explain(error);
         }
+        const writeResponse = result;
         if (tool.name === "module_set") {
-          try { result = await binding.call("modules_read", { projectId }, signal); }
-          catch (error) { result = { result: "module_set succeeded; modules_read failed", error: explain(error).message }; }
+          try { result = await (binding.callAgent ? binding.callAgent("modules_read", { projectId }, `${_id}-readback`, signal, _id) : binding.call("modules_read", { projectId }, signal)); }
+          catch (error) { result = { outcome: "unknown", writeResponse, message: "The write response arrived, but its documented modules_read read-back failed. The write has not been verified; do not repeat it until its outcome is reconciled.", error: (error as { status?: number } | null)?.status === 401 ? "The owner session expired during read-back." : explain(error).message }; }
+          if (result && typeof result === "object" && (result as { outcome?: string }).outcome !== "unknown") result = { outcome: "observed", writeResponse, readBackTool: "modules_read", observation: result };
+        } else if (binding.callAgent && needsConfirmation(tool.name, given)) {
+          const readTool = readBackMap[tool.name];
+          if (readTool && readTool !== "database_execute") {
+            try {
+              const readArgs: Record<string,unknown> = {};
+              if (readTool !== "auth_session" && readTool !== "mail_status") readArgs.projectId = projectId;
+              const observation = await binding.callAgent(readTool, readArgs, `${_id}-readback`, signal, _id);
+              result = { outcome: "observed", writeResponse, readBackTool: readTool, observation };
+            } catch (error) {
+              result = { outcome: "unknown", writeResponse, message: `The write response arrived, but the documented ${readTool} read-back failed. The write has not been verified; do not repeat it until its outcome is reconciled.`, error: (error as { status?: number } | null)?.status === 401 ? "The owner session expired during read-back." : explain(error).message };
+            }
+          }
         }
         check(signal);
         if (confirm) binding.onChanged?.(tool.name);
@@ -237,7 +281,7 @@ export async function createPlatformTools(context: PlatformToolContext, signal?:
       parameters: { type: "object", properties: {}, additionalProperties: false } as never,
       execute: async (_id, _params, signal) => {
         check(signal);
-        const outcome = await publish(projectId);
+      const outcome = await publish(projectId, _id);
         check(signal);
         context.onCallBoundary?.(_id, { arguments: {}, effectiveArguments: { projectId }, confirmation: outcome.status === "published" ? "approved" : "declined" });
         if (outcome.status === "declined") throw new Error("The owner closed the Deploy dialog without publishing.");

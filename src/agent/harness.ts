@@ -33,6 +33,8 @@ export type KonaeAgentHandle = KonaeAgent & {
   retarget(project: MiniAppProject): void;
   dispose(): void;
   initialize?(): Promise<void>;
+  assertExecution?(): Promise<void>;
+  execution?(callId: string, observesCallId?: string): import("../mcp/client").AgentExecution | null;
   recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void>;
 };
 

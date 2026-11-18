@@ -48,6 +48,30 @@ pub(super) fn routes() -> Router<Konae> {
             post(claim),
         )
         .route(
+            "/_konae/projects/{project}/conversations/{conversation}/renew",
+            post(renew),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/lease",
+            get(lease_status),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/release",
+            post(release),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/stop",
+            post(request_stop),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/effects",
+            get(list_effects),
+        )
+        .route(
+            "/_konae/projects/{project}/conversations/{conversation}/effects/{call_id}",
+            get(read_effect).post(settle_effect),
+        )
+        .route(
             "/_konae/projects/{project}/conversations/{conversation}/commit",
             post(commit),
         )
@@ -110,6 +134,25 @@ pub(super) fn schema(db: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS conversation_live_authority(
           conversation TEXT PRIMARY KEY, owner TEXT NOT NULL, project TEXT NOT NULL,
           generation INTEGER NOT NULL, claimed_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS conversation_execution_leases(
+          owner TEXT NOT NULL, project TEXT NOT NULL, conversation TEXT NOT NULL,
+          executor_id TEXT NOT NULL, generation INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL, PRIMARY KEY(owner,project));
+        CREATE TABLE IF NOT EXISTS conversation_project_generations(
+          owner TEXT NOT NULL, project TEXT NOT NULL, generation INTEGER NOT NULL,
+          PRIMARY KEY(owner,project));
+        CREATE TABLE IF NOT EXISTS conversation_stop_requests(
+          owner TEXT NOT NULL, project TEXT NOT NULL, conversation TEXT NOT NULL,
+          executor_id TEXT NOT NULL, generation INTEGER NOT NULL,
+          request_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+          PRIMARY KEY(owner,project));
+        CREATE TABLE IF NOT EXISTS conversation_effects(
+          owner TEXT NOT NULL, project TEXT NOT NULL, conversation TEXT NOT NULL,
+          call_id TEXT NOT NULL, executor_id TEXT NOT NULL, generation INTEGER NOT NULL,
+          tool TEXT NOT NULL, effect_class TEXT NOT NULL, args_hash TEXT NOT NULL,
+          intent TEXT, state TEXT NOT NULL, result TEXT, refusal TEXT,
+          observation_call_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          PRIMARY KEY(owner,project,call_id));
         CREATE TABLE IF NOT EXISTS conversation_batches(
           conversation TEXT NOT NULL, owner TEXT NOT NULL, project TEXT NOT NULL,
           request_id TEXT NOT NULL, content_hash TEXT NOT NULL,
@@ -157,7 +200,7 @@ pub(super) fn schema(db: &Connection) -> rusqlite::Result<()> {
 
 fn metadata_bytes(db: &Connection, owner: &str) -> rusqlite::Result<i64> {
     db.query_row(
-        "SELECT COALESCE((SELECT SUM(c.byte_size) FROM conversations c WHERE c.owner=?1),0)+COALESCE((SELECT SUM(r.byte_size) FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE c.owner=?1),0)+COALESCE((SELECT SUM(p.byte_size) FROM conversation_checkpoints p JOIN conversations c ON c.id=p.conversation WHERE c.owner=?1),0)+COALESCE((SELECT SUM(length(b.receipt)) FROM conversation_batches b WHERE b.owner=?1),0)",
+        "SELECT COALESCE((SELECT SUM(c.byte_size) FROM conversations c WHERE c.owner=?1),0)+COALESCE((SELECT SUM(r.byte_size) FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE c.owner=?1),0)+COALESCE((SELECT SUM(p.byte_size) FROM conversation_checkpoints p JOIN conversations c ON c.id=p.conversation WHERE c.owner=?1),0)+COALESCE((SELECT SUM(length(b.receipt)) FROM conversation_batches b WHERE b.owner=?1),0)+COALESCE((SELECT SUM(length(e.call_id)+length(e.executor_id)+length(e.project)+length(e.conversation)+length(e.tool)+length(e.effect_class)+length(e.args_hash)+length(e.state)+length(COALESCE(e.refusal,''))+512) FROM conversation_effects e WHERE e.owner=?1),0)",
         [owner],
         |r| r.get(0),
     )
@@ -383,6 +426,8 @@ async fn read(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Claim {
     expected_generation: i64,
+    executor_id: String,
+    continue_explicitly: bool,
 }
 async fn claim(
     State(state): State<Konae>,
@@ -411,7 +456,7 @@ async fn claim(
         Err(e) => return internal(e),
     };
     let current:Option<(i64,i64,String,String)>=tx.query_row("SELECT current_generation,format_version,pi_version,registry_version FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",params![conversation,owner,project],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().unwrap_or(None);
-    let Some((current, format, pi, registry)) = current else {
+    let Some((_current, format, pi, registry)) = current else {
         return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
     };
     if format != SUPPORTED_FORMAT
@@ -420,19 +465,61 @@ async fn claim(
     {
         return fail(StatusCode::CONFLICT,"This conversation record or registry version is readable but cannot be resumed by this Konae storage adapter.");
     }
-    if current != input.expected_generation {
+    if input.executor_id.is_empty() || input.executor_id.len() > 128 || !input.continue_explicitly {
         return fail(
-            StatusCode::CONFLICT,
-            "Conversation generation changed; reload before claiming.",
+            StatusCode::BAD_REQUEST,
+            "A stable executor ID and explicit Continue are required to claim execution.",
         );
     }
-    let Some(next) = current.checked_add(1).filter(|v| *v <= MAX_SAFE_INTEGER) else {
+    let now = now_ms();
+    let lease: Option<(i64, i64)> = tx.query_row(
+        "SELECT generation,expires_at FROM conversation_execution_leases WHERE owner=?1 AND project=?2",
+        params![owner, project], |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional().unwrap_or(None);
+    if lease.is_some_and(|(_, expires)| expires > now) {
+        return fail(
+            StatusCode::CONFLICT,
+            "Another executor still holds this project's live lease.",
+        );
+    }
+    let project_generation: i64 = tx
+        .query_row(
+            "SELECT generation FROM conversation_project_generations WHERE owner=?1 AND project=?2",
+            params![owner, project],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap_or(None)
+        .unwrap_or(0);
+    if project_generation != input.expected_generation {
+        return fail(StatusCode::CONFLICT, "Project execution generation changed; reload the latest receipts and checkpoint before continuing.");
+    }
+    let unresolved: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversation_effects WHERE owner=?1 AND project=?2 AND state IN ('admitted','running','unknown'))",
+        params![owner, project], |r| r.get(0),
+    ).unwrap_or(true);
+    if unresolved {
+        return fail(
+            StatusCode::CONFLICT,
+            "An admitted or ambiguous write must be reconciled before this project can continue.",
+        );
+    }
+    let Some(next) = project_generation
+        .checked_add(1)
+        .filter(|v| *v <= MAX_SAFE_INTEGER)
+    else {
         return fail(
             StatusCode::CONFLICT,
             "Conversation generation namespace exhausted.",
         );
     };
-    let now = now_ms();
+    let expires = now.saturating_add(60_000);
+    if let Err(e)=tx.execute("INSERT INTO conversation_project_generations(owner,project,generation) VALUES(?1,?2,?3) ON CONFLICT(owner,project) DO UPDATE SET generation=excluded.generation",params![owner,project,next]) {return internal(e)}
+    if let Err(e) = tx.execute("INSERT INTO conversation_execution_leases(owner,project,conversation,executor_id,generation,expires_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(owner,project) DO UPDATE SET conversation=excluded.conversation,executor_id=excluded.executor_id,generation=excluded.generation,expires_at=excluded.expires_at", params![owner, project, conversation, input.executor_id, next, expires]) { return internal(e); }
+    let _ = tx.execute(
+        "DELETE FROM conversation_stop_requests WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    );
     if let Err(e) = tx.execute(
         "UPDATE conversations SET current_generation=?2,updated_at=?3 WHERE id=?1",
         params![conversation, next, now],
@@ -443,7 +530,265 @@ async fn claim(
     if let Err(e) = tx.commit() {
         return internal(e);
     }
-    json_response(json!({"generation":next,"claimedAt":now}))
+    json_response(
+        json!({"generation":next,"claimedAt":now,"expiresAt":expires,"renewAfterMs":15_000,"executorId":input.executor_id}),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LeaseIdentity {
+    executor_id: String,
+    generation: i64,
+}
+
+async fn renew(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    lease_change(state, project, conversation, request, false).await
+}
+async fn lease_status(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(r) = require_conversation(&db, &owner, &project, &conversation) {
+        return r;
+    }
+    let now = now_ms();
+    let lease:Option<(String,String,i64,i64)>=match db.query_row("SELECT conversation,executor_id,generation,expires_at FROM conversation_execution_leases WHERE owner=?1 AND project=?2",params![owner,project],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional(){Ok(v)=>v,Err(e)=>return internal(e)};
+    let unresolved:bool=match db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_effects WHERE owner=?1 AND project=?2 AND state IN ('admitted','running','unknown'))",params![owner,project],|r|r.get(0)){Ok(v)=>v,Err(e)=>return internal(e)};
+    let generation: i64 = match db
+        .query_row(
+            "SELECT generation FROM conversation_project_generations WHERE owner=?1 AND project=?2",
+            params![owner, project],
+            |r| r.get(0),
+        )
+        .optional()
+    {
+        Ok(Some(v)) => v,
+        Ok(None) => 0,
+        Err(e) => return internal(e),
+    };
+    let live = lease.as_ref().is_some_and(|v| v.3 > now);
+    let stop_requested:bool=match db.query_row("SELECT EXISTS(SELECT 1 FROM conversation_stop_requests WHERE owner=?1 AND project=?2 AND conversation=?3)",params![owner,project,conversation],|r|r.get(0)){Ok(v)=>v,Err(e)=>return internal(e)};
+    json_response(
+        json!({"generation":generation,"conversationId":lease.as_ref().map(|v|v.0.as_str()),"executorId":lease.as_ref().map(|v|v.1.as_str()),"expiresAt":lease.map(|v|v.3),"live":live,"unresolvedEffects":unresolved,"stopRequested":stop_requested,"serverNow":now}),
+    )
+}
+async fn release(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    lease_change(state, project, conversation, request, true).await
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StopRequest {
+    request_id: String,
+    generation: i64,
+}
+async fn request_stop(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(r) = require_conversation(&db, &owner, &project, &conversation) {
+        return r;
+    }
+    let bytes = match to_bytes(request.into_body(), 4096).await {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::PAYLOAD_TOO_LARGE, "Stop request exceeds 4 KiB."),
+    };
+    let input: StopRequest = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid project stop request."),
+    };
+    if input.request_id.is_empty() || input.request_id.len() > 128 {
+        return fail(StatusCode::BAD_REQUEST, "Stop request ID is invalid.");
+    }
+    let now = now_ms();
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let live:Option<(String,i64)>=tx.query_row("SELECT executor_id,generation FROM conversation_execution_leases WHERE owner=?1 AND project=?2 AND conversation=?3 AND generation=?4 AND expires_at>?5",params![owner,project,conversation,input.generation,now],|r|Ok((r.get(0)?,r.get(1)?))).optional().unwrap_or(None);
+    let Some((executor, generation)) = live else {
+        return fail(
+            StatusCode::CONFLICT,
+            "There is no live project executor to request stop from.",
+        );
+    };
+    if let Err(e)=tx.execute("INSERT INTO conversation_stop_requests(owner,project,conversation,executor_id,generation,request_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(owner,project) DO UPDATE SET conversation=excluded.conversation,executor_id=excluded.executor_id,generation=excluded.generation,request_id=excluded.request_id,created_at=excluded.created_at",params![owner,project,conversation,executor,generation,input.request_id,now]){return internal(e)}
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(
+        json!({"requested":true,"requestId":input.request_id,"executorId":executor,"generation":generation,"createdAt":now}),
+    )
+}
+async fn lease_change(
+    state: Konae,
+    project: String,
+    conversation: String,
+    request: Request,
+    release: bool,
+) -> Response {
+    let (owner, mut db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), 4096).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Lease request exceeds 4 KiB.",
+            )
+        }
+    };
+    let input: LeaseIdentity = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid lease identity."),
+    };
+    let now = now_ms();
+    let tx = match db.transaction_with_behavior(TransactionBehavior::Immediate) {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_execution_leases WHERE owner=?1 AND project=?2 AND conversation=?3 AND executor_id=?4 AND generation=?5 AND expires_at>?6)",params![owner,project,conversation,input.executor_id,input.generation,now],|r|r.get(0)).unwrap_or(false);
+    if !live {
+        return fail(
+            StatusCode::CONFLICT,
+            "Project execution lease is expired or fenced.",
+        );
+    }
+    if release {
+        let running:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_effects WHERE owner=?1 AND project=?2 AND state='running')",params![owner,project],|r|r.get(0)).unwrap_or(true);
+        if running {
+            return fail(StatusCode::CONFLICT,"Project handoff is waiting for an admitted MCP write to finish or become observable.");
+        }
+    }
+    let expires = if release {
+        now
+    } else {
+        now.saturating_add(60_000)
+    };
+    if let Err(e)=tx.execute("UPDATE conversation_execution_leases SET expires_at=?6 WHERE owner=?1 AND project=?2 AND conversation=?3 AND executor_id=?4 AND generation=?5",params![owner,project,conversation,input.executor_id,input.generation,expires]) { return internal(e); }
+    if release {
+        let _=tx.execute("DELETE FROM conversation_live_authority WHERE conversation=?1 AND owner=?2 AND project=?3 AND generation=?4",params![conversation,owner,project,input.generation]);
+        let _=tx.execute("DELETE FROM conversation_stop_requests WHERE owner=?1 AND project=?2 AND generation=?3",params![owner,project,input.generation]);
+    }
+    let stop_requested:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_stop_requests WHERE owner=?1 AND project=?2 AND conversation=?3 AND executor_id=?4 AND generation=?5)",params![owner,project,conversation,input.executor_id,input.generation],|r|r.get(0)).unwrap_or(false);
+    if let Err(e) = tx.commit() {
+        return internal(e);
+    }
+    json_response(
+        json!({"generation":input.generation,"expiresAt":expires,"released":release,"stopRequested":stop_requested}),
+    )
+}
+
+async fn list_effects(
+    State(state): State<Konae>,
+    AxumPath((project, conversation)): AxumPath<(String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match db.prepare("SELECT call_id,executor_id,generation,tool,effect_class,state,observation_call_id,created_at,updated_at FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 ORDER BY created_at DESC,call_id DESC LIMIT 50") {
+        Ok(mut q)=>match q.query_map(params![owner,project,conversation],|r|Ok(json!({"callId":r.get::<_,String>(0)?,"executorId":r.get::<_,String>(1)?,"generation":r.get::<_,i64>(2)?,"tool":r.get::<_,String>(3)?,"effectClass":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"observationCallId":r.get::<_,Option<String>>(6)?,"createdAt":r.get::<_,i64>(7)?,"updatedAt":r.get::<_,i64>(8)?}))) {
+            Ok(rows)=>match rows.collect::<rusqlite::Result<Vec<_>>>() {Ok(items)=>json_response(json!({"items":items,"limit":50})),Err(e)=>internal(e)},Err(e)=>internal(e)
+        },Err(e)=>internal(e)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EffectSettlement {
+    state: String,
+    result: Option<Box<RawValue>>,
+    refusal: Option<String>,
+    observation_call_id: Option<String>,
+    acknowledgement: Option<String>,
+}
+async fn read_effect(
+    State(state): State<Konae>,
+    AxumPath((project, conversation, call_id)): AxumPath<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match db.query_row("SELECT tool,effect_class,state,result,refusal,observation_call_id,created_at,updated_at FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4",params![owner,project,conversation,call_id],|r|Ok(json!({"callId":call_id,"tool":r.get::<_,String>(0)?,"effectClass":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"result":r.get::<_,Option<String>>(3)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"refusal":r.get::<_,Option<String>>(4)?,"observationCallId":r.get::<_,Option<String>>(5)?,"createdAt":r.get::<_,i64>(6)?,"updatedAt":r.get::<_,i64>(7)?}))) { Ok(v)=>json_response(v),Err(_)=>fail(StatusCode::NOT_FOUND,"Effect receipt is not available.") }
+}
+async fn settle_effect(
+    State(state): State<Konae>,
+    AxumPath((project, conversation, call_id)): AxumPath<(String, String, String)>,
+    request: Request,
+) -> Response {
+    let (owner, db) = match owner_request(&state, request.headers().clone(), &project).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let bytes = match to_bytes(request.into_body(), BODY_LIMIT).await {
+        Ok(v) => v,
+        Err(_) => {
+            return fail(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Effect settlement exceeds 4 MiB.",
+            )
+        }
+    };
+    let input: EffectSettlement = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "Invalid effect settlement."),
+    };
+    if input.state != "acknowledged"
+        || input.refusal.is_some()
+        || input.result.is_some()
+        || input.observation_call_id.is_some()
+        || input
+            .acknowledgement
+            .as_ref()
+            .is_some_and(|s| s.len() > 512)
+    {
+        return fail(StatusCode::BAD_REQUEST,"Only an explicit informed acknowledgement can be recorded here; observations must use the authorized MCP read-back.");
+    }
+    let Some(acknowledgement) = input
+        .acknowledgement
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "An informed acknowledgement must name the owner's decision.",
+        );
+    };
+    let now = now_ms();
+    // The route can resolve only a completed unknown outcome. It can never
+    // release a call whose backend dispatch is still running.
+    let changed=match db.execute("UPDATE conversation_effects SET state='acknowledged',refusal=?5,updated_at=?6 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='unknown'",params![owner,project,conversation,call_id,format!("Owner acknowledged unresolved outcome: {}",acknowledgement),now]){Ok(v)=>v,Err(e)=>return internal(e)};
+    if changed == 0 {
+        return fail(
+            StatusCode::CONFLICT,
+            "Effect is already settled or unavailable.",
+        );
+    }
+    json_response(json!({"callId":call_id,"state":input.state,"updatedAt":now}))
 }
 
 #[derive(Deserialize)]
@@ -483,7 +828,7 @@ async fn mint_id(
         Ok(v) => v,
         Err(e) => return internal(e),
     };
-    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_live_authority l JOIN conversations c ON c.id=l.conversation WHERE l.conversation=?1 AND l.owner=?2 AND l.project=?3 AND l.generation=?4 AND c.current_generation=?4 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.format_version=?5 AND c.pi_version=?6 AND c.registry_version=?7)",params![conversation,owner,project,input.generation,SUPPORTED_FORMAT,SUPPORTED_PI_VERSION,SUPPORTED_REGISTRY_VERSION],|r|r.get(0)).unwrap_or(false);
+    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_execution_leases l JOIN conversations c ON c.id=l.conversation WHERE l.conversation=?1 AND l.owner=?2 AND l.project=?3 AND l.generation=?4 AND l.expires_at>?5 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.format_version=?6 AND c.pi_version=?7 AND c.registry_version=?8)",params![conversation,owner,project,input.generation,now_ms(),SUPPORTED_FORMAT,SUPPORTED_PI_VERSION,SUPPORTED_REGISTRY_VERSION],|r|r.get(0)).unwrap_or(false);
     if !live {
         return fail(
             StatusCode::CONFLICT,
@@ -588,7 +933,7 @@ async fn commit(
     let Some((last_seq, generation)) = current else {
         return fail(StatusCode::NOT_FOUND, "Conversation is not available.");
     };
-    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_live_authority WHERE conversation=?1 AND owner=?2 AND project=?3 AND generation=?4)",params![conversation,owner,project,input.generation],|r|r.get(0)).unwrap_or(false);
+    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_execution_leases WHERE conversation=?1 AND owner=?2 AND project=?3 AND generation=?4 AND expires_at>?5)",params![conversation,owner,project,input.generation,now_ms()],|r|r.get(0)).unwrap_or(false);
     if !live || generation != input.generation {
         return fail(
             StatusCode::CONFLICT,
@@ -1029,28 +1374,8 @@ async fn receipt(
     if let Err(response) = require_conversation(&db, &owner, &project, &conversation) {
         return response;
     }
-    let live: Option<i64> = match db.query_row(
-        "SELECT generation FROM conversation_live_authority WHERE conversation=?1 AND owner=?2 AND project=?3",
-        params![conversation, owner, project],
-        |r| r.get(0),
-    ).optional() {
-        Ok(value) => value,
-        Err(error) => return internal(error),
-    };
-    let current: Option<i64> = match db.query_row(
-        "SELECT current_generation FROM conversations WHERE id=?1 AND owner=?2 AND project=?3 AND project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND deleted=0",
-        params![conversation, owner, project],
-        |r| r.get(0),
-    ).optional() {
-        Ok(value) => value,
-        Err(error) => return internal(error),
-    };
-    if live.is_none() || live != current {
-        return fail(
-            StatusCode::CONFLICT,
-            "Conversation has no current live generation; claim it before reading writer receipts.",
-        );
-    }
+    // Receipts are owner-readable after lease loss so a new executor can
+    // reconcile an uncertain commit without reviving the old writer.
     match db.query_row("SELECT receipt FROM conversation_batches WHERE conversation=?1 AND owner=?2 AND project=?3 AND request_id=?4",params![conversation,owner,project,request_id],|r|r.get::<_,String>(0)).optional(){Ok(Some(v))=>match serde_json::from_str(&v){Ok(v)=>json_response(v),Err(e)=>internal(e)},Ok(None)=>fail(StatusCode::NOT_FOUND,"Conversation receipt is not available."),Err(e)=>internal(e)}
 }
 
@@ -1443,6 +1768,7 @@ async fn remove(
     if let Err(e)=tx.execute("INSERT OR REPLACE INTO conversation_tombstones(owner,project,conversation,deleted_at) VALUES(?1,?2,?3,?4)",params![owner,project,conversation,now_ms()]){return internal(e)}
     for table in [
         "conversation_live_authority",
+        "conversation_effects",
         "conversation_batches",
         "conversation_records",
         "conversation_checkpoints",
@@ -1458,6 +1784,11 @@ async fn remove(
     if let Err(e) = tx.execute("DELETE FROM conversations WHERE id=?1", [&conversation]) {
         return internal(e);
     }
+    let _ = tx.execute("DELETE FROM conversation_execution_leases WHERE owner=?1 AND project=?2 AND conversation=?3",params![owner,project,conversation]);
+    let _ = tx.execute(
+        "DELETE FROM conversation_stop_requests WHERE owner=?1 AND project=?2 AND conversation=?3",
+        params![owner, project, conversation],
+    );
     if let Err(e)=tx.execute("DELETE FROM conversation_blobs WHERE NOT EXISTS(SELECT 1 FROM conversation_blob_refs r WHERE r.digest=conversation_blobs.digest)",[]){return internal(e)}
     if let Err(e) = tx.commit() {
         return internal(e);
@@ -1477,6 +1808,8 @@ pub(super) fn delete_project_tx(
         params![owner, project],
     )?;
     tx.execute("UPDATE conversation_project_epochs SET epoch=epoch+1 WHERE owner=?1 AND project=?2 AND epoch<?3",params![owner,project,MAX_SAFE_INTEGER])?;
+    tx.execute("INSERT OR IGNORE INTO conversation_project_generations(owner,project,generation) VALUES(?1,?2,0)",params![owner,project])?;
+    tx.execute("UPDATE conversation_project_generations SET generation=generation+1 WHERE owner=?1 AND project=?2 AND generation<?3",params![owner,project,MAX_SAFE_INTEGER])?;
     tx.execute("INSERT OR IGNORE INTO conversation_tombstones(owner,project,conversation,deleted_at) SELECT owner,project,id,?3 FROM conversations WHERE owner=?1 AND project=?2",params![owner,project,now])?;
     for table in [
         "conversation_live_authority",
@@ -1489,6 +1822,14 @@ pub(super) fn delete_project_tx(
     }
     tx.execute(
         "DELETE FROM conversations WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    )?;
+    tx.execute(
+        "DELETE FROM conversation_execution_leases WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    )?;
+    tx.execute(
+        "DELETE FROM conversation_stop_requests WHERE owner=?1 AND project=?2",
         params![owner, project],
     )?;
     tx.execute(
@@ -1509,6 +1850,228 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
         .as_millis()
         .min(i64::MAX as u128) as i64
+}
+
+/// Validate browser execution identity and durably admit an MCP effect before
+/// the tool dispatcher is entered. The transaction ends before remote work.
+pub(super) fn authorize_agent_mcp_call(
+    state: &Konae,
+    owner: &str,
+    project: &str,
+    conversation: &str,
+    executor: &str,
+    generation: i64,
+    call_id: &str,
+    tool: &str,
+    args: &Value,
+    observes: Option<&str>,
+) -> Result<bool, String> {
+    if call_id.is_empty() || call_id.len() > 128 || executor.is_empty() || executor.len() > 128 {
+        return Err("Agent execution identity is invalid.".into());
+    }
+    let mut db = super::mcp::store(state).map_err(|e| e.to_string())?;
+    schema(&db).map_err(|e| e.to_string())?;
+    let tx = db
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let now = now_ms();
+    let bound_project = if let Some(id) = args["projectId"].as_str() {
+        Some(id.to_owned())
+    } else if tool == "release_apply" {
+        let plan = args["planId"].as_str().unwrap_or_default();
+        tx.query_row("SELECT project FROM plans WHERE id=?1", [plan], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    if bound_project.as_deref().is_some_and(|id| id != project) {
+        return Err(
+            "Agent MCP call refused: its project binding does not match the leased project.".into(),
+        );
+    }
+    let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_execution_leases WHERE owner=?1 AND project=?2 AND conversation=?3 AND executor_id=?4 AND generation=?5 AND expires_at>?6)",params![owner,project,conversation,executor,generation,now],|r|r.get(0)).unwrap_or(false);
+    let is_write = agent_tool_writes(tool, args);
+    if !live {
+        let observed_write:Option<(String,String)>=observes.and_then(|original|tx.query_row("SELECT tool,state FROM conversation_effects WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state IN ('unknown','running')",params![owner,project,conversation,original],|r|Ok((r.get(0)?,r.get(1)?))).optional().ok().flatten());
+        if let (Some(original), Some((_, "running"))) = (
+            observes,
+            observed_write
+                .as_ref()
+                .map(|(tool, state)| (tool, state.as_str())),
+        ) {
+            if active_agent_effects()
+                .lock()
+                .map_err(|_| "Agent effect registry is unavailable.".to_owned())?
+                .contains(&effect_key(owner, project, original))
+            {
+                return Err(
+                    "The original MCP write is still running; read-back is not available yet."
+                        .into(),
+                );
+            }
+            tx.execute("UPDATE conversation_effects SET state='unknown',updated_at=?5 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='running'",params![owner,project,conversation,original,now]).map_err(|e|e.to_string())?;
+        }
+        let authorized_observation = observed_write.as_ref().and_then(|(name, _)| {
+            super::guide::READ_BACK
+                .iter()
+                .find(|(write, _)| *write == name)
+                .map(|(_, read)| *read)
+        }) == Some(tool)
+            && !is_write;
+        if !authorized_observation {
+            return Err(
+                "Agent MCP call refused: project execution lease is expired or fenced.".into(),
+            );
+        }
+    }
+    if is_write {
+        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_effects WHERE owner=?1 AND project=?2 AND state IN ('running','unknown'))",params![owner,project],|r|r.get(0)).unwrap_or(true);
+        if blocked {
+            return Err("Agent MCP write refused: a previous effect is still running or has an unknown outcome; reconcile it before continuing.".into());
+        }
+        let canonical = serde_json::to_vec(args).map_err(|e| e.to_string())?;
+        let hash = hex::encode(Sha256::digest(&canonical));
+        let inserted=tx.execute("INSERT INTO conversation_effects(owner,project,conversation,call_id,executor_id,generation,tool,effect_class,args_hash,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'running',?10,?10)",params![owner,project,conversation,call_id,executor,generation,tool,if tool=="release_apply" {"publish"} else {"write"},hash,now]).map_err(|e|e.to_string())?;
+        if inserted != 1 {
+            return Err("Agent MCP call ID was already admitted; inspect its receipt before taking another action.".into());
+        }
+        if metadata_bytes(&tx, owner).map_err(|e| e.to_string())? > OWNER_METADATA_LIMIT {
+            return Err("Project effect receipts reached the owner's conversation metadata quota; no MCP write was dispatched.".into());
+        }
+        active_agent_effects()
+            .lock()
+            .map_err(|_| "Agent effect registry is unavailable.".to_owned())?
+            .insert(effect_key(owner, project, call_id));
+    }
+    if let Err(error) = tx.commit() {
+        if is_write {
+            if let Ok(mut active) = active_agent_effects().lock() {
+                active.remove(&effect_key(owner, project, call_id));
+            }
+        }
+        return Err(error.to_string());
+    }
+    Ok(is_write)
+}
+
+pub(super) fn finish_agent_mcp_call(
+    state: &Konae,
+    owner: &str,
+    project: &str,
+    conversation: &str,
+    call_id: &str,
+    write: bool,
+    success: bool,
+    definitive_refusal: bool,
+    observation_of: Option<&str>,
+    tool: &str,
+) -> Result<(), String> {
+    let db = super::mcp::store(state).map_err(|e| e.to_string())?;
+    let now = now_ms();
+    if write {
+        let status = if definitive_refusal {
+            "refused"
+        } else {
+            "unknown"
+        };
+        let refusal = definitive_refusal.then(|| {
+            if tool == "project_sources_save" {
+                "Source revision compare-and-swap refused this write before mutation."
+            } else {
+                "The platform definitively refused this write before mutation."
+            }
+        });
+        db.execute("UPDATE conversation_effects SET state=?5,refusal=?6,updated_at=?7 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='running'",params![owner,project,conversation,call_id,status,refusal,now]).map_err(|e|e.to_string())?;
+        if let Ok(mut active) = active_agent_effects().lock() {
+            active.remove(&effect_key(owner, project, call_id));
+        }
+    }
+    if success {
+        if let Some(original) = observation_of {
+            if !readback_matches(state, owner, project, original, tool)? {
+                return Err(
+                    "This read is not the documented read-back for the pending effect.".into(),
+                );
+            }
+            let changed=db.execute("UPDATE conversation_effects SET state='observed',observation_call_id=?5,updated_at=?6 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='unknown'",params![owner,project,conversation,original,call_id,now]).map_err(|e|e.to_string())?;
+            if changed != 1 {
+                return Err("The original write is not awaiting read-back.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn effect_key(owner: &str, project: &str, call_id: &str) -> String {
+    format!("{owner}\u{1f}{project}\u{1f}{call_id}")
+}
+fn active_agent_effects() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static ACTIVE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    ACTIVE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+fn readback_matches(
+    _state: &Konae,
+    owner: &str,
+    project: &str,
+    call_id: &str,
+    read_tool: &str,
+) -> Result<bool, String> {
+    let db = super::mcp::store(_state).map_err(|e| e.to_string())?;
+    let write: Option<String> = db
+        .query_row(
+            "SELECT tool FROM conversation_effects WHERE owner=?1 AND project=?2 AND call_id=?3",
+            params![owner, project, call_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(write.as_deref().and_then(|name| {
+        super::guide::READ_BACK
+            .iter()
+            .find(|(write, _)| *write == name)
+            .map(|(_, read)| *read)
+    }) == Some(read_tool))
+}
+
+fn agent_tool_writes(tool: &str, args: &Value) -> bool {
+    if tool == "database_execute" {
+        let operation = args["operation"].as_str().unwrap_or("");
+        if matches!(operation, "inspect" | "browse" | "list-backups") {
+            return false;
+        }
+        if operation == "sql" {
+            let sql = args["input"]["sql"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            return !sql.starts_with("select ")
+                && !sql.starts_with("select\n")
+                && !sql.starts_with("select\t")
+                || sql.contains(';');
+        }
+        return true;
+    }
+    !matches!(
+        tool,
+        "session_inspect"
+            | "platform_guide"
+            | "project_inspect"
+            | "project_sources_read"
+            | "usage_summary"
+            | "notices_read"
+            | "app_users_list"
+            | "domain_read"
+            | "path_read"
+            | "modules_read"
+            | "app_invitations_list"
+            | "hostname_read"
+    )
 }
 
 #[cfg(test)]
@@ -1636,6 +2199,265 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    }
+
+    #[tokio::test]
+    async fn project_lease_fences_conversations_and_drains_ambiguous_writes_before_readback() {
+        let (root, state, konae, alice, bob) = fixture().await;
+        let alice_id = &alice.user.user_id;
+        make_conversation(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "project_alice",
+            "exec_one",
+        )
+        .await;
+        make_conversation(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "project_alice",
+            "exec_two",
+        )
+        .await;
+        make_conversation(
+            &state,
+            &konae,
+            &bob,
+            &bob.user.user_id,
+            "project_bob",
+            "exec_bob",
+        )
+        .await;
+        let one = "/_konae/projects/project_alice/conversations/exec_one";
+        let two = "/_konae/projects/project_alice/conversations/exec_two";
+        let bob_path = "/_konae/projects/project_bob/conversations/exec_bob";
+        let claim=call(&state,&konae,&alice,alice_id,"POST",&format!("{one}/claim"),Some(json!({"expectedGeneration":0,"executorId":"fixture-device-a","continueExplicitly":true})),None).await;
+        assert_eq!(claim.status(), StatusCode::OK);
+        let generation = json(claim).await["generation"].as_i64().unwrap();
+        let status = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "GET",
+            &format!("{two}/lease"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(json(status).await["conversationId"], "exec_one");
+        let stale_stop = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{one}/stop"),
+            Some(json!({"requestId":"fixture-stale-stop","generation":generation-1})),
+            None,
+        )
+        .await;
+        assert_eq!(stale_stop.status(), StatusCode::CONFLICT);
+        let stop = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{one}/stop"),
+            Some(json!({"requestId":"fixture-stop-1","generation":generation})),
+            None,
+        )
+        .await;
+        assert_eq!(stop.status(), StatusCode::OK);
+        let renewal = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{one}/renew"),
+            Some(json!({"executorId":"fixture-device-a","generation":generation})),
+            None,
+        )
+        .await;
+        assert_eq!(json(renewal).await["stopRequested"], true);
+        let same_project=call(&state,&konae,&alice,alice_id,"POST",&format!("{two}/claim"),Some(json!({"expectedGeneration":generation,"executorId":"fixture-device-b","continueExplicitly":true})),None).await;
+        assert_eq!(same_project.status(), StatusCode::CONFLICT);
+        let other_project=call(&state,&konae,&bob,&bob.user.user_id,"POST",&format!("{bob_path}/claim"),Some(json!({"expectedGeneration":0,"executorId":"fixture-device-bob","continueExplicitly":true})),None).await;
+        assert_eq!(other_project.status(), StatusCode::OK);
+        let admitted = authorize_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_one",
+            "fixture-device-a",
+            generation,
+            "write-1",
+            "module_set",
+            &json!({"projectId":"project_alice","module":"files","on":true}),
+            None,
+        )
+        .unwrap();
+        assert!(admitted);
+        let db = super::super::mcp::store(&konae).unwrap();
+        db.execute(
+            "UPDATE conversation_execution_leases SET expires_at=?3 WHERE owner=?1 AND project=?2",
+            params![alice_id, "project_alice", now_ms() - 1],
+        )
+        .unwrap();
+        let stale_renew = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{one}/renew"),
+            Some(json!({"executorId":"fixture-device-a","generation":generation})),
+            None,
+        )
+        .await;
+        assert_eq!(stale_renew.status(), StatusCode::CONFLICT);
+        let premature_observation = authorize_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_one",
+            "fixture-device-a",
+            generation,
+            "read-early",
+            "modules_read",
+            &json!({"projectId":"project_alice"}),
+            Some("write-1"),
+        );
+        assert!(premature_observation.is_err());
+        let settle=call(&state,&konae,&alice,alice_id,"POST",&format!("{one}/effects/write-1"),Some(json!({"state":"acknowledged","acknowledgement":"The owner accepts the uncertainty."})),None).await;
+        assert_eq!(settle.status(), StatusCode::CONFLICT);
+        finish_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_one",
+            "write-1",
+            true,
+            true,
+            false,
+            None,
+            "module_set",
+        )
+        .unwrap();
+        let late_read = authorize_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_one",
+            "fixture-device-a",
+            generation,
+            "read-late",
+            "modules_read",
+            &json!({"projectId":"project_alice"}),
+            Some("write-1"),
+        )
+        .unwrap();
+        assert!(!late_read);
+        finish_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_one",
+            "read-late",
+            false,
+            true,
+            false,
+            Some("write-1"),
+            "modules_read",
+        )
+        .unwrap();
+        let next=call(&state,&konae,&alice,alice_id,"POST",&format!("{two}/claim"),Some(json!({"expectedGeneration":generation,"executorId":"fixture-device-b","continueExplicitly":true})),None).await;
+        assert_eq!(next.status(), StatusCode::OK);
+        let next_generation = json(next).await["generation"].as_i64().unwrap();
+        assert_eq!(next_generation, generation + 1);
+        assert!(authorize_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_two",
+            "fixture-device-b",
+            next_generation,
+            "source-save-1",
+            "project_sources_save",
+            &json!({"projectId":"project_alice","revision":8}),
+            None
+        )
+        .unwrap());
+        finish_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_two",
+            "source-save-1",
+            true,
+            true,
+            false,
+            None,
+            "project_sources_save",
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE conversation_execution_leases SET expires_at=?3 WHERE owner=?1 AND project=?2",
+            params![alice_id, "project_alice", now_ms() - 1],
+        )
+        .unwrap();
+        let source_readback = authorize_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_two",
+            "fixture-device-b",
+            next_generation,
+            "source-read-1",
+            "project_sources_read",
+            &json!({"projectId":"project_alice","requestId":"fixture-source-read"}),
+            Some("source-save-1"),
+        )
+        .unwrap();
+        assert!(
+            !source_readback,
+            "project_sources_read is a read, including after lease expiry"
+        );
+        finish_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_two",
+            "source-read-1",
+            false,
+            true,
+            false,
+            Some("source-save-1"),
+            "project_sources_read",
+        )
+        .unwrap();
+        let source_state:String=db.query_row("SELECT state FROM conversation_effects WHERE owner=?1 AND project=?2 AND call_id='source-save-1'",params![alice_id,"project_alice"],|r|r.get(0)).unwrap();
+        assert_eq!(source_state, "observed");
+        let stale_write = authorize_agent_mcp_call(
+            &konae,
+            alice_id,
+            "project_alice",
+            "exec_one",
+            "fixture-device-a",
+            generation,
+            "write-2",
+            "module_set",
+            &json!({"projectId":"project_alice","module":"files","on":false}),
+            None,
+        );
+        assert!(stale_write.is_err());
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     async fn make_conversation(
@@ -1807,7 +2629,7 @@ mod tests {
             alice_id,
             "POST",
             &format!("{base}/claim"),
-            Some(json!({"expectedGeneration":0})),
+            Some(json!({"expectedGeneration":0,"executorId":"fixture-executor-1","continueExplicitly":true})),
             None,
         )
         .await;
@@ -1969,6 +2791,18 @@ mod tests {
         assert!(replay_text.contains(r#"\ud800"#));
         assert!(replay_text.contains(r#"\ud801"#));
         assert!(!replay_text.contains('\u{fffd}'));
+        let released = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/release"),
+            Some(json!({"executorId":"fixture-executor-1","generation":generation})),
+            None,
+        )
+        .await;
+        assert_eq!(released.status(), StatusCode::OK);
         let next = call(
             &state,
             &konae,
@@ -1976,22 +2810,38 @@ mod tests {
             alice_id,
             "POST",
             &format!("{base}/claim"),
-            Some(json!({"expectedGeneration":generation})),
+            Some(json!({"expectedGeneration":generation,"executorId":"fixture-executor-2","continueExplicitly":true})),
             None,
         )
         .await;
         let next_generation = json(next).await["generation"].as_i64().unwrap();
         let stale=call(&state,&konae,&alice,alice_id,"POST",&format!("{base}/commit"),Some(json!({"requestId":"stale","expectedSeq":2,"generation":generation,"writes":[[{"type":"entry","value":{"id":10,"kind":"pi.user"}}]]})),None).await;
         assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let released = call(
+            &state,
+            &konae,
+            &alice,
+            alice_id,
+            "POST",
+            &format!("{base}/release"),
+            Some(json!({"executorId":"fixture-executor-2","generation":next_generation})),
+            None,
+        )
+        .await;
+        assert_eq!(released.status(), StatusCode::OK);
         let db = super::super::mcp::store(&konae).unwrap();
         let copy = root.join("mcp-copy.sqlite");
         db.execute("VACUUM INTO ?1", [copy.to_string_lossy().as_ref()])
             .unwrap();
         let restored = Connection::open(&copy).unwrap();
-        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_live_authority WHERE conversation='native_conversation'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_execution_leases WHERE owner=?1 AND project='project_alice'", [alice_id], |r| r.get::<_, i64>(0)).unwrap(), 1);
         restored
             .execute("DELETE FROM conversation_live_authority", [])
             .unwrap();
+        restored
+            .execute("DELETE FROM conversation_execution_leases", [])
+            .unwrap();
+        assert_eq!(restored.query_row("SELECT generation FROM conversation_project_generations WHERE owner=?1 AND project='project_alice'", [alice_id], |r| r.get::<_, i64>(0)).unwrap(), 2);
         assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_records WHERE conversation='native_conversation'",[],|r|r.get::<_,i64>(0)).unwrap(),8);
         assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_checkpoints WHERE conversation='native_conversation'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
         assert_eq!(restored.query_row("SELECT COUNT(*) FROM conversation_batches WHERE conversation='native_conversation' AND request_id='stable-write-1'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
@@ -2041,7 +2891,7 @@ mod tests {
             alice_id,
             "POST",
             &format!("{deleted_project_conversation}/claim"),
-            Some(json!({"expectedGeneration":0})),
+            Some(json!({"expectedGeneration":2,"executorId":"fixture-executor-1","continueExplicitly":true})),
             None,
         )
         .await;

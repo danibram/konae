@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineExtension, defineTool, hook, Harness, createRegistry, GenerationTask, ToolTask, ToolResultEntry, ROOT_CONVERSATION_ID, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { MiniAppProject } from "../lib/types";
+import type { AgentExecution } from "../mcp/client";
 import { textFiles } from "../lib/source-files";
 import { buildSystemPrompt } from "./system-prompt";
 import { createDurableModels, durableModelFor, modelsWithConfiguredModel } from "./durable-models";
@@ -32,6 +33,8 @@ export type DurableEngineOptions = {
   onMutation?: (files: CapsuleFiles) => void;
   localOnly?: boolean;
   isCurrent?: () => boolean;
+  assertExecution?: () => Promise<void>;
+  executionIdentity?: () => Omit<AgentExecution, "callId" | "observesCallId"> | null;
   loadSql?: SqlJsLoader;
   liveDatabase?: CapsuleToolHooks["liveDatabase"];
   previewErrors?: CapsuleToolHooks["previewErrors"];
@@ -79,6 +82,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       projectId,
       isCurrent: options.isCurrent ?? (() => false),
       binding: options.platform,
+      refreshSession: Boolean(options.openStorage),
       onCallBoundary: (callId, boundary) => platformBoundaries.set(callId, boundary),
     });
     tools.push(...platformTools);
@@ -100,7 +104,10 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
         },
       }),
       hook(GenerationTask, {
-        beforeRequest(request) {
+        async beforeRequest(request) {
+          // GenerationTask includes resumed work. Check the authoritative lease
+          // immediately before every provider dispatch, not just on Send.
+          await options.assertExecution?.();
           const messages = request.messages.map((message: any) => ({ ...message, content: Array.isArray(message.content) ? message.content.filter((part: any) => part.type !== "thinking" && part.type !== "redacted_thinking") : message.content }));
           return { messages };
         },
@@ -134,8 +141,8 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   return {
     conversation,
     harness,
-    async send(text: string) {
-      const submitted = await conversation.submit({ type: "input", content: redactDurableValue(text, currentCredentials(options)) as string, entry: { kind: "konae.owner-message" } }, BACKGROUND_CONTEXT);
+    async send(text: string, requestId = crypto.randomUUID()) {
+      const submitted = await conversation.submit({ requestId, type: "input", content: redactDurableValue(text, currentCredentials(options)) as string, entry: { kind: "konae.owner-message" } }, BACKGROUND_CONTEXT);
       const settled = await submitted.wait(BACKGROUND_CONTEXT);
       const changedFiles = workspace.changedFiles();
       if (changedFiles.length) {
@@ -175,7 +182,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
 }
 
 /** KonaeAgent adapter used only by the explicit local Durable staging opt-in. */
-export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
+export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void; assertExecution(): Promise<void>; execution(callId: string, observesCallId?: string): AgentExecution | null; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
   let currentProject = project;
   const modelConfig = { ...sessionConfig };
   let engine: Awaited<ReturnType<typeof openLocalDurableEngine>> | null = null;
@@ -248,10 +255,21 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
     proposal,
     applyGateStatus,
     async recordDisposition(status, files, saved) {
-      const current = await ensure();
-      await current.recordDisposition(status, files, saved);
+      const run = serial.then(async () => {
+        await options.assertExecution?.();
+        const current = await ensure();
+        await current.recordDisposition(status, files, saved);
+      });
+      serial = run.then(() => undefined, () => undefined);
+      await run;
     },
-    async send(prompt) {
+    async assertExecution() { await options.assertExecution?.(); },
+    execution(callId: string, observesCallId?: string) {
+      const identity = options.executionIdentity?.();
+      return identity ? { ...identity, callId, ...(observesCallId ? { observesCallId } : {}) } : null;
+    },
+    async send(prompt, requestId = crypto.randomUUID()) {
+      await options.assertExecution?.();
       const token = ++runToken;
       const run = serial.then(async () => {
         validation = null;
@@ -266,7 +284,7 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
           for (const entry of page.items) before.add(String(entry.id));
         } catch { /* a new conversation has no entries yet */ }
         try {
-          const settled = await current.send(prompt);
+          const settled = await current.send(prompt, requestId);
           const page = await current.conversation.entries({}, 50, undefined, BACKGROUND_CONTEXT);
           for (const entry of page.items) {
             if (before.has(String(entry.id)) || !ToolResultEntry.is(entry)) continue;
@@ -284,7 +302,16 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
     },
     interrupt() {
       runToken += 1;
-      if (engine) void engine.interrupt().then(() => emit({ type: "turn-end" })).catch((error) => emit({ type: "error", message: safeString(error) }));
+      if (engine) {
+        const stopped = engine;
+        void stopped.interrupt().then(async () => {
+          if (options.openStorage && engine === stopped) {
+            await stopped.close();
+            engine = null;
+          }
+          emit({ type: "turn-end" });
+        }).catch((error) => emit({ type: "error", message: safeString(error) }));
+      }
     },
     configure(config) {
       Object.assign(modelConfig, config);
@@ -337,6 +364,8 @@ function durableTool(tool: any, options: DurableEngineOptions, platformBoundarie
     executionMode: tool.executionMode === "sequential" ? "sequential" : undefined,
     outputLimits: { maxBytes: 80_000, retain: "head" },
     async execute(args, api, context) {
+      await options.assertExecution?.();
+      if (options.isCurrent?.() === false) throw new Error("The current project or agent execution changed. Continue again from the current saved conversation.");
       const knownCredentials = ["anthropic", "openai", "openrouter"].flatMap((provider) => {
         try { const value = options.keyStore.getKey(provider as AgentSessionConfig["provider"]); return value ? [value] : []; }
         catch { return []; }
