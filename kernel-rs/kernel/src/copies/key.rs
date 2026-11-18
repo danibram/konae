@@ -17,11 +17,12 @@ impl CopyKey {
             Some(secret) => {
                 ensure!(secret.len() >= 32, "KONAE_COPY_SECRET must be at least 32 characters.");
                 let mut key = Self::derive(&secret);
-                if let Ok(secret) = std::env::var("KONAE_COPY_V3_SECRET") {
+                if let Some(secret) = secret_setting("KONAE_COPY_V3_SECRET")? {
                     key.epoch = key.data_key(&secret)?;
                 }
-                if let Ok(list) = std::env::var("KONAE_COPY_V3_PREVIOUS_SECRETS") {
-                    let secrets = serde_json::from_str::<Vec<String>>(&list)?;
+                if let Some(list) = secret_setting("KONAE_COPY_V3_PREVIOUS_SECRETS")? {
+                    let secrets = serde_json::from_str::<Vec<String>>(&list).map_err(|_|
+                        anyhow::anyhow!("KONAE_COPY_V3_PREVIOUS_SECRETS must be a JSON array of strings."))?;
                     key.previous = secrets.iter().map(|s| key.data_key(s)).collect::<Result<_>>()?;
                 }
                 Ok(Some(key))
@@ -80,6 +81,11 @@ impl std::ops::Deref for CopyKey {
     fn deref(&self) -> &Self::Target {
         &self.files
     }
+}
+
+fn secret_setting(name: &str) -> Result<Option<String>> {
+    std::env::var_os(name).map(|value| value.into_string()
+        .map_err(|_| anyhow::anyhow!("{name} must contain UTF-8."))).transpose()
 }
 
 fn entry_message(name: &str, entry: &recovery::Entry) -> Result<Vec<u8>> {

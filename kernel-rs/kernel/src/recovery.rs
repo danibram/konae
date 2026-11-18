@@ -404,18 +404,21 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
                 serde_json::from_slice::<Hold>(&std::fs::read(path)?)?.key_check
             } else { None };
             let key = copies::CopyKey::from_env()?;
-            let source = copies::record_source(&args[2]).await?;
-            if let Some(required) = &key_check {
-                let actual = copies::ledger_binding(&source, key.as_ref());
-                if required.starts_with("v3/") {
-                    ensure!(actual.as_ref() == Some(required),
-                        "Use the selected v3 repository and its revocation key to reconcile.");
-                } else {
-                    ensure!(actual.as_ref() == Some(required),
-                        "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET.");
+            let record = match copies::record_source(&args[2]).await {
+                Err(error) => Err(error),
+                Ok(source) => {
+                    if let Some(required) = &key_check {
+                        let actual = copies::ledger_binding(&source, key.as_ref());
+                        let reason = if required.starts_with("v3/") {
+                            "Use the selected v3 repository and its revocation key to reconcile."
+                        } else {
+                            "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET."
+                        };
+                        ensure!(actual.as_ref() == Some(required), "{reason}");
+                    }
+                    copies::read_source_record(&source, key.as_ref()).await
                 }
-            }
-            let record = copies::read_source_record(&source, key.as_ref()).await;
+            };
             match apply_or_hold_for_key(&root, installation, record, key_check.as_deref())? {
                 Ok(changed) => {
                     clear_hold(&root)?;
