@@ -74,7 +74,6 @@ import { NotFound } from "./components/NotFound";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import { McpError, platformMcp } from "./mcp/client";
 import type { DurableEffectReceipt } from "./agent/durable-storage";
-import { isBoundedReadOnlySelect } from "./agent/platform-tools";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { parseServerActionSource } from "./kernel/actions";
@@ -1296,11 +1295,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (expectedRead === "app_invitations_list" && session.can?.manage_users !== true) throw new Error("Current session_inspect.can.manage_users permission is not granted for app_invitations_list. No read-back was sent.");
     let args: Record<string, unknown>;
     if (expectedRead === "database_execute") {
-      if (typeof sql !== "string" || !isBoundedReadOnlySelect(sql)) throw new Error("Enter one read-only SELECT with a numeric LIMIT from 1 to 1000 that inspects the affected rows.");
       if (session.can?.write !== true) throw new Error("Current session_inspect.can.write permission is not granted for database_execute SQL. No read-back was sent.");
+      const { isBoundedReadOnlySelect } = await import("./agent/platform-tools");
+      if (!current()) throw new Error("The selected owner, project or conversation changed. No read-back was sent.");
+      if (typeof sql !== "string" || !isBoundedReadOnlySelect(sql)) throw new Error("Enter one read-only SELECT with a numeric LIMIT from 1 to 1000 that inspects the affected rows.");
       args = { projectId: project.id, operation: "sql", input: { sql } };
     } else {
-      args = expectedRead === "auth_session" ? {} : { projectId: project.id };
+      args = { projectId: project.id };
     }
     const evidence = await platformMcp.call(expectedRead, args);
     if (!current()) throw new Error("The selected owner, project or conversation changed while the read was in progress. Its evidence is not attached to the new selection.");
