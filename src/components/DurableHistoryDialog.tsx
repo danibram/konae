@@ -33,6 +33,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
   const [expanded, setExpanded] = useState<Record<string, Expanded>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loadingOlderRecords, setLoadingOlderRecords] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [waitingForRelease, setWaitingForRelease] = useState(false);
   const selectionToken = useRef(0);
@@ -43,7 +44,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
     let active = true;
     selectionToken.current += 1;
     checkpointSelectionToken.current += 1;
-    setError(""); setSelected(null); setRecords(null); setExpanded({}); setConfirmDelete(false); setCheckpoint(null); setCheckpoints([]); setBrowsingCheckpoints(false); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setCheckpointError(""); setWaitingForRelease(false);
+    setError(""); setSelected(null); setRecords(null); setLoadingOlderRecords(false); setExpanded({}); setConfirmDelete(false); setCheckpoint(null); setCheckpoints([]); setBrowsingCheckpoints(false); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setCheckpointError(""); setWaitingForRelease(false);
     void listDurableConversations(projectId, ownerId).then((page) => {
       if (active) { setConversations(page.items); setConversationCursor(page.nextCursor); }
     }).catch((cause) => { if (active) setError(message(cause)); });
@@ -56,6 +57,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
     setCheckpoint(null);
     setCheckpoints([]);
     setBrowsingCheckpoints(false);
+    setLoadingOlderRecords(false);
     setSelected(item); setRecords(null); setExpanded({}); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setError(""); setCheckpointError(""); setLease(null); setEffects([]); setEffectsState({ kind: "available" }); setConfirmDelete(false); setWaitingForRelease(false); setBusy(false);
     try {
       const [page, currentLease, effectsResult, checkpointSummary] = await Promise.all([
@@ -140,13 +142,13 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
     catch (cause) { if (token === selectionToken.current) setError(message(cause)); } finally { if (token === selectionToken.current) setBusy(false); }
   };
   const olderRecords = async () => {
-    if (!selected || !records?.nextCursor || busy) return;
+    if (!selected || !records?.nextCursor || busy || loadingOlderRecords) return;
     const token = selectionToken.current;
     const conversationId = selected.id;
     const cursor = records.nextCursor;
-    setBusy(true);
+    setLoadingOlderRecords(true);
     try { const page = await readDurableRecords(projectId, conversationId, ownerId, cursor); if (token === selectionToken.current && selected?.id === conversationId) setRecords((current) => current ? { items: [...page.items, ...current.items], nextCursor: page.nextCursor } : page); }
-    catch (cause) { if (token === selectionToken.current && selected?.id === conversationId) setError(message(cause)); } finally { if (token === selectionToken.current) setBusy(false); }
+    catch (cause) { if (token === selectionToken.current && selected?.id === conversationId) setError(message(cause)); } finally { if (token === selectionToken.current) setLoadingOlderRecords(false); }
   };
   const expand = async (item: DurableRecordSummaryItem) => {
     if (item.id === null) return;
@@ -227,7 +229,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
           <ol className="durable-timeline">
             {[...(records?.items ?? [])].reverse().map((item) => <HistoryEntry key={`${item.sequence}:${item.ordinal}`} item={item} expanded={expanded[String(item.id)]} onExpand={() => void expand(item)} effects={effects} projectId={projectId} conversationId={selected.id} ownerId={ownerId} />)}
           </ol>
-          {records?.nextCursor && <Button variant="secondary" onClick={() => void olderRecords()} disabled={busy}>Load older entries</Button>}
+          {records?.nextCursor && <Button variant="secondary" onClick={() => void olderRecords()} disabled={busy || loadingOlderRecords}>Load older entries</Button>}
           {canContinue && !confirmDelete && lease && !lease.live && !checkpoint?.inspectionOnly && (checkpoint?.status === "applied-unsaved" || checkpoint?.status === "apply-unknown") && <Button variant="primary" onClick={() => onContinue(selected.id)}>Check saved source outcome</Button>}
           {canContinue && !confirmDelete && lease && !lease.live && !lease.unresolvedEffects && !checkpoint?.inspectionOnly && checkpoint?.status !== "applied-unsaved" && checkpoint?.status !== "apply-unknown" && <Button variant="primary" onClick={() => onContinue(selected.id)}>Continue from this saved conversation</Button>}
           {onRestore && !confirmDelete && checkpoint && !checkpoint.inspectionOnly && candidate && candidateCheckpointId === checkpoint.checkpointId && <Button variant="primary" onClick={async () => { const token = selectionToken.current; const checkpointToken = checkpointSelectionToken.current; const conversationId = selected.id; const checkpointId = checkpoint.checkpointId; const sequence = checkpoint.sequence; setBusy(true); try { await onRestore(conversationId, checkpointId, sequence); } finally { if (token === selectionToken.current && checkpointToken === checkpointSelectionToken.current && selected?.id === conversationId) setBusy(false); } }} disabled={busy}>Restore as a new proposal from this checkpoint</Button>}
