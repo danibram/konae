@@ -162,6 +162,7 @@ pub(super) async fn audit(source: &Source, copy: &str, key: Option<&CopyKey>) ->
     let manifest = read_manifest(source, copy).await?.map_err(anyhow::Error::msg)?;
     ensure!(manifest.copy_id == copy, "Manifest belongs to another copy.");
     ensure!(!(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()), "Expected a signed and encrypted S3 copy.");
+    let key = key.map(CopyKey::files);
     check_sealed(copy, &manifest, key)?;
     let mut index = HashMap::new();
     for file in &manifest.files {

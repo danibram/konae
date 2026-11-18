@@ -1,0 +1,21 @@
+[package]
+name = "konae-backup"
+version.workspace = true
+edition.workspace = true
+
+[features]
+s3 = ["dep:aws-sdk-s3"]
+
+[dependencies]
+anyhow.workspace = true
+aws-sdk-s3 = { workspace = true, optional = true }
+hex.workspace = true
+ring.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
