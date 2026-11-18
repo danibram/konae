@@ -118,6 +118,23 @@ class Lab:
         return subprocess.run([self.args.mc, *args], input=data, capture_output=True,
                               env=dict(self.env, **settings), check=True, timeout=120).stdout
 
+    def block_versions(self):
+        if self.remote:
+            return {o["key"]: (o["size"], o["lastModified"], o["etag"])
+                    for line in self.mc("ls", "--json", PREFIX+"objects/").splitlines()
+                    if (o := json.loads(line))["type"] == "file"}
+        versions = {}
+        for path in (self.data/"objects").iterdir():
+            info = path.stat()
+            versions[path.name] = (info.st_size, info.st_mtime_ns, info.st_ino)
+        return versions
+
+    def publish_unchanged(self):
+        before = self.block_versions()
+        self.run("next", measure=True)
+        assert before and self.block_versions() == before
+        print(f"PASS {self.target} stable publication preserved all {len(before)} stored block versions", flush=True)
+
     def bytes(self, name):
         return self.mc("cat", PREFIX+name) if self.remote else (self.data / name).read_bytes()
 
@@ -235,7 +252,7 @@ class Lab:
         self.run("reachable")
         if self.remote:
             self.readonly_restore()
-        self.run("next", measure=True)
+        self.publish_unchanged()
         self.run("next-prune", measure=True)
         self.cold("newest", measure=True)
         retained, survivors = self.inventory()
@@ -257,6 +274,46 @@ class Lab:
         print(f"PASS {self.target} retained 54/1080 roots and 56/1083 objects; stable publication reused both blocks", flush=True)
 
 
+def historical(args, root):
+    import runpy
+    cut = runpy.run_path(str(Path(__file__).with_name("common-cut.py")))
+    directory = Lab(args, root/"directory", "directory")
+    remote = Lab(args, root/"remote", "s3")
+    assert not remote.mc("ls", "--recursive", "--json", "lab/konae-test")
+    for lab in (directory, remote):
+        lab.root.mkdir()
+        lab.run("retry")
+    inventories = [lab.inventory() for lab in (directory, remote)]
+    old = [f"2000-01-01T00-00-00.{i:03}Z" for i in range(25)]
+    for i, point in enumerate(old):
+        folder = directory.root/point
+        folder.mkdir()
+        m = dict(copyId=point, createdAt=946684800000+i, version=1, files=[])
+        (folder/"manifest.json").write_text(json.dumps(m))
+        m["version"] = 1 + i % 2
+        remote.mc("pipe", f"lab/konae-test/copies/{point}/manifest.json", data=json.dumps(m).encode())
+    live = root/"live"
+    cut["fixture"](live)
+    env = dict(cut["setting"](live), KONAE_COPY_DIR=str(directory.root), KONAE_COPY_S3="1",
+               AWS_EC2_METADATA_DISABLED="true", TOKIO_WORKER_THREADS="2")
+    for name in ("ENDPOINT", "BUCKET", "ACCESS_KEY", "SECRET_KEY"):
+        env["KONAE_S3_"+name] = os.environ["KONAE_TEST_S3_"+name]
+
+    with cut["server"](args.historical_kernel.resolve(), env) as (port, _):
+        def complete():
+            reports = cut["targets"](port)
+            assert all(not r["lastError"] for r in reports), "Historical copy worker failed"
+            return len(reports) == 2 and all(r["lastCopyId"] for r in reports)
+        cut["wait"](complete, "Historical kernel did not finish both copies", 90)
+    remote_dirs = {json.loads(line)["key"].rstrip("/") for line in remote.mc("ls", "--json", "lab/konae-test/copies/").splitlines()}
+    assert [p for p in old if (directory.root/p).exists()] == old[2:]
+    assert [p for p in old if p in remote_dirs] == old[2:]
+    for lab, before in zip((directory, remote), inventories):
+        assert lab.inventory() == before
+        lab.cold("latest")
+    print("PASS historical kernel removed two old manifests per destination and both v3 points restored")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--worker", required=True, type=Path)
@@ -264,6 +321,7 @@ def main():
     p.add_argument("--measure", type=Path)
     p.add_argument("--oracle", type=Path)
     p.add_argument("--require-s3", action="store_true")
+    p.add_argument("--historical-kernel", type=Path)
     p.add_argument("--capacity-only", action="store_true")
     args = p.parse_args()
     if args.capacity_only:
@@ -295,8 +353,12 @@ def main():
         targets.append("s3")
     else:
         print("SKIP S3 destination (requires --mc inside with-minio)", flush=True)
-        if args.require_s3:
+        if args.require_s3 or args.historical_kernel:
             p.error("S3 destination required")
+    if args.historical_kernel:
+        with tempfile.TemporaryDirectory(prefix="konae-historical-prune-") as tmp:
+            historical(args, Path(tmp))
+        return
     for target in targets:
         with tempfile.TemporaryDirectory(prefix="konae-v3-prune-") as tmp:
             Lab(args, Path(tmp), target).exercise()
