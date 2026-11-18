@@ -1,7 +1,9 @@
 const secretAliases = new Set(["apikey", "xapikey", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "credential", "credentials", "clientsecret", "secret", "password", "invitationcode", "verificationtoken", "ownertoken", "codeverifier", "oauthstate"]);
 const credentialMarker = /\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-or-v1-[A-Fa-f0-9]{16,}|sk-proj-[A-Za-z0-9_-]{8,}|lb_[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._~+/-]{12,})\b/g;
 const sensitiveParameter = /^(?:token|key|api[_-]?key|code|invite|invitation|invitation[_-]?code|verification|verification[_-]?token|email[_-]?verification|auth|authorization|signature)$/i;
-const oauthPath = /\/oauth2?\/(?:v\d+\/)?(?:authorize|authorization|callback)(?:\/|$)/i;
+const oauthRoute = String.raw`oauth2?/(?:v\d+(?:\.\d+)*/)?(?:authorize|authorization|callback)`;
+const oauthPath = new RegExp(`/${oauthRoute}(?:/|$)`, "i");
+const urlInText = new RegExp(String.raw`(?:https?://|(?<![\w/])/(?:[^\s"'<>/?#]+/)*${oauthRoute}(?=[/?#]))[^\s"'<>]+`, "gi");
 const relativeUrlOrigin = "https://redaction.invalid";
 
 export type BoundedText = { text: string; originalLength: number; retainedLength: number; truncated: boolean; redacted: boolean; method: "head" };
@@ -23,7 +25,7 @@ export function redactDurableValue(value: unknown, knownCredentials: readonly st
 export function redactText(value: string, knownCredentials: readonly string[] = []): string {
   let credentialSafe = value.replace(credentialMarker, "[redacted credential]");
   for (const credential of knownCredentials) if (credential) credentialSafe = credentialSafe.split(credential).join("[redacted credential]");
-  credentialSafe = credentialSafe.replace(/(?:https?:\/\/|(?<![\w/])\/oauth\/(?:authorize|callback)\?)[^\s"'<>]+/gi, redactUrl);
+  credentialSafe = credentialSafe.replace(urlInText, redactUrl);
   try {
     const parsed = JSON.parse(credentialSafe);
     const safe = JSON.stringify(redactDurableValue(parsed, knownCredentials));

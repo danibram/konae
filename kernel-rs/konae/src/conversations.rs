@@ -128,8 +128,15 @@ mod agent_sql_classification_tests {
     #[test]
     fn effect_read_back_requires_a_numeric_bounded_limit() {
         assert!(super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 50;"));
+        assert!(super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 10 OFFSET 40"));
         assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes"));
         assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 1001"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes -- LIMIT 10"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes /* LIMIT 10 */"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes WHERE title = 'a LIMIT 10 string'"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM (SELECT id FROM notes LIMIT 10)"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 1+1000"));
+        assert!(!super::agent_sql_is_bounded_read("SELECT id FROM notes LIMIT 1, 1001"));
     }
 }
 
@@ -2300,14 +2307,18 @@ fn agent_sql_is_bounded_read(sql: &str) -> bool {
         return false;
     }
     let statement = sql.trim().strip_suffix(';').unwrap_or(sql.trim()).trim();
-    let words = statement.split_whitespace().collect::<Vec<_>>();
-    words.windows(2).any(|pair| {
-        pair[0].eq_ignore_ascii_case("limit")
-            && pair[1]
-                .trim_end_matches(|character: char| !character.is_ascii_digit())
-                .parse::<u32>()
-                .is_ok_and(|limit| (1..=1000).contains(&limit))
-    })
+    let tokens = sql_tokens(statement);
+    let top: Vec<&SqlTok> = tokens.iter().filter(|token| token.depth == 0).collect();
+    let Some(index) = limit_index(&top) else { return false };
+    let is_integer = |token: &SqlTok| {
+        token.kind == SqlTokKind::Symbol && token.text.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    let limit = match &top[index + 1..] {
+        [limit] => limit,
+        [limit, offset, rows] if offset.is_word("OFFSET") && is_integer(rows) => limit,
+        _ => return false,
+    };
+    is_integer(limit) && limit.text.parse::<u32>().is_ok_and(|rows| (1..=1000).contains(&rows))
 }
 
 #[cfg(test)]

@@ -1,5 +1,7 @@
 import type { AgentTool } from "./contracts";
 import { sdkContract, type SdkModuleOption } from "../sdk/contract";
+import { limitIndex } from "../lib/query-bound";
+import { sqlTokens, type SqlToken } from "../lib/sql-tokens";
 
 export type McpToolDefinition = {
   name: string;
@@ -77,8 +79,14 @@ export function isReadOnlySelect(sql: string): boolean {
 
 export function isBoundedReadOnlySelect(sql: string): boolean {
   if (!isReadOnlySelect(sql)) return false;
-  const limit = sql.trim().replace(/;\s*$/, "").match(/\blimit\s+(\d+)\b/i)?.[1];
-  return limit !== undefined && Number(limit) >= 1 && Number(limit) <= 1000;
+  const statement = sql.trim().replace(/;\s*$/, "");
+  const top = sqlTokens(statement).filter((token) => token.depth === 0);
+  const index = limitIndex(top);
+  if (index < 0) return false;
+  const [limit, offset, rows, ...extra] = top.slice(index + 1);
+  const integer = (token: SqlToken | undefined) => token?.kind === "symbol" && /^\d+$/.test(token.text);
+  if (limit?.kind !== "symbol" || !integer(limit) || Number(limit.text) < 1 || Number(limit.text) > 1000) return false;
+  return !offset || (offset.kind === "word" && offset.text.toUpperCase() === "OFFSET" && integer(rows) && extra.length === 0);
 }
 
 function needsConfirmation(name: string, args: Record<string, unknown>): boolean {

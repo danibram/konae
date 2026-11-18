@@ -57,6 +57,8 @@ describe("durable trace privacy and model boundary", () => {
     for (const link of [
       `https://fixture.test/oauth/authorize?state=${oauthState}&reason=denied`,
       `/oauth/authorize?client_id=fixture-client&state=${oauthState}`,
+      `/oauth2/authorize?state=${oauthState}`,
+      `/accounts/oauth2/v2.0/authorize?state=${oauthState}`,
       `https://fixture.test/connect/authorize?client_id=fixture-client&redirect_uri=https%3A%2F%2Ffixture.test&state=${oauthState}`,
       `https://fixture.test/oauth/callback?error=access_denied&state=${oauthState}`,
       `https://fixture.test/oauth/callback#state=${oauthState}`,

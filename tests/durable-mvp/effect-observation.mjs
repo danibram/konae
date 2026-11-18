@@ -91,6 +91,16 @@ try {
   const sqlDiagnostic = await mcp.call("database_execute", { projectId, operation: "sql", input: { sql: "SELECT id,title FROM notes WHERE id = 999 LIMIT 10;" } });
   assert.equal(sqlDiagnostic.rows.length, 0, "an empty diagnostic read is available as evidence before confirmation");
   assert.equal((await request(`${conversation}/effects/${sqlWriteId}`, owner)).json.state, "unknown", "expired-lease diagnostic read does not resolve the pending write");
+  for (const sql of [
+    "SELECT id,title FROM notes -- LIMIT 10",
+    "SELECT id,title FROM (SELECT id,title FROM notes LIMIT 10)",
+    "SELECT id,title FROM notes LIMIT 1+1000",
+  ]) {
+    const unbounded = await callAgent("database_execute", { projectId, operation: "sql", input: { sql } }, { observes: sqlWriteId });
+    assert.ok(!succeeded(unbounded));
+    assert.match(unbounded.text, /bounded, read-only SELECT/);
+    assert.equal((await request(`${conversation}/effects/${sqlWriteId}`, owner)).json.state, "unknown");
+  }
   const sqlRead = await callAgent("database_execute", { projectId, operation: "sql", input: { sql: " SELECT id,title FROM notes WHERE id = 1 LIMIT 10; " } }, { id: "fixture-sql-readback", observes: sqlWriteId });
   assert.ok(succeeded(sqlRead), sqlRead.text);
   assert.equal((await request(`${conversation}/effects/${sqlWriteId}`, owner)).json.state, "observed");

@@ -47,6 +47,13 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 50; ")).toBe(true);
     expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1001")).toBe(false);
     expect(isBoundedReadOnlySelect("SELECT id FROM tasks")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks -- LIMIT 10")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks /* LIMIT 10 */")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks WHERE title = 'a LIMIT 10 string'")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM (SELECT id FROM tasks LIMIT 10)")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1+1000")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1, 1001")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 10 OFFSET 40")).toBe(true);
   });
 
   test("only the allowlisted tools reach the model, never source saves, credentials, secrets or transfers", async () => {
