@@ -233,6 +233,7 @@ pub fn operator_command() -> Result<bool> {
         return Ok(false);
     }
     let root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
+    let _operation = crate::file_store::external_operation(&root)?;
     println!("{}", run(&root, &args, now_seconds())?);
     Ok(true)
 }

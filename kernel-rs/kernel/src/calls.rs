@@ -653,35 +653,7 @@ async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static st
 fn connection(data_root: &Path) -> Result<Connection> {
     let connection = Connection::open(data_root.join(CALLS_DATABASE))?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    connection.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         CREATE TABLE IF NOT EXISTS calls (
-           id TEXT PRIMARY KEY,
-           deployment TEXT NOT NULL,
-           action TEXT NOT NULL,
-           input TEXT NOT NULL,
-           state TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'failed')),
-           attempts INTEGER NOT NULL DEFAULT 0,
-           next_attempt_at INTEGER NOT NULL,
-           leased_until INTEGER,
-           method TEXT,
-           url TEXT,
-           status INTEGER,
-           error TEXT,
-           answer TEXT,
-           then_action TEXT,
-           then_state TEXT,
-           then_message TEXT,
-           execution_mode TEXT NOT NULL DEFAULT 'live' CHECK (execution_mode IN ('live', 'test')),
-           request_body TEXT,
-           request_headers TEXT,
-           response_body BLOB,
-           created_at INTEGER NOT NULL,
-           updated_at INTEGER NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS calls_due ON calls(state, next_attempt_at);
-         CREATE INDEX IF NOT EXISTS calls_deployment ON calls(deployment, created_at);",
-    )?;
+    connection.execute_batch(include_str!("calls.sql"))?;
     // `calls.sqlite` predates execution modes. Additive columns keep existing
     // live outbox rows deliverable after an upgrade.
     for (column, declaration) in [
@@ -767,6 +739,7 @@ pub enum SyntheticSubmission {
 /// Returns test-mode calls that are waiting for an operator response.
 pub async fn list_captured_requests(state: &AppState) -> Result<Vec<Value>> {
     anyhow::ensure!(state.execution_mode.is_test(), "Captured calls require test execution mode.");
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(Vec::new()); }
     let data_root = state.data_root.clone();
     tokio::task::spawn_blocking(move || {
         let db = connection(&data_root)?;
@@ -797,6 +770,7 @@ pub async fn list_captured_requests_for_app(state: &AppState, app_id: &str) -> R
 /// Reads pending test calls and continuations whose outcome is uncertain.
 pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<Vec<Value>> {
     anyhow::ensure!(state.execution_mode.is_test(), "Test call readback requires test execution mode.");
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(Vec::new()); }
     let root = state.data_root.clone();
     let app_id = app_id.to_owned();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -840,6 +814,7 @@ pub async fn list_test_calls_for_app(state: &AppState, app_id: &str) -> Result<V
 /// Completed rows remain as history, and this function never runs a `then`.
 pub async fn retire_after_local_reset(state: &AppState, app_id: &str) -> Result<usize> {
     anyhow::ensure!(state.execution_mode.is_test(), "Call retirement requires test execution mode.");
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(0); }
     let data_root = state.data_root.clone();
     let app_id = app_id.to_owned();
     tokio::task::spawn_blocking(move || -> Result<usize> {
@@ -1102,6 +1077,7 @@ fn finish(data_root: &Path, id: &str, attempt: &Attempt, then: Option<(&str, &st
 
 /// Sends the calls that are due. Returns how many it looked at.
 pub async fn run_once(state: &AppState) -> Result<usize> {
+    if !state.data_root.join(CALLS_DATABASE).try_exists()? { return Ok(0); }
     if state.execution_mode.is_test() {
         mark_interrupted_test_continuations(state).await?;
         let data_root = state.data_root.clone();
@@ -1115,7 +1091,12 @@ pub async fn run_once(state: &AppState) -> Result<usize> {
     for job in claimed {
         let state = state.clone();
         tasks.spawn(async move {
-            if let Err(error_value) = process(&state, job).await {
+            let result = async {
+                let pending = crate::copies::Pending::begin(&state.data_root, &format!("{}/{} job {}", job.deployment, job.action, job.id), "delivering a call and committing its continuation")?;
+                crate::usage::confirmed_signals(process(&state, job)).await??;
+                pending.finish()
+            }.await;
+            if let Err(error_value) = result {
                 eprintln!("Call worker pass failed: {error_value}");
             }
         });
@@ -1187,9 +1168,11 @@ fn capture_test_requests(data_root: &Path, deployments: &HashMap<String, Deploym
 pub fn spawn_worker(state: AppState) {
     tokio::spawn(async move {
         loop {
+            let operation = state.copies.operations.read().await;
             if let Err(error_value) = run_once(&state).await {
                 eprintln!("Call worker pass failed: {error_value}");
             }
+            drop(operation);
             tokio::select! {
                 _ = wake().notified() => {}
                 _ = tokio::time::sleep(WORKER_INTERVAL) => {}
@@ -1377,7 +1360,7 @@ async fn send(
     let secret = match &call.auth {
         None => None,
         Some(auth) => {
-            let found = super::http::secrets_store(&state.data_root, &deployment.id).and_then(|db| super::http::project_secret(&db, auth.secret()));
+            let found = super::http::read_secrets(&state.data_root, &deployment.id).and_then(|db| super::http::project_secret(&db, auth.secret()));
             match found {
                 Ok(Some(value)) => Some(value),
                 Ok(None) => return Err(("secret-unset", false)),
@@ -1576,7 +1559,9 @@ pub async fn admin_call(state: &AppState, deployment: &Deployment, a: &Value) ->
 }
 
 fn read_outbox(data_root: &Path, deployment: &str, before: i64) -> Result<Value> {
-    let db = connection(data_root)?;
+    let Some(db) = crate::app_db::read_optional(&data_root.join(CALLS_DATABASE))? else {
+        return Ok(json!({"calls": [], "nextCursor": null}));
+    };
     let mut query = db.prepare(
         "SELECT rowid, id, action, state, attempts, method, url, status, error, answer, then_action, then_state, then_message,
                 created_at, updated_at, next_attempt_at

@@ -26,6 +26,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ### Fixed
 
+- Installation copies verify indexed blobs and all referenced destination bytes before publishing. The writer checks the 4 MiB limit after signing the manifest. Health preserves the last complete point per target across restarts and reports its age and the last verified restore.
 - App settings keeps the selected tab when the dialog remounts.
 - Concurrent initialization of the Usage database no longer interrupts a scheduled run with a SQLite lock error.
 

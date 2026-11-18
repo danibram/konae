@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel", "konae"]
+members = ["backup", "kernel", "konae"]
 resolver = "3"
 
 [workspace.package]

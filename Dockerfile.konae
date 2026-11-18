@@ -12,15 +12,17 @@ FROM rust:1.91-bookworm AS build
 
 WORKDIR /src
 COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
+COPY kernel-rs/backup/Cargo.toml backup/Cargo.toml
 COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
 COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
 # Builds the dependencies once, on empty crates, so a source change rebuilds only Konae and the Kernel.
-RUN mkdir kernel/src konae/src \
-  && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
-  && cargo build --release --locked --bin konae && rm -rf kernel/src konae/src
+RUN mkdir backup/src kernel/src konae/src \
+  && touch backup/src/lib.rs && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
+  && cargo build --release --locked --bin konae && rm -rf backup/src kernel/src konae/src
+COPY kernel-rs/backup/src ./backup/src
 COPY kernel-rs/kernel/src ./kernel/src
 COPY kernel-rs/konae/src ./konae/src
-RUN touch kernel/src/lib.rs kernel/src/main.rs konae/src/main.rs && cargo build --release --locked --bin konae
+RUN touch backup/src/lib.rs kernel/src/lib.rs kernel/src/main.rs konae/src/main.rs && cargo build --release --locked --bin konae
 
 FROM debian:bookworm-slim
 

@@ -156,14 +156,57 @@ pub(super) fn installation() -> super::installation::Installation {
     use super::installation::{AccountDatabase, RootDatabase};
     let mut installation = super::installation::Installation::kernel();
     installation.databases.splice(0..0, [
-        RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
-        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans", "conversation_live_authority", "conversation_execution_leases", "conversation_stop_requests"] },
+        RootDatabase {
+            file: "owners.sqlite",
+            sign_out: &["app_sessions", "creator_sessions", "account_challenges", "entry_links"],
+        },
+        RootDatabase {
+            file: "mcp.sqlite",
+            sign_out: &[
+                "credentials", "oauth_codes", "plans", "source_read_requests", "package_imports",
+                "conversation_live_authority", "conversation_execution_leases", "conversation_stop_requests",
+            ],
+        },
     ]);
     installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
+    installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "clerk-owner", file: "owners.sqlite" });
     installation.mail_group = project_owner;
+    installation.check_catalog = check_restored_catalog;
+    installation.check_cut = super::owners::check_suspensions;
     installation
 }
 
+
+fn check_restored_catalog(root: &Path) -> Result<()> {
+    let path = root.join("mcp.sqlite");
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    let read = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let catalog = Connection::open_with_flags(path, read)?;
+    if !catalog.query_row("SELECT EXISTS(SELECT 1 FROM projects)", [], |row| row.get::<_, bool>(0))? {
+        return Ok(());
+    }
+    let owners = Connection::open_with_flags(root.join("owners.sqlite"), read)?;
+    let mut owner_tables = Vec::new();
+    for (table, column) in [("app_users", "id"), ("creator_identities", "owner")] {
+        if crate::table_exists(&owners, table)? {
+            owner_tables.push(format!("SELECT 1 FROM {table} WHERE {column}=?1"));
+        }
+    }
+    anyhow::ensure!(!owner_tables.is_empty(), "The project catalog has no owner store.");
+    let mut owner = owners.prepare(&format!("SELECT EXISTS({})", owner_tables.join(" UNION ALL ")))?;
+    let mut projects = catalog.prepare("SELECT id, owner FROM projects")?;
+    let mut rows = projects.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let account: String = row.get(1)?;
+        anyhow::ensure!(crate::runtime::valid_app_id(&id) && crate::layout::settings(root, &id).is_file(),
+            "Catalog project {id} has no matching app folder.");
+        anyhow::ensure!(owner.query_row([account], |r| r.get::<_, bool>(0))?, "Catalog project {id} has no matching owner.");
+    }
+    Ok(())
+}
 
 fn project_owner(root: &Path, project_id: &str) -> Option<String> {
     let connection = Connection::open_with_flags(root.join("mcp.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
@@ -386,6 +429,8 @@ pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this proj
 
 
 async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
+    let _generation = state.copies.generations.read().await;
+    let pending = crate::copies::Pending::begin(&state.data_root, id, "removing the project folder and catalogue entry")?;
     let published = {
         let mut deployments = state.deployments.write().await;
         let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.id == id).map(|(host, _)| host.clone()).collect();
@@ -423,6 +468,7 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     }
     tx.execute("DELETE FROM projects WHERE id=?1", [id])?;
     tx.commit()?;
+    pending.finish()?;
     Ok(ids)
 }
 
@@ -436,7 +482,7 @@ fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -
     let mut query = db.prepare("SELECT id FROM projects WHERE owner = ?1 AND id <> ?2")?;
     let others = query.query_map(params![owner, project], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     for other in others {
-        if crate::layout::secrets(&state.data_root, &other).is_file() && super::http::holds_route_secret(&super::http::secrets_store(&state.data_root, &other)?, value)? {
+        if crate::layout::secrets(&state.data_root, &other).is_file() && super::http::holds_route_secret(&super::http::read_secrets(&state.data_root, &other)?, value)? {
             return Ok(true);
         }
     }
@@ -1411,8 +1457,9 @@ async fn admin_call(
                         anyhow::ensure!(saved.as_ref() == Some(&source), "This project already has saved sources. Reload before saving.");
                         revision
                     } else {
-                        super::sources::write(&state.data_root, &id, &source).await?;
+                        let pending = super::sources::stage_write(&state.data_root, &id, &source).await?;
                         db.execute("UPDATE projects SET sources=1 WHERE id=?1", [&id])?;
+                        pending.commit().await?;
                         1
                     };
                     project["sourcesRevision"] = json!(revision);
@@ -1436,6 +1483,7 @@ async fn admin_call(
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").map(super::sources::manifest_without_runtime).unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
 
 
+            let pending = crate::copies::Pending::begin(&state.data_root, &id, "creating the project folder and catalogue entry")?;
             let created = async {
                 super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
                     .write(&state.data_root)
@@ -1461,9 +1509,14 @@ async fn admin_call(
                 Ok(())
             });
             if let Err(error_value) = created {
-                let _ = tokio::fs::remove_dir_all(crate::layout::folder(&state.data_root, &id)).await;
+                match tokio::fs::remove_dir_all(crate::layout::folder(&state.data_root, &id)).await {
+                    Ok(()) => pending.finish()?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => pending.finish()?,
+                    Err(e) => return Err(error_value.context(format!("Could not remove the incomplete project: {e}"))),
+                }
                 return Err(error_value);
             }
+            pending.finish()?;
             Ok(project)
         }
         "project_inspect" => {
@@ -1578,7 +1631,7 @@ async fn admin_call(
                 }
                 return Err(error.into());
             }
-            pending.commit().await;
+            pending.commit().await?;
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
@@ -1641,7 +1694,12 @@ async fn admin_call(
             if name == "secret_set" && super::http::sets_route_secret(&a) {
                 anyhow::ensure!(!route_secret_reused(state, &owner.id, id, a["value"].as_str().unwrap_or(""))?, super::http::SECRET_REUSED);
             }
-            super::http::secrets_call(&super::http::secrets_store(&state.data_root, id)?, id, deployment.as_ref(), name, &a)
+            let db = if name == "secrets_list" || (name == "secret_delete" && !crate::layout::secrets(&state.data_root, id).try_exists()?) {
+                super::http::read_secrets(&state.data_root, id)?
+            } else {
+                super::http::secrets_store(&state.data_root, id)?
+            };
+            super::http::secrets_call(&db, id, deployment.as_ref(), name, &a)
         }
         "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
             let id = a["projectId"].as_str().unwrap();
@@ -1833,7 +1891,7 @@ async fn admin_call(
                 json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"expectedSourcesRevision":source_revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
             )
         }
-        "release_apply" => {
+        "release_apply" => crate::copies::Pending::through_catalogue(async {
             let id = a["planId"].as_str().unwrap();
             let row: (String,u64,String,u64,Option<String>,Option<String>,u64)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources,source_revision FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))?;
             let _guard = database_lock(state, &format!("project:{}", row.0)).await;
@@ -1874,8 +1932,8 @@ async fn admin_call(
             tx.commit()?;
             drop(db);
             Ok(receipt)
-        }
-        "project_import" => project_import(state, owner, principal, &a).await,
+        }).await,
+        "project_import" => crate::copies::Pending::through_catalogue(project_import(state, owner, principal, &a)).await?,
         "app_user_enter" => {
             anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
@@ -1924,7 +1982,9 @@ const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
 
 
 
-async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
+// A refused release can leave a complete app after its import is reversed.
+// The outer result tells the copy journal whether the catalogue is consistent.
+async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Result<Value>> {
     use super::import::{Outcome, Target};
     let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
     let replace = a["replace"].as_str().unwrap_or_default();
@@ -1971,7 +2031,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
             );
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
-                return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
+                return Ok(Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()})));
             }
             Some((payload, change))
         }
@@ -1989,7 +2049,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 None => Target::live(state, &deployment)?,
             };
             match super::import::import_data(state, &deployment, package, &target, confirmation, sources).await? {
-                Outcome::NeedsConfirmation(change) => return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()})),
+                Outcome::NeedsConfirmation(change) => return Ok(Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}))),
                 Outcome::Imported { backup, change } => (backup, change),
             }
         }
@@ -2014,20 +2074,21 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         )?;
         answer["deployment"] = receipt;
     }
-    Ok(answer)
+    Ok(Ok(answer))
 }
 
 
-async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Value> {
-    if has_package {
-        let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
-        let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
-        let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
-        let _data = database_lock(state, &deployment.id).await;
-        super::import::restore_held(&state.kernel, deployment, &record).await
-            .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
+async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Result<Value>> {
+    if !has_package {
+        return Err(error);
     }
-    Err(error)
+    let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
+    let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
+    let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
+    let _data = database_lock(state, &deployment.id).await;
+    super::import::restore_held(&state.kernel, deployment, &record).await
+        .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
+    Ok(Err(error))
 }
 
 
@@ -2377,6 +2438,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restored_catalog_requires_the_app_and_its_local_or_hosted_owner() {
+        let root = std::env::temp_dir().join(format!("konae-catalog-{}", Uuid::new_v4()));
+        crate::Settings::new("notes", "Notes", "notes", &json!({})).write(&root).await.unwrap();
+        let db = store_at(&root).unwrap();
+        check_restored_catalog(&root).unwrap();
+        assert!(!root.join("owners.sqlite").exists());
+        db.execute("INSERT INTO projects(id,owner,body) VALUES('notes','fixture','{}')", []).unwrap();
+        let owners = Connection::open(root.join("owners.sqlite")).unwrap();
+        super::super::clerk::install(&owners).unwrap();
+        assert!(check_restored_catalog(&root).unwrap_err().to_string().contains("no matching owner"));
+        owners.execute("INSERT INTO creator_identities(owner,provider,subject) VALUES('fixture','lab','person')", []).unwrap();
+        check_restored_catalog(&root).unwrap();
+        let suspended = crate::recovery::Entry::new("clerk-owner", None, "fixture", "suspended");
+        assert_eq!(crate::recovery::reconcile(&root, &installation(), &[suspended]).unwrap(), 1);
+        assert!(owners.query_row("SELECT suspended FROM creator_identities", [], |row| row.get::<_, bool>(0)).unwrap());
+        db.execute("UPDATE projects SET id='missing'", []).unwrap();
+        assert!(check_restored_catalog(&root).unwrap_err().to_string().contains("no matching app folder"));
+        drop((db, owners));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn saved_sources_from_an_older_project_revision_remain_readable() {
         let root = std::env::temp_dir().join(format!("konae-old-sources-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&root).await.unwrap();
@@ -2437,7 +2520,11 @@ mod tests {
         let imported_source = json!({"id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"imported source"},"directories":[],"manifest":old_source["manifest"],"updatedAt":2});
         super::super::sources::write(&state.data_root, id, &imported_source).await.unwrap();
         let backup = record.view();
-        let error = restore_import_after_release_failure(&state, &deployment, true, &backup, anyhow::anyhow!("Injected release failure")).await.unwrap_err();
+        let result = crate::copies::Pending::through_catalogue(restore_import_after_release_failure(
+            &state, &deployment, true, &backup, anyhow::anyhow!("Injected release failure"),
+        )).await.unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(std::fs::read_dir(root.join(".copy-operations")).unwrap().count(), 0);
         assert!(error.to_string().contains("Injected release failure"));
         let row: String = rusqlite::Connection::open(&database).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(row, "old row");

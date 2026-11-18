@@ -1,46 +1,63 @@
 
+pub(crate) mod blocks;
+mod cut;
+pub(crate) mod operation;
+pub use operation::Pending;
+pub(crate) mod history;
+mod validation;
+#[cfg(test)]
+mod history_tests;
+
 use crate::installation::Installation;
 use std::{
-    collections::{HashMap, HashSet},
-    io::Read,
+    collections::HashMap,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
+#[cfg(test)]
 use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+#[cfg(test)]
+use std::collections::HashSet;
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
-
-use ring::{
-    aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey},
-    hkdf, hmac,
-    rand::{SecureRandom, SystemRandom},
+use crate::{AppState, list_s3_keys, now_ms, read_s3_bytes, recovery};
+pub use konae_backup::{checksum_file, civil_from_days, vacuum_into};
+use konae_backup::{
+    CopyReader, MANIFEST, Manifest, ManifestCache, ManifestFile, PathScope, S3CopyTarget, Source,
+    check_sealed, copy_id, newest_authentic_copy, normalize_prefix, parse_copy_id, prune_directory, prune_s3_cached,
+    read_manifest, send_to_directory, send_to_s3, verified_bytes,
 };
+#[cfg(test)]
+use konae_backup::{DAY_MS, MAX_MANIFEST_BYTES, manifest_cache_key, encode_manifest, expired_copies, list_files, sealed_manifest};
 
-use crate::{
-    AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery,
-    safe_relative_path,
-};
+impl PathScope for Installation {
+    fn allows(&self, path: &str) -> bool { self.holds(path) || path.starts_with("apps/") }
 
-const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
-const MANIFEST: &str = "manifest.json";
+    fn sqlite_image(&self, path: &str) -> bool {
+        let mut parts = path.split('/');
+        self.holds(path) || matches!((parts.next(), parts.next(), parts.next(), parts.next(), parts.next()),
+            (Some("apps"), Some(_), Some("data"), Some(name), None) if DEPLOYMENT_DATABASES.contains(&name))
+    }
+}
+
+pub(crate) const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
 /// The prefix of copies in the installation's one bucket.
 pub const S3_PREFIX: &str = "copies/";
-const ENCRYPTION: &str = "AES-256-GCM";
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_SKIPPED_COPIES: usize = 50;
-const KEEP_RECENT: usize = 24;
-const KEEP_DAILY_DAYS: u64 = 30;
-const DAY_MS: u64 = 86_400_000;
 const DEFAULT_INTERVAL_SECONDS: u64 = 3600;
 
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Directory(PathBuf),
+    BlocksDirectory(PathBuf),
+    BlocksS3 { prefix: String },
     S3 { prefix: String },
 }
 
@@ -48,6 +65,8 @@ impl Target {
     fn kind(&self) -> &'static str {
         match self {
             Target::Directory(_) => "directory",
+            Target::BlocksDirectory(_) => "directory-v3",
+            Target::BlocksS3 { .. } => "s3-v3",
             Target::S3 { .. } => "s3",
         }
     }
@@ -63,9 +82,11 @@ impl CopyConfig {
     /// `s3_configured` says whether `KONAE_S3_BUCKET` names a bucket.
     pub fn from_env(data_root: &Path, s3_configured: bool) -> Result<Option<Self>> {
         // Refuses a short secret at startup rather than at the first copy.
-        CopyKey::from_env()?;
+        let key = CopyKey::from_env()?;
         let get = crate::file_store::env_var;
+        let blocks = blocks::targets(data_root, s3_configured, key.is_some())?;
         Self::parse(
+            blocks,
             get("KONAE_COPY_DIR").as_deref(),
             get("KONAE_COPY_S3").as_deref(),
             get("KONAE_COPY_INTERVAL_SECONDS").as_deref(),
@@ -75,13 +96,13 @@ impl CopyConfig {
     }
 
     fn parse(
+        mut targets: Vec<Target>,
         directory: Option<&str>,
         copy_s3: Option<&str>,
         interval: Option<&str>,
         data_root: &Path,
         s3_configured: bool,
     ) -> Result<Option<Self>> {
-        let mut targets = Vec::new();
         if let Some(directory) = directory {
             let directory = std::path::absolute(directory)?;
             let data_root = std::path::absolute(data_root)?;
@@ -89,6 +110,13 @@ impl CopyConfig {
                 !directory.starts_with(&data_root) && !data_root.starts_with(&directory),
                 "KONAE_COPY_DIR must be outside KONAE_DATA_DIR, on another disk."
             );
+            for target in &targets {
+                if let Target::BlocksDirectory(v3) = target {
+                    let legacy = blocks::effective(&directory)?;
+                    ensure!(!legacy.starts_with(v3) && !v3.starts_with(&legacy),
+                        "Choose separate directory trees for legacy and v3 copies.");
+                }
+            }
             targets.push(Target::Directory(directory));
         }
         match copy_s3 {
@@ -115,204 +143,23 @@ impl CopyConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Encryption at rest
+mod key;
+pub use key::CopyKey;
 
-/// The key that seals copy files on S3. HKDF-SHA256 of `KONAE_COPY_SECRET`
-/// with a fixed salt and label, as `mail.rs` derives its link key, so the
-/// secret itself never encrypts anything.
-pub struct CopyKey {
-    key: LessSafeKey,
-    check: String,
-    /// Signs each manifest of a sealed copy. Its own HKDF label, so it is
-    /// neither the sealing key nor the `check` value.
-    manifest_mac: hmac::Key,
-    /// Signs each revocation entry sent to S3, under another label.
-    entry_mac: hmac::Key,
-}
-
-impl CopyKey {
-    /// Reads the secret as written, untrimmed.
-    pub fn from_env() -> Result<Option<Self>> {
-        match std::env::var("KONAE_COPY_SECRET").ok().filter(|value| !value.is_empty()) {
-            None => Ok(None),
-            Some(secret) => {
-                ensure!(secret.len() >= 32, "KONAE_COPY_SECRET must be at least 32 characters.");
-                Ok(Some(Self::derive(&secret)))
-            }
-        }
-    }
-
-    /// The `keyCheck` a sealed manifest carries. It tells two secrets apart
-    /// without revealing either.
-    pub fn fingerprint(&self) -> &str {
-        &self.check
-    }
-
-    pub fn derive(secret: &str) -> Self {
-        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-copy-v1").extract(secret.as_bytes());
-        let okm = prk.expand(&[b"copy file"], &AES_256_GCM).expect("HKDF output fits AES-256");
-        let key = LessSafeKey::new(UnboundKey::from(okm));
-        // A second expansion, so the manifest can tell a wrong secret from a
-        // damaged file without revealing anything about the key.
-        let mut check = [0u8; 32];
-        prk.expand(&[b"key check"], HkdfLength(32)).expect("HKDF output fits 32 bytes").fill(&mut check).expect("32 bytes");
-        let mac_key = |label: &'static [u8]| hmac::Key::from(prk.expand(&[label], hmac::HMAC_SHA256).expect("HKDF output fits HMAC-SHA256"));
-        Self { key, check: hex::encode(check), manifest_mac: mac_key(b"manifest mac"), entry_mac: mac_key(b"revocation entry mac") }
-    }
-
-    fn sign_manifest(&self, copy: &str, manifest: &Manifest) -> String {
-        hex::encode(hmac::sign(&self.manifest_mac, &manifest_message(copy, manifest)).as_ref())
-    }
-
-    fn verify_manifest(&self, copy: &str, manifest: &Manifest, mac: &str) -> bool {
-        hex::decode(mac).is_ok_and(|mac| hmac::verify(&self.manifest_mac, &manifest_message(copy, manifest), &mac).is_ok())
-    }
-
-    pub(crate) fn sign_entry(&self, name: &str, entry: &recovery::Entry) -> Result<String> {
-        Ok(hex::encode(hmac::sign(&self.entry_mac, &entry_message(name, entry)?).as_ref()))
-    }
-
-    pub(crate) fn verify_entry(&self, name: &str, entry: &recovery::Entry, mac: &str) -> Result<bool> {
-        Ok(hex::decode(mac).is_ok_and(|mac| hmac::verify(&self.entry_mac, &entry_message(name, entry).unwrap_or_default(), &mac).is_ok()))
-    }
-
-    /// Seals one file. The copy ID and the file's path are the associated
-    /// data, so a sealed file moved to another copy or path does not open.
-    /// The output is the nonce followed by the ciphertext and its tag.
-    pub fn seal(&self, copy: &str, path: &str, mut bytes: Vec<u8>) -> Result<Vec<u8>> {
-        let mut nonce = [0u8; NONCE_LEN];
-        SystemRandom::new().fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate a nonce."))?;
-        self.key
-            .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(format!("{copy}/{path}").as_bytes()), &mut bytes)
-            .map_err(|_| anyhow::anyhow!("Could not encrypt {path}."))?;
-        let mut sealed = nonce.to_vec();
-        sealed.extend_from_slice(&bytes);
-        Ok(sealed)
-    }
-
-    pub fn open(&self, copy: &str, path: &str, sealed: &[u8]) -> Option<Vec<u8>> {
-        if sealed.len() < NONCE_LEN {
-            return None;
-        }
-        let (nonce, body) = sealed.split_at(NONCE_LEN);
-        let nonce = Nonce::try_assume_unique_for_key(nonce).ok()?;
-        let mut buffer = body.to_vec();
-        let plain = self.key.open_in_place(nonce, Aad::from(format!("{copy}/{path}").as_bytes()), &mut buffer).ok()?;
-        Some(plain.to_vec())
-    }
-}
-
-fn manifest_message(copy: &str, manifest: &Manifest) -> Vec<u8> {
-    let mut message = copy.as_bytes().to_vec();
-    message.push(0);
-    let plain = Manifest { mac: None, ..manifest.clone() };
-    message.extend(serde_json::to_vec(&plain).expect("a manifest serialises"));
-    message
-}
-
-fn entry_message(name: &str, entry: &recovery::Entry) -> Result<Vec<u8>> {
-    let mut message = name.as_bytes().to_vec();
-    message.push(0);
-    message.extend(serde_json::to_vec(entry)?);
-    Ok(message)
-}
-
-struct HkdfLength(usize);
-
-impl hkdf::KeyType for HkdfLength {
-    fn len(&self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Encryption {
-    algorithm: String,
-    key_check: String,
-}
-
-fn normalize_prefix(prefix: &str) -> String {
-    let trimmed = prefix.trim().trim_matches('/');
-    if trimmed.is_empty() { String::new() } else { format!("{trimmed}/") }
-}
-
-#[derive(Clone, Default)]
-struct TargetReport {
-    last_attempt_at: Option<u64>,
-    last_success_at: Option<u64>,
-    last_copy_id: Option<String>,
-    last_error: Option<String>,
-}
-
-#[derive(Default)]
-pub struct CopyStatus {
-    targets: Vec<&'static str>,
-    interval_seconds: Option<u64>,
-    reports: std::sync::Mutex<HashMap<&'static str, TargetReport>>,
-    ledger: Vec<Target>,
-    key: Option<std::sync::Arc<CopyKey>>,
-}
-
-impl CopyStatus {
-    pub fn new(config: Option<&CopyConfig>) -> Self {
-        Self {
-            targets: config.map(|config| config.targets.iter().map(Target::kind).collect()).unwrap_or_default(),
-            interval_seconds: config.map(|config| config.interval.as_secs()),
-            reports: Default::default(),
-            ledger: config.map(|config| config.targets.clone()).unwrap_or_default(),
-            key: config.and_then(|_| CopyKey::from_env().ok().flatten()).map(std::sync::Arc::new),
-        }
-    }
-
-    pub fn ledger_targets(&self) -> &[Target] {
-        &self.ledger
-    }
-
-    pub fn key(&self) -> Option<&CopyKey> {
-        self.key.as_deref()
-    }
-
-    fn update(&self, kind: &'static str, change: impl FnOnce(&mut TargetReport)) {
-        let mut reports = self.reports.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        change(reports.entry(kind).or_default());
-    }
-
-    pub fn health(&self) -> Value {
-        let reports = self.reports.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut alerts = Vec::new();
-        let targets = self
-            .targets
-            .iter()
-            .map(|kind| {
-                let report = reports.get(kind).cloned().unwrap_or_default();
-                if let Some(error_value) = &report.last_error {
-                    alerts.push(format!("The last copy to the {kind} target failed: {error_value}"));
-                }
-                json!({
-                    "kind": kind,
-                    "encrypted": *kind == "s3" && self.key.is_some(),
-                    "lastAttemptAt": report.last_attempt_at,
-                    "lastSuccessAt": report.last_success_at,
-                    "lastCopyId": report.last_copy_id,
-                    "lastError": report.last_error,
-                })
-            })
-            .collect::<Vec<_>>();
-        json!({
-            "targets": targets,
-            "intervalSeconds": self.interval_seconds,
-            "alert": if alerts.is_empty() { Value::Null } else { Value::String(alerts.join(" ")) },
-        })
-    }
-}
+mod health;
+pub use health::CopyStatus;
+pub(crate) use health::status_directory;
 
 // ---------------------------------------------------------------------------
 // Scheduled copy
 
 pub fn spawn_schedule(state: AppState, config: CopyConfig) {
     tokio::spawn(async move {
+        let stale = state.data_root.join(".copy-staging");
+        if let Err(e) = tokio::fs::remove_dir_all(stale).await
+            && e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("Could not remove old copy staging: {e}");
+        }
         let mut ticker = tokio::time::interval(config.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -324,354 +171,163 @@ pub fn spawn_schedule(state: AppState, config: CopyConfig) {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Manifest {
-    version: u32,
-    copy_id: String,
-    created_at: u64,
-    files: Vec<ManifestFile>,
-    /// Present when the files are sealed; sizes and checksums are of the
-    /// plain files.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    encryption: Option<Encryption>,
-    /// Present on a sealed copy: HMAC-SHA256 of the copy ID and the
-    /// manifest without this field, so no entry can be added or dropped.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mac: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ManifestFile {
-    path: String,
-    size: u64,
-    sha256: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    home_copy: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 struct CopyState {
-    copy_id: String,
     files: Vec<ManifestFile>,
-    blobs: HashMap<String, BlobStamp>,
-    #[serde(default)]
-    s3_manifest: Option<Manifest>,
     #[serde(default)]
     s3_manifests: HashMap<String, Manifest>,
 }
 
-type ManifestCache = HashMap<String, std::result::Result<Manifest, String>>;
-
-struct S3CopyTarget<'a> {
-    client: &'a S3Client,
-    bucket: &'a str,
-    prefix: &'a str,
-    key: Option<&'a CopyKey>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct BlobStamp {
-    size: u64,
-    modified_ms: Option<u64>,
-}
-
 struct StagedCopy {
     manifest: Manifest,
-    state: CopyState,
+    legacy_blobs: HashMap<String, String>,
+    checked_files: Vec<cut::CheckedFile>,
 }
 
 /// Takes one copy and sends it to every target, then prunes old copies.
 /// Returns the copy ID when every target succeeded.
 pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
+    let mut source_cache = state.copies.worker.lock().await;
     let started = now_ms();
-    let id = copy_id(started);
+    for target in targets {
+        state.copies.update(target.kind(), |report| {
+            report.last_attempt_at = Some(started);
+            report.running = true;
+        }).await;
+    }
     let staging_root = state.data_root.join(".copy-staging");
-    let _ = tokio::fs::remove_dir_all(&staging_root).await;
-    let staging = staging_root.join(&id);
+    let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
+    let _scratch = Staging(staging.clone());
     let mut cache = ManifestCache::new();
-    let mut staged = stage_copy(state, targets, &staging, &id, started, &mut cache).await;
+    let staged = stage_copy(state, &staging, &mut cache, &mut source_cache).await;
+    let cut_at = staged.as_ref().map_or(started, |s| s.manifest.created_at);
+    let id = copy_id(cut_at);
     let mut failures = Vec::new();
+    let mut published = false;
     for target in targets {
         let kind = target.kind();
-        state.copies.update(kind, |report| report.last_attempt_at = Some(started));
         let outcome = match &staged {
             Err(error_value) => Err(anyhow::anyhow!("the snapshot failed: {error_value:#}")),
-            Ok(staged) => match recovery::start(target, state.s3.as_ref(), &state.data_bucket).await {
-                Ok(()) => send(state, target, &staging, &staged.manifest, &id, &mut cache).await,
+            Ok(staged) => match recovery::start_with_key(target, state.s3.as_ref(), &state.data_bucket, state.copies.key()).await {
+                Ok(()) => send(state, target, &staging, staged, &id, &mut cache).await,
                 Err(error_value) => Err(error_value.context("the revocation record could not be started")),
             },
         };
-        match outcome {
-            Ok((pruned, s3_manifest)) => {
-                println!("Copy {id} sent to the {kind} target; pruned {pruned} old copies.");
-                if let (Ok(staged), Some(manifest)) = (&mut staged, s3_manifest) {
-                    staged.state.s3_manifest = Some(manifest);
-                }
+        let result = match outcome {
+            Ok(()) => {
+                published = true;
                 state.copies.update(kind, |report| {
+                    report.last_cut_at = Some(cut_at);
                     report.last_success_at = Some(now_ms());
                     report.last_copy_id = Some(id.clone());
                     report.last_error = None;
-                });
+                }).await;
+                prune(state, target, &id, &mut cache).await.context("The copy is complete but pruning failed")
             }
-            Err(error_value) => {
-                let message = format!("{error_value:#}");
+            Err(error) => Err(error),
+        };
+        let error = match result {
+            Ok(pruned) => {
+                println!("Copy {id} sent to the {kind} target; pruned {pruned} old copies.");
+                None
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
                 eprintln!("Copy {id} to the {kind} target failed: {message}");
                 failures.push(format!("{kind}: {message}"));
-                state.copies.update(kind, |report| report.last_error = Some(message));
+                Some(message)
             }
-        }
+        };
+        state.copies.update(kind, |report| {
+            report.running = false;
+            report.last_error = error;
+        }).await;
     }
-    let _ = tokio::fs::remove_dir_all(&staging_root).await;
-    if failures.is_empty() {
-        if let Ok(staged) = staged {
-            let mut saved = staged.state;
-            saved.copy_id = id.clone();
-            saved.s3_manifests = cache.iter().filter_map(|(key, value)| value.as_ref().ok().map(|manifest| (key.clone(), manifest.clone()))).collect();
-            tokio::fs::write(state.data_root.join(".copy-state.json"), serde_json::to_vec_pretty(&saved)?).await?;
+    if published && let Ok(staged) = staged {
+        if let Err(error) = source_cache.keep(&staging, staged.checked_files) {
+            eprintln!("Could not retain verified file versions for the next copy: {error:#}");
         }
-        Ok(id)
-    } else { bail!("{}", failures.join("; ")) }
+        let saved = CopyState {
+            files: staged.manifest.files,
+            s3_manifests: cache.into_iter().filter_map(|(key, result)| result.ok().map(|manifest| (key, manifest))).collect(),
+        };
+        crate::write_atomic(&state.data_root.join(".copy-state.json"), &serde_json::to_vec(&saved)?).await?;
+    }
+    if failures.is_empty() { Ok(id) } else { bail!("{}", failures.join("; ")) }
 }
 
-async fn send(state: &AppState, target: &Target, staging: &Path, manifest: &Manifest, id: &str, cache: &mut ManifestCache) -> Result<(usize, Option<Manifest>)> {
+async fn send(state: &AppState, target: &Target, staging: &Path, staged: &StagedCopy, id: &str, cache: &mut ManifestCache) -> Result<()> {
     match target {
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => blocks::publish(state, target, staging, staged).await,
         Target::Directory(directory) => {
-            let (staging, directory, id, manifest) = (staging.to_owned(), directory.clone(), id.to_owned(), manifest.clone());
-            tokio::task::spawn_blocking(move || {
-                send_to_directory(&staging, &directory, &id, &manifest)?;
-                Ok((prune_directory(&directory, now_ms())?, None))
-            })
-            .await?
+            let (staging, directory, id, manifest) = (staging.to_owned(), directory.clone(), id.to_owned(), staged.manifest.clone());
+            let legacy = staged.legacy_blobs.clone();
+            let installation = state.installation.clone();
+            tokio::task::spawn_blocking(move || send_to_directory(&staging, &directory, &id, &manifest, &legacy, installation.as_ref())).await?
+        }
+        Target::S3 { prefix } => {
+            let client = state.s3.as_ref().context("S3 is not configured.")?;
+            let target = S3CopyTarget { client, bucket: &state.data_bucket, prefix, key: state.copies.key().map(CopyKey::files) };
+            send_to_s3(target, staging, &staged.manifest, id, cache, &staged.legacy_blobs, state.installation.as_ref()).await
+        }
+    }
+}
+
+async fn prune(state: &AppState, target: &Target, id: &str, cache: &mut ManifestCache) -> Result<usize> {
+    match target {
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => blocks::prune(state, target, id).await,
+        Target::Directory(directory) => {
+            let directory = directory.clone();
+            tokio::task::spawn_blocking(move || prune_directory(&directory, now_ms())).await?
         }
         Target::S3 { prefix } => {
             let s3 = state.s3.as_ref().context("S3 is not configured.")?;
-            let stored = send_to_s3(S3CopyTarget { client: s3, bucket: &state.data_bucket, prefix, key: state.copies.key.as_deref() }, staging, manifest, id, cache).await?;
-            let pruned = prune_s3_cached(s3, &state.data_bucket, prefix, id, now_ms(), cache).await?;
-            Ok((pruned, Some(stored)))
+            prune_s3_cached(s3, &state.data_bucket, prefix, id, now_ms(), cache).await
         }
     }
 }
 
-/// Builds the copy in `staging`. Each Deployment is snapshotted under its
-/// data and identity locks, the same locks an action, an upload, a signup and
-/// a publish take, so its databases, files and artifact agree with each other.
-async fn stage_copy(state: &AppState, targets: &[Target], staging: &Path, id: &str, created_at: u64, cache: &mut ManifestCache) -> Result<StagedCopy> {
+struct Staging(PathBuf);
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+        if let Some(root) = self.0.parent() { let _ = std::fs::remove_dir(root); }
+    }
+}
+
+async fn stage_copy(state: &AppState, staging: &Path, cache: &mut ManifestCache, source_cache: &mut cut::SourceCache) -> Result<StagedCopy> {
     let prior = tokio::fs::read(state.data_root.join(".copy-state.json")).await.ok()
         .and_then(|bytes| serde_json::from_slice::<CopyState>(&bytes).ok());
     if let Some(prior) = prior.as_ref() {
         for (key, manifest) in &prior.s3_manifests {
             cache.insert(key.clone(), Ok(manifest.clone()));
         }
-        if let (Some(manifest), Some(Target::S3 { prefix })) = (prior.s3_manifest.clone(), targets.iter().find(|target| matches!(target, Target::S3 { .. }))) {
-            let source = Source::S3 { client: state.s3.as_ref().context("S3 is not configured.")?.clone(), bucket: state.data_bucket.clone(), prefix: normalize_prefix(prefix) };
-            cache.insert(manifest_cache_key(&source, &prior.copy_id), Ok(manifest));
-        }
     }
-    let carry = match prior.as_ref() { Some(prior) => targets_hold_state(state, targets, prior, cache).await?, None => false };
-    let mut carried_files = Vec::new();
-    let mut blob_stamps = HashMap::new();
-    tokio::fs::create_dir_all(crate::layout::apps(staging)).await?;
-    for name in state.installation.databases.iter().map(|database| database.file) {
-        let source = state.data_root.join(name);
-        if source.exists() {
-            let target = staging.join(name);
-            tokio::task::spawn_blocking(move || vacuum_into(&source, &target)).await??;
-        }
-    }
-    let mut entries = tokio::fs::read_dir(crate::layout::apps(&state.data_root)).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        if !entry.file_type().await?.is_dir() {
-            continue;
-        }
-        let Some(deployment) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        // An editor save swaps app/ under the project lock.
-        let _project = database_lock(state, &format!("project:{deployment}")).await;
-        let _data = database_lock(state, &deployment).await;
-        let _identity = database_lock(state, &format!("identity:{deployment}")).await;
-        let (source, target) = (entry.path(), crate::layout::folder(staging, &deployment));
-        tokio::task::spawn_blocking(move || copy_deployment(&source, &target))
-            .await?
-            .with_context(|| format!("Deployment {deployment}"))?;
-        drop((_project, _data, _identity));
-        copy_file_bytes(state, &deployment, &crate::layout::files(staging, &deployment), prior.as_ref().filter(|_| carry), &mut carried_files, &mut blob_stamps)
-            .await
-            .with_context(|| format!("The files of Deployment {deployment}"))?;
-    }
-    let (root, id) = (staging.to_owned(), id.to_owned());
+    let previous_files: HashMap<_, _> = prior.iter().flat_map(|prior| &prior.files)
+        .map(|file| (file.path.as_str(), file.sha256.as_str())).collect();
+    let mut directory = std::fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut directory, 0o700);
+    directory.create(crate::layout::apps(staging))?;
+    let (created_at, indexed_files) = cut::stage(state, staging, &previous_files, source_cache).await?;
+    let root = staging.to_owned();
     tokio::task::spawn_blocking(move || {
-        let mut files = list_files(&root)?;
-        let present: HashSet<String> = files.iter().map(|file| file.path.clone()).collect();
-        files.extend(carried_files.into_iter().filter(|file| !present.contains(&file.path)));
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        let manifest = Manifest { version: 1, copy_id: id.clone(), created_at, files: files.clone(), encryption: None, mac: None };
-        std::fs::write(root.join(MANIFEST), serde_json::to_vec_pretty(&manifest)?)?;
-        Ok(StagedCopy { manifest, state: CopyState { copy_id: id, files, blobs: blob_stamps, s3_manifest: None, s3_manifests: HashMap::new() } })
+        let manifest = Manifest::capture(&root, created_at)?;
+        let staged: HashMap<_, _> = manifest.files.iter().map(|file| (file.path.as_str(), file)).collect();
+        let mut legacy_blobs = HashMap::new();
+        for checked in &indexed_files {
+            let path = &checked.path;
+            let file = staged.get(path.as_str()).with_context(|| format!("Staging is missing indexed file {path}"))?;
+            ensure!(file.size == checked.size && file.sha256 == checked.digest, "Indexed file {path} changed in staging.");
+            if checked.legacy { legacy_blobs.insert(path.clone(), checked.digest.clone()); }
+        }
+        Ok(StagedCopy { manifest, legacy_blobs, checked_files: indexed_files })
     })
     .await?
 }
 
-async fn copy_file_bytes(state: &AppState, deployment: &str, files: &Path, prior: Option<&CopyState>, carried: &mut Vec<ManifestFile>, stamps: &mut HashMap<String, BlobStamp>) -> Result<()> {
-    let index_path = files.join("index.json");
-    let index: Vec<serde_json::Value> = match tokio::fs::read(&index_path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error_value) => return Err(error_value.into()),
-    };
-    let objects: HashMap<String, crate::file_store::StoredObject> = state.files.store.objects(deployment).await?.into_iter().map(|object| (object.id.clone(), object)).collect();
-    let mut kept = Vec::with_capacity(index.len());
-    for file in index {
-        let id = file["id"].as_str().filter(|id| crate::valid_file_id(id)).context("A stored file has an invalid id.")?.to_owned();
-        let path = format!("apps/{deployment}/data/files/{id}.blob");
-        let Some(object) = objects.get(&id) else { continue };
-        let stamp = BlobStamp { size: object.size, modified_ms: object.modified_ms };
-        let old_stamp = prior.and_then(|prior| prior.blobs.get(&path));
-        let old_file = prior.and_then(|prior| prior.files.iter().find(|file| file.path == path));
-        if old_stamp.is_some_and(|old| old.size == stamp.size && old.modified_ms == stamp.modified_ms)
-            && let Some(old_file) = old_file
-        {
-            carried.push(old_file.clone());
-            stamps.insert(path, stamp);
-            kept.push(file);
-            continue;
-        }
-        if let Some(blob) = state.files.store.get(deployment, &id, None).await? {
-            crate::file_store::save_blob(blob, &files.join(format!("{id}.blob"))).await?;
-            stamps.insert(path, stamp);
-            kept.push(file);
-        }
-    }
-    tokio::fs::write(&index_path, serde_json::to_vec_pretty(&kept)?).await?;
-    Ok(())
-}
-
-async fn targets_hold_state(state: &AppState, targets: &[Target], prior: &CopyState, cache: &mut ManifestCache) -> Result<bool> {
-    if targets.is_empty() { return Ok(false); }
-    for target in targets {
-        let manifest = match target {
-            Target::Directory(directory) => {
-                let bytes = match tokio::fs::read(directory.join(&prior.copy_id).join(MANIFEST)).await {
-                    Ok(bytes) => bytes,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                    Err(error) => return Err(error.into()),
-                };
-                serde_json::from_slice::<Manifest>(&bytes)?
-            }
-            Target::S3 { prefix } => {
-                let Some(s3) = state.s3.as_ref() else { return Ok(false) };
-                let source = Source::S3 { client: s3.clone(), bucket: state.data_bucket.clone(), prefix: normalize_prefix(prefix) };
-                match read_manifest_cached(&source, &prior.copy_id, cache).await? { Ok(manifest) => manifest, Err(_) => return Ok(false) }
-            }
-        };
-        if manifest.copy_id != prior.copy_id || manifest.files.len() != prior.files.len() || manifest.files.iter().any(|file| !prior.files.iter().any(|old| old.path == file.path && old.size == file.size && old.sha256 == file.sha256)) { return Ok(false); }
-        if let Target::Directory(directory) = target {
-            for path in prior.blobs.keys() {
-                let Some(file) = prior.files.iter().find(|file| file.path == *path) else { return Ok(false) };
-                let stored = directory.join(&prior.copy_id).join(path);
-                if !stored.is_file() || checksum_file(&stored)? != (file.size, file.sha256.clone()) { return Ok(false); }
-            }
-        }
-        if let Target::S3 { prefix } = target {
-            let s3 = state.s3.as_ref().context("S3 is not configured.")?;
-            match state.copies.key() {
-                Some(key) if manifest.encryption.as_ref().is_some_and(|encryption| encryption.key_check == key.fingerprint()) && check_sealed(&manifest.copy_id, &manifest, Some(key)).is_ok() => {}
-                None if manifest.encryption.is_none() => {}
-                _ => return Ok(false),
-            }
-            let sizes = s3_object_sizes(s3, &state.data_bucket, prefix).await?;
-            if !sizes.contains_key(&format!("{}{}/{MANIFEST}", normalize_prefix(prefix), prior.copy_id)) { return Ok(false); }
-            for file in &manifest.files {
-                let home = file.home_copy.as_deref().unwrap_or(&prior.copy_id);
-                if parse_copy_id(home).is_none() { return Ok(false); }
-                let size = file.size + if manifest.encryption.is_some() { (NONCE_LEN + 16) as u64 } else { 0 };
-                if sizes.get(&format!("{}{home}/{}", normalize_prefix(prefix), file.path)) != Some(&size) { return Ok(false); }
-            }
-        }
-    }
-    Ok(true)
-}
-
-fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let name = entry.file_name();
-        let (from, to) = (entry.path(), target.join(&name));
-        match &*name.to_string_lossy() {
-            crate::layout::SETTINGS_FILE if kind.is_file() => {
-                std::fs::copy(&from, &to)?;
-            }
-            "app" | "dist" if kind.is_dir() => copy_tree(&from, &to)?,
-            "data" if kind.is_dir() => copy_data(&from, &to)?,
-            ".konae" if kind.is_dir() => copy_private(&from, &to)?,
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn copy_data(source: &Path, target: &Path) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let name = entry.file_name();
-        let (from, to) = (entry.path(), target.join(&name));
-        match &*name.to_string_lossy() {
-            database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
-            "files" if kind.is_dir() => {
-                std::fs::create_dir_all(&to)?;
-                if from.join("index.json").is_file() {
-                    std::fs::copy(from.join("index.json"), to.join("index.json"))?;
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn copy_private(source: &Path, target: &Path) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let name = entry.file_name();
-        let (from, to) = (entry.path(), target.join(&name));
-        match &*name.to_string_lossy() {
-            "deployment.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
-                std::fs::copy(&from, &to)?;
-            }
-            "backups" if kind.is_dir() => {
-                std::fs::create_dir_all(&to)?;
-                for backup in std::fs::read_dir(&from)? {
-                    let backup = backup?;
-                    let name = backup.file_name();
-                    if backup.file_type()?.is_file() && is_backup_file(&name.to_string_lossy()) {
-                        std::fs::copy(backup.path(), to.join(name))?;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn is_backup_file(name: &str) -> bool {
-    let Some((stem, extension)) = name.rsplit_once('.') else { return false };
-    (extension == "sqlite" || extension == "json")
-        && stem.len() == 36
-        && stem.chars().all(|character| character.is_ascii_hexdigit() || character == '-')
-}
-
-pub fn vacuum_into(source: &Path, target: &Path) -> Result<()> {
-    let connection = Connection::open(source)?;
-    connection.busy_timeout(Duration::from_secs(10))?;
-    connection.execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])?;
-    Ok(())
-}
-
+#[cfg(test)]
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
@@ -690,224 +346,7 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn list_files(root: &Path) -> Result<Vec<ManifestFile>> {
-    fn walk(root: &Path, directory: &Path, files: &mut Vec<ManifestFile>) -> Result<()> {
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            if entry.file_type()?.is_dir() {
-                walk(root, &path, files)?;
-                continue;
-            }
-            let relative = path
-                .strip_prefix(root)?
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            if relative == MANIFEST {
-                continue;
-            }
-            let (size, sha256) = checksum_file(&path)?;
-            files.push(ManifestFile { path: relative, size, sha256, home_copy: None });
-        }
-        Ok(())
-    }
-    let mut files = Vec::new();
-    walk(root, root, &mut files)?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
-}
-
-pub fn checksum_file(path: &Path) -> Result<(u64, String)> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut size = 0u64;
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        size += read as u64;
-    }
-    Ok((size, hex::encode(hasher.finalize())))
-}
-
-fn send_to_directory(staging: &Path, directory: &Path, id: &str, manifest: &Manifest) -> Result<()> {
-    std::fs::create_dir_all(directory)
-        .with_context(|| format!("Could not create {}", directory.display()))?;
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(".partial-") {
-            std::fs::remove_dir_all(entry.path())?;
-        }
-    }
-    let partial = directory.join(format!(".partial-{id}"));
-    let previous = std::fs::read_dir(directory)?.filter_map(|entry| entry.ok()).filter_map(|entry| {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        (parse_copy_id(&name).is_some() && entry.path().join(MANIFEST).is_file()).then_some((name, entry.path()))
-    }).max_by(|left, right| left.0.cmp(&right.0));
-    let previous_files = previous.as_ref().and_then(|(_, path)| {
-        serde_json::from_slice::<Manifest>(&std::fs::read(path.join(MANIFEST)).ok()?).ok()
-    }).map(|manifest| manifest.files.into_iter().map(|file| (file.path.clone(), file)).collect::<HashMap<_, _>>()).unwrap_or_default();
-    let previous_root = previous.map(|(_, path)| path);
-    copy_tree_incremental(staging, staging, &partial, previous_root.as_deref(), &previous_files)?;
-    if let Some(previous_root) = previous_root {
-        for file in &manifest.files {
-            let target = partial.join(&file.path);
-            if target.exists() { continue; }
-            let source = previous_root.join(&file.path);
-            if !source.is_file() || checksum_file(&source)? != (file.size, file.sha256.clone()) {
-                anyhow::bail!("Previous directory copy is missing unchanged file {}.", file.path);
-            }
-            if let Some(parent) = target.parent() { std::fs::create_dir_all(parent)?; }
-            if std::fs::hard_link(&source, &target).is_err() { std::fs::copy(source, target)?; }
-        }
-    }
-    std::fs::rename(&partial, directory.join(id))?;
-    Ok(())
-}
-
-fn copy_tree_incremental(root: &Path, source: &Path, target: &Path, previous: Option<&Path>, previous_files: &HashMap<String, ManifestFile>) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = target.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_tree_incremental(root, &from, &to, previous, previous_files)?;
-            continue;
-        }
-        if entry.file_name() == MANIFEST {
-            std::fs::copy(&from, &to)?;
-            continue;
-        }
-        let rel = from.strip_prefix(root)?;
-        let candidate = previous.map(|root| root.join(rel));
-        let same = if let (Some(candidate), Some(expected)) = (candidate.as_ref(), previous_files.get(&rel.to_string_lossy().replace('\\', "/"))) {
-            candidate.is_file() && checksum_file(&from)? == (expected.size, expected.sha256.clone()) && checksum_file(candidate)? == (expected.size, expected.sha256.clone())
-        } else {
-            false
-        };
-        if same {
-            if std::fs::hard_link(candidate.expect("same candidate"), &to).is_err() {
-                std::fs::copy(&from, &to)?;
-            }
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
-}
-
-fn prune_directory(directory: &Path, now: u64) -> Result<usize> {
-    let mut complete = Vec::new();
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if parse_copy_id(&name).is_some() && entry.path().join(MANIFEST).is_file() {
-            complete.push(name);
-        }
-    }
-    let expired = expired_copies(&complete, now);
-    for name in &expired {
-        std::fs::remove_dir_all(directory.join(name))?;
-    }
-    Ok(expired.len())
-}
-
-fn sealed_manifest(manifest: &Manifest, key: &CopyKey) -> Manifest {
-    let mut sealed = Manifest {
-        encryption: Some(Encryption { algorithm: ENCRYPTION.into(), key_check: key.check.clone() }),
-        mac: None,
-        ..manifest.clone()
-    };
-    sealed.mac = Some(key.sign_manifest(&manifest.copy_id, &sealed));
-    sealed
-}
-
-async fn send_to_s3(
-    target: S3CopyTarget<'_>,
-    staging: &Path,
-    manifest: &Manifest,
-    id: &str,
-    cache: &mut ManifestCache,
-) -> Result<Manifest> {
-    let S3CopyTarget { client: s3, bucket, prefix, key } = target;
-    let source = Source::S3 { client: s3.clone(), bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) };
-    let previous_id = source.complete_copies().await?.into_iter().filter(|copy| copy.as_str() < id).max();
-    let previous = match previous_id {
-        Some(copy) => read_manifest_cached(&source, &copy, cache).await?.ok(),
-        None => None,
-    };
-    let previous = previous.filter(|manifest| match key {
-        Some(key) => manifest.encryption.as_ref().is_some_and(|encryption| {
-            encryption.algorithm == ENCRYPTION && encryption.key_check == key.fingerprint()
-        }) && check_sealed(&manifest.copy_id, manifest, Some(key)).is_ok(),
-        None => manifest.encryption.is_none(),
-    });
-    let previous_files: HashMap<&str, &ManifestFile> = previous.as_ref().map(|manifest| {
-        manifest.files.iter().map(|file| (file.path.as_str(), file)).collect()
-    }).unwrap_or_default();
-    let existing_sizes = s3_object_sizes(s3, bucket, prefix).await?;
-    let mut next = manifest.clone();
-    next.version = 2;
-    let mut uploads = tokio::task::JoinSet::new();
-    for file in &mut next.files {
-        let unchanged = previous_files.get(file.path.as_str()).filter(|old| {
-            let home = old.home_copy.as_deref().unwrap_or_else(|| previous.as_ref().map(|manifest| manifest.copy_id.as_str()).unwrap_or(id));
-            let sealed_size = old.size + if key.is_some() { (NONCE_LEN + 16) as u64 } else { 0 };
-            old.size == file.size && old.sha256 == file.sha256
-                && parse_copy_id(home).is_some()
-                && existing_sizes.get(&format!("{}{home}/{}", normalize_prefix(prefix), old.path)) == Some(&sealed_size)
-        });
-        if let Some(old) = unchanged {
-            file.home_copy = Some(old.home_copy.clone().unwrap_or_else(|| previous.as_ref().unwrap().copy_id.clone()));
-            continue;
-        }
-        file.home_copy = Some(id.to_owned());
-        if uploads.len() >= 8 && let Some(result) = uploads.join_next().await {
-            result??;
-        }
-        let mut bytes = tokio::fs::read(staging.join(&file.path)).await?;
-        if let Some(key) = key {
-            bytes = key.seal(id, &file.path, bytes)?;
-        }
-        let request = s3
-            .put_object()
-            .bucket(bucket)
-            .key(format!("{prefix}{id}/{}", file.path))
-            .body(ByteStream::from(bytes));
-        uploads.spawn(async move { request.send().await.map(|_| ()).map_err(anyhow::Error::from) });
-    }
-    while let Some(result) = uploads.join_next().await {
-        result??;
-    }
-    let stored = match key {
-        Some(key) => sealed_manifest(&next, key),
-        None => next.clone(),
-    };
-    let manifest_bytes = serde_json::to_vec_pretty(&stored)?;
-    let present = s3_object_sizes(s3, bucket, prefix).await?;
-    for file in &next.files {
-        let home = file.home_copy.as_deref().unwrap_or(id);
-        let object_key = format!("{prefix}{home}/{}", file.path);
-        let expected = file.size + if key.is_some() { (NONCE_LEN + 16) as u64 } else { 0 };
-        ensure!(safe_relative_path(&file.path) && parse_copy_id(home).is_some(), "Copy {id} has an invalid object reference.");
-        ensure!(present.get(&object_key) == Some(&expected), "Copy {id} refers to missing or wrongly sized object {object_key}.");
-    }
-    s3.put_object()
-        .bucket(bucket)
-        .key(format!("{prefix}{id}/{MANIFEST}"))
-        .body(ByteStream::from(manifest_bytes))
-        .send()
-        .await?;
-    cache.insert(manifest_cache_key(&source, id), Ok(stored.clone()));
-    Ok(stored)
-}
-
+#[cfg(test)]
 async fn s3_object_sizes(s3: &S3Client, bucket: &str, prefix: &str) -> Result<HashMap<String, u64>> {
     let mut result = HashMap::new();
     let mut continuation = None;
@@ -932,134 +371,8 @@ async fn prune_s3(s3: &S3Client, bucket: &str, prefix: &str, current: &str, now:
     prune_s3_cached(s3, bucket, prefix, current, now, &mut ManifestCache::new()).await
 }
 
-async fn prune_s3_cached(s3: &S3Client, bucket: &str, prefix: &str, current: &str, now: u64, cache: &mut ManifestCache) -> Result<usize> {
-    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-    for key in list_s3_keys(s3, bucket, prefix).await? {
-        let Some((id, _)) = key[prefix.len()..].split_once('/') else { continue };
-        if parse_copy_id(id).is_some() {
-            groups.entry(id.to_owned()).or_default().push(key);
-        }
-    }
-    let manifest_suffix = format!("/{MANIFEST}");
-    let complete = groups
-        .iter()
-        .filter(|(_, keys)| keys.iter().any(|key| key.ends_with(&manifest_suffix)))
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    let expired = expired_copies(&complete, now);
-    let mut keep = complete.iter().filter(|id| !expired.contains(id)).cloned().collect::<HashSet<_>>();
-    keep.insert(current.to_owned());
-    let mut marked = HashSet::new();
-    for id in &keep {
-        let source = Source::S3 { client: s3.clone(), bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) };
-        let manifest = read_manifest_cached(&source, id, cache).await?
-            .map_err(|reason| anyhow::anyhow!("Cannot prune copy {id} because its manifest is invalid: {reason}"))?;
-        ensure!(manifest.copy_id == *id, "Cannot prune copy {id} because its manifest names another copy.");
-        for file in manifest.files {
-            let home = file.home_copy.as_deref().unwrap_or(id);
-            ensure!(safe_relative_path(&file.path) && parse_copy_id(home).is_some(), "Cannot prune copy {id} because it has an invalid object reference.");
-            marked.insert(format!("{prefix}{home}/{}", file.path));
-        }
-    }
-    for id in &expired {
-        let key = format!("{prefix}{id}/{MANIFEST}");
-        s3.delete_object().bucket(bucket).key(key).send().await?;
-    }
-    for (id, keys) in &groups {
-        for key in keys {
-            if key.ends_with(&manifest_suffix) {
-                if !keep.contains(id) && !expired.contains(id) {
-                    s3.delete_object().bucket(bucket).key(key).send().await?;
-                }
-            } else if !marked.contains(key) {
-                s3.delete_object().bucket(bucket).key(key).send().await?;
-            }
-        }
-    }
-    let cache_prefix = format!("{bucket}/{}", normalize_prefix(prefix));
-    cache.retain(|key, _| {
-        let Some(id) = key.strip_prefix(&cache_prefix) else { return true };
-        parse_copy_id(id).is_none() || keep.contains(id)
-    });
-    Ok(expired.len())
-}
-
-fn expired_copies(ids: &[String], now: u64) -> Vec<String> {
-    let mut dated = ids
-        .iter()
-        .filter_map(|id| parse_copy_id(id).map(|at| (at, id)))
-        .collect::<Vec<_>>();
-    dated.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut days = HashSet::new();
-    let mut expired = Vec::new();
-    for (index, (at, id)) in dated.into_iter().enumerate() {
-        let newest_of_day = days.insert(at / DAY_MS);
-        if index < KEEP_RECENT {
-            continue;
-        }
-        if newest_of_day && now.saturating_sub(at) <= KEEP_DAILY_DAYS * DAY_MS {
-            continue;
-        }
-        expired.push(id.clone());
-    }
-    expired
-}
-
-
-fn copy_id(at_ms: u64) -> String {
-    let days = (at_ms / DAY_MS) as i64;
-    let (year, month, day) = civil_from_days(days);
-    let in_day = at_ms % DAY_MS;
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}-{:02}-{:02}.{:03}Z",
-        in_day / 3_600_000,
-        in_day / 60_000 % 60,
-        in_day / 1000 % 60,
-        in_day % 1000
-    )
-}
-
-fn parse_copy_id(id: &str) -> Option<u64> {
-    if id.len() != 24 || !id.is_ascii() {
-        return None;
-    }
-    let number = |range: std::ops::Range<usize>| id[range].parse::<u64>().ok();
-    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
-    let (hour, minute, second, millis) = (number(11..13)?, number(14..16)?, number(17..19)?, number(20..23)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 59 {
-        return None;
-    }
-    let days = u64::try_from(days_from_civil(year as i64, month as u32, day as u32)).ok()?;
-    let at = days * DAY_MS + hour * 3_600_000 + minute * 60_000 + second * 1000 + millis;
-    (copy_id(at) == id).then_some(at)
-}
-
-pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let year = yoe as i64 + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = (year - era * 400) as u64;
-    let mp = u64::from(if month > 2 { month - 3 } else { month + 9 });
-    let doy = (153 * mp + 2) / 5 + u64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe as i64 - 719_468
-}
-
-
 fn restore_usage() -> String {
-    format!("Usage: {} restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>]", crate::program())
+    format!("Usage: {} restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>] [--require-revocation <entry SHA-256>]", crate::program())
 }
 
 /// Handles the `restore` command. Returns false for any other command.
@@ -1070,18 +383,27 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
     }
     let mut from = None;
     let mut copy = None;
+    let mut witness = None;
     let mut rest = args[1..].iter();
     while let Some(flag) = rest.next() {
         match flag.as_str() {
             "--from" => from = rest.next().cloned(),
-            "--copy" => copy = rest.next().cloned(),
+            "--copy" => copy = Some(rest.next().with_context(restore_usage)?.clone()),
+            "--require-revocation" => {
+                let hash = rest.next().with_context(restore_usage)?;
+                ensure!(hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()), "Pass the SHA-256 of the revocation entry.");
+                witness = Some(hash.to_ascii_lowercase());
+            }
             _ => bail!("{}", restore_usage()),
         }
     }
     let from = from.with_context(restore_usage)?;
     let destination = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     let source = source_for(&from).await?;
-    let summary = restore(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(), installation).await?;
+    let summary = restore_with_receipt(
+        &source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(),
+        installation, &status_directory(&destination), witness.as_deref(),
+    ).await?;
     println!(
         "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials and ended every open email link; owners, agents and app users sign in again.",
         summary.copy_id,
@@ -1099,15 +421,40 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
     Ok(true)
 }
 
+async fn restore_with_receipt(source: &Source, copy: Option<&str>, destination: &Path, key: Option<&CopyKey>,
+    installation: &Installation, reports: &Path, witness: Option<&str>) -> Result<RestoreSummary> {
+    let summary = restore_with_witness(source, copy, destination, key, installation, witness).await?;
+    if summary.reconciled.is_ok() {
+        health::record_restore(source, reports, &summary.copy_id).await?;
+    }
+    Ok(summary)
+}
+
 /// Reads the revocation record next to the copies at `from`, for
 /// The `reconcile` command. `None` when the source keeps no record.
 pub async fn read_record(from: &str, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
+    let source = record_source(from).await?;
+    read_source_record(&source, key).await
+}
+
+pub(crate) async fn record_source(from: &str) -> Result<Source> {
     let source = source_for(from).await?;
-    let source = match source {
-        Source::Directory(path) if path.join(MANIFEST).is_file() => Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
+    Ok(match source {
+        Source::Directory(path) if blocks::identity(&path).is_none() && path.join(MANIFEST).is_file() =>
+            Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
         other => other,
-    };
-    source.record(key).await
+    })
+}
+
+pub(crate) fn ledger_binding(source: &Source, key: Option<&CopyKey>) -> Option<String> {
+    let key = key?;
+    if let Some(repo) = blocks::source_identity(source) {
+        Some(format!("v3/{repo}/{}", key.fingerprint()))
+    } else if matches!(source, Source::S3 { .. }) {
+        Some(key.fingerprint().to_owned())
+    } else {
+        None
+    }
 }
 
 async fn source_for(from: &str) -> Result<Source> {
@@ -1123,106 +470,58 @@ async fn source_for(from: &str) -> Result<Source> {
     })
 }
 
-enum Source {
-    Directory(PathBuf),
-    S3 { client: S3Client, bucket: String, prefix: String },
-}
-
-impl Source {
-    async fn complete_copies(&self) -> Result<Vec<String>> {
-        let mut ids = match self {
-            Source::Directory(root) => {
-                let mut ids = Vec::new();
-                for entry in std::fs::read_dir(root).with_context(|| format!("Could not read {}", root.display()))? {
-                    let entry = entry?;
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if parse_copy_id(&name).is_some() && entry.path().join(MANIFEST).is_file() {
-                        ids.push(name);
-                    }
-                }
-                ids
-            }
-            Source::S3 { client, bucket, prefix } => list_s3_keys(client, bucket, prefix)
-                .await?
-                .iter()
-                .filter_map(|key| key[prefix.len()..].strip_suffix(&format!("/{MANIFEST}")).map(str::to_owned))
-                .filter(|id| parse_copy_id(id).is_some())
-                .collect(),
-        };
-        ids.sort();
-        Ok(ids)
-    }
-
-    async fn read(&self, copy: &str, path: &str) -> Result<Vec<u8>> {
-        match self {
-            Source::Directory(root) => Ok(tokio::fs::read(root.join(copy).join(path)).await?),
-            Source::S3 { client, bucket, prefix } => read_s3_bytes(client, bucket, &format!("{prefix}{copy}/{path}")).await,
+pub(crate) async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
+    let dir = recovery::LEDGER_DIR;
+    let start = recovery::LEDGER_START;
+    let check = |name: &str, bytes: &[u8]| -> Result<()> {
+        if let Some(repository) = blocks::source_identity(source) {
+            key.context("A v3 revocation record needs KONAE_COPY_SECRET.")?.check_record_mac(repository, name, bytes)?;
+        } else if name != start && matches!(source, Source::S3 { .. }) && let Some(key) = key {
+            recovery::check_signed(key, name, bytes)?;
         }
-    }
-
-    async fn read_manifest_bytes(&self, copy: &str) -> Result<Option<Vec<u8>>> {
-        match self {
-            Source::Directory(root) => {
-                let path = root.join(copy).join(MANIFEST);
-                if tokio::fs::metadata(&path).await?.len() > MAX_MANIFEST_BYTES {
-                    return Ok(None);
-                }
-                Ok(Some(tokio::fs::read(path).await?))
+        if name == start { check_record_start(bytes)?; }
+        Ok(())
+    };
+    match source {
+        Source::Directory(root) => {
+            let folder = root.join(dir);
+            if !folder.join(start).is_file() {
+                return Ok(None);
             }
-            Source::S3 { client, bucket, prefix } => {
-                let object = client.get_object().bucket(bucket).key(format!("{prefix}{copy}/{MANIFEST}")).send().await?;
-                if object.content_length().is_some_and(|length| length > MAX_MANIFEST_BYTES as i64) {
-                    return Ok(None);
-                }
-                let mut body = object.body;
-                let mut bytes = Vec::new();
-                while let Some(chunk) = body.try_next().await? {
-                    bytes.extend_from_slice(&chunk);
-                    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
-                        return Ok(None);
-                    }
-                }
-                Ok(Some(bytes))
-            }
-        }
-    }
-
-    async fn record(&self, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
-        let dir = recovery::LEDGER_DIR;
-        let start = recovery::LEDGER_START;
-        match self {
-            Source::Directory(root) => {
-                let folder = root.join(dir);
-                if !folder.join(start).is_file() {
-                    return Ok(None);
-                }
-                let mut files = Vec::new();
-                for entry in std::fs::read_dir(&folder)? {
-                    let name = entry?.file_name().to_string_lossy().into_owned();
-                    if name.ends_with(".json") && name != start && !name.starts_with('.') {
-                        files.push(tokio::fs::read(folder.join(&name)).await?);
-                    }
-                }
-                Ok(Some(files))
-            }
-            Source::S3 { client, bucket, prefix } => {
-                let base = format!("{prefix}{dir}/");
-                let keys = list_s3_keys(client, bucket, &base).await?;
-                if !keys.iter().any(|key| key[base.len()..] == *start) {
-                    return Ok(None);
-                }
-                let mut files = Vec::new();
-                for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
-                    let bytes = read_s3_bytes(client, bucket, object).await?;
-                    if let Some(key) = key {
-                        recovery::check_signed(key, &object[base.len()..], &bytes)?;
-                    }
+            check(start, &tokio::fs::read(folder.join(start)).await?)?;
+            let mut files = Vec::new();
+            for entry in std::fs::read_dir(&folder)? {
+                let name = entry?.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".json") && name != start && !name.starts_with('.') {
+                    let bytes = tokio::fs::read(folder.join(&name)).await?;
+                    check(&name, &bytes)?;
                     files.push(bytes);
                 }
-                Ok(Some(files))
             }
+            Ok(Some(files))
+        }
+        Source::S3 { client, bucket, prefix } => {
+            let base = format!("{prefix}{dir}/");
+            let keys = list_s3_keys(client, bucket, &base).await?;
+            if !keys.iter().any(|key| key[base.len()..] == *start) {
+                return Ok(None);
+            }
+            check(start, &read_s3_bytes(client, bucket, &format!("{base}{start}")).await?)?;
+            let mut files = Vec::new();
+            for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
+                let bytes = read_s3_bytes(client, bucket, object).await?;
+                check(&object[base.len()..], &bytes)?;
+                files.push(bytes);
+            }
+            Ok(Some(files))
         }
     }
+}
+
+fn check_record_start(bytes: &[u8]) -> Result<()> {
+    let marker: Value = serde_json::from_slice(bytes).context("Invalid revocation record start marker.")?;
+    ensure!(marker["version"] == 1, "Unsupported revocation record start marker.");
+    Ok(())
 }
 
 struct RestoreSummary {
@@ -1233,99 +532,7 @@ struct RestoreSummary {
     reconciled: std::result::Result<usize, String>,
 }
 
-async fn read_manifest(source: &Source, copy: &str) -> Result<std::result::Result<Manifest, String>> {
-    let Some(bytes) = source.read_manifest_bytes(copy).await? else {
-        return Ok(Err(format!("The manifest of copy {copy} is larger than 4 MiB.")));
-    };
-    let manifest: Manifest = match serde_json::from_slice(&bytes) {
-        Ok(manifest) => manifest,
-        Err(_) => return Ok(Err(format!("The manifest of copy {copy} is invalid."))),
-    };
-    if manifest.version != 1 && manifest.version != 2 {
-        return Ok(Err(format!("The manifest version of copy {copy} is not supported.")));
-    }
-    Ok(Ok(manifest))
-}
-
-fn manifest_cache_key(source: &Source, copy: &str) -> String {
-    match source {
-        Source::Directory(path) => format!("{}:{copy}", path.display()),
-        Source::S3 { bucket, prefix, .. } => format!("{bucket}/{prefix}{copy}"),
-    }
-}
-
-async fn read_manifest_cached(source: &Source, copy: &str, cache: &mut ManifestCache) -> Result<std::result::Result<Manifest, String>> {
-    let cache_key = manifest_cache_key(source, copy);
-    if let Some(manifest) = cache.get(&cache_key) {
-        return Ok(manifest.clone());
-    }
-    let manifest = read_manifest(source, copy).await?;
-    cache.insert(cache_key, manifest.clone());
-    Ok(manifest)
-}
-
-fn not_encrypted(copy: &str) -> String {
-    format!("Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set, and a copy this installation sends to S3 with the secret is always encrypted.")
-}
-
-fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>) -> Result<()> {
-    let Some(encryption) = &manifest.encryption else {
-        return Ok(());
-    };
-    ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {:?}, which this Kernel cannot open.", encryption.algorithm);
-    let key = key.with_context(|| {
-        format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
-    })?;
-    ensure!(
-        key.check == encryption.key_check,
-        "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
-    );
-    match &manifest.mac {
-        Some(mac) => ensure!(
-            key.verify_manifest(copy, manifest, mac),
-            "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
-        ),
-        None => bail!("Copy {copy} has no manifest MAC. The Kernel signs every manifest it encrypts, so this one was altered. Nothing was installed."),
-    }
-    Ok(())
-}
-
-async fn newest_authentic_copy(source: &Source, key: &CopyKey, report: &mut dyn FnMut(String)) -> Result<String> {
-    let copies = source.complete_copies().await?;
-    ensure!(!copies.is_empty(), "No complete copy found. A complete copy has a manifest.json.");
-    let mut skipped = 0;
-    let mut newest_reason = String::new();
-    for copy in copies.iter().rev() {
-        ensure!(
-            skipped < MAX_SKIPPED_COPIES,
-            "Stopped after {MAX_SKIPPED_COPIES} skipped copies without finding one that could be authenticated. The newest: {newest_reason} Nothing was installed."
-        );
-        let manifest = read_manifest(source, copy)
-            .await
-            .map_err(|error| anyhow::anyhow!("Could not read the manifest of copy {copy}: {error:#}. Nothing was installed."))?;
-        let verdict = manifest.and_then(|manifest| {
-            if manifest.encryption.is_none() {
-                return Err(not_encrypted(copy));
-            }
-            check_sealed(copy, &manifest, Some(key)).map_err(|error| format!("{error:#}"))
-        });
-        match verdict {
-            Ok(()) => return Ok(copy.clone()),
-            Err(reason) => {
-                let reason = reason.trim_end_matches(" Nothing was installed.").to_owned();
-                report(format!("Skipped copy {copy}: {reason}"));
-                if skipped == 0 {
-                    newest_reason = reason;
-                }
-                skipped += 1;
-            }
-        }
-    }
-    bail!(
-        "No copy in the source could be authenticated, {skipped} skipped. The newest: {newest_reason} While KONAE_COPY_SECRET is set, only a copy encrypted and signed with it is chosen automatically, and a copy that is not encrypted never is. Nothing was installed."
-    )
-}
-
+#[cfg(test)]
 async fn restore(
     source: &Source,
     copy: Option<&str>,
@@ -1333,84 +540,75 @@ async fn restore(
     key: Option<&CopyKey>,
     installation: &Installation,
 ) -> Result<RestoreSummary> {
+    restore_with_witness(source, copy, destination, key, installation, None).await
+}
+
+async fn restore_with_witness(
+    source: &Source,
+    copy: Option<&str>,
+    destination: &Path,
+    key: Option<&CopyKey>,
+    installation: &Installation,
+    witness: Option<&str>,
+) -> Result<RestoreSummary> {
+    let _volume = crate::file_store::hold_while_stopped(destination, "restore")?;
     ensure_empty(destination)?;
-    let direct;
-    let (source, copy) = match (source, copy) {
-        (Source::Directory(path), None) if path.join(MANIFEST).is_file() => {
-            let name = path.file_name().and_then(|name| name.to_str()).context("The copy directory has no name.")?;
-            direct = Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned());
-            (&direct, name.to_owned())
-        }
-        (source, Some(copy)) => (source, copy.to_owned()),
-        (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
-            let key = key.expect("checked by the guard");
-            (source, newest_authentic_copy(source, key, &mut |line| println!("{line}")).await?)
-        }
-        (source, None) => {
-            let latest = source.complete_copies().await?.pop();
-            (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
-        }
-    };
-    ensure!(
-        !copy.is_empty() && !copy.contains('/') && copy != "." && copy != "..",
-        "The copy ID is invalid."
-    );
-    let manifest = read_manifest(source, &copy)
-        .await
-        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?
-        .map_err(|reason| anyhow::anyhow!("{reason} Nothing was installed."))?;
-    ensure!(
-        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
-        "{} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.",
-        not_encrypted(&copy),
-        crate::program()
-    );
-    check_sealed(&copy, &manifest, key)?;
-    for file in &manifest.files {
-        let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
-        ensure!(
-            safe_relative_path(&file.path) && allowed,
-            "The copy's manifest names a path outside a data directory: {}",
-            file.path
-        );
-    }
-    for file in &manifest.files {
-        let home = file.home_copy.as_deref().unwrap_or(&copy);
-        ensure!(
-            parse_copy_id(home).is_some(),
-            "Copy {copy} has an invalid object reference. Nothing was installed."
-        );
-    }
     let staging = destination.join(format!(".restore-{}", uuid::Uuid::new_v4()));
-    let staged = async {
-        for file in &manifest.files {
-            let home = file.home_copy.as_deref().unwrap_or(&copy);
-            let mut bytes = source.read(home, &file.path).await.with_context(|| format!("Could not read {} from copy {home}", file.path))?;
-            if let (Some(_), Some(key)) = (&manifest.encryption, key) {
-                bytes = key
-                    .open(home, &file.path, &bytes)
-                    .with_context(|| format!("Copy {copy} is damaged: {} does not decrypt. Nothing was installed.", file.path))?;
+    let direct;
+    let (source, manifest) = if let Some(identity) = blocks::source_identity(source) {
+        let manifest = blocks::restore(source, identity, key, copy, installation, &staging).await?;
+        (source, manifest)
+    } else {
+        let (source, copy) = match (source, copy) {
+            (Source::Directory(path), None) if path.join(MANIFEST).is_file() => {
+                let name = path.file_name().and_then(|name| name.to_str()).context("The copy directory has no name.")?;
+                direct = Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned());
+                (&direct, name.to_owned())
             }
-            ensure!(
-                bytes.len() as u64 == file.size && hex::encode(Sha256::digest(&bytes)) == file.sha256,
-                "Copy {copy} is damaged: {} does not match its checksum. Nothing was installed.",
-                file.path
-            );
-            let target = staging.join(&file.path);
-            tokio::fs::create_dir_all(target.parent().expect("file has a parent")).await?;
-            tokio::fs::write(&target, &bytes).await?;
-        }
+            (source, Some(copy)) => (source, copy.to_owned()),
+            (source, None) if matches!(source, Source::S3 { .. }) && key.is_some() => {
+                let key = key.expect("checked by the guard");
+                (source, newest_authentic_copy(source, key, &mut |line| println!("{line}")).await?)
+            }
+            (source, None) => {
+                let latest = source.complete_copies().await?.pop();
+                (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
+            }
+        };
+        let reader = CopyReader::open(source, &copy, key.map(CopyKey::files), installation).await.map_err(|error| {
+            if error.is::<konae_backup::UnencryptedS3Copy>() {
+                anyhow::anyhow!("{error} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.", crate::program())
+            } else {
+                error
+            }
+        })?;
+        reader.restore(&staging).await?;
+        (source, reader.manifest().clone())
+    };
+    let copy = manifest.copy_id.clone();
+    let staged = async {
         let root = staging.clone();
         let stores = installation.clone();
+        let copy_id = copy.clone();
+        let files = manifest.files.clone();
         let removed = tokio::task::spawn_blocking(move || -> Result<usize> {
+            validation::check_materialized(&root, &files)?;
+            history::warn_incomplete(&root, &copy_id)?;
             check_databases(&root, &stores)?;
+            validation::check_cut(&root, &stores)?;
             invalidate_sessions(&root, &stores)
         })
         .await??;
-        let record = source.record(key).await;
+        let record = read_source_record(source, key).await;
+        let witness = witness.map(str::to_owned);
+        let cut = manifest.created_at;
+        let key_check = ledger_binding(source, key);
         let root = staging.clone();
         let stores = installation.clone();
-        let reconciled = tokio::task::spawn_blocking(move || recovery::apply_or_hold(&root, &stores, record)).await??;
+        let reconciled = tokio::task::spawn_blocking(move || match witness {
+            Some(hash) => recovery::prove_revocation(&root, &stores, record, &hash, cut).map(Ok),
+            None => recovery::apply_or_hold_for_key(&root, &stores, record, key_check.as_deref()),
+        }).await??;
         Ok((removed, reconciled))
     }
     .await;
@@ -1421,11 +619,8 @@ async fn restore(
             return Err(error_value);
         }
     };
-    let mut entries = tokio::fs::read_dir(&staging).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        tokio::fs::rename(entry.path(), destination.join(entry.file_name())).await?;
-    }
-    tokio::fs::remove_dir(&staging).await?;
+    let root = destination.to_owned();
+    tokio::task::spawn_blocking(move || activate(&staging, &root, sync_path)).await??;
     let deployments = manifest
         .files
         .iter()
@@ -1434,25 +629,57 @@ async fn restore(
     Ok(RestoreSummary { copy_id: copy, deployments, files: manifest.files.len(), sessions_removed, reconciled })
 }
 
-fn ensure_empty(destination: &Path) -> Result<()> {
-    match std::fs::read_dir(destination) {
-        Ok(entries) => {
-            for entry in entries {
-                if entry?.file_name() != "lost+found" {
-                    bail!(
-                        "Restore refuses {}: it is not empty. Point KONAE_DATA_DIR at an empty directory.",
-                        destination.display()
-                    );
-                }
-            }
-            Ok(())
+fn sync_path(path: &Path) -> Result<()> {
+    std::fs::File::open(path)?.sync_all().with_context(|| format!("Could not sync {}", path.display()))
+}
+
+fn sync_tree(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            sync_tree(&entry?.path())?;
         }
-        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(destination)?;
-            Ok(())
-        }
-        Err(error_value) => Err(error_value.into()),
     }
+    sync_path(path)
+}
+
+fn activate(staging: &Path, destination: &Path, sync_dir: impl Fn(&Path) -> Result<()>) -> Result<()> {
+    sync_dir(destination)?;
+    for entry in std::fs::read_dir(staging)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        ensure!(!target.try_exists()?, "Restore destination is occupied at {}.", target.display());
+        sync_tree(&entry.path())?;
+        std::fs::rename(entry.path(), target)?;
+        sync_dir(destination)?;
+    }
+    sync_dir(staging)?;
+    std::fs::remove_dir(staging)?;
+    if let Err(error) = sync_dir(destination) {
+        // The tree is durable. Restore the startup guard while the volume lock is still held.
+        std::fs::create_dir(staging).context("Could not restore the activation marker after a failed sync")?;
+        sync_dir(destination).context("Could not sync the restored activation marker")?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub(crate) fn check_activation(root: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(root)? {
+        ensure!(!entry?.file_name().to_string_lossy().starts_with(".restore-"),
+            "Installation restore is incomplete. Repeat restore into an empty data directory before starting the Kernel.");
+    }
+    Ok(())
+}
+
+fn ensure_empty(destination: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(destination)? {
+        let entry = entry?;
+        if entry.file_name() == crate::file_store::KERNEL_LOCK_FILE || entry.file_name() == "lost+found" {
+            continue;
+        }
+        bail!("Restore refuses {}: it is not empty. Point KONAE_DATA_DIR at an empty directory.", destination.display());
+    }
+    Ok(())
 }
 
 fn sqlite_files(root: &Path, installation: &Installation) -> Result<Vec<PathBuf>> {
@@ -1472,8 +699,10 @@ fn sqlite_files(root: &Path, installation: &Installation) -> Result<Vec<PathBuf>
 
 fn check_databases(root: &Path, installation: &Installation) -> Result<()> {
     for path in sqlite_files(root, installation)? {
-        let result: String = Connection::open(&path)?.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let result: String = db.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         ensure!(result == "ok", "{} failed SQLite's integrity check.", path.display());
+        ensure!(db.prepare("PRAGMA foreign_key_check")?.query([])?.next()?.is_none(), "{} has a broken foreign key.", path.display());
     }
     Ok(())
 }
@@ -1482,7 +711,7 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
     let tables = installation.databases.iter().map(|database| (database.file, database.sign_out));
     let mut removed = 0;
     let mut clear = |path: &Path, names: &[&str]| -> Result<()> {
-        let connection = Connection::open(path)?;
+        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         for name in names {
             if crate::table_exists(&connection, name)? {
                 removed += connection.execute(&format!("DELETE FROM \"{name}\""), [])?;
@@ -1499,10 +728,11 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
         for entry in entries {
             let identity = entry?.path().join("data").join("identity.sqlite");
             if identity.is_file() {
-                clear(&identity, &["app_sessions", "account_challenges"])?;
+                clear(&identity, &["app_sessions", "account_challenges", "entry_links"])?;
             }
         }
     }
+    retire_restored_work(root)?;
     let mail = root.join(crate::mail::MAIL_DATABASE);
     if mail.is_file() {
         removed += crate::mail::end_pending_after_restore(&mail)?;
@@ -1510,9 +740,77 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
     Ok(removed)
 }
 
+fn retire_restored_work(root: &Path) -> Result<()> {
+    let path = root.join(crate::calls::CALLS_DATABASE);
+    if path.try_exists()? {
+        let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        if crate::table_exists(&db, "calls")? {
+            db.execute_batch("UPDATE calls SET state='failed', error='restored-outcome-unknown', leased_until=NULL
+                              WHERE state='pending';
+                              UPDATE calls SET then_state='interrupted', then_message='Check the continuation before repeating it.', leased_until=NULL
+                              WHERE then_state='processing';")?;
+        }
+    }
+    // The first timer tick takes a new baseline. The run history stays available.
+    let apps = crate::layout::apps(root);
+    if apps.try_exists()? {
+        for entry in std::fs::read_dir(apps)? {
+            let path = entry?.path().join("data/usage.sqlite");
+            if path.try_exists()? {
+                let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+                if crate::table_exists(&db, "schedule_state")? {
+                    db.execute("DELETE FROM schedule_state", [])?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    mod activation;
+    mod integrity;
     use super::*;
+
+    #[test]
+    fn snapshot_refuses_a_missing_source_without_creating_either_file() {
+        let root = scratch("missing-snapshot");
+        std::fs::create_dir(&root).unwrap();
+        assert!(vacuum_into(&root.join("source.sqlite"), &root.join("copy.sqlite")).is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_copy_restores_a_legacy_draft_without_creating_optional_stores() {
+        let root = scratch("draft-inventory");
+        let source = root.join("live");
+        let copies = root.join("copies");
+        let restored = root.join("restored");
+        let id = "old_draft";
+        crate::Settings::new(id, "Project", "project", &json!({"version":1})).write(&source).await.unwrap();
+        let app = crate::layout::sources(&source, id);
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("index.html"), "<main>Draft</main>").unwrap();
+        let private = crate::layout::private(&source, id);
+        std::fs::create_dir_all(&private).unwrap();
+        let metadata = json!({"name":"Original draft","slug":"original","manifest":{"version":1},"directories":["empty"],"updatedAt":77});
+        std::fs::write(private.join("sources.json"), metadata.to_string()).unwrap();
+        let original = crate::sources::read(&source, id).await.unwrap().unwrap();
+        let state = state(&source);
+        run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
+        let summary = restore(&Source::Directory(copies), None, &restored, None, &state.installation).await.unwrap();
+        assert_eq!(summary.deployments, 0);
+        assert_eq!(original["name"], "Original draft");
+        assert_eq!(crate::sources::read(&restored, id).await.unwrap(), Some(original));
+        for volume in [&source, &restored] {
+            assert!(!crate::layout::data(volume, id).exists());
+            assert!(!crate::layout::dist(volume, id).exists());
+            assert!(!volume.join("google.sqlite").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_copy_carries_the_custom_domain_with_the_record_and_the_maintenance_state() {
@@ -1523,7 +821,7 @@ mod tests {
             std::fs::write(source.join(".konae").join(name), "{}").unwrap();
         }
         let target = target.join(".konae");
-        copy_deployment(&source, &target.parent().unwrap()).unwrap();
+        cut::test_deployment(&source, target.parent().unwrap()).unwrap();
         assert!(target.join("deployment.json").exists());
         assert!(target.join(crate::domain::RECORD_FILE).exists());
         assert!(target.join(crate::path::RECORD_FILE).exists());
@@ -1536,6 +834,10 @@ mod tests {
         Deployment, SignupPolicy, auth::AuthService, initialize_database, load_deployments, read_artifact,
     };
     use std::sync::Arc;
+
+    fn installed_entries(root: &Path) -> usize {
+        std::fs::read_dir(root).unwrap().filter(|entry| entry.as_ref().unwrap().file_name() != crate::file_store::KERNEL_LOCK_FILE).count()
+    }
 
     fn scratch(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("konae-{label}-{}", uuid::Uuid::new_v4()))
@@ -1562,7 +864,7 @@ mod tests {
         let first_id = "2026-01-01T00-00-00.000Z";
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::rename(&first, directory.join(first_id)).unwrap();
-        send_to_directory(&second, &directory, "2026-01-01T01-00-00.000Z", &manifest("2026-01-01T01-00-00.000Z")).unwrap();
+        send_to_directory(&second, &directory, "2026-01-01T01-00-00.000Z", &manifest("2026-01-01T01-00-00.000Z"), &HashMap::new(), &Installation::for_test()).unwrap();
         let original = std::fs::metadata(directory.join(first_id).join(path)).unwrap();
         let linked = std::fs::metadata(directory.join("2026-01-01T01-00-00.000Z").join(path)).unwrap();
         assert_eq!((original.dev(), original.ino()), (linked.dev(), linked.ino()));
@@ -1572,7 +874,7 @@ mod tests {
         let changed = ManifestFile { path: path.into(), size, sha256, home_copy: None };
         let mut changed_manifest = manifest("2026-01-01T02-00-00.000Z");
         changed_manifest.files = vec![changed];
-        send_to_directory(&second, &directory, "2026-01-01T02-00-00.000Z", &changed_manifest).unwrap();
+        send_to_directory(&second, &directory, "2026-01-01T02-00-00.000Z", &changed_manifest, &HashMap::new(), &Installation::for_test()).unwrap();
         let changed_inode = std::fs::metadata(directory.join("2026-01-01T02-00-00.000Z").join(path)).unwrap();
         assert_ne!(linked.ino(), changed_inode.ino());
         let _ = std::fs::remove_dir_all(root);
@@ -1618,7 +920,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn staging_skips_current_blobs_and_missing_state_forces_a_full_read() {
+    async fn staging_reads_each_indexed_blob_and_accepts_an_import_under_the_same_id() {
         let (source, copies, restored) = (scratch("copy-state-source"), scratch("copy-state-target"), scratch("copy-state-restored"));
         let (deployment, _) = seed(&source);
         let files = crate::layout::files(&source, &deployment.id);
@@ -1631,7 +933,7 @@ mod tests {
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
         assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 1);
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
-        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 1, "the second copy carries the previous hash without a blob read");
+        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 2, "the second copy verifies the source bytes again");
         tokio::time::sleep(Duration::from_millis(3)).await;
         let import_dir = scratch("copy-state-import");
         std::fs::create_dir_all(&import_dir).unwrap();
@@ -1644,12 +946,12 @@ mod tests {
         let blobs = crate::file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
         tokio::task::spawn_blocking(move || crate::package::unpack_into(&archive, &accounts, &files, &blobs, &Default::default())).await.unwrap().unwrap();
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
-        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 2, "the import reused an ID with different bytes and the copy read it fresh");
+        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 3, "the import reused an ID with different bytes and the copy read it fresh");
         restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
         assert_eq!(std::fs::read(crate::layout::files(&restored, &deployment.id).join(format!("{id}.blob"))).unwrap(), b"imported!!");
         std::fs::remove_file(source.join(".copy-state.json")).unwrap();
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
-        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 3, "missing state forces a full blob read");
+        assert_eq!(gets.load(std::sync::atomic::Ordering::SeqCst), 4, "missing state forces a full blob read");
         for path in [source, copies, restored, import_dir] { let _ = std::fs::remove_dir_all(path); }
     }
 
@@ -1691,11 +993,15 @@ mod tests {
         std::fs::create_dir_all(folder.join("data/files")).unwrap();
         let file_id = uuid::Uuid::new_v4().to_string();
         std::fs::write(folder.join("data/files").join(format!("{file_id}.blob")), b"attachment").unwrap();
-        std::fs::write(folder.join("data/files/index.json"), json!([{"id": file_id}]).to_string()).unwrap();
+        std::fs::write(folder.join("data/files/index.json"), json!([{"id": file_id, "size": 10}]).to_string()).unwrap();
         std::fs::write(folder.join("data/files/.index.json.tmp-x"), "temporary").unwrap();
         std::fs::create_dir_all(folder.join(".konae/backups")).unwrap();
-        let backup_id = uuid::Uuid::new_v4();
-        std::fs::write(folder.join(".konae/backups").join(format!("{backup_id}.json")), "{}").unwrap();
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let backup_dir = crate::layout::backups(root, &deployment.id);
+        let snapshot = backup_dir.join(format!("{backup_id}.sqlite"));
+        vacuum_into(&folder.join("data/database.sqlite"), &snapshot).unwrap();
+        let record = json!({"id": backup_id, "key": format!("{backup_id}.sqlite"), "sizeBytes": snapshot.metadata().unwrap().len(), "label": "Manual", "createdAt": 1});
+        std::fs::write(backup_dir.join(format!("{backup_id}.json")), record.to_string()).unwrap();
         std::fs::write(folder.join(".konae/backups/portable-data-x.sqlite"), "scratch").unwrap();
         crate::http::secrets_call(&crate::http::secrets_store(root, &deployment.id).unwrap(), &deployment.id, None, "secret_set", &json!({"name": "hook", "value": "a-copied-route-secret"})).unwrap();
         AuthService::open(root.join("accounts.sqlite"))
@@ -1741,11 +1047,11 @@ mod tests {
     #[test]
     fn copy_settings_refuse_unsafe_targets() {
         let data = Path::new("/srv/konae/data");
-        assert!(CopyConfig::parse(None, None, None, data, false).unwrap().is_none());
-        let config = CopyConfig::parse(Some("/mnt/second"), Some("1"), None, data, true).unwrap().unwrap();
+        assert!(CopyConfig::parse(Vec::new(), None, None, None, data, false).unwrap().is_none());
+        let config = CopyConfig::parse(Vec::new(), Some("/mnt/second"), Some("1"), None, data, true).unwrap().unwrap();
         assert_eq!(config.targets, vec![Target::Directory("/mnt/second".into()), Target::S3 { prefix: "copies/".into() }]);
         assert_eq!(config.interval, Duration::from_secs(3600));
-        let refuse = |dir, copy_s3, interval, s3| CopyConfig::parse(dir, copy_s3, interval, data, s3).unwrap_err().to_string();
+        let refuse = |dir, copy_s3, interval, s3| CopyConfig::parse(Vec::new(), dir, copy_s3, interval, data, s3).unwrap_err().to_string();
         assert!(refuse(Some("/srv/konae/data/copies"), None, None, false).contains("outside"));
         assert_eq!(refuse(None, Some("1"), None, false), "KONAE_COPY_S3=1 needs KONAE_S3_BUCKET.");
         assert_eq!(refuse(None, Some("copies/"), None, true), "KONAE_COPY_S3 must be 1 when set.");
@@ -1765,14 +1071,17 @@ mod tests {
         let vanished = uuid::Uuid::new_v4().to_string();
         s3.put(&deployment.id, &kept, &files.join(format!("{kept}.blob"))).await.unwrap();
         std::fs::remove_file(files.join(format!("{kept}.blob"))).unwrap();
-        std::fs::write(files.join("index.json"), json!([{"id": kept}, {"id": vanished}]).to_string()).unwrap();
+        std::fs::write(files.join("index.json"), json!([{"id": kept, "size": 10}, {"id": vanished, "size": 12}]).to_string()).unwrap();
 
+        let error = run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap_err();
+        assert!(error.to_string().contains(&vanished), "{error}");
+        std::fs::write(files.join("index.json"), seeded.to_string()).unwrap();
         run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
         restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
         let folder = crate::layout::files(&restored, &deployment.id);
         assert_eq!(std::fs::read(folder.join(format!("{kept}.blob"))).unwrap(), b"attachment");
         let index: Value = serde_json::from_slice(&std::fs::read(folder.join("index.json")).unwrap()).unwrap();
-        assert_eq!(index, json!([{"id": kept}]));
+        assert_eq!(index, seeded);
         assert!(!restored.join(crate::file_store::MARKER_FILE).exists(), "a restore starts on its folder");
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
@@ -1791,7 +1100,7 @@ mod tests {
 
         let copied = crate::layout::folder(&copies.join(&id), &deployment.id);
         assert!(!copied.join("files/.index.json.tmp-x").exists(), "temporary files stay behind");
-        assert!(!copied.join("backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
+        assert!(!copied.join(".konae/backups/portable-data-x.sqlite").exists(), "export scratch stays behind");
 
         let summary = restore(&Source::Directory(copies.clone()), None, &restored, None, &crate::installation::Installation::for_test()).await.unwrap();
         assert_eq!((summary.copy_id.as_str(), summary.deployments), (id.as_str(), 1));
@@ -1811,7 +1120,7 @@ mod tests {
         let index: Value = serde_json::from_slice(&std::fs::read(folder.join("data/files/index.json")).unwrap()).unwrap();
         let file_id = index[0]["id"].as_str().unwrap();
         assert_eq!(std::fs::read(folder.join("data/files").join(format!("{file_id}.blob"))).unwrap(), b"attachment");
-        assert_eq!(std::fs::read_dir(folder.join(".konae/backups")).unwrap().count(), 1, "the saved backup travels");
+        assert_eq!(std::fs::read_dir(folder.join(".konae/backups")).unwrap().count(), 2, "the backup record and its database travel");
         assert!(crate::http::holds_route_secret(&crate::http::secrets_store(&restored, &deployment.id).unwrap(), "a-copied-route-secret").unwrap(), "the app's secrets travel in a copy");
         assert!(std::fs::read_dir(&restored).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".restore-")));
 
@@ -1908,7 +1217,7 @@ mod tests {
         let folder = crate::layout::folder(&restored, &deployment.id);
         assert_eq!(count(&folder.join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
         AuthService::open(folder.join("data/identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
-        assert_eq!(std::fs::read_dir(&refused_root).unwrap().count(), 0, "a refused restore installs nothing");
+        assert_eq!(installed_entries(&refused_root), 0, "a refused restore installs nothing");
         for path in [source, plain, sealed, restored, moved, refused_root] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -1971,10 +1280,7 @@ mod tests {
         let mut state = state(&source);
         let (client, metrics) = fake_s3_client_with_metrics().await;
         state.s3 = Some(client.clone());
-        state.copies = Arc::new(CopyStatus {
-            key: Some(Arc::new(CopyKey::derive(TEST_SECRET))),
-            ..CopyStatus::default()
-        });
+        Arc::get_mut(&mut state.copies).unwrap().key = Some(Arc::new(CopyKey::derive(TEST_SECRET)));
         let target = s3_target();
         let store_gets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let store_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -1995,7 +1301,7 @@ mod tests {
             .body(ByteStream::from(serde_json::to_vec(&legacy).unwrap())).send().await.unwrap();
         let copy_state_path = source.join(".copy-state.json");
         let mut copy_state: CopyState = serde_json::from_slice(&std::fs::read(&copy_state_path).unwrap()).unwrap();
-        copy_state.s3_manifest = Some(legacy);
+        copy_state.s3_manifests.insert(manifest_cache_key(&s3_source(&client), &first), legacy);
         std::fs::write(copy_state_path, serde_json::to_vec(&copy_state).unwrap()).unwrap();
         tokio::time::sleep(Duration::from_millis(2)).await;
         let before_second = metrics.snapshot();
@@ -2008,12 +1314,13 @@ mod tests {
         let second_sizes = s3_object_sizes(&client, "data", &format!("copies/{second}/")).await.unwrap();
         let second_uploaded: u64 = second_sizes.iter().filter(|(key, _)| !key.ends_with(MANIFEST)).map(|(_, size)| size).sum();
         assert_eq!(second_keys, vec![format!("copies/{second}/{MANIFEST}")]);
-        assert_eq!(second_store_gets, 0);
-        assert_eq!(second_downloaded, 0);
-        assert!(second_requests.iter().all(|request| request.method != "GET" || request.key.ends_with(&format!("/{MANIFEST}"))));
-        assert_eq!(second_s3.get("GET").map_or(0, |counts| counts.0), 0, "the stable copy reads no S3 objects or manifests");
+        assert_eq!(second_store_gets, 1);
+        assert_eq!(second_downloaded, 10);
+        assert!(second_requests.iter().any(|request| request.method == "GET" && request.key.ends_with(".blob")));
         tokio::time::sleep(Duration::from_millis(2)).await;
         std::fs::write(blob_dir.join(format!("{blob_id}.blob")), b"new attachment bytes").unwrap();
+        let updated_index = json!([{"id": blob_id, "size": 20, "sha256": hex::encode(Sha256::digest(b"new attachment bytes"))}]);
+        std::fs::write(blob_dir.join("index.json"), updated_index.to_string()).unwrap();
         tokio::time::sleep(Duration::from_millis(3)).await;
         let before_third = metrics.snapshot();
         let third_store_gets_before = store_gets.load(std::sync::atomic::Ordering::SeqCst);
@@ -2025,11 +1332,11 @@ mod tests {
         let third_keys = list_s3_keys(&client, "data", &format!("copies/{third}/")).await.unwrap();
         let third_sizes = s3_object_sizes(&client, "data", &format!("copies/{third}/")).await.unwrap();
         let third_uploaded: u64 = third_sizes.iter().filter(|(key, _)| !key.ends_with(MANIFEST)).map(|(_, size)| size).sum();
-        assert_eq!(third_keys.len(), 2, "the changed blob and manifest were written");
+        assert_eq!(third_keys.len(), 3, "the changed blob, index and manifest were written");
         let third_prefix = format!("data/copies/{third}/");
         let third_file_puts: Vec<_> = third_requests.iter().filter(|request| request.method == "PUT" && request.key.starts_with(&third_prefix) && !request.key.ends_with(&format!("/{MANIFEST}"))).map(|request| request.key.as_str()).collect();
-        assert_eq!(third_file_puts.len(), 1);
-        assert!(third_file_puts[0].ends_with(&format!("/{blob_id}.blob")));
+        assert_eq!(third_file_puts.len(), 2);
+        assert!(third_file_puts.iter().any(|path| path.ends_with(&format!("/{blob_id}.blob"))));
         println!("Copy {first}: file-store blob GETs {first_store_gets}, downloaded {first_downloaded} bytes; S3 {}; uploaded {first_uploaded} file bytes", s3_metrics_text(&first_s3));
         println!("Copy {second}: file-store blob GETs {second_store_gets}, downloaded {second_downloaded} bytes; S3 {}; uploaded {second_uploaded} file bytes", s3_metrics_text(&second_s3));
         println!("Copy {third}: file-store blob GETs {third_store_gets}, downloaded {changed_downloaded} bytes; S3 {}; uploaded {third_uploaded} file bytes", s3_metrics_text(&third_s3));
@@ -2038,7 +1345,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(manifest.version, 2);
         assert!(manifest.files.iter().any(|file| file.path.ends_with(&format!("{blob_id}.blob")) && file.home_copy.as_deref() == Some(third.as_str())));
-        assert!(manifest.files.iter().filter(|file| !file.path.ends_with(&format!("{blob_id}.blob"))).all(|file| file.home_copy.as_deref() == Some(first.as_str())));
+        assert!(manifest.files.iter().filter(|file| !file.path.ends_with(&format!("{blob_id}.blob")) && !file.path.ends_with("/files/index.json")).all(|file| file.home_copy.as_deref() == Some(first.as_str())));
         client.delete_object().bucket("data").key(format!("copies/{first}/{MANIFEST}")).send().await.unwrap();
         restore(&s3_source(&client), Some(&third), &restored, Some(state.copies.key().unwrap()), &crate::installation::Installation::for_test()).await.unwrap();
         assert_eq!(std::fs::read(crate::layout::files(&restored, &deployment.id).join(format!("{blob_id}.blob"))).unwrap(), b"new attachment bytes");
@@ -2080,21 +1387,21 @@ mod tests {
         assert_eq!(fourth_puts.len(), 1);
         assert!(fourth_puts[0].key.ends_with(&format!("/{MANIFEST}")));
         assert!(fourth_requests.iter().all(|request| request.method != "GET" || request.key != format!("data/copies/{first}/{MANIFEST}")));
-        assert_eq!(store_gets.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(store_gets.load(std::sync::atomic::Ordering::SeqCst), 4);
         let mut tampered = manifest.clone();
         tampered.files[0].home_copy = Some("2026-11-17T00-00-00.000Z".into());
         client.put_object().bucket("data").key(format!("copies/{third}/{MANIFEST}"))
             .body(ByteStream::from(serde_json::to_vec(&tampered).unwrap())).send().await.unwrap();
         let refused = scratch("tampered-reference");
         assert!(restore(&s3_source(&client), Some(&third), &refused, Some(state.copies.key().unwrap()), &crate::installation::Installation::for_test()).await.is_err());
-        assert_eq!(std::fs::read_dir(&refused).unwrap().count(), 0);
+        assert_eq!(installed_entries(&refused), 0);
         client.put_object().bucket("data").key(format!("copies/{third}/{MANIFEST}"))
             .body(ByteStream::from(bytes)).send().await.unwrap();
         let missing_file = manifest.files.iter().find(|file| file.home_copy.as_deref() == Some(first.as_str()) && !file.path.ends_with(".sqlite")).unwrap();
         client.delete_object().bucket("data").key(format!("copies/{}/{}", first, missing_file.path)).send().await.unwrap();
         let refused_missing = scratch("missing-reference");
         assert!(restore(&s3_source(&client), Some(&third), &refused_missing, Some(state.copies.key().unwrap()), &crate::installation::Installation::for_test()).await.is_err());
-        assert_eq!(std::fs::read_dir(&refused_missing).unwrap().count(), 0);
+        assert_eq!(installed_entries(&refused_missing), 0);
         for path in [source, restored, refused, refused_missing] { let _ = std::fs::remove_dir_all(path); }
     }
 
@@ -2146,7 +1453,7 @@ mod tests {
     async fn send_and_prune_s3(client: &S3Client, key: &CopyKey, staging: &Path, file: &ManifestFile, id: String, at: u64) -> Result<()> {
         let manifest = Manifest { version: 2, copy_id: id.clone(), created_at: at, files: vec![file.clone()], encryption: None, mac: None };
         let mut cache = ManifestCache::new();
-        send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key: Some(key) }, staging, &manifest, &id, &mut cache).await?;
+        send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key: Some(key) }, staging, &manifest, &id, &mut cache, &HashMap::new(), &Installation::for_test()).await?;
         prune_s3_cached(client, "data", "copies/", &id, at, &mut cache).await?;
         Ok(())
     }
@@ -2203,14 +1510,13 @@ mod tests {
         let stable_manifest = Manifest { version: 2, copy_id: unchanged.clone(), created_at: at, files: vec![template], encryption: None, mac: None };
         let before_stable = metrics.snapshot();
         let mut cache = ManifestCache::new();
-        send_to_s3(S3CopyTarget { client: &client, bucket: "data", prefix: "copies/", key: Some(&key) }, &staging, &stable_manifest, &unchanged, &mut cache).await.unwrap();
+        send_to_s3(S3CopyTarget { client: &client, bucket: "data", prefix: "copies/", key: Some(&key) }, &staging, &stable_manifest, &unchanged, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
         prune_s3_cached(&client, "data", "copies/", &unchanged, at, &mut cache).await.unwrap();
         let (stable_s3, stable_requests) = s3_metrics_delta(&before_stable, &metrics.snapshot());
         assert_eq!(list_s3_keys(&client, "data", &format!("copies/{unchanged}/")).await.unwrap(), vec![format!("copies/{unchanged}/{MANIFEST}")]);
         assert_eq!(stable_s3.get("PUT").map(|counts| counts.0), Some(1));
-        assert!(stable_requests.iter().all(|request| request.method != "GET" || request.key.ends_with(&format!("/{MANIFEST}"))));
         assert!(stable_requests.iter().all(|request| request.key != format!("data/copies/{home}/{MANIFEST}")));
-        assert!(stable_requests.iter().all(|request| request.method != "GET" || request.key != format!("data/copies/{home}/{path}")));
+        assert!(stable_requests.iter().any(|request| request.method == "GET" && request.key == format!("data/copies/{home}/{path}")));
         assert!(last > oldest);
         let _ = std::fs::remove_dir_all(staging);
     }
@@ -2237,7 +1543,7 @@ mod tests {
     async fn send_genuine(client: &S3Client, copy: &Path, id: &str, key: Option<&CopyKey>) {
         let manifest: Manifest = serde_json::from_slice(&std::fs::read(copy.join(MANIFEST)).unwrap()).unwrap();
         let mut cache = ManifestCache::new();
-        send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key }, copy, &manifest, id, &mut cache).await.unwrap();
+        send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key: key.map(CopyKey::files) }, copy, &manifest, id, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
         recovery::start(&s3_target(), Some(client), "data").await.unwrap();
     }
 
@@ -2258,7 +1564,7 @@ mod tests {
         let restored = scratch("planted-restored");
         let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
         assert!(refused.contains("is not encrypted") && refused.contains("KONAE_COPY_SECRET") && refused.contains("Nothing was installed"), "{refused}");
-        assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0, "a refused restore installs nothing");
+        assert_eq!(installed_entries(&restored), 0, "a refused restore installs nothing");
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -2277,7 +1583,7 @@ mod tests {
             assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
             summary.copy_id
         });
-        let installed = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        let installed = installed_entries(&root);
         let _ = std::fs::remove_dir_all(&root);
         (installed.to_string(), outcome)
     }
@@ -2464,7 +1770,7 @@ mod tests {
         let refused = restore(&s3_source(&client), None, &root, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
         assert!(refused.contains(LATER_ID) && refused.contains("Nothing was installed"), "{refused}");
         assert_eq!(older_asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the restore did not roll back to the older copy");
-        assert_eq!(std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0), 0);
+        assert_eq!(installed_entries(&root), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2542,7 +1848,7 @@ mod tests {
         let restored = scratch("trimmed-restored");
         let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("an altered manifest is refused").to_string();
         assert!(refused.contains("Nothing was installed"), "{refused}");
-        assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0);
+        assert_eq!(installed_entries(&restored), 0);
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -2615,7 +1921,7 @@ mod tests {
         assert!(!key.verify_manifest(&id, &shorter, &mac), "a dropped entry changes the MAC");
         assert!(!CopyKey::derive("another secret that is long enough for tests").verify_manifest(&id, &sealed, &mac));
         assert!(!key.verify_manifest(&id, &sealed, "not hex"));
-        assert_ne!(mac, key.check);
+        assert_ne!(mac, key.fingerprint());
         for path in [source, copies] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -2635,7 +1941,7 @@ mod tests {
         let refused_root = scratch("unsigned-refused");
         let refused = restore(&s3_source(&client), None, &refused_root, Some(&key), &stores).await.err().expect("no MAC, no restore").to_string();
         assert!(refused.contains("no manifest MAC") && refused.contains("was altered") && refused.contains("Nothing was installed"), "{refused}");
-        assert_eq!(std::fs::read_dir(&refused_root).map(|entries| entries.count()).unwrap_or(0), 0);
+        assert_eq!(installed_entries(&refused_root), 0);
         assert!(!crate::layout::folder(&refused_root, &deployment.id).exists());
         for path in [source, copies, refused_root] {
             let _ = std::fs::remove_dir_all(path);
@@ -2789,7 +2095,7 @@ mod tests {
         std::fs::write(&artifact, "<main>tampered</main>").unwrap();
         let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(message.contains("does not match its checksum"), "{message}");
-        assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0, "a refused restore leaves the directory empty");
+        assert_eq!(installed_entries(&empty), 0, "a refused restore leaves the directory empty");
 
         let manifest_path = copies.join(&id).join(MANIFEST);
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -2807,13 +2113,13 @@ mod tests {
         let (source, copies) = (scratch("lock-source"), scratch("lock-copies"));
         let (deployment, _) = seed(&source);
         let state = state(&source);
-        let held = database_lock(&state, &deployment.id).await;
+        let held = state.copies.operations.read().await;
         let copying = tokio::spawn({
             let (state, copies) = (state.clone(), copies.clone());
             async move { run_copy(&state, &[Target::Directory(copies)]).await }
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(!copying.is_finished(), "the copy waits for the Deployment's lock");
+        assert!(!copying.is_finished(), "the copy waits for the admitted operation");
         let database = crate::layout::database(&source, &deployment.id);
         Connection::open(&database).unwrap().execute("INSERT INTO notes VALUES ('during')", []).unwrap();
         drop(held);
@@ -2852,3 +2158,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod pilot;

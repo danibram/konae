@@ -321,10 +321,13 @@ pub async fn run(state: &AppState, deployment: &Deployment, sender: &Inviter, na
         "app_invitations_list" => off(move || Ok(auth.read(|db| list_invitations(db, cursor.as_deref(), limit))?)).await,
         "app_user_suspend" | "app_user_resume" => {
             let (user_id, suspend) = (text("userId"), name == "app_user_suspend");
-            let value = off(move || set_suspended(&auth, &user_id, suspend)).await?;
-            if suspend {
+            let root = state.data_root.clone();
+            let app = deployment.id.clone();
+            let (value, pending) = off(move || set_suspended(&auth, &user_id, suspend, &root, &app)).await?;
+            if let Some(pending) = pending {
                 let entry = super::recovery::Entry::new("app-user", Some(&deployment.id), &text("userId"), "suspended");
                 super::recovery::record(state, entry).await?;
+                pending.finish()?;
             }
             Ok(value)
         }
@@ -619,7 +622,8 @@ fn revoke(tx: &rusqlite::Transaction<'_>, invitation: &str) -> Result<Value, Ref
     Ok(revoked)
 }
 
-fn set_suspended(auth: &AuthService, user_id: &str, suspend: bool) -> Result<Value> {
+fn set_suspended(auth: &AuthService, user_id: &str, suspend: bool, root: &std::path::Path, app: &str)
+    -> Result<(Value, Option<crate::copies::Pending>)> {
     let email: Option<String> = auth.read(|db| {
         db.query_row("SELECT email FROM app_users WHERE id = ?1", [user_id], |row| row.get(0))
             .optional()
@@ -628,7 +632,9 @@ fn set_suspended(auth: &AuthService, user_id: &str, suspend: bool) -> Result<Val
     let Some(email) = email else {
         anyhow::bail!("No account with that ID on this deployment.");
     };
+    let mut pending = None;
     let state = if suspend {
+        pending = Some(crate::copies::Pending::begin(root, &format!("{app}/{user_id}"), "suspending the app account and recording its revocation")?);
         auth.suspend(&email)?;
         "suspended".to_owned()
     } else {
@@ -638,7 +644,7 @@ fn set_suspended(auth: &AuthService, user_id: &str, suspend: bool) -> Result<Val
             Err(other) => return Err(other.into()),
         }
     };
-    Ok(json!({"userId": user_id, "email": email, "state": state}))
+    Ok((json!({"userId": user_id, "email": email, "state": state}), pending))
 }
 
 fn list_users(db: &Connection, state: Option<&str>, cursor: Option<&str>, limit: usize) -> Result<Value, AuthError> {

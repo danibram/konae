@@ -43,6 +43,7 @@ pub mod hostname;
 pub mod hosts;
 pub mod import;
 pub mod installation;
+pub mod inventory;
 pub mod http;
 pub mod invitations;
 pub mod layout;
@@ -692,9 +693,11 @@ fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::resul
 /// Runs the operator commands both binaries answer: `restore`, the file
 /// store commands and `reconcile`. Returns whether one ran.
 pub async fn operator_command(installation: &installation::Installation) -> Result<bool> {
-    Ok(copies::operator_command(installation).await?
+    Ok(copies::history::operator_command().await?
+        || copies::operator_command(installation).await?
         || file_store::operator_command().await?
-        || recovery::operator_command(installation).await?)
+        || recovery::operator_command(installation).await?
+        || recovery::drill_check(installation).await?)
 }
 
 /// What a Kernel process reads from its environment before it serves.
@@ -725,6 +728,7 @@ impl Startup {
 pub struct Running {
     pub state: AppState,
     pub _lock: std::fs::File,
+    copy_config: Option<copies::CopyConfig>,
 }
 
 /// Loads every app folder, builds the state and starts the workers: copies,
@@ -739,8 +743,30 @@ pub async fn start(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<Running> {
-    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let lock = file_store::hold_kernel_lock(&startup.data_root)?;
+    let mut running = start_locked(startup, lock, installation, mail_key, own_origins, audit).await?;
+    running.start_copies();
+    Ok(running)
+}
+
+impl Running {
+    pub fn start_copies(&mut self) {
+        if let Some(config) = self.copy_config.take() {
+            copies::spawn_schedule(self.state.clone(), config);
+        }
+    }
+}
+
+/// The binaries acquire the volume before opening accounts or reading the local mail key.
+pub async fn start_locked(
+    startup: &Startup,
+    lock: std::fs::File,
+    installation: installation::Installation,
+    mail_key: &str,
+    own_origins: Vec<String>,
+    audit: Option<runtime::AuditSink>,
+) -> Result<Running> {
+    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
     path::load(&state);
@@ -748,9 +774,7 @@ pub async fn start(
     for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {
         eprintln!("Not serving apps/{}: {} is this installation's own host. Move the app with hostname_set.", deployment.id, deployment.hostname);
     }
-    if let Some(config) = copy_config {
-        copies::spawn_schedule(state.clone(), config);
-    }
+
     schedule::spawn(state.clone(), schedule_clock);
     if let Some(queue) = state.accounts.queue.clone() {
 
@@ -762,14 +786,14 @@ pub async fn start(
                 mailbox.display()
             );
         }
-        mail::spawn_worker(queue);
+        mail::spawn_worker(queue, state.copies.clone());
     }
     calls::spawn_worker(state.clone());
-    Ok(Running { state, _lock: lock })
+    Ok(Running { state, _lock: lock, copy_config })
 }
 
 /// The state a Kernel serves with, read from the environment, without its
-/// workers. An operator command works on the same state beside a running
+/// workers. An operator command holds the volume permit beside a running
 /// Kernel. Also answers the copy settings the workers need.
 pub async fn state_from_env(
     startup: &Startup,
@@ -800,6 +824,8 @@ pub async fn state_from_env(
     } else {
         file_store::Files::from_env(&data_root).await?
     };
+    let copies = copies::CopyStatus::open(copy_config.as_ref(), &copies::status_directory(&data_root),
+        &file_store::env_var("KONAE_S3_ENDPOINT").unwrap_or_default(), &data_bucket);
     let state = AppState {
         execution_mode: startup.execution_mode,
         deployments: Arc::new(RwLock::new(deployments)),
@@ -808,7 +834,7 @@ pub async fn state_from_env(
         data_bucket,
         data_root,
         files,
-        copies: Arc::new(copies::CopyStatus::new(copy_config.as_ref())),
+        copies: Arc::new(copies),
         public_origin,
         own_origins,
         host_suffix: startup.hosts.host_suffix.clone(),
@@ -897,11 +923,23 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .layer(axum::middleware::from_fn_with_state(state.clone(), maintenance::guard))
         .with_state(state.clone());
     let service = ServiceBuilder::new()
+        .layer(axum::middleware::from_fn_with_state(state.clone(), logical_request))
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
         .layer(axum::middleware::from_fn_with_state(state.clone(), hostname::redirect))
         .layer(axum::middleware::from_fn_with_state(state, path::route))
         .service(routes);
     tower::util::BoxCloneSyncService::new(service)
+}
+
+async fn logical_request(State(state): State<AppState>, request: Request, next: axum::middleware::Next) -> Response {
+    // A disconnected client can leave SQLite work running on a blocking thread.
+    // Keep the permit until the handler has joined that work.
+    let operation = state.copies.operations.clone().read_owned().await;
+    let task = tokio::spawn(async move {
+        let _operation = operation;
+        next.run(request).await
+    });
+    task.await.unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -944,6 +982,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
 /// imports. `app/`, `dist/`, the database and the record change together, or
 /// none of them does.
 pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
+    let _generation = state.copies.generations.read().await;
     if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
         return match refusal::of(&error_value) {
             Some(refused) => refusal_error(refused),
@@ -983,7 +1022,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if !runtime::valid_app_id(&input.project.id) {
         return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
     }
-    if let Err(error_value) = http::secrets_store(&state.data_root, &input.project.id).and_then(|db| {
+    if let Err(error_value) = http::read_secrets(&state.data_root, &input.project.id).and_then(|db| {
         calls::check_release(&domain::Rules::of(&state), &db, &program)
     }) {
         return match refusal::of(&error_value) {
@@ -1131,6 +1170,17 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
+    let subject = format!("{id} revision {artifact_version}");
+    let journal_release = || copies::Pending::begin(&state.data_root, &subject, "installing the database, sources and release record");
+    let initializes_stores = input.initial_package.is_some()
+        || (modules::is_on(&deployment.modules, "actions") && !layout::database(&state.data_root, &id).exists())
+        || (modules::is_on(&deployment.modules, "auth") && !layout::identity(&state.data_root, &id).exists());
+    let preparing = if initializes_stores {
+        match journal_release() {
+            Ok(pending) => Some(pending),
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    } else { None };
     let mut notices = Vec::new();
     if let Some(package) = input.initial_package.as_ref() {
         if let Err(error_value) = package::install(&state, package, &id)
@@ -1219,6 +1269,13 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
     let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
+    let pending = match preparing {
+        Some(pending) => pending,
+        None => match journal_release() {
+            Ok(pending) => pending,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    };
     let swapped = if !actions_enabled || change.statements.is_empty() && !has_transformation_changes {
         remove_database_files(&staged_database);
         false
@@ -1277,6 +1334,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_database_files(&replaced);
     }
     staged_sources.finish().await;
+    if let Err(e) = pending.finish() { return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()); }
     http::routes_published(&deployment);
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
@@ -1338,7 +1396,7 @@ pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::
 
 fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, transforms: Option<&str>, confirmation: Option<&str>) -> Result<schema_change::Change> {
     remove_database_files(staged);
-    Connection::open(live)?.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
+    copies::vacuum_into(live, staged)?;
     let change = schema_change::apply_with_transforms(staged, schema, program, transforms, schema_change::Mode::Apply(confirmation))?;
 
 
@@ -1548,52 +1606,54 @@ pub async fn invoke_action(
         .data_root, &deployment.id);
 
 
-    let result = if action.kind == "signal" {
-        Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
-    } else {
-        let _guard = action_lock(&state, &deployment.id, &action.kind).await;
-        match state.guards.statement_permit(&deployment.id).await {
-            Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
-            Err(wait) => return http::rate_limited(wait),
-        }
-    };
-    let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
+    copies::operation::action(&state, &deployment.id, &name, action, async {
+        let result = if action.kind == "signal" {
+            Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
+        } else {
+            let _guard = action_lock(&state, &deployment.id, &action.kind).await;
+            match state.guards.statement_permit(&deployment.id).await {
+                Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+                Err(wait) => return http::rate_limited(wait),
+            }
+        };
+        let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
 
-    let counted = !enter::entered(actor.as_ref());
-    match result {
-        Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
-            guard::Outcome::Refused(message) => {
-                if counted {
-                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
-                    usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
-                }
-                error(StatusCode::FORBIDDEN, &message)
-            }
-            changed => {
-                if counted {
-                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
-                    usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
-                    if let Some(account) = actor_id {
-                        usage::count_account(&state.data_root, &deployment.id, account, usage::AccountKind::Action);
-                    }
-                }
-                if matches!(changed, guard::Outcome::Changed) {
+        let counted = !enter::entered(actor.as_ref());
+        match result {
+            Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
+                guard::Outcome::Refused(message) => {
                     if counted {
-                        usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                        usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
+                        usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
                     }
-                    let caller = notify::Caller { account: actor_id, actor_id };
-                    notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
+                    error(StatusCode::FORBIDDEN, &message)
                 }
-                Json(json!({"result": ran.answer})).into_response()
-            }
-        },
-        Err(error_value) => {
-            if counted {
-                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
-            }
-            error(StatusCode::BAD_REQUEST, &error_value.to_string())
-        },
-    }
+                changed => {
+                    if counted {
+                        usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
+                        usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                        if let Some(account) = actor_id {
+                            usage::count_account(&state.data_root, &deployment.id, account, usage::AccountKind::Action);
+                        }
+                    }
+                    if matches!(changed, guard::Outcome::Changed) {
+                        if counted {
+                            usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                        }
+                        let caller = notify::Caller { account: actor_id, actor_id };
+                        notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
+                    }
+                    Json(json!({"result": ran.answer})).into_response()
+                }
+            },
+            Err(error_value) => {
+                if counted {
+                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
+                }
+                error(StatusCode::BAD_REQUEST, &error_value.to_string())
+            },
+        }
+    }).await
 }
 
 pub async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -2033,6 +2093,13 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
             Err(response) => return response,
         }
     }
+    let path = source.to_owned();
+    let sha256 = match tokio::task::spawn_blocking(move || copies::checksum_file(&path)).await {
+        Ok(Ok((length, digest))) if length == size => digest,
+        Ok(Ok(_)) => return error(StatusCode::INTERNAL_SERVER_ERROR, "The upload changed size before storage."),
+        Ok(Err(e)) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
     let id = Uuid::new_v4().to_string();
     if let Err(e) = state.files.store.put(&deployment.id, &id, source).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("The file could not be stored: {e:#}"));
@@ -2042,6 +2109,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
         "name": name,
         "type": content_type,
         "size": size,
+        "sha256": sha256,
         "visibility": visibility,
         "ownerId": actor.user_id,
         "createdAt": now_ms(),
@@ -3017,8 +3085,7 @@ pub async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Va
     tokio::fs::create_dir_all(&dir).await?;
     let backup_id = Uuid::new_v4().to_string();
     let snapshot_path = dir.join(format!("{backup_id}.sqlite"));
-    let db = Connection::open(&db_path)?;
-    db.execute("VACUUM INTO ?1", [snapshot_path.to_string_lossy().as_ref()])?;
+    copies::vacuum_into(&db_path, &snapshot_path)?;
     let size = tokio::fs::metadata(&snapshot_path).await?.len();
     let backup = DatabaseBackup {
         id: backup_id.clone(),
@@ -3041,7 +3108,8 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
         anyhow::bail!("Invalid backup ID.");
     }
 
-    let record: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
+    let directory = backup_dir(state, id);
+    let record = copies::history::checked_record(&directory, backup_id)?;
     if !record.holds.is_empty() {
         let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().context("Deployment not found.")?;
         return import::restore_held(state, &deployment, &record).await;
@@ -3058,6 +3126,7 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
         let _ = tokio::fs::remove_file(&temp_path).await;
         anyhow::bail!("The backup failed SQLite's integrity check.");
     }
+    let _generation = state.copies.generations.read().await;
     replace_database_file(&temp_path, &database_path(state, id))?;
     Ok(json!({"id":backup_id,"sizeBytes":bytes.len()}))
 }
@@ -3584,6 +3653,7 @@ pub fn file_view(deployment: &Deployment, file: &Value, actor_id: Option<&str>) 
     let mut view = file.clone();
     if let Some(object) = view.as_object_mut() {
         object.remove("url");
+        object.remove("sha256");
         if app_user_files(deployment) {
             object.insert("visibility".into(), json!("app-users"));
         }
@@ -3649,14 +3719,7 @@ pub fn decode_base64(value: &str) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-pub fn safe_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
-}
+pub use konae_backup::safe_relative_path;
 
 /// Persists changes made to the applied Deployment while keeping editable settings intact.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
@@ -3806,31 +3869,9 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
     Ok(result)
 }
 
-pub async fn read_s3_bytes(s3: &S3Client, bucket: &str, key: &str) -> Result<Vec<u8>> {
-    let object = s3.get_object().bucket(bucket).key(key).send().await?;
-    Ok(object.body.collect().await?.into_bytes().to_vec())
-}
+pub use konae_backup::read_s3_bytes;
 
-pub async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<String>> {
-    let mut keys = Vec::new();
-    let mut continuation: Option<String> = None;
-    loop {
-        let page = s3
-            .list_objects_v2()
-            .bucket(bucket)
-            .prefix(prefix)
-            .set_continuation_token(continuation.take())
-            .send()
-            .await
-            .with_context(|| format!("Listing s3://{bucket}/{prefix} failed"))?;
-        keys.extend(page.contents().iter().filter_map(|object| object.key().map(str::to_owned)));
-        match page.next_continuation_token() {
-            Some(token) if page.is_truncated() == Some(true) => continuation = Some(token.to_owned()),
-            _ => break,
-        }
-    }
-    Ok(keys)
-}
+pub use konae_backup::list_s3_keys;
 
 /// The Deployment a request is for. A generated hostname and a verified
 /// alias answer first, as before. Otherwise the request is on the path host,
@@ -6238,10 +6279,12 @@ pub mod tests {
         let request = Request::builder().body(Body::from(body.to_string())).unwrap();
         let response = upload_file(State(state), headers, request).await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert!(response_json(response).await["result"].get("sha256").is_none());
         let index: Vec<Value> =
             serde_json::from_slice(&tokio::fs::read(files.join("index.json")).await.unwrap()).unwrap();
         assert_eq!(index.len(), 1);
         assert_eq!(index[0]["visibility"], "private");
+        assert_eq!(index[0]["sha256"], digest(b"hi"));
         let leftovers = std::fs::read_dir(&files)
             .unwrap()
             .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains(".tmp-"))

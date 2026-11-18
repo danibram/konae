@@ -316,6 +316,7 @@ pub async fn restore_held(state: &AppState, deployment: &Deployment, record: &Da
 }
 
 async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incoming, schema: Option<(&Target, Option<&str>)>) -> Result<Change> {
+    let _generation = state.copies.generations.read().await;
     let stage = state.data_root.join("transfers").join(format!(".import-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&stage).await?;
     let result = async {
@@ -351,13 +352,14 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
         if let Some(staged) = &identity {
             carry_access(staged, &live.join("identity.sqlite"))?;
         }
+        let pending = crate::copies::Pending::begin(&state.data_root, &deployment.id, "replacing the imported file index, blobs and SQLite stores")?;
         let index = match &incoming.files {
             Some(archive) => {
-                let accounts = Connection::open(identity.as_ref().map_or_else(|| live.join("identity.sqlite"), Clone::clone))?;
+                let accounts = crate::app_db::read_optional(&identity.clone().unwrap_or_else(|| live.join("identity.sqlite")))?;
                 let staged = stage.join("files");
                 let blobs = file_store::BlockingFiles::new(state.files.store.clone(), &deployment.id);
                 let (archive, limits, staged_files) = (archive.clone(), state.files.limits, staged.clone());
-                tokio::task::spawn_blocking(move || package::unpack_into(&archive, &accounts, &staged_files, &blobs, &limits)).await??;
+                tokio::task::spawn_blocking(move || package::unpack_files(&archive, accounts.as_ref(), Some((&staged_files, &blobs)), &limits)).await??;
                 Some(staged.join("index.json"))
             }
             None => None,
@@ -377,6 +379,7 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             tokio::fs::rename(&index, files.join("index.json")).await?;
             forget_unlisted(state, deployment).await?;
         }
+        pending.finish()?;
         Ok::<_, anyhow::Error>(change)
     }
     .await;
@@ -525,6 +528,7 @@ mod tests {
         import_folder(&state, &deployment, &folder, &target, None).await.unwrap();
         let current = state.deployments.read().await.values().next().unwrap().clone();
         assert_eq!(current.modules["files"]["on"], true);
+        assert!(!layout::identity(&root, id).exists(), "ownerless files need no identity store");
         assert_eq!(crate::Settings::read(&root, id).unwrap().modules["files"]["on"], true);
         assert!(layout::files(&root, id).join("018f2b2c-4a10-7a01-8000-000000000001.blob").exists());
         let _ = tokio::fs::remove_dir_all(root).await;

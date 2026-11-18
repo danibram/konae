@@ -699,7 +699,7 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         return Err(anyhow::Error::new(super::modules::require_on(&candidate_modules, "auth").unwrap_err()));
     }
     if uses_actions { super::modules::require_on(&candidate_modules, "actions").map_err(anyhow::Error::new)?; }
-    super::calls::check_release(&super::domain::Rules::of(state), &super::http::secrets_store(&state.data_root, &input.project.id)?, &program)?;
+    super::calls::check_release(&super::domain::Rules::of(state), &super::http::read_secrets(&state.data_root, &input.project.id)?, &program)?;
     let _guard = database_lock(state, &format!("release:{}", input.project.id)).await;
     let existing = find_project_deployment(&*state.deployments.read().await, &input.project.id);
     anyhow::ensure!(
@@ -715,11 +715,16 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
         .join(format!("validate-{}.sqlite", Uuid::new_v4()));
     let result = (|| -> Result<super::schema_change::Change> {
         if !super::modules::is_on(&candidate_modules, "actions") { return Ok(super::schema_change::Change::default()); }
+        std::fs::create_dir_all(&state.data_root)?;
         if let Some(database) = against {
             std::fs::copy(database, &temp)?;
         } else if let Some(ref deployment) = existing {
-            let connection = Connection::open(database_path(state, &deployment.id))?;
-            connection.execute("VACUUM INTO ?1", [temp.to_string_lossy().as_ref()])?;
+            let live = database_path(state, &deployment.id);
+            if live.try_exists()? {
+                super::copies::vacuum_into(&live, &temp)?;
+            } else {
+                initialize_database(&temp)?;
+            }
         } else if let Some(package) = input.initial_package.as_ref() {
             super::package::copy_database(state, package, &temp)?;
         } else {

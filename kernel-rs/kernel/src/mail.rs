@@ -1098,7 +1098,8 @@ impl MailQueue {
     }
 
     async fn deliver(&self, job: Claimed, email: OutgoingEmail) -> Result<bool> {
-        match self.transport.send(&email).await {
+        let pending = crate::copies::Pending::begin(&self.data_root, &job.id, "delivering mail and recording the provider outcome")?;
+        let delivered: Result<bool> = match self.transport.send(&email).await {
             SendOutcome::Accepted { provider_id, delivered } => {
                 self.record_accepted(&job.id, provider_id.as_deref(), delivered)?;
                 Ok(true)
@@ -1123,7 +1124,10 @@ impl MailQueue {
                 self.set_preflight(PreflightResult::Refused(reason));
                 Ok(false)
             }
-        }
+        };
+        let delivered = delivered?;
+        pending.finish()?;
+        Ok(delivered)
     }
 
     fn release(&self, id: &str, delay_ms: i64, counted: bool, error_kind: Option<&str>) -> Result<()> {
@@ -1521,10 +1525,11 @@ impl ChallengeOutbox for JobOutbox<'_> {
 
 /// Runs the worker on its interval and whenever a job is enqueued. Sending
 /// happens on this task, never in a request handler.
-pub fn spawn_worker(queue: Arc<MailQueue>) {
+pub fn spawn_worker(queue: Arc<MailQueue>, copies: Arc<crate::copies::CopyStatus>) {
     tokio::spawn(async move {
         queue.run_preflight().await;
         loop {
+            let operation = copies.operations.read().await;
             if let Err(error_value) = queue.run_once().await {
                 eprintln!("Email worker pass failed: {error_value}");
             }
@@ -1532,6 +1537,7 @@ pub fn spawn_worker(queue: Arc<MailQueue>) {
             if preflight.state == "refused" && preflight.checked_at.is_some_and(|at| now() - at > PREFLIGHT_RETRY_MS) {
                 queue.run_preflight().await;
             }
+            drop(operation);
             tokio::select! {
                 _ = queue.wake.notified() => {}
                 _ = tokio::time::sleep(queue.interval) => {}
@@ -2109,7 +2115,7 @@ mod tests {
     async fn the_worker_runs_on_its_own_task() {
         let transport = Scripted::new();
         let fixture = fixture(transport.clone()).await;
-        spawn_worker(fixture.queue());
+        spawn_worker(fixture.queue(), Default::default());
         fixture.signup(&fixture.app, "person@example.test").await.unwrap();
         for _ in 0..100 {
             if !transport.sent().is_empty() {

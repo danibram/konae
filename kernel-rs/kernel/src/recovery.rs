@@ -79,7 +79,11 @@ pub fn hold(data_root: &Path) -> Option<String> {
 }
 
 pub fn set_hold(data_root: &Path, reason: &str) -> Result<()> {
-    std::fs::write(data_root.join(HOLD_FILE), serde_json::to_vec_pretty(&json!({"reason": reason, "at": now_ms()}))?)?;
+    save_hold(data_root, reason, None)
+}
+
+fn save_hold(data_root: &Path, reason: &str, key_check: Option<&str>) -> Result<()> {
+    write_file(data_root, HOLD_FILE, &serde_json::to_vec(&json!({"reason": reason, "at": now_ms(), "keyCheck": key_check}))?)?;
     HOLDS.write().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&data_root.join(HOLD_FILE));
     Ok(())
 }
@@ -102,6 +106,9 @@ pub async fn write(targets: &[Target], s3: Option<&S3Client>, bucket: &str, entr
     let bytes = serde_json::to_vec(entry)?;
     for target in targets {
         match target {
+            Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => {
+                append_record(target, s3, bucket, key, &entry.file_name(), serde_json::to_value(entry)?).await?;
+            }
             Target::Directory(directory) => {
                 let (directory, name, bytes) = (directory.join(LEDGER_DIR), entry.file_name(), bytes.clone());
                 tokio::task::spawn_blocking(move || write_file(&directory, &name, &bytes)).await??;
@@ -158,7 +165,7 @@ pub async fn record(state: &AppState, entry: Entry) -> Result<()> {
 /// Kernel. Reads the copy settings from the environment.
 pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     let read = |name: &str| std::env::var(name).ok().filter(|value| !value.trim().is_empty());
-    if read("KONAE_COPY_DIR").is_none() && read("KONAE_COPY_S3").is_none() {
+    if ["KONAE_COPY_DIR", "KONAE_COPY_S3", "KONAE_COPY_V3_DIR", "KONAE_COPY_V3_S3"].iter().all(|name| read(name).is_none()) {
         return Ok(());
     }
     let run = async {
@@ -174,10 +181,28 @@ pub fn record_offline(data_root: &Path, entry: Entry) -> Result<()> {
     result.context("The change holds on this server, but it could not be recorded at the copy target, so a restore could undo it. Run the command again")
 }
 
-/// Marks a target as keeping a record. Every copy writes it again.
+async fn append_record(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>, name: &str, mut value: Value) -> Result<()> {
+    let source = copies::blocks::source(target, s3, bucket)?;
+    let repository = copies::blocks::source_identity(&source).context("Invalid v3 repository.")?;
+    let mac = key.context("Set KONAE_COPY_SECRET for the revocation record.")?.record_mac(repository, name, &value)?;
+    value["mac"] = Value::String(mac);
+    konae_backup::blocks::append_record(&source, LEDGER_DIR, name, &serde_json::to_vec(&value)?).await
+}
+
+/// Marks a target as keeping a revocation record.
 pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str) -> Result<()> {
+    let key = if matches!(target, Target::BlocksDirectory(_) | Target::BlocksS3 { .. }) {
+        CopyKey::from_env()?
+    } else { None };
+    start_with_key(target, s3, bucket, key.as_ref()).await
+}
+
+pub(crate) async fn start_with_key(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>) -> Result<()> {
     let bytes = serde_json::to_vec(&json!({"version": 1}))?;
     match target {
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => {
+            append_record(target, s3, bucket, key, LEDGER_START, json!({"version":1})).await
+        }
         Target::Directory(directory) => {
             let directory = directory.join(LEDGER_DIR);
             tokio::task::spawn_blocking(move || write_file(&directory, LEDGER_START, &bytes)).await?
@@ -223,6 +248,41 @@ pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8]) -> Result<()> {
     }
 }
 
+fn identity_path(root: &Path, installation: &Installation, entry: &Entry) -> Option<PathBuf> {
+    if let Some(account) = installation.account_for_kind(&entry.kind) {
+        return Some(root.join(account.file));
+    }
+    let app = entry.deployment_id.as_deref()?;
+    (!app.is_empty() && !app.contains(['/', '\\', '.'])).then(|| layout::identity(root, app))
+}
+
+/// The custodian supplies the hash of one entry recorded after the cut.
+/// Read the same subject before and after applying the verified record.
+pub(crate) fn prove_revocation(
+    root: &Path, installation: &Installation, record: Result<Option<Vec<Vec<u8>>>>, hash: &str, cut: u64,
+) -> Result<usize> {
+    use sha2::{Digest, Sha256};
+    let files = record?.context("The required revocation record could not be read.")?;
+    let bytes = files.iter().find(|entry| hex::encode(Sha256::digest(entry)) == hash)
+        .context("The required revocation entry is absent from the verified record.")?;
+    let entry: Entry = serde_json::from_slice(bytes)?;
+    ensure!(entry.at > cut, "The required revocation must follow the selected cut.");
+    let path = identity_path(root, installation, &entry).context("The required revocation has no identity store.")?;
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let query = match (entry.kind.as_str(), entry.state.as_str()) {
+        ("clerk-owner", "suspended") => "SELECT suspended FROM creator_identities WHERE owner=?1",
+        ("api-key", "revoked") => "SELECT revoked_at IS NOT NULL FROM api_keys WHERE id=?1",
+        (kind, "suspended") if kind == "app-user" || installation.account_for_kind(kind).is_some() =>
+            "SELECT state='suspended' FROM app_users WHERE id=?1",
+        _ => bail!("The required entry must suspend an account or revoke an API key."),
+    };
+    let applied = || db.query_row(query, [&entry.subject], |row| row.get::<_, bool>(0));
+    ensure!(!applied()?, "The required revocation already holds at the cut.");
+    let changed = reconcile(root, installation, &parse(&files)?)?;
+    ensure!(applied()?, "The required revocation did not take effect.");
+    Ok(changed)
+}
+
 /// Applies the record to a data directory that is not serving. Only the
 /// newest entry for each account or key counts, and only a suspension or a
 /// revocation changes anything: a restore never lifts a suspension.
@@ -230,6 +290,12 @@ pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8]) -> Result<()> {
 pub fn reconcile(root: &Path, installation: &Installation, entries: &[Entry]) -> Result<usize> {
     let mut latest: HashMap<(String, Option<String>, String), &Entry> = HashMap::new();
     for entry in entries {
+        let app_entry = matches!(entry.kind.as_str(), "app-user" | "api-key");
+        let expected = if entry.kind == "api-key" { "revoked" } else { "suspended" };
+        ensure!(entry.state == expected && !entry.subject.is_empty() && !entry.id.is_empty()
+            && (app_entry || installation.account_for_kind(&entry.kind).is_some())
+            && if app_entry { entry.deployment_id.as_deref().is_some_and(crate::runtime::valid_app_id) }
+               else { entry.deployment_id.is_none() }, "Invalid subject, scope or state in the revocation record.");
         let key = (entry.kind.clone(), entry.deployment_id.clone(), entry.subject.clone());
         let newer = latest.get(&key).is_none_or(|seen| (entry.at, &entry.id) > (seen.at, &seen.id));
         if newer {
@@ -238,18 +304,15 @@ pub fn reconcile(root: &Path, installation: &Installation, entries: &[Entry]) ->
     }
     let mut changed = 0;
     for entry in latest.values() {
-        let identity = match (entry.kind.as_str(), entry.deployment_id.as_deref()) {
-            (kind, _) if installation.account_for_kind(kind).is_some() => root.join(installation.account_for_kind(kind).unwrap().file),
-            (_, Some(deployment)) if !deployment.is_empty() && !deployment.contains(['/', '\\', '.']) => {
-                crate::layout::identity(&root, &deployment)
-            }
-            _ => continue,
-        };
-        if !identity.is_file() {
+        let Some(identity) = identity_path(root, installation, entry) else { continue };
+        if !identity.try_exists()? {
             continue;
         }
-        let db = Connection::open(&identity)?;
+        let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         changed += match (entry.kind.as_str(), entry.state.as_str()) {
+            ("clerk-owner", "suspended") if table_exists(&db, "creator_identities")? =>
+                db.execute("UPDATE creator_identities SET suspended=1 WHERE owner=?1 AND suspended=0", [&entry.subject])?,
+            ("clerk-owner", _) => 0,
             (kind, "suspended") if kind == "app-user" || installation.account_for_kind(kind).is_some() => {
                 let mut rows = db.execute("UPDATE app_users SET state='suspended' WHERE id=?1 AND state<>'suspended'", [&entry.subject])?;
                 rows += db.execute("DELETE FROM app_sessions WHERE user_id=?1", [&entry.subject])?;
@@ -271,6 +334,11 @@ pub fn reconcile(root: &Path, installation: &Installation, entries: &[Entry]) ->
 /// Applies the record read from a copy source, or holds the installation.
 /// Returns how many rows changed, or the reason it held.
 pub fn apply_or_hold(root: &Path, installation: &Installation, record: Result<Option<Vec<Vec<u8>>>>) -> Result<std::result::Result<usize, String>> {
+    apply_or_hold_for_key(root, installation, record, None)
+}
+
+pub(crate) fn apply_or_hold_for_key(root: &Path, installation: &Installation, record: Result<Option<Vec<Vec<u8>>>>,
+    key_check: Option<&str>) -> Result<std::result::Result<usize, String>> {
     let reason = match record {
         Ok(Some(files)) => match parse(&files).and_then(|entries| reconcile(root, installation, &entries)) {
             Ok(changed) => return Ok(Ok(changed)),
@@ -279,8 +347,32 @@ pub fn apply_or_hold(root: &Path, installation: &Installation, record: Result<Op
         Ok(None) => format!("The copy source has no {LEDGER_DIR}/{LEDGER_START}, so the record cannot be read."),
         Err(error_value) => format!("The record could not be read: {error_value:#}"),
     };
-    set_hold(root, &reason)?;
+    save_hold(root, &reason, key_check)?;
     Ok(Err(reason))
+}
+
+/// Load a restored installation and exercise its health route in process.
+pub async fn drill_check(installation: &Installation) -> Result<bool> {
+    if std::env::args().nth(1).as_deref() != Some("drill-check") {
+        return Ok(false);
+    }
+    let startup = Startup::from_env()?;
+    ensure!(startup.execution_mode.is_test(), "drill-check requires KONAE_EXECUTION_MODE=test.");
+    ensure!(startup.data_root.is_dir(), "The restored directory is missing.");
+    super::copies::check_activation(&startup.data_root)?;
+    ensure!(hold(&startup.data_root).is_none(), "The revocation record needs reconciliation.");
+    let denied = |error: Option<std::io::Error>| error.is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+    ensure!(denied(std::net::TcpListener::bind(("127.0.0.1", 0)).err()), "The drill must deny listeners before loading the Kernel.");
+    let outbound = std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], 9).into(), std::time::Duration::from_secs(1));
+    ensure!(denied(outbound.err()), "The drill must deny outbound connections before loading the Kernel.");
+    let _operation = crate::file_store::external_operation(&startup.data_root)?;
+    let (state, _) = state_from_env(&startup, installation.clone(), "recovery-drill-local-mail-key-only", Vec::new(), None).await?;
+    let deployments = state.deployments.read().await.len();
+    let request = Request::builder().uri("/_konae/health").body(Body::empty())?;
+    let response = tower::ServiceExt::oneshot(stack(state, Router::new()), request).await?;
+    ensure!(response.status().is_success(), "The restored Kernel failed its health check.");
+    println!("{}", json!({"version": env!("CARGO_PKG_VERSION"), "loadedDeployments": deployments}));
+    Ok(true)
 }
 
 /// The `reconcile` command. Returns false for any other command.
@@ -290,24 +382,48 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
         return Ok(false);
     }
     let root = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
+    ensure!(matches!(args.as_slice(), [_, option] if option == "--without-record")
+        || matches!(args.as_slice(), [_, option, _] if option == "--from"), "{}", reconcile_usage());
+    ensure!(root.is_dir(), "The restored directory is missing.");
+    let _volume = crate::file_store::hold_while_stopped(&root, "reconcile")?;
+    super::copies::check_activation(&root)?;
     match args.get(1).map(String::as_str) {
         Some("--without-record") if args.len() == 2 => {
             clear_hold(&root)?;
             println!(
-                "Reopened {} without the revocation record. Accounts suspended and API keys revoked after the restored copy may be active again; check them in each app's Users view and revoke again. Start the Kernel again; a running Kernel keeps the maintenance it read at startup.",
+                "Reopened {} without the revocation record. Accounts suspended and API keys revoked after the restored copy may be active again; check them in each app's Users view and revoke again. Start the Kernel again.",
                 root.display()
             );
         }
         Some("--from") if args.len() == 3 => {
-            let record = match copies::CopyKey::from_env() {
-                Ok(key) => copies::read_record(&args[2], key.as_ref()).await,
-                Err(error_value) => Err(error_value),
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Hold { key_check: Option<String> }
+            let path = root.join(HOLD_FILE);
+            let key_check = if path.try_exists()? {
+                serde_json::from_slice::<Hold>(&std::fs::read(path)?)?.key_check
+            } else { None };
+            let key = copies::CopyKey::from_env()?;
+            let record = match copies::record_source(&args[2]).await {
+                Err(error) => Err(error),
+                Ok(source) => {
+                    if let Some(required) = &key_check {
+                        let actual = copies::ledger_binding(&source, key.as_ref());
+                        let reason = if required.starts_with("v3/") {
+                            "Use the selected v3 repository and its revocation key to reconcile."
+                        } else {
+                            "The installation stays in maintenance. Use the signed S3 revocation record and the copy's KONAE_COPY_SECRET."
+                        };
+                        ensure!(actual.as_ref() == Some(required), "{reason}");
+                    }
+                    copies::read_source_record(&source, key.as_ref()).await
+                }
             };
-            match apply_or_hold(&root, installation, record)? {
+            match apply_or_hold_for_key(&root, installation, record, key_check.as_deref())? {
                 Ok(changed) => {
                     clear_hold(&root)?;
                     println!(
-                        "Applied the revocation record to {}: {changed} rows changed. Start the Kernel again; a running Kernel keeps the maintenance it read at startup.",
+                        "Applied the revocation record to {}: {changed} rows changed. Start the Kernel again.",
                         root.display()
                     );
                 }
@@ -388,8 +504,10 @@ mod tests {
             Entry::new("app-user", Some("app-1"), &gone.user.user_id, "suspended"),
             Entry::new("api-key", Some("app-1"), "key-1", "revoked"),
             Entry::new("installation-account", None, &creator.user.user_id, "suspended"),
-            Entry::new("app-user", Some("../app-1"), &kept.user.user_id, "suspended"),
         ];
+        let mut invalid = entries.clone();
+        invalid.push(Entry::new("app-user", Some("../app-1"), &kept.user.user_id, "suspended"));
+        assert!(reconcile(&root, &crate::installation::Installation::for_test(), &invalid).unwrap_err().to_string().contains("Invalid subject"));
         assert!(reconcile(&root, &crate::installation::Installation::for_test(), &entries).unwrap() >= 4);
         let state = |path: &Path, id: &str| -> String {
             Connection::open(path).unwrap().query_row("SELECT state FROM app_users WHERE id=?1", [id], |r| r.get(0)).unwrap()
@@ -409,6 +527,27 @@ mod tests {
         };
         assert!(revoked[0].1.is_some() && revoked[1].1.is_none());
         assert_eq!(reconcile(&root, &crate::installation::Installation::for_test(), &entries).unwrap(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_witness_must_change_its_subject_after_the_cut() {
+        use sha2::{Digest, Sha256};
+        let root = scratch();
+        let folder = layout::data(&root, "one");
+        std::fs::create_dir_all(&folder).unwrap();
+        let db = Connection::open(folder.join("identity.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE api_keys(id TEXT PRIMARY KEY, revoked_at INTEGER);
+                          INSERT INTO api_keys VALUES('retired', NULL), ('other', NULL)").unwrap();
+        let entry = Entry::new("api-key", Some("one"), "retired", "revoked");
+        let bytes = serde_json::to_vec(&entry).unwrap();
+        let hash = hex::encode(Sha256::digest(&bytes));
+        let prove = |cut| prove_revocation(&root, &Installation::kernel(), Ok(Some(vec![bytes.clone()])), &hash, cut);
+        assert!(prove(entry.at).unwrap_err().to_string().contains("must follow"));
+        assert_eq!(prove(entry.at - 1).unwrap(), 1);
+        assert!(prove(entry.at - 1).unwrap_err().to_string().contains("already holds"));
+        assert!(db.query_row("SELECT revoked_at IS NULL FROM api_keys WHERE id='other'", [], |r| r.get::<_, bool>(0)).unwrap());
+        drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
 

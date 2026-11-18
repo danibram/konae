@@ -2,7 +2,8 @@
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, Deployment};
 use anyhow::Result;
-use rusqlite::{params, Connection, OpenFlags};
+use crate::app_db::read_optional as read_only;
+use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -72,7 +73,7 @@ impl Operation {
 
 enum Message {
     Count { folder: PathBuf, at: u64, kind: &'static str, name: String },
-    Signal { folder: PathBuf, at: u64, name: String, properties: String },
+    Signal { folder: PathBuf, at: u64, name: String, properties: String, committed: Option<tokio::sync::oneshot::Sender<bool>> },
     Metric { folder: PathBuf, at: u64, feature: String, name: String, origin: String, outcome: String },
     Account { folder: PathBuf, at: u64, account: String, kind: AccountKind },
     Flush(SyncSender<()>),
@@ -82,6 +83,24 @@ static QUEUE_SENDER: OnceLock<SyncSender<Message>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
+
+tokio::task_local! {
+    static SIGNAL_COMMITS: std::cell::RefCell<Vec<tokio::sync::oneshot::Receiver<bool>>>;
+}
+
+/// Wait only for Signals enqueued by this operation. Counts from other apps
+/// can fail independently in the same writer thread.
+pub(crate) async fn confirmed_signals<T>(work: impl Future<Output = T>) -> Result<T> {
+    SIGNAL_COMMITS.scope(Default::default(), async {
+        let result = work.await;
+        let receipts = SIGNAL_COMMITS.with(|receipts| receipts.take());
+        for receipt in receipts {
+            anyhow::ensure!(tokio::time::timeout(Duration::from_secs(5), receipt).await??,
+                "The action row committed but its Signal could not be written.");
+        }
+        Ok(result)
+    }).await
+}
 
 fn sender() -> &'static SyncSender<Message> {
     QUEUE_SENDER.get_or_init(|| {
@@ -133,7 +152,13 @@ pub fn signal(data_root: &Path, deployment_id: &str, action_name: &str, action: 
         };
         properties.insert(key.clone(), value);
     }
+    let committed = SIGNAL_COMMITS.try_with(|receipts| {
+        let (sent, received) = tokio::sync::oneshot::channel();
+        receipts.borrow_mut().push(received);
+        sent
+    }).ok();
     enqueue(Message::Signal {
+        committed,
         folder: folder(data_root, deployment_id),
         at: super::now_ms(),
         name: declared.name,
@@ -218,6 +243,7 @@ fn send_waiting(message: Message) -> std::result::Result<(), ()> {
 struct Batch {
     counts: HashMap<(String, &'static str, String), i64>,
     signals: Vec<(u64, String, String)>,
+    commits: Vec<tokio::sync::oneshot::Sender<bool>>,
     metrics: Vec<(u64, String, String, String, String)>,
     accounts: HashMap<(String, String, AccountKind), (i64, u64)>,
 }
@@ -233,8 +259,10 @@ fn writer(receiver: Receiver<Message>) {
                 Message::Count { folder, at, kind, name } => {
                     *batches.entry(folder).or_default().counts.entry((day(at), kind, name)).or_insert(0) += 1;
                 }
-                Message::Signal { folder, at, name, properties } => {
-                    batches.entry(folder).or_default().signals.push((at, name, properties));
+                Message::Signal { folder, at, name, properties, committed } => {
+                    let batch = batches.entry(folder).or_default();
+                    batch.signals.push((at, name, properties));
+                    batch.commits.extend(committed);
                 }
                 Message::Metric { folder, at, feature, name, origin, outcome } => {
                     batches.entry(folder).or_default().metrics.push((at, feature, name, origin, outcome));
@@ -252,7 +280,11 @@ fn writer(receiver: Receiver<Message>) {
             }
         }
         for (folder, batch) in batches {
-            if let Err(error) = write(&folder, &batch, super::now_ms()) {
+            let result = write(&folder, &batch, super::now_ms());
+            for receipt in batch.commits {
+                let _ = receipt.send(result.is_ok());
+            }
+            if let Err(error) = result {
                 WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Usage write failed for {}: {error}", folder.display());
             }
@@ -577,15 +609,6 @@ pub async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a
         }
     })
     .await?
-}
-
-fn read_only(path: &Path) -> Result<Option<Connection>> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    connection.busy_timeout(Duration::from_secs(5))?;
-    Ok(Some(connection))
 }
 
 pub fn validate_range(from: &str, to: &str) -> Result<(i64, i64)> {

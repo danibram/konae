@@ -146,6 +146,8 @@ pub fn operator_command() -> Result<bool> {
         "Usage: konae owner-account-suspend <email> | owner-account-resume <email>"
     );
     let root = PathBuf::from(env("KONAE_DATA_DIR", "/data"));
+    let _operation = suspension_lock(&root)?;
+    finish_pending_suspensions(&root)?;
     println!("{}", run_operator_command(&root, suspend, &args[1])?);
     Ok(true)
 }
@@ -161,9 +163,60 @@ fn run_operator_command(root: &Path, suspend: bool, email: &str) -> Result<Strin
         let (id, state) = auth.resume(email).map_err(|_| not_found())?;
         return Ok(format!("Resumed owner {id}. The account is {state}; it signs in again to get a session."));
     }
-    let id = auth.suspend(email).map_err(|_| not_found())?;
+    let id = auth.suspend_with(email, |tx, id| {
+        let entry = super::recovery::Entry::new("creator", None, id, "suspended");
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS pending_owner_suspensions(owner TEXT PRIMARY KEY, entry_id TEXT NOT NULL, at INTEGER NOT NULL)")?;
+        tx.execute("INSERT INTO pending_owner_suspensions VALUES (?1,?2,?3)", rusqlite::params![id, entry.id, entry.at])?;
+        Ok(())
+    })?;
+    finish_pending_suspensions(root)?;
+    Ok(format!(
+        "Suspended owner {id}. Projects and app accounts remain available to the installation operator."
+    ))
+}
+
+fn suspension_lock(root: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(root)?;
+    let volume = std::fs::File::open(root)?;
+    volume.lock()?;
+    Ok(volume)
+}
+
+fn pending_suspensions(root: &Path) -> Result<Vec<super::recovery::Entry>> {
+    let path = root.join("owners.sqlite");
+    if !path.try_exists()? { return Ok(vec![]); }
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    db.busy_timeout(std::time::Duration::ZERO)?;
+    if !db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='pending_owner_suspensions')", [], |r| r.get::<_, bool>(0))? {
+        return Ok(vec![]);
+    }
+    Ok(db.prepare("SELECT owner, entry_id, at FROM pending_owner_suspensions")?.query_map([], |r| {
+        Ok(super::recovery::Entry { subject: r.get(0)?, id: r.get(1)?, at: r.get(2)?,
+            kind: "creator".into(), state: "suspended".into(), deployment_id: None })
+    })?.collect::<rusqlite::Result<_>>()?)
+}
+
+pub(super) fn check_suspensions(root: &Path) -> Result<()> {
+    anyhow::ensure!(pending_suspensions(root)?.is_empty(), "Unfinished owner suspension. Restart Konae to finish revoking access.");
+    Ok(())
+}
+
+pub(super) fn recover_suspensions(root: &Path) -> Result<()> {
+    let _volume = suspension_lock(root)?;
+    finish_pending_suspensions(root)
+}
+
+fn finish_pending_suspensions(root: &Path) -> Result<()> {
+    for entry in pending_suspensions(root)? {
+        finish_suspension(root, entry)?;
+    }
+    Ok(())
+}
+
+fn finish_suspension(root: &Path, entry: super::recovery::Entry) -> Result<()> {
+    let id = entry.subject.clone();
     let mcp_path = root.join("mcp.sqlite");
-    if mcp_path.exists() {
+    if mcp_path.try_exists()? {
         let mut mcp = Connection::open_with_flags(mcp_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         mcp.busy_timeout(std::time::Duration::from_secs(5))?;
         let transaction = mcp.transaction()?;
@@ -178,10 +231,10 @@ fn run_operator_command(root: &Path, suspend: bool, email: &str) -> Result<Strin
         }
         transaction.commit()?;
     }
-    super::recovery::record_offline(root, super::recovery::Entry::new("creator", None, &id, "suspended"))?;
-    Ok(format!(
-        "Suspended owner {id}. Projects and app accounts remain available to the installation operator."
-    ))
+    super::recovery::record_offline(root, entry)?;
+    Connection::open_with_flags(root.join("owners.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?
+        .execute("DELETE FROM pending_owner_suspensions WHERE owner=?1", [&id])?;
+    Ok(())
 }
 
 

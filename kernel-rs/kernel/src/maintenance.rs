@@ -149,6 +149,9 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
         return next.run(request).await;
     }
     let Some(deployment) = deployment_for(&state, request.headers()).await else {
+        if let Some(message) = super::recovery::hold(&state.data_root) {
+            return refusal(&message);
+        }
         return next.run(request).await;
     };
     let Some(message) = pause(&state.data_root, &deployment.id) else {

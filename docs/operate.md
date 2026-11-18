@@ -92,7 +92,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_ACCOUNT_VERIFICATION` | `local` | `required` makes new owner and app accounts prove their email before they are active, and moves accounts that never verified to pending with their sessions revoked. `local` keeps unverified signup for development. See [Verified accounts](#verified-accounts). |
 | `KONAE_MAIL_TRANSPORT` | unset (`development` under `bun run dev:local` and `konae dev`) | How email leaves: `resend`, `smtp` or `development`. Every transport sends through the queue in `mail.sqlite`. `development` appends each message to `mailbox.jsonl` in the data directory; `konae dev` writes test mail to `.konae/kernel/mail-testbox.jsonl`. Unset means no email, so signup under required verification, recovery and invitations are refused. See [Account email](#account-email). |
 | `KONAE_MAIL_FROM` | `Konae <konae@localhost>` for `development`; required otherwise | Sender address, such as `Konae <no-reply@mail.example.com>`. The sender preflight checks its domain. |
-| `KONAE_MAIL_SECRET` | unset | Secret of at least 32 characters from which the Kernel derives the key that encrypts queued links. When it is unset, `konae` derives the key from `KONAE_SETUP_KEY` and refuses to start `resend` or `smtp` while that is the development default. `kernel` writes a random key to `mail-key` in the data directory on its first start, readable by its owner alone, and every later start and command reads it. |
+| `KONAE_MAIL_SECRET` | unset | Secret of at least 32 characters from which the Kernel derives the key that encrypts queued links. When it is unset, `konae` derives the key from `KONAE_SETUP_KEY` and refuses to start `resend` or `smtp` while that is the development default. The `kernel` server and its app commands create or reuse the owner-only `mail-key` file in the data directory, including when an operator runs `kernel import` on a Konae volume. They use that key when `KONAE_MAIL_SECRET` is unset. |
 | `KONAE_RESEND_API_KEY` | unset | Resend API key for `resend`. A sending-only key is enough to send. |
 | `KONAE_RESEND_DOMAINS_KEY` | `KONAE_RESEND_API_KEY` | Resend key that can list domains, for the sender preflight. Set it when the sending key has `sending_access` only. |
 | `KONAE_RESEND_WEBHOOK_SECRET` | unset | The `whsec_` signing secret of the Resend webhook that posts to `/_konae/mail/resend-events`. Unset means the route answers 404 and jobs stop at accepted. |
@@ -123,6 +123,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_COPY_DIR` | unset | Directory, on another disk, that receives scheduled copies of the data directory. It must be outside `KONAE_DATA_DIR`. |
 | `KONAE_COPY_S3` | unset | `1` sends scheduled copies to `copies/` in `KONAE_S3_BUCKET`. |
 | `KONAE_COPY_INTERVAL_SECONDS` | `3600` | Seconds between copies when a copy target is set. The first copy runs at startup. |
+| `KONAE_COPY_HEALTH_DIR` | `$KONAE_DATA_DIR/.copy-health` | Directory for per-target attempt records and verified restore receipts. |
 | `KONAE_COPY_SECRET` | unset | Secret of at least 32 characters that encrypts every file of a copy sent to S3 with AES-256-GCM. `restore` needs the same secret to open such a copy. The secret also signs each copy's manifest and each revocation entry sent to S3, and `restore` from S3 refuses a copy or an entry whose signature is missing or wrong. Directory copies stay unencrypted and unsigned. |
 | `KONAE_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses whose `X-Forwarded-For` header the Kernel trusts for rate limiting. CIDR ranges are refused. |
 | `KONAE_DOMAIN` | unset | Derives the installation's hosts from one domain (ADR-0014). The public origin, and on `konae` the MCP origin, become `<scheme>://app.<domain>`, and the app suffix becomes `<domain>`. Each of `KONAE_PUBLIC_ORIGIN`, `KONAE_MCP_ORIGIN` and `KONAE_HOST_SUFFIX` still wins when it is set. The Kernel refuses to start when `KONAE_PUBLIC_ORIGIN` or `KONAE_MCP_ORIGIN` has the bare domain as its host, because the home and path addresses answer there. The local stack sets `localhost` with port `8080`. |
@@ -159,6 +160,8 @@ The editor, the `konae` CLI, the test configurations and an exported folder read
 
 ## Data directory and copies
 
+Operators can rehearse a retained restore with a post-cut revocation on an isolated host. [Rehearse loss of the installation volume](./recovery-drill.md).
+
 Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.rs` names every path, and [the architecture](./architecture.md#the-app-folder) describes each file.
 
 ```text
@@ -169,7 +172,7 @@ Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.r
 ├── transfers/              # the bytes of unfinished MCP uploads and downloads
 ├── owners.sqlite           # konae only: owner accounts, sessions and invitation codes
 ├── mcp.sqlite              # konae only: projects, agent credentials, OAuth and the audit log
-├── mail-key                # kernel only, without KONAE_MAIL_SECRET: the key that seals queued links
+├── mail-key                # private fallback for kernel mail, created by kernel startup or app commands
 └── apps/<id>/              # one app folder (ADR-0001)
     ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email
     ├── app/                # the Capsule
@@ -178,15 +181,52 @@ Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.r
     └── .konae/             # the installation's part: the Deployment record, addresses, maintenance and backups
 ```
 
-The data root may also hold `mailbox.jsonl` with the development transport, `files-store.json` once the file store is recorded, `.copy-state.json` for the previous copy's file hashes, store metadata and signed S3 manifests used by pruning, `kernel.lock` while a Kernel serves, and `.copy-staging/` while a copy runs. Restore does not install `.copy-state.json`, so the first copy after restore reads every file blob again. [Who owns which store](./architecture.md#who-owns-which-store) says which of them an export carries.
+The data root may also hold `mailbox.jsonl` with the development transport, `files-store.json` once the file store is recorded, `.copy-state.json` for the previous copy's file hashes and cached S3 manifests, `kernel.lock` while a Kernel serves, and `.copy-staging/` while a copy runs. Restore leaves the copy cache and attempt records on the original installation. [Who owns which store](./architecture.md#who-owns-which-store) says which of them an export carries.
+
+Run `inventory` with the installation’s server binary to classify a volume in read-only mode. Use `inventory --policy` to see what each writer persists and how restore treats it. [Installation store inventory](./reference/store-inventory.md)
 
 Set `KONAE_COPY_DIR`, `KONAE_COPY_S3=1` or both to copy the data directory off the volume, every hour by default. Each copy takes every app's data and identity locks in turn, snapshots its SQLite files with `VACUUM INTO`, copies its folder, then writes `manifest.json` with the size and SHA-256 of every file. A directory copy appears under its final name only when it is complete, and an S3 copy is complete once its manifest is uploaded. The Kernel keeps the 24 newest copies and the newest copy of each day for 30 days on each target. It stages each copy under `.copy-staging/` in the data directory, so the volume needs room for one more copy.
 
 Directory copies stay complete folders. The Kernel hard-links unchanged files to the preceding copy when possible and writes a separate file when linking fails. S3 copies can refer to file objects stored under an earlier copy ID. Restore reads each object from its recorded home copy and checks it against the current signed manifest. A home copy's manifest may expire while its objects remain in use. Do not delete S3 copy objects by hand. Removing an object that a retained manifest names makes that copy unrestorable. Pruning removes expired manifests first, then deletes only objects that no retained manifest references. It keeps an object's group even when that group has no manifest if a retained manifest still names an object there.
 
-A failed copy never stops the Kernel from serving. The Kernel logs it, and `/_konae/health` reports it under `copies`: each target's `lastAttemptAt`, `lastSuccessAt`, `lastCopyId` and `lastError`, and an `alert` message while any target's last attempt failed. `copies.targets` is empty when no target is set.
+The Kernel reads each blob the captured file index names. It checks the store inventory, the number of bytes read and the SHA-256 recorded at upload or import. Older indexes carry only a size. For those files the Kernel compares the bytes with the previous copy cache and the preceding manifest on each target when available. The first capture without a recorded hash establishes a baseline. It cannot detect a same-size substitution that predates that baseline. Removing an entry before capture excludes the blob even if its bytes still await deletion.
+
+Before publishing, the Kernel checks each directory file and downloads each referenced S3 object, including reused objects. An encrypted target also has to decrypt each object. S3 still uploads only changed files. Budget for a full read from each target on every copy. The writer checks the final manifest against the reader's 4 MiB limit, including S3 references, encryption fields and the signature.
+
+A copy failure leaves the Kernel serving. Read `copies.targets` on `/_konae/health` for the result on each target. Dates use Unix milliseconds.
+
+| Field | Meaning |
+| --- | --- |
+| `lastAttemptAt`, `inProgress`, `lastError` | Start of the latest attempt, whether the worker is still running it, and the last recorded error. A restart reports an interrupted attempt. |
+| `lastCopyId`, `lastCutAt`, `lastSuccessAt` | Last complete point, start of its capture and time of publication. A failed send preserves these values. |
+| `cutAgeMs`, `stale`, `alert` | Health measures age at request time. It alerts when there is no recorded complete point or its cut is older than the copy interval plus five minutes. An hourly copy goes stale after 65 minutes, including upload time. |
+| `lastVerifiedRestoreAt`, `lastVerifiedRestoreCopyId` | Completion time and point of the last restore that checked the files and SQLite databases, installed the copy and applied the revocation record. Both fields are null until a receipt is available. |
+
+The top-level `copies.alert` includes each target's alert. With no targets, `copies.targets` is empty. Keep the status directory across restarts. A directory path or S3 endpoint, bucket and prefix identify each target. On upgrade, the first attempt starts the record for that target.
+
+A restore writes its receipt under `KONAE_COPY_HEALTH_DIR`, which defaults to `.copy-health/` in the restored data directory. A drill may read its copy with read-only credentials. To report the drill on the running Kernel, copy the new `*.restore.json` receipt into its status directory or give both commands the same operator-controlled status directory. Use the same absolute directory path or S3 address in both environments. A failed restore or a restore held in maintenance leaves the last verified result in place.
 
 A copy moves an installation. To move one app, export it and import it ([Export and import an app](./reference/export-and-import.md#export-and-import-an-app)).
+
+### Verify internal backups
+
+An installation copy includes each app's internal backup records. A manual backup has a database beside its record. An import backup has a directory named by its ID. For data, the Kernel copies the database, identity, usage and file archive covered by the record. For saved sources, it copies `sources.json`. A module can be off, so a data backup can contain fewer files. The Kernel checks their combined length against `sizeBytes`. It writes a zero-byte `.empty-data` entry for an empty data snapshot. A missing folder, missing required file, unexpected size or unreadable record stops the capture before either target gets a manifest.
+
+Earlier installation copies could include a record but omit its directory. Check all retained manifests on each target using a read-only account. The optional `--copy` selects one ID. Both server binaries accept the command. Keep the report in a directory accessible only to the recovery operator.
+
+```sh
+umask 077
+konae verify-history --from /mnt/copies > directory-history.jsonl
+konae verify-history --from s3://konae/copies/ --copy "$copy_id" > s3-history.jsonl
+```
+
+Each JSON line names the installation copy. Each internal backup entry names the app, backup ID and scope. `recovered` means the verifier read the recorded contents and checked their sizes and SHA-256 hashes against the manifest. `missing` identifies omitted or missing payload. `unchecked` means the verifier could not establish integrity, for example after a read error, wrong key or checksum failure. A manifest the verifier cannot open gets a copy-level `unchecked`. Any of these failures gives the command a nonzero exit status. `currentApp` stays `unchecked` because this command reads only history. Use a restore drill to check the app.
+
+If an old copy omitted payload, `restore` reports the affected app, backup ID and scope when it installs the app's current state. The incomplete internal backup cannot be applied. If the manifest listed a file whose bytes are now missing or damaged, the installation restore fails its file check.
+
+1. Keep the original copy, its report and any S3 objects its manifest references. Within the installation's recovery perimeter, take a read-only snapshot of the surviving source. Preserve the matching records and their components in restricted storage under a separate credential and failure domain. They can contain account data and private uploads. Keep the revocation record with the installation recovery material.
+2. Restore the old installation into an isolated, empty volume. With the Kernel stopped, compare the app ID, backup ID and original record bytes on both sides. Recover only the files declared for that backup into its directory on the isolated volume. Retain the provenance and checksums of the recovered files. Older internal records have only a total size. If the source or its provenance is unavailable, record the history as missing or unchecked.
+3. Use a separate copy destination for the isolated installation. Record both the original copy ID and the new `lastCopyId` from health. Run `verify-history` on the new point, restore it into a second empty volume and sign in again. In Konae, use the owner's `database_execute` with `list-backups`, then `restore-backup` with the selected `backupId`. Read back the rows, a private file as its owner, and the saved files with `project_sources_read`. Restoring sources writes their contents as a new source revision. Keep these results with the two copy IDs.
 
 ### Restore
 
@@ -199,7 +239,11 @@ KONAE_DATA_DIR=/data konae restore --from s3://konae/copies/ --copy 2026-11-06T1
 
 Run `kernel restore` the same way on an installation of the `kernel` binary. Restoring from `s3://` reads `KONAE_S3_ENDPOINT`, `KONAE_S3_REGION`, `KONAE_S3_ACCESS_KEY` and `KONAE_S3_SECRET_KEY` from the same shell, and `KONAE_COPY_SECRET` when the copies are encrypted. Without `--copy`, restore takes the newest complete copy. From S3 with `KONAE_COPY_SECRET` set, it takes the newest complete copy whose manifest is encrypted and carries a signature that verifies under the secret. It prints a line for each copy it skips and why, and stops after 50 skipped copies or at the first copy it cannot read, so with a secret set and no `--copy` a copy someone else planted in the bucket neither restores nor hides the genuine ones. A manifest over 4 MiB is refused.
 
-Restore installs nothing when the data directory holds anything besides `lost+found`, when the copy has no manifest, when any file's size or checksum differs from the manifest, or when an encrypted copy arrives without its secret or with another one, when `KONAE_COPY_SECRET` is set and the copy on S3 is not encrypted (a copy named with `--copy` is refused, and the message tells the operator to name an encrypted one instead of unsetting the secret; without `--copy` such a copy is skipped, and restore refuses only when no copy qualifies), or when the manifest's signature is wrong or missing (without `--copy` a copy with no signature is skipped, and restore refuses when no copy qualifies). A revocation entry on S3 without a valid signature leaves the installation in maintenance, as an unreadable record does. It runs SQLite's integrity check on every database. After installing, it signs everyone out: owner and app sessions, Clerk owner sessions, agent credentials, OAuth tokens and codes, open verification, recovery and invitation links, and unfinished transfers and release plans. Owners create new agent credentials after a restore.
+Restore holds `kernel.lock` until activation finishes. The destination may contain the lock and the filesystem's `lost+found` directory. Any other entry stops restore. Restore also refuses a missing manifest, a wrong or missing encryption key, and a sealed manifest whose signature fails. With a copy secret set, an explicitly selected S3 copy must be encrypted and signed. A missing or invalid revocation record leaves the recovered installation in maintenance. Before changing account state, restore reads back each staged file and compares its size and SHA-256 with the selected manifest. It checks SQLite integrity and foreign keys, project ownership, app folder IDs, published artifacts, addresses and indexed files. A private upload keeps its original app user. A draft keeps its sources and can have no published artifact.
+
+Restore clears owner and app sessions, entry links, account challenges, MCP credentials, OAuth codes, release plans and unfinished transfers. The operator can inspect completed mail and call history. Pending mail ends with `error_kind=restored`. Pending calls end with `state=failed` and `error=restored-outcome-unknown`, including jobs that had zero attempts at the cut. The receiver might have accepted one after the cut. Check its records before issuing a replacement. A continuation that was processing stays interrupted. Scheduled run history survives. At its first tick the timer records the current slot and waits for the next occurrence.
+
+During activation the Kernel syncs the staged files and their directories before moving them into place. A `.restore-*` directory keeps both binaries closed during an interrupted activation. Leave the incomplete tree in place for inspection and repeat restore into a fresh empty directory.
 
 The signatures detect forged or altered manifests and revocation entries. A manifest signature covers each S3 object's home copy, path, size and SHA-256. Restore checks the object's sealed bytes against those signed values, even if the home manifest has expired. Signatures do not detect removal of an object, removal of a signed entry or replay of a complete older signed copy. Keep the copy bucket and its revocation record protected against deletion and rollback.
 
@@ -210,7 +254,7 @@ KONAE_DATA_DIR=/data konae reconcile --from /mnt/copies
 KONAE_DATA_DIR=/data konae reconcile --without-record
 ```
 
-Run `reconcile` with the Kernel stopped, or restart it afterwards, because a running Kernel keeps the maintenance it read at startup. An app that was in maintenance before the copy stays in maintenance after a restore, because its state travels in the copy.
+Stop the Kernel before running `reconcile`. For a held restore of an encrypted S3 copy, supply the same copy key and the signed S3 record. Start the Kernel after the command finishes. An app that was in maintenance before the copy stays in maintenance after a restore, because its state travels in the copy.
 
 ### File bytes in a bucket
 
@@ -254,7 +298,7 @@ Before it sends anything, the Kernel runs the sender preflight. For Resend the s
 
 A job is `pending` until the provider takes it, then `accepted`, then `delivered` when the provider reports delivery to the recipient's server, or `failed`. A provider outage keeps jobs pending, with up to nine attempts that wait 30 seconds at first and double up to an hour. A job whose link was replaced, used or expired before sending fails without being sent. Delivery says the recipient's server took the email, not that a person read it, and it never activates an account.
 
-The Kernel encrypts each queued link with AES-256-GCM under a key derived from `KONAE_MAIL_SECRET`, or, when that is unset, from `KONAE_SETUP_KEY` on `konae` and from `mail-key` on `kernel`. It deletes the link once the provider accepts the email. Changing the secret leaves pending links unreadable, so those jobs fail and people ask for a new link.
+The Kernel encrypts each queued link with AES-256-GCM under a key derived from `KONAE_MAIL_SECRET`, or, when that is unset, from `KONAE_SETUP_KEY` on `konae` and from `mail-key` on `kernel`. It deletes the link once the provider accepts the email. When both binaries enqueue mail on the same volume, give both processes the same `KONAE_MAIL_SECRET`. Changing the secret leaves pending links unreadable, so those jobs fail and people ask for a new link.
 
 To record delivery, add a webhook in Resend that posts `email.sent`, `email.delivered`, `email.bounced`, `email.failed` and `email.suppressed` to `<KONAE_PUBLIC_ORIGIN>/_konae/mail/resend-events`, and set `KONAE_RESEND_WEBHOOK_SECRET` to its signing secret. The Kernel rejects an event without a valid signature, records each event ID once, and only moves a job forward.
 
