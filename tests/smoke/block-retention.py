@@ -281,12 +281,12 @@ class Lab:
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--worker", required=True, type=Path)
+    p.add_argument("--year", action="store_true", help="spread the 1,080 cuts across 365 simulated days")
     p.add_argument("--mc", type=Path)
     p.add_argument("--report", type=Path, help="write aggregate results for the retention campaign")
     p.add_argument("--measure", type=Path)
     p.add_argument("--oracle", type=Path)
     p.add_argument("--require-s3", action="store_true")
-    p.add_argument("--year", action="store_true", help="spread the 1,080 cuts across 365 simulated days")
     p.add_argument("--capacity-only", action="store_true")
     args = p.parse_args()
     if args.capacity_only:
@@ -309,6 +309,7 @@ def main():
         print("PASS directory ENOSPC preserved the complete root and its restored bytes")
         print("SKIP S3 destination (directory capacity case)")
         return
+    report = {"targets": {}, "skipped": []}
     targets = ["directory"]
     if args.mc and os.environ.get("KONAE_TEST_S3_ENDPOINT"):
         endpoint = urlsplit(os.environ["KONAE_TEST_S3_ENDPOINT"])
@@ -317,19 +318,19 @@ def main():
         assert os.environ["KONAE_TEST_S3_BUCKET"] == "konae-test"
         targets.append("s3")
     else:
+        report["skipped"].append("s3")
         print("SKIP S3 destination (requires --mc inside with-minio)", flush=True)
         if args.require_s3:
             p.error("S3 destination required")
-    report = {"targets": {}, "skipped": [] if "s3" in targets else ["s3"]}
-    try:
-        for target in targets:
-            with tempfile.TemporaryDirectory(prefix="konae-v3-prune-") as tmp:
-                lab = Lab(args, Path(tmp), target)
-                report["targets"][target] = lab.summary
+    for target in targets:
+        with tempfile.TemporaryDirectory(prefix="konae-v3-prune-") as tmp:
+            lab = Lab(args, Path(tmp), target)
+            report["targets"][target] = lab.summary
+            try:
                 lab.exercise()
-    finally:
-        if args.report:
-            args.report.write_text(json.dumps(report, sort_keys=True) + "\n")
+            finally:
+                if args.report:
+                    args.report.write_text(json.dumps(report, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

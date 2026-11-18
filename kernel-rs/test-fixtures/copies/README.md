@@ -22,23 +22,6 @@ The script starts a new process for each read. It loads S3 into a fresh loopback
 
 Without `--mc`, the script prints `SKIP S3 destination` and runs the directory cases. With `--require-s3` an omitted S3 destination fails the run.
 
-## V3 retention
-
-From the worktree root, set `LAB_BIN` to the local lab tools and `ORACLE` to `retention-oracle.py`. The runner uses Python 3, MinIO, `mc` and a fresh bucket. Cargo needs the workspace dependencies in its offline cache.
-
-```sh
-export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR="$PWD/kernel-rs/target"
-set -o pipefail
-worker=$(cargo test --offline --locked --manifest-path kernel-rs/Cargo.toml -p konae-backup \
-  --features s3 --lib --no-run --message-format=json | python3 -c \
-  'import json,sys; print(next(x["executable"] for line in sys.stdin if (x:=json.loads(line)).get("executable")))')
-"$LAB_BIN/with-minio" python3 tests/smoke/block-retention.py --worker "$worker" \
-  --mc "$LAB_BIN/bin/mc" --measure "$LAB_BIN/minio-measure" --oracle "$ORACLE" --require-s3
-"$LAB_BIN/with-small-volume" python3 tests/smoke/block-retention.py --worker "$worker" --capacity-only
-```
-
-Each destination receives 1,080 synthetic hourly points across two key epochs. The runner compares the listed survivors against the UTC calendar and checks exact bytes in a new process for each restore. The MinIO run measures creation, pruning, both restores, stable publication and the next recovery separately. It also exercises real pagination and injects a truncated response, a failed second page and a refused manifest PUT through a loopback proxy. The capacity run fills a disposable encrypted macOS volume until the directory writer hits ENOSPC. Running without `--mc` reports the skipped S3 destination. With `--require-s3` that omission fails the run.
-
 ## Installation history and crash campaign
 
 Run from the checkout root with Rust 1.91.0, Python 3.11 or later, a filesystem with hardlinks, and the MinIO server and client (`minio` and `mc`) on PATH. The workflow pins the Linux binaries and their SHA-256 digests. Each invocation of the launcher creates credentials, starts MinIO on loopback and removes its bucket on exit.
@@ -65,7 +48,7 @@ The app advances one logical day per insert. Every third day a member deletes a 
 | Year | 365 logical days | Each binary publishes on day 1, then every seven days through day 365. The copy IDs use the host clock. The runner checks both repositories against the 24 recent points and newest point of each UTC day. |
 | Retention worker with `--year` | 365 days in the repository timestamps | The backup crate publishes 1,080 points per destination. The last 31 days have hourly cuts. Separate processes hold readers, lose writers and interrupt collection. A proxy withholds a point PUT until the SDK times out, refuses a PUT, drops a continuation token and refuses the second list page. |
 
-Use the worker build command above and run the annual retention trial in a fresh bucket.
+Build the worker with the command in the V3 retention section and run the annual trial in a fresh bucket.
 
 ```sh
 python3 tests/smoke/with-minio.py python3 tests/smoke/block-retention.py \
@@ -77,3 +60,20 @@ Omit `--year` for the short app history. Omit `--s3` to run the directory alone.
 For real ENOSPC, run `python3 tests/smoke/recovery-capacity.py --binary "$CARGO_TARGET_DIR/release/kernel"` inside a launcher that sets `LAB_SMALL_VOLUME` to a private mounted filesystem of at most 144 MiB. Repeat with `konae`. The runner fills that volume, checks the last advertised point, returns space and restores both generations.
 
 Pull requests run the short history. The Sunday 03:17 UTC job also runs the annual retention trial. GitHub Actions keeps the aggregate JSON for 90 days. The laboratory exercises process death and real filesystem and MinIO operations. Power loss, elapsed retention time and access to a separately operated custody copy require an operator drill.
+
+## V3 retention
+
+From the worktree root, set `LAB_BIN` to the local lab tools and `ORACLE` to `retention-oracle.py`. The runner uses Python 3, MinIO, `mc` and a fresh bucket. Cargo needs the workspace dependencies in its offline cache.
+
+```sh
+export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR="$PWD/kernel-rs/target"
+set -o pipefail
+worker=$(cargo test --offline --locked --manifest-path kernel-rs/Cargo.toml -p konae-backup \
+  --features s3 --lib --no-run --message-format=json | python3 -c \
+  'import json,sys; print(next(x["executable"] for line in sys.stdin if (x:=json.loads(line)).get("executable")))')
+"$LAB_BIN/with-minio" python3 tests/smoke/block-retention.py --worker "$worker" \
+  --mc "$LAB_BIN/bin/mc" --measure "$LAB_BIN/minio-measure" --oracle "$ORACLE" --require-s3
+"$LAB_BIN/with-small-volume" python3 tests/smoke/block-retention.py --worker "$worker" --capacity-only
+```
+
+Each destination receives 1,080 synthetic hourly points across two key epochs. The runner compares the listed survivors against the UTC calendar and checks exact bytes in a new process for each restore. The MinIO run measures creation, pruning, both restores, stable publication and the next recovery separately. It also exercises real pagination and injects a truncated response, a failed second page and a refused manifest PUT through a loopback proxy. The capacity run fills a disposable encrypted macOS volume until the directory writer hits ENOSPC. Running without `--mc` reports the skipped S3 destination. With `--require-s3` that omission fails the run.
