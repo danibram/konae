@@ -203,6 +203,26 @@ A restore writes its receipt under `KONAE_COPY_HEALTH_DIR`, which defaults to `.
 
 A copy moves an installation. To move one app, export it and import it ([Export and import an app](./reference/export-and-import.md#export-and-import-an-app)).
 
+### Verify internal backups
+
+An installation copy includes each app's internal backup records. A manual backup has a database beside its record. An import backup has a directory named by its ID. For data, the Kernel copies the database, identity, usage and file archive covered by the record. For saved sources, it copies `sources.json`. A module can be off, so a data backup can contain fewer files. The Kernel checks their combined length against `sizeBytes`. It writes a zero-byte `.empty-data` entry for an empty data snapshot. A missing folder, missing required file, unexpected size or unreadable record stops the capture before either target gets a manifest.
+
+Earlier installation copies could include a record but omit its directory. Check all retained manifests on each target using a read-only account. The optional `--copy` selects one ID. Both server binaries accept the command. Keep the report in a directory accessible only to the recovery operator.
+
+```sh
+umask 077
+konae verify-history --from /mnt/copies > directory-history.jsonl
+konae verify-history --from s3://konae/copies/ --copy "$copy_id" > s3-history.jsonl
+```
+
+Each JSON line names the installation copy. Each internal backup entry names the app, backup ID and scope. `recovered` means the verifier read the recorded contents and checked their sizes and SHA-256 hashes against the manifest. `missing` identifies omitted or missing payload. `unchecked` means the verifier could not establish integrity, for example after a read error, wrong key or checksum failure. A manifest the verifier cannot open gets a copy-level `unchecked`. Any of these failures gives the command a nonzero exit status. `currentApp` stays `unchecked` because this command reads only history. Use a restore drill to check the app.
+
+If an old copy omitted payload, `restore` reports the affected app, backup ID and scope when it installs the app's current state. The incomplete internal backup cannot be applied. If the manifest listed a file whose bytes are now missing or damaged, the installation restore fails its file check.
+
+1. Keep the original copy, its report and any S3 objects its manifest references. Within the installation's recovery perimeter, take a read-only snapshot of the surviving source. Preserve the matching records and their components in restricted storage under a separate credential and failure domain. They can contain account data and private uploads. Keep the revocation record with the installation recovery material.
+2. Restore the old installation into an isolated, empty volume. With the Kernel stopped, compare the app ID, backup ID and original record bytes on both sides. Recover only the files declared for that backup into its directory on the isolated volume. Retain the provenance and checksums of the recovered files. Older internal records have only a total size. If the source or its provenance is unavailable, record the history as missing or unchecked.
+3. Use a separate copy destination for the isolated installation. Record both the original copy ID and the new `lastCopyId` from health. Run `verify-history` on the new point, restore it into a second empty volume and sign in again. In Konae, use the owner's `database_execute` with `list-backups`, then `restore-backup` with the selected `backupId`. Read back the rows, a private file as its owner, and the saved files with `project_sources_read`. Restoring sources writes their contents as a new source revision. Keep these results with the two copy IDs.
+
 ### Restore
 
 To move to a new volume or machine, restore a copy into an empty data directory, then start the Kernel:

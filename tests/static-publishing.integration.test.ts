@@ -182,7 +182,7 @@ test("a held database backup restores while actions are off", async () => {
   const backupDatabase = new Database(path.join(backup, "database.sqlite"));
   backupDatabase.run("CREATE TABLE notes(value TEXT); INSERT INTO notes VALUES ('saved');");
   backupDatabase.close();
-  await writeFile(path.join(app, `.konae/backups/${backupId}.json`), JSON.stringify({ id: backupId, key: backupId, label: "Before import", createdAt: Date.now(), sizeBytes: 0, holds: ["data"] }));
+  await writeFile(path.join(app, `.konae/backups/${backupId}.json`), JSON.stringify({ id: backupId, key: backupId, label: "Before import", createdAt: Date.now(), sizeBytes: Bun.file(path.join(backup, "database.sqlite")).size, holds: ["data"] }));
 
   await owner.call("database_execute", { projectId: id, operation: "restore-backup", input: { backupId } });
   const restored = new Database(live, { readonly: true });

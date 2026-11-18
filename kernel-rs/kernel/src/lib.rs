@@ -692,7 +692,8 @@ fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::resul
 /// Runs the operator commands both binaries answer: `restore`, the file
 /// store commands and `reconcile`. Returns whether one ran.
 pub async fn operator_command(installation: &installation::Installation) -> Result<bool> {
-    Ok(copies::operator_command(installation).await?
+    Ok(copies::history::operator_command().await?
+        || copies::operator_command(installation).await?
         || file_store::operator_command().await?
         || recovery::operator_command(installation).await?)
 }
@@ -3051,7 +3052,8 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
         anyhow::bail!("Invalid backup ID.");
     }
 
-    let record: DatabaseBackup = serde_json::from_slice(&tokio::fs::read(backup_dir(state, id).join(format!("{backup_id}.json"))).await?)?;
+    let directory = backup_dir(state, id);
+    let record = copies::history::checked_record(&directory, backup_id)?;
     if !record.holds.is_empty() {
         let deployment = state.deployments.read().await.values().find(|d| d.id == id).cloned().context("Deployment not found.")?;
         return import::restore_held(state, &deployment, &record).await;
