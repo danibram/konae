@@ -518,7 +518,7 @@ fn parse_octal(field: &[u8]) -> Result<u64> {
     u64::from_str_radix(text, 8).context("The files component has a damaged header.")
 }
 
-fn unpack_files(
+pub(super) fn unpack_files(
     archive: &Path,
     accounts: Option<&Connection>,
     destination: Option<(&Path, &file_store::BlockingFiles)>,
@@ -790,7 +790,7 @@ pub async fn install(state: &AppState, package: &InitialPackage, id: &str) -> Re
         if let Some((content, source)) = find("files") {
             let (size, sha256) = copies::checksum_file(source)?;
             ensure!(size == content.size && sha256 == content.sha256, "The files component does not match the SHA-256 in the manifest.");
-            let accounts = identity.exists().then(|| Connection::open(&identity)).transpose()?;
+            let accounts = crate::app_db::read_optional(&identity)?;
             unpack_files(source, accounts.as_ref(), Some((&directory.join("files"), &blobs)), &file_limits)?;
         }
         if let Some((content, source)) = find("usage") {

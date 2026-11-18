@@ -25,7 +25,7 @@ use crate::{
     safe_relative_path,
 };
 
-const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
+pub(crate) const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
 const MANIFEST: &str = "manifest.json";
 /// The prefix of copies in the installation's one bucket.
 pub const S3_PREFIX: &str = "copies/";
@@ -639,7 +639,7 @@ fn copy_private(source: &Path, target: &Path) -> Result<()> {
         let name = entry.file_name();
         let (from, to) = (entry.path(), target.join(&name));
         match &*name.to_string_lossy() {
-            "deployment.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
+            "deployment.json" | "sources.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
                 std::fs::copy(&from, &to)?;
             }
             "backups" if kind.is_dir() => {
@@ -666,7 +666,7 @@ fn is_backup_file(name: &str) -> bool {
 }
 
 pub fn vacuum_into(source: &Path, target: &Path) -> Result<()> {
-    let connection = Connection::open(source)?;
+    let connection = Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_secs(10))?;
     connection.execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])?;
     Ok(())
@@ -1472,7 +1472,7 @@ fn sqlite_files(root: &Path, installation: &Installation) -> Result<Vec<PathBuf>
 
 fn check_databases(root: &Path, installation: &Installation) -> Result<()> {
     for path in sqlite_files(root, installation)? {
-        let result: String = Connection::open(&path)?.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let result: String = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         ensure!(result == "ok", "{} failed SQLite's integrity check.", path.display());
     }
     Ok(())
@@ -1482,7 +1482,7 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
     let tables = installation.databases.iter().map(|database| (database.file, database.sign_out));
     let mut removed = 0;
     let mut clear = |path: &Path, names: &[&str]| -> Result<()> {
-        let connection = Connection::open(path)?;
+        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         for name in names {
             if crate::table_exists(&connection, name)? {
                 removed += connection.execute(&format!("DELETE FROM \"{name}\""), [])?;
@@ -1513,6 +1513,45 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_refuses_a_missing_source_without_creating_either_file() {
+        let root = scratch("missing-snapshot");
+        std::fs::create_dir(&root).unwrap();
+        assert!(vacuum_into(&root.join("source.sqlite"), &root.join("copy.sqlite")).is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_copy_restores_a_legacy_draft_without_creating_optional_stores() {
+        let root = scratch("draft-inventory");
+        let source = root.join("live");
+        let copies = root.join("copies");
+        let restored = root.join("restored");
+        let id = "old_draft";
+        crate::Settings::new(id, "Project", "project", &json!({"version":1})).write(&source).await.unwrap();
+        let app = crate::layout::sources(&source, id);
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("index.html"), "<main>Draft</main>").unwrap();
+        let private = crate::layout::private(&source, id);
+        std::fs::create_dir_all(&private).unwrap();
+        let metadata = json!({"name":"Original draft","slug":"original","manifest":{"version":1},"directories":["empty"],"updatedAt":77});
+        std::fs::write(private.join("sources.json"), metadata.to_string()).unwrap();
+        let original = crate::sources::read(&source, id).await.unwrap().unwrap();
+        let state = state(&source);
+        run_copy(&state, &[Target::Directory(copies.clone())]).await.unwrap();
+        let summary = restore(&Source::Directory(copies), None, &restored, None, &state.installation).await.unwrap();
+        assert_eq!(summary.deployments, 0);
+        assert_eq!(original["name"], "Original draft");
+        assert_eq!(crate::sources::read(&restored, id).await.unwrap(), Some(original));
+        for volume in [&source, &restored] {
+            assert!(!crate::layout::data(volume, id).exists());
+            assert!(!crate::layout::dist(volume, id).exists());
+            assert!(!volume.join("google.sqlite").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_copy_carries_the_custom_domain_with_the_record_and_the_maintenance_state() {

@@ -30,6 +30,7 @@ pub fn usage() -> &'static str {
   kernel sql <statement>
   kernel events --from <YYYY-MM-DD> --to <YYYY-MM-DD>
   kernel capabilities
+  kernel inventory [--policy]   inspect the installation or print its store policies
   kernel schema fingerprint --schema <schema.sql> | --database <database.sqlite>
   kernel test status [--app <id>]
   kernel test schedule <action> [--app <id>]
@@ -201,9 +202,8 @@ fn read_test_reply(reader: impl Read) -> Result<(i64, crate::calls::SyntheticOut
 async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> Result<Value> {
     if name == "secret" {
         let deployment = find_project_deployment(&*state.deployments.read().await, id);
-        let db = http::secrets_store(&state.data_root, id)?;
         return match words.next().as_deref() {
-            Some("list") => http::secrets_call(&db, id, deployment.as_ref(), "secrets_list", &json!({})),
+            Some("list") => http::secrets_call(&http::read_secrets(&state.data_root, id)?, id, deployment.as_ref(), "secrets_list", &json!({})),
             Some("set") => {
                 let usage = words.option("use")?;
                 let secret = words.required("the secret's name")?;
@@ -213,7 +213,7 @@ async fn run(state: &AppState, id: &str, name: &str, words: &mut Arguments) -> R
                 if let Some(usage) = usage {
                     arguments["use"] = json!(usage);
                 }
-                http::secrets_call(&db, id, deployment.as_ref(), "secret_set", &arguments)
+                http::secrets_call(&http::secrets_store(&state.data_root, id)?, id, deployment.as_ref(), "secret_set", &arguments)
             }
             _ => bail!("{}", usage()),
         };

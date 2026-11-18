@@ -2,7 +2,8 @@
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, Deployment};
 use anyhow::Result;
-use rusqlite::{params, Connection, OpenFlags};
+use crate::app_db::read_optional as read_only;
+use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -577,15 +578,6 @@ pub async fn admin_call(data_root: &Path, deployment: &Deployment, name: &str, a
         }
     })
     .await?
-}
-
-fn read_only(path: &Path) -> Result<Option<Connection>> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    connection.busy_timeout(Duration::from_secs(5))?;
-    Ok(Some(connection))
 }
 
 pub fn validate_range(from: &str, to: &str) -> Result<(i64, i64)> {

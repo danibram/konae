@@ -248,7 +248,7 @@ pub fn reconcile(root: &Path, installation: &Installation, entries: &[Entry]) ->
         if !identity.is_file() {
             continue;
         }
-        let db = Connection::open(&identity)?;
+        let db = Connection::open_with_flags(&identity, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         changed += match (entry.kind.as_str(), entry.state.as_str()) {
             (kind, "suspended") if kind == "app-user" || installation.account_for_kind(kind).is_some() => {
                 let mut rows = db.execute("UPDATE app_users SET state='suspended' WHERE id=?1 AND state<>'suspended'", [&entry.subject])?;

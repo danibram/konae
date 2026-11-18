@@ -423,7 +423,7 @@ fn route_secret_reused(state: &Konae, owner: &str, project: &str, value: &str) -
     let mut query = db.prepare("SELECT id FROM projects WHERE owner = ?1 AND id <> ?2")?;
     let others = query.query_map(params![owner, project], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     for other in others {
-        if crate::layout::secrets(&state.data_root, &other).is_file() && super::http::holds_route_secret(&super::http::secrets_store(&state.data_root, &other)?, value)? {
+        if crate::layout::secrets(&state.data_root, &other).is_file() && super::http::holds_route_secret(&super::http::read_secrets(&state.data_root, &other)?, value)? {
             return Ok(true);
         }
     }
@@ -1575,7 +1575,12 @@ async fn admin_call(
             if name == "secret_set" && super::http::sets_route_secret(&a) {
                 anyhow::ensure!(!route_secret_reused(state, &owner.id, id, a["value"].as_str().unwrap_or(""))?, super::http::SECRET_REUSED);
             }
-            super::http::secrets_call(&super::http::secrets_store(&state.data_root, id)?, id, deployment.as_ref(), name, &a)
+            let db = if name == "secrets_list" || (name == "secret_delete" && !crate::layout::secrets(&state.data_root, id).try_exists()?) {
+                super::http::read_secrets(&state.data_root, id)?
+            } else {
+                super::http::secrets_store(&state.data_root, id)?
+            };
+            super::http::secrets_call(&db, id, deployment.as_ref(), name, &a)
         }
         "api_keys_list" | "api_keys_create" | "api_keys_revoke" => {
             let id = a["projectId"].as_str().unwrap();

@@ -43,6 +43,7 @@ pub mod hostname;
 pub mod hosts;
 pub mod import;
 pub mod installation;
+pub mod inventory;
 pub mod http;
 pub mod invitations;
 pub mod layout;
@@ -983,7 +984,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     if !runtime::valid_app_id(&input.project.id) {
         return error(StatusCode::BAD_REQUEST, "Invalid project ID.");
     }
-    if let Err(error_value) = http::secrets_store(&state.data_root, &input.project.id).and_then(|db| {
+    if let Err(error_value) = http::read_secrets(&state.data_root, &input.project.id).and_then(|db| {
         calls::check_release(&domain::Rules::of(&state), &db, &program)
     }) {
         return match refusal::of(&error_value) {
@@ -1338,7 +1339,7 @@ pub async fn switch_dist(state: &AppState, id: &str, version: &str) -> std::io::
 
 fn stage_database(live: &Path, staged: &Path, schema: &str, program: &ActionProgram, transforms: Option<&str>, confirmation: Option<&str>) -> Result<schema_change::Change> {
     remove_database_files(staged);
-    Connection::open(live)?.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
+    copies::vacuum_into(live, staged)?;
     let change = schema_change::apply_with_transforms(staged, schema, program, transforms, schema_change::Mode::Apply(confirmation))?;
 
 
@@ -3017,8 +3018,7 @@ pub async fn create_backup(state: &AppState, id: &str, label: &str) -> Result<Va
     tokio::fs::create_dir_all(&dir).await?;
     let backup_id = Uuid::new_v4().to_string();
     let snapshot_path = dir.join(format!("{backup_id}.sqlite"));
-    let db = Connection::open(&db_path)?;
-    db.execute("VACUUM INTO ?1", [snapshot_path.to_string_lossy().as_ref()])?;
+    copies::vacuum_into(&db_path, &snapshot_path)?;
     let size = tokio::fs::metadata(&snapshot_path).await?.len();
     let backup = DatabaseBackup {
         id: backup_id.clone(),

@@ -4,6 +4,7 @@ use kernel::installation::Installation;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let installation = Installation::kernel();
+    if kernel::inventory::command("kernel", &installation)? { return Ok(()); }
     if kernel::operator_command(&installation).await? || kernel::operator::command(&installation).await? {
         return Ok(());
     }
