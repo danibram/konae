@@ -25,8 +25,20 @@ describe("durable trace privacy and model boundary", () => {
     ]));
   });
 
+  test("redacts a pasted fixture key from source and tool argument evidence", () => {
+    const pasted = "fixture-key-pasted-into-capsule-source-2026";
+    const result = redactDurableValue({ source: `const key = '${pasted}';`, toolArguments: { content: `write this ${pasted}` } }, [pasted]);
+    expect(JSON.stringify(result)).not.toContain(pasted);
+    expect(result).toMatchObject({ source: "const key = '[redacted credential]';", toolArguments: { content: "write this [redacted credential]" } });
+  });
+
   test("preserves untouched URLs and bounds the exact model-visible text", () => {
     expect(redactText("See https://example.test/path?a=1")).toBe("See https://example.test/path?a=1");
+    const providerError = redactText("Provider refused request: https://api.example.test/error?access_token=synthetic-private-access&refresh_token=synthetic-private-refresh&reason=denied");
+    expect(providerError).toContain("Provider refused request:");
+    expect(providerError).toContain("reason=denied");
+    expect(providerError).not.toContain("synthetic-private-access");
+    expect(providerError).not.toContain("synthetic-private-refresh");
     const result = boundModelText({ output: "x".repeat(20_001), apiKey: "sk-real-credential-1234567890" });
     expect(result.truncated).toBe(true);
     expect(result.redacted).toBe(true);

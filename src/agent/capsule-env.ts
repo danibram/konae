@@ -120,6 +120,15 @@ class CapsuleEnvWorkspace implements CapsuleWorkspace {
     for (const name of Object.keys(this.current)) this.mtimes.set(name, created);
   }
 
+  adoptBaseline(files: CapsuleFiles): void {
+    for (const key of Object.keys(this.seed) as ProjectFile[]) delete this.seed[key];
+    Object.assign(this.seed, files);
+    this.writeOrder.length = 0;
+    for (const name of new Set([...Object.keys(this.seed), ...Object.keys(this.current)]) as Set<ProjectFile>) {
+      if (this.current[name] !== this.seed[name]) this.writeOrder.push(name);
+    }
+  }
+
   private write(file: ProjectFile, content: string) {
     if (!this.writeOrder.includes(file)) this.writeOrder.push(file);
     this.current = { ...this.current, [file]: content };

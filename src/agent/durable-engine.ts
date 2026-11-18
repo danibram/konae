@@ -11,7 +11,7 @@ import { createCapsuleWorkspace } from "./capsule-env";
 import { createCapsuleValidator, type SqlJsLoader } from "./gate";
 import { createCapsuleTools, readLiveDatabase, readValidationFacts, type CapsuleToolHooks } from "./tools";
 import { createPlatformTools, type AgentPlatformBinding } from "./platform-tools";
-import type { AgentKeyStore, AgentSessionConfig, CapsuleFiles, AgentUiEvent, ApplyGateStatus, KonaeAgent, AgentProposal, ValidationResult } from "./contracts";
+import { AgentSubmissionNotAdmitted, type AgentKeyStore, type AgentSessionConfig, type CapsuleFiles, type AgentUiEvent, type ApplyGateStatus, type KonaeAgent, type AgentProposal, type ValidationResult } from "./contracts";
 
 /** Shared writable Durable execution stays deliberately inactive through #28. */
 export const SHARED_DURABLE_ACTIVATION = false;
@@ -43,6 +43,7 @@ export type DurableEngineOptions = {
   onModelEvent?: (event: any) => void;
   onValidation?: (result: ValidationResult) => void;
   onCheckpointStatus?: (status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) => void;
+  onSavedSourceReadback?: (revision: number, project: MiniAppProject) => void;
 };
 
 /** Opens a reader with scheduler recovery disabled; history inspection never starts provider work. */
@@ -64,19 +65,20 @@ export async function openDurableHistory(projectId: string, conversationId: stri
 /** Browser-owned local engine candidate. The editor still selects the legacy adapter until #29/#30 validation. */
 export async function openLocalDurableEngine(options: DurableEngineOptions) {
   if (!options.localOnly && !options.storage && !options.openStorage) throw new Error("Shared Durable activation is held for the checkpoint and coordination follow-ups.");
-  const files = textFiles(options.project);
+  let currentProject = options.project;
+  const files = textFiles(currentProject);
   const workspace = createCapsuleWorkspace(files, options.recoveredFiles ?? files);
   const validator = createCapsuleValidator(options.loadSql);
   workspace.onMutation(() => options.onMutation?.(workspace.serialize().files));
   const platformBoundaries = new Map<string, unknown>();
   const tools = createCapsuleTools(workspace, validator, {
-    sourceFiles: options.sourceFiles ?? (() => options.project),
+    sourceFiles: options.sourceFiles ?? (() => currentProject),
     liveDatabase: options.liveDatabase,
     previewErrors: options.previewErrors,
     releaseFacts: options.releaseFacts,
       onValidated: (_files, result) => options.onValidation?.(result),
   });
-  const projectId = options.project.id;
+  const projectId = currentProject.id;
   if (options.platform) {
     const platformTools = await createPlatformTools({
       projectId,
@@ -135,7 +137,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     const result = await validator.validate(
       workspace.serialize().files,
       await readLiveDatabase({ liveDatabase: options.liveDatabase }),
-      await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => options.project) }),
+      await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
     );
     options.onValidation?.(result);
   }
@@ -151,7 +153,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
         const result = await validator.validate(
           workspace.serialize().files,
           await readLiveDatabase({ liveDatabase: options.liveDatabase }),
-          await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => options.project) }),
+          await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
         );
         options.onValidation?.(result);
       }
@@ -163,7 +165,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     async recordDisposition(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) {
       const { proposalDisposition } = await import("./durable-checkpoints");
       if (status === "discarded") {
-        options.onCheckpointStatus?.(status, textFiles(options.project));
+        options.onCheckpointStatus?.(status, textFiles(currentProject));
       } else {
         options.onCheckpointStatus?.(status, files, saved);
       }
@@ -179,7 +181,13 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
         options.onValidation?.({ ok: false, errors: [], checked: [] });
       }
     },
+    adoptSavedBaseline(project: MiniAppProject, revision: number) {
+      currentProject = project;
+      workspace.adoptBaseline(textFiles(project));
+      options.onSavedSourceReadback?.(revision, project);
+    },
     reseed(project: MiniAppProject, config: AgentSessionConfig = options.sessionConfig) {
+      currentProject = project;
       workspace.reseed(textFiles(project));
       const configured = modelsWithConfiguredModel(durableModels, config, options.keyStore);
       const configuredModel = durableModelFor(config, configured);
@@ -190,7 +198,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
 }
 
 /** KonaeAgent adapter used only by the explicit local Durable staging opt-in. */
-export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; retarget(next: MiniAppProject): void; assertExecution(): Promise<void>; exportLocalHistory(): Promise<{ version: 1; createdAt: number; title: string; records: any[] }>; execution(callId: string, observesCallId?: string): AgentExecution | null; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
+export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: AgentSessionConfig, keyStore: AgentKeyStore, options: Omit<DurableEngineOptions, "project" | "sessionConfig" | "keyStore" | "localOnly">): KonaeAgent & { initialize(): Promise<void>; dispose(): void; configure(config: AgentSessionConfig): void; discard(): void; reseed(files: CapsuleFiles, encodings?: MiniAppProject["encodings"]): void; adoptSavedBaseline(project: MiniAppProject, revision: number): void; retarget(next: MiniAppProject): void; assertExecution(): Promise<void>; exportLocalHistory(): Promise<{ version: 1; createdAt: number; title: string; records: any[] }>; execution(callId: string, observesCallId?: string): AgentExecution | null; recordDisposition?(status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }): Promise<void> } {
   let currentProject = project;
   const modelConfig = { ...sessionConfig };
   let engine: Awaited<ReturnType<typeof openLocalDurableEngine>> | null = null;
@@ -311,14 +319,23 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
       return identity ? { ...identity, callId, ...(observesCallId ? { observesCallId } : {}) } : null;
     },
     async send(prompt, requestId = crypto.randomUUID()) {
-      await options.assertExecution?.();
+      try { await options.assertExecution?.(); }
+      catch (error) { throw new AgentSubmissionNotAdmitted(safeString(error), { cause: error }); }
       const token = ++runToken;
       const run = serial.then(async () => {
         validation = null;
         validationSignature = "";
         let current: Awaited<ReturnType<typeof openLocalDurableEngine>>;
         try { current = await ensure(); }
-        catch (error) { if (token === runToken) { emit({ type: "error", message: safeString(error) }); emit({ type: "turn-end" }); } return; }
+        catch (error) {
+          if (token === runToken) {
+            // Storage/lease admission failed before the owner message reached
+            // Pi Durable. Callers may safely return the unsent draft.
+            emit({ type: "error", message: safeString(error), submission: "not-admitted" });
+            emit({ type: "turn-end" });
+          }
+          return;
+        }
         if (token !== runToken) return;
         const before = new Set<string>();
         try {
@@ -374,6 +391,12 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
       validation = null;
       validationSignature = "";
       engine?.reseed(currentProject, modelConfig);
+    },
+    adoptSavedBaseline(project, revision) {
+      currentProject = project;
+      validation = null;
+      validationSignature = "";
+      engine?.adoptSavedBaseline(project, revision);
     },
     retarget(next) {
       const changed = currentProject.id !== next.id || JSON.stringify(currentProject.files) !== JSON.stringify(next.files) || JSON.stringify(currentProject.encodings ?? {}) !== JSON.stringify(next.encodings ?? {});

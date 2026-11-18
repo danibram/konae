@@ -7,6 +7,7 @@ import type {
   KonaeAgent,
   ProviderConfig,
 } from "../agent/contracts";
+import { isAgentSubmissionNotAdmitted } from "../agent/contracts";
 import {
   agentThreadReducer,
   canSubmit,
@@ -88,6 +89,7 @@ export function useAgentThread({
   const [recoveryAttempted, setRecoveryAttempted] = useState(false);
   const [draft, setDraftState] = useState(() => readDraft(draftStorage, draftKey));
   const submitting = useRef(false);
+  const pendingUnsentDraft = useRef<string | null>(null);
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
   const setDraft = (value: string) => {
@@ -108,9 +110,15 @@ export function useAgentThread({
     subscription.current?.off();
     subscription.current = {
       agent: next,
-      off: next.subscribe((event) =>
-        dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined, keepBusy: submitting.current }),
-      ),
+      off: next.subscribe((event) => {
+        if (event.type === "error" && event.submission === "not-admitted" && pendingUnsentDraft.current !== null) {
+          const unsent = pendingUnsentDraft.current;
+          pendingUnsentDraft.current = null;
+          setDraft(unsent);
+          dispatch({ type: "unsubmit", text: unsent });
+        }
+        dispatch({ type: "event", event, snapshot: carriesSnapshot(event) ? readSnapshot(next) : undefined, keepBusy: submitting.current });
+      }),
     };
     if (!submitting.current) dispatch({ type: "settled", snapshot: readSnapshot(next) });
   }
@@ -128,11 +136,10 @@ export function useAgentThread({
   }, [threadResetToken, draftKey]);
 
   async function submit() {
-    const text = draft.trim();
+    const submittedDraft = draft;
+    const text = submittedDraft.trim();
     if (!text || running || submitting.current || blocker) return;
     submitting.current = true;
-    setDraft("");
-    dispatch({ type: "prompt", text });
     let handle: KonaeAgent | null = null;
     try {
       handle = await ensureAgent();
@@ -141,8 +148,19 @@ export function useAgentThread({
         return;
       }
       attach(handle);
+      // Loading the shared agent includes the authoritative lease admission.
+      // Keep the composer intact until that succeeds; a standby that loses
+      // admission has not submitted this prompt and must not lose its draft.
+      setDraft("");
+      dispatch({ type: "prompt", text });
+      pendingUnsentDraft.current = submittedDraft;
       await handle.send(text);
+      pendingUnsentDraft.current = null;
     } catch (error) {
+      if (!handle || isAgentSubmissionNotAdmitted(error)) {
+        setDraft(submittedDraft);
+        dispatch({ type: "unsubmit", text });
+      }
       dispatch({ type: "event", event: { type: "error", message: error instanceof Error ? error.message : String(error) }, keepBusy: true });
     } finally {
       submitting.current = false;

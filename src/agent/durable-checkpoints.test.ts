@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createCheckpointDraft, proposalDisposition, reconcileInterruptedApply, recoverCheckpoint } from "./durable-checkpoints";
+import { createCheckpointDraft, inspectCheckpointCandidate, proposalDisposition, reconcileInterruptedApply, recoverCheckpoint } from "./durable-checkpoints";
 
 async function sha(bytes: Uint8Array) {
   const value = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
@@ -33,6 +33,10 @@ describe("Durable recovery checkpoints", () => {
     expect(recovered.scratch.encodings).toEqual({ "public/mark.bin": "base64" });
     expect(recovered.applyAllowed).toBe(false);
     expect(recovered.historicalGate).toEqual({ ok: true, checked: ["sources"] });
+    const inspected = await inspectCheckpointCandidate({ checkpointId: "cp-7", sequence: 19, createdAt: 1, payload }, async (digest) => byDigest.get(digest)!);
+    expect(inspected.base.files["index.html"]).toBe("<p>base</p>");
+    expect(inspected.scratch.files["index.html"]).toBe("<p>candidate</p>");
+    expect(inspected.scratch.files["public/mark.bin"]).toBe(b64);
   });
 
   test("preserves stale candidate history and refuses to make historical Gate permission current", async () => {

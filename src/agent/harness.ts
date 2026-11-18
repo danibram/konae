@@ -445,6 +445,10 @@ class WorkspaceHolder implements CapsuleWorkspace {
     this.workspace.reseed(files);
   }
 
+  adoptBaseline(files: CapsuleFiles) {
+    this.workspace.adoptBaseline(files);
+  }
+
   private forward() {
     return this.workspace.onMutation((mutation) => {
       for (const listener of this.listeners) listener(mutation);

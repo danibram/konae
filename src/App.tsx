@@ -837,7 +837,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           let recoveredSavedReadback: { revision: number; project: MiniAppProject } | undefined;
           let lateApplyCandidate: any = null;
           if (stagingRecovery) {
-            const [{ createDurableConversation, readDurableConversation, openDurableStorage, readDurableCheckpoints, readDurableBlob }, { openDurableHistory }, { createCheckpointDraft, recoverCheckpoint, reconcileInterruptedApply }, { ToolResultEntry }] = await Promise.all([
+            const [{ createDurableConversation, readDurableConversation, readLatestDurableCheckpoint, listDurableConversations, readDurableLease, openDurableStorage, readDurableBlob }, { openDurableHistory }, { createCheckpointDraft, recoverCheckpoint, reconcileInterruptedApply }, { ToolResultEntry }] = await Promise.all([
               import("./agent/durable-storage"), import("./agent/durable-engine"), import("./agent/durable-checkpoints"), import("@earendil-works/pi-durable"),
             ]);
             const key = `konae:durable-recovery:${ownerSession.ownerId}:${projectId}`;
@@ -876,8 +876,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
               } finally { await history.close(); }
             };
             if (info) {
-              const checkpoints = await readDurableCheckpoints({ projectId, conversationId, ownerId: ownerSession.ownerId });
-              const latest = checkpoints[0];
+              const latest = await readLatestDurableCheckpoint({ projectId, conversationId, ownerId: ownerSession.ownerId });
               if (latest) {
                 if ((latest.payload as any)?.lifecycle?.origin === "local-attachment" && (latest.payload as any)?.lifecycle?.inspectionOnly === true) {
                   throw new Error("This local attachment is preserved for reading only: its native pending work or pre-attachment tool details were not preserved, so it cannot be continued. The attached files remain an inspection-only proposal checkpoint.");
@@ -973,6 +972,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             }
             if (requiresLinkedAttempt) return null;
             if (!info) {
+              // A project lease spans conversations. Check it before creating
+              // a fresh history envelope so a known standby refusal does not
+              // leave an empty conversation that looks like an admitted send.
+              const prior = await listDurableConversations(projectId, ownerSession.ownerId);
+              const previousConversation = prior.items[0];
+              if (previousConversation) {
+                const lease = await readDurableLease(projectId, previousConversation.id, ownerSession.ownerId);
+                if (lease.live) throw new Error("Another device still holds this project's live execution lease. Ask it to stop and release before continuing.");
+                if (lease.unresolvedEffects) throw new Error("An admitted or ambiguous write needs read-back and reconciliation before this project can continue.");
+              }
               const created = await createDurableConversation(projectId, ownerSession.ownerId);
               conversationId = created.id;
               info = created;
@@ -1084,6 +1093,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                   committedScratch = textFiles(saved.project);
                 } else committedScratch = { ...files };
                 pendingScratch = { ...committedScratch };
+              },
+              onSavedSourceReadback(revision: number, saved: MiniAppProject) {
+                durableSourceRevisionRef.current = revision;
+                base = { files: { ...saved.files }, encodings: saved.encodings };
+                committedScratch = { ...pendingScratch };
               },
             };
           }
@@ -1349,8 +1363,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           try {
             const conversationId = new URLSearchParams(window.location.search).get("conversation") ?? localStorage.getItem(`konae:durable-recovery:${ownerSession.ownerId}:${project.id}`) ?? "";
             if (conversationId) {
-              const { readDurableCheckpoints } = await import("./agent/durable-storage");
-              checkpointId = (await readDurableCheckpoints({ projectId: project.id, conversationId, ownerId: ownerSession.ownerId }))[0]?.checkpointId ?? checkpointId;
+              const { readLatestDurableCheckpoint } = await import("./agent/durable-storage");
+              checkpointId = (await readLatestDurableCheckpoint({ projectId: project.id, conversationId, ownerId: ownerSession.ownerId }))?.checkpointId ?? checkpointId;
             }
           } catch { /* Keep the prior immutable parent when the latest receipt cannot be read. */ }
           const reason = "Saved sources changed while Apply was in flight. The old candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
@@ -1554,6 +1568,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     const agentPublish = resolveAgentPublish.current !== null;
     const publishCallId = agentPublishCallId.current ?? crypto.randomUUID();
     const sourceSaveExecution = agentPublish ? agentRef.current?.execution?.(`${publishCallId}-sources`) ?? undefined : undefined;
+    let confirmedDeployment: DeploymentReceipt | null = null;
     setPublishing(true);
     setDeployError("");
     try {
@@ -1568,6 +1583,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         const expected = sources.revision(project.id);
         if (expected === undefined || !sourceSaveExecution) throw new Error("Shared execution identity is unavailable for the source save.");
         observedSourcesRevision = await sources.saveExpected(project, expected, sourceSaveExecution);
+        if (observedSourcesRevision > expected) {
+          const saveReadback = agentRef.current?.execution?.(`${publishCallId}-sources-save-readback`, `${publishCallId}-sources`);
+          if (!saveReadback) throw new Error("The source save advanced but its documented project_sources_read read-back is unavailable. Publishing is stopped until the saved Project is observed.");
+          const observed = await sources.observeSaved(project.id, saveReadback);
+          if (!observed.project || observed.revision !== observedSourcesRevision || !sameProjectSourceFiles(project, observed.project)) throw new Error("The source save advanced, but project_sources_read did not confirm its exact files and revision. Publishing is stopped; keep the current proposal and reconcile saved sources.");
+        }
       } else observedSourcesRevision = await sources.save(project);
       serverSnapshots.current.set(project.id, JSON.stringify(project));
       const deployment = deploymentsRef.current[project.id];
@@ -1601,6 +1622,23 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       } : undefined;
       const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules, fencedClient);
       const record = published.receipt;
+      confirmedDeployment = record;
+      // Once release_apply and project_inspect agree, remove the Deploy action
+      // immediately. Later baseline read-back must never invite a second release.
+      setDeployment(record);
+      setDeployments((current) => ({ ...current, [project.id]: record }));
+      if (agentPublish) {
+        // release_apply has already been observed through project_inspect, its
+        // documented read-back. Read canonical files with a fresh leased call,
+        // not as an observation of either release_apply or a possibly absent save.
+        const sourceReadback = agentRef.current?.execution?.(`${publishCallId}-released-sources-readback`);
+        if (!sourceReadback) throw new Error("The Deployment was confirmed, but its saved source baseline could not be read back. Do not repeat release; reconcile the Project sources first.");
+        const observed = await sources.observeSaved(project.id, sourceReadback);
+        if (!observed.project || observed.revision !== published.sourcesRevision || !sameProjectSourceFiles(project, observed.project)) {
+          throw new Error(`The Deployment was confirmed, but source read-back did not match the exact published files and revision ${published.sourcesRevision}. Do not repeat release; inspect current Project sources before continuing.`);
+        }
+        agentRef.current?.adoptSavedBaseline?.(observed.project, observed.revision);
+      }
       const releasedProject = { ...project, manifest: record.manifest };
       const releasedSnapshot = JSON.stringify(releasedProject);
       sources.markPublished(project.id, published.sourcesRevision, releasedProject);
@@ -1609,16 +1647,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setProject((current) => current.id === project.id && JSON.stringify(current) === JSON.stringify(project) ? releasedProject : current);
       setProjects((current) => current.map((item) => item.id === project.id && JSON.stringify(item) === JSON.stringify(project) ? releasedProject : item));
       setExportAhead(false);
-      setDeployment(record);
-      setDeployments((current) => ({ ...current, [project.id]: record }));
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
       resolveAgentPublish.current = null;
       agentPublishCallId.current = null;
     } catch (error) {
       if (error instanceof SchemaChangeDeclined) return;
       if (isSignedOutError(error)) refreshOwnerSession();
-      setDeployError(error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      setDeployError(detail);
       setDeployErrorCode(error instanceof McpError ? error.refusal?.code : undefined);
+      if (confirmedDeployment) setOperationError(`Deployment ${confirmedDeployment.url} was confirmed and read back. Do not repeat release. The project source baseline still needs reconciliation: ${detail}`);
     } finally {
       setPublishing(false);
     }
@@ -2071,7 +2109,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   };
 
-  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} recoverAvailable={durableRecoveryStaging && durableKeyReady} historyAvailable={durableRecoveryStaging} staleRecovery={staleRecoveryReview} applyBlocked={durableApplyBlocked} onStartLinkedAttempt={() => void startLinkedRecoveryAttempt()} onOpenHistory={() => setDurableHistoryOpen(true)} />;
+  const durableHistoryAvailable = Boolean(ownerSession.ownerId && project.id);
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} recoverAvailable={durableRecoveryStaging && durableKeyReady} historyAvailable={durableHistoryAvailable} staleRecovery={staleRecoveryReview} applyBlocked={durableApplyBlocked} onStartLinkedAttempt={() => void startLinkedRecoveryAttempt()} onOpenHistory={() => setDurableHistoryOpen(true)} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",
@@ -2189,7 +2228,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
 
-      {durableRecoveryStaging && durableHistoryOpen && <Suspense fallback={null}><DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} /></Suspense>}
+      {durableHistoryAvailable && durableHistoryOpen && <Suspense fallback={null}><DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} canContinue={durableRecoveryStaging} /></Suspense>}
       {localAttachment !== null && <Suspense fallback={null}><LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
         sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
       }} /></Suspense>}
@@ -2356,6 +2395,16 @@ function downloadBlob(blob: Blob, filename: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function sameProjectSourceFiles(expected: MiniAppProject, observed: MiniAppProject) {
+  const sorted = (value: Record<string, unknown> | undefined) => JSON.stringify(Object.entries(value ?? {}).sort(([left], [right]) => left.localeCompare(right)));
+  return expected.id === observed.id
+    && expected.name === observed.name
+    && expected.slug === observed.slug
+    && sorted(expected.files) === sorted(observed.files)
+    && sorted(expected.encodings) === sorted(observed.encodings)
+    && JSON.stringify([...(expected.directories ?? [])].sort()) === JSON.stringify([...(observed.directories ?? [])].sort());
 }
 
 function fileMetaFor(file: string): { label: string; icon: typeof FileText; language: string } {

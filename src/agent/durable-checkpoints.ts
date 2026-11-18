@@ -43,6 +43,25 @@ export type CheckpointRead = {
   error?: string;
 };
 
+/** Read only the saved source and candidate file sets for keyless owner inspection.
+ * This deliberately does not reconstruct model context, claim a lease or contact a provider. */
+export async function inspectCheckpointCandidate(checkpoint: DurableCheckpoint, readBlob: (digest: string) => Promise<Uint8Array>) {
+  const payload = checkpoint.payload as any;
+  if (!payload || payload.formatVersion !== DURABLE_CHECKPOINT_FORMAT) throw new Error(`Checkpoint format ${String(payload?.formatVersion)} cannot be inspected.`);
+  const refs = payload.blobFiles as Record<string, string> | undefined;
+  if (!refs || typeof refs !== "object" || !payload.base?.manifest || !payload.scratch?.manifest) throw new Error("The saved proposal file references are malformed.");
+  const byteTotal = [payload.base, payload.scratch].reduce((total: number, set: any) => total + Object.values(set.manifest as Record<string, { byteLength?: number }>).reduce((sum, file) => sum + (Number.isSafeInteger(file.byteLength) ? file.byteLength! : 0), 0), 0);
+  if (byteTotal > 2 * 1024 * 1024) throw new Error("Saved proposal comparison exceeds the 2 MiB keyless inspection limit.");
+  const cache = new Map<string, Promise<Uint8Array>>();
+  const cachedRead = (digest: string) => {
+    let pending = cache.get(digest);
+    if (!pending) { pending = readBlob(digest); cache.set(digest, pending); }
+    return pending;
+  };
+  const [base, scratch] = await Promise.all([decodeFiles(payload.base, refs, cachedRead), decodeFiles(payload.scratch, refs, cachedRead)]);
+  return { id: checkpoint.checkpointId, sequence: checkpoint.sequence, sourcesRevision: payload.sourcesRevision as number, status: payload.status as CheckpointStatus, base, scratch };
+}
+
 /** Create a checkpoint draft. The native commit adapter uploads every byte before atomically
  * committing this metadata with its Pi batch; a failed upload or commit exposes no checkpoint. */
 export async function createCheckpointDraft(input: CheckpointInput): Promise<DurableCheckpointDraft> {

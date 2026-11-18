@@ -1319,9 +1319,11 @@ async fn details(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BatchPage {
     after: Option<i64>,
     limit: Option<usize>,
+    max_bytes: Option<usize>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1378,10 +1380,15 @@ async fn batches(
         return response;
     }
     let limit = page.limit.unwrap_or(50);
-    if !(1..=50).contains(&limit) {
+    let max_bytes = match page.max_bytes {
+        Some(value) if !(1024..=4 * 1024 * 1024).contains(&value) => return fail(StatusCode::BAD_REQUEST, "Native batch response byte bound must be between 1024 and 4194304 bytes."),
+        value => value,
+    };
+    let limit_ceiling = if max_bytes.is_some() { 250 } else { 50 };
+    if !(1..=limit_ceiling).contains(&limit) {
         return fail(
             StatusCode::BAD_REQUEST,
-            "Native batch page limit must be between 1 and 50.",
+            if max_bytes.is_some() { "Bounded native batch page limit must be between 1 and 250." } else { "Native batch page limit must be between 1 and 50." },
         );
     }
     let after = page.after.unwrap_or(0);
@@ -1397,6 +1404,7 @@ async fn batches(
         Err(e) => return internal(e),
     };
     let mut grouped: Vec<NativeBatchResponse> = Vec::new();
+    let mut page_bytes = 128usize;
     for sequence in sequences {
         let mut q=match db.prepare("SELECT payload FROM conversation_records WHERE conversation=?1 AND seq=?2 ORDER BY ordinal"){Ok(v)=>v,Err(e)=>return internal(e)};
         let writes = match q.query_map(params![conversation, sequence], |r| {
@@ -1415,9 +1423,27 @@ async fn batches(
             },
             Err(e) => return internal(e),
         };
-        grouped.push(NativeBatchResponse { sequence, writes });
+        let batch = NativeBatchResponse { sequence, writes };
+        if let Some(max_bytes) = max_bytes {
+            let batch_bytes = match serde_json::to_vec(&batch) { Ok(value) => value.len(), Err(error) => return internal(error) };
+            // Keep a native sequence atomic for replay. A single sequence can
+            // exceed the soft page target, but no additional sequence joins it.
+            if !grouped.is_empty() && page_bytes + batch_bytes + 1 > max_bytes { break; }
+            page_bytes = page_bytes.saturating_add(batch_bytes + 1);
+        }
+        grouped.push(batch);
     }
-    let next_cursor = grouped.last().map(|batch| batch.sequence);
+    let next_cursor = if let Some(last) = grouped.last() {
+        let has_more = match db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversation_records r JOIN conversations c ON c.id=r.conversation WHERE r.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND c.deleted=0 AND r.seq>?4)",
+            params![conversation, owner, project, last.sequence],
+            |row| row.get::<_, bool>(0),
+        ) {
+            Ok(value) => value,
+            Err(error) => return internal(error),
+        };
+        if has_more { Some(last.sequence) } else { None }
+    } else { None };
     match serde_json::to_string(&NativeBatchesResponse {
         batches: grouped,
         next_cursor,
@@ -1560,7 +1586,7 @@ async fn checkpoint(
 }
 
 #[derive(Deserialize)]
-struct CheckpointQuery { summary: Option<bool> }
+struct CheckpointQuery { summary: Option<bool>, latest: Option<bool>, checkpoint_id: Option<String> }
 async fn checkpoints(
     State(state): State<Konae>,
     AxumPath((project, conversation)): AxumPath<(String, String)>,
@@ -1598,8 +1624,9 @@ async fn checkpoints(
     struct Page {
         items: Vec<Item>,
     }
-    let mut q=match db.prepare("SELECT p.checkpoint_id,p.seq,p.payload,p.created_at FROM conversation_checkpoints p JOIN conversations c ON c.id=p.conversation WHERE p.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.deleted=0 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) ORDER BY p.seq DESC,p.checkpoint_id DESC LIMIT 50"){Ok(v)=>v,Err(e)=>return internal(e)};
-    let items = match q.query_map(params![conversation, owner, project], |r| {
+    let single = query.latest.unwrap_or(false) || query.checkpoint_id.is_some();
+    let mut q=match db.prepare("SELECT p.checkpoint_id,p.seq,p.payload,p.created_at FROM conversation_checkpoints p JOIN conversations c ON c.id=p.conversation WHERE p.conversation=?1 AND c.owner=?2 AND c.project=?3 AND c.deleted=0 AND c.project_epoch=(SELECT epoch FROM conversation_project_epochs WHERE owner=?2 AND project=?3) AND (?4 IS NULL OR p.checkpoint_id=?4) ORDER BY p.seq DESC,p.checkpoint_id DESC LIMIT CASE WHEN ?5 THEN 1 ELSE 50 END"){Ok(v)=>v,Err(e)=>return internal(e)};
+    let items = match q.query_map(params![conversation, owner, project, query.checkpoint_id.as_deref(), single], |r| {
         let payload: String = r.get(2)?;
         let payload = RawValue::from_string(payload).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
@@ -2587,6 +2614,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsupported_conversation_versions_remain_readable_and_exportable_but_cannot_claim() {
+        let (root, state, konae, alice, _) = fixture().await;
+        let owner = alice.user.user_id.as_str();
+        let cases = [
+            ("future-format", 2, "1.5.2", "1"),
+            ("future-pi", 1, "9.0.0", "1"),
+            ("future-registry", 1, "1.5.2", "2"),
+        ];
+        for (id, format, pi, registry) in cases {
+            let collection = "/_konae/projects/project_alice/conversations";
+            let created = call(
+                &state,
+                &konae,
+                &alice,
+                owner,
+                "POST",
+                collection,
+                Some(json!({"id":id,"formatVersion":format,"piVersion":pi,"registryVersion":registry,"title":"Future fixture"})),
+                None,
+            )
+            .await;
+            assert_eq!(created.status(), StatusCode::OK, "{id}");
+
+            let detail = call(&state, &konae, &alice, owner, "GET", &format!("{collection}/{id}"), None, None).await;
+            assert_eq!(detail.status(), StatusCode::OK, "history read {id}");
+            let envelope = json(detail).await;
+            assert_eq!(envelope["formatVersion"], format);
+            assert_eq!(envelope["piVersion"], pi);
+            assert_eq!(envelope["registryVersion"], registry);
+
+            let download = call(&state, &konae, &alice, owner, "GET", &format!("{collection}/{id}/download"), None, None).await;
+            assert_eq!(download.status(), StatusCode::OK, "history export {id}");
+            let export = json(download).await;
+            assert_eq!(export["formatVersion"], format);
+            assert_eq!(export["piVersion"], pi);
+            assert_eq!(export["registryVersion"], registry);
+
+            let claim = call(
+                &state,
+                &konae,
+                &alice,
+                owner,
+                "POST",
+                &format!("{collection}/{id}/claim"),
+                Some(json!({"expectedGeneration":0,"executorId":"future-version-probe","continueExplicitly":true})),
+                None,
+            )
+            .await;
+            assert_eq!(claim.status(), StatusCode::CONFLICT, "claim {id}");
+            let refusal = json(claim).await;
+            assert!(refusal["error"].as_str().unwrap_or_default().contains("readable but cannot be resumed"), "{id}: {refusal}");
+        }
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn owner_routes_scope_guessed_ids_and_refuse_delegated_app_and_forged_origins() {
         let (root, state, konae, alice, bob) = fixture().await;
         let alice_id = &alice.user.user_id;
@@ -2792,6 +2875,20 @@ mod tests {
         let receipt = json(response).await;
         assert_eq!(receipt["stored"], 1);
         assert_eq!(receipt["checkpointStored"], true);
+        for query in ["?latest=true", "?checkpoint_id=checkpoint-1"] {
+            let scoped = call(&state, &konae, &alice, alice_id, "GET", &format!("{base}/checkpoints{query}"), None, None).await;
+            assert_eq!(scoped.status(), StatusCode::OK);
+            let item = json(scoped).await["items"][0].clone();
+            assert_eq!(item["checkpointId"], "checkpoint-1");
+            assert_eq!(item["sequence"], 1);
+            assert_eq!(item["payload"]["scratchFiles"]["index.html"], "proposal");
+        }
+        let bounded = call(&state, &konae, &alice, alice_id, "GET", &format!("{base}/batches?limit=50&maxBytes=1024"), None, None).await;
+        assert_eq!(bounded.status(), StatusCode::OK);
+        let bounded = axum::body::to_bytes(bounded.into_body(), 4096).await.unwrap();
+        assert!(bounded.len() <= 1024);
+        let invalid_bound = call(&state, &konae, &alice, alice_id, "GET", &format!("{base}/batches?maxBytes=100"), None, None).await;
+        assert_eq!(invalid_bound.status(), StatusCode::BAD_REQUEST);
         let duplicate = call(
             &state,
             &konae,

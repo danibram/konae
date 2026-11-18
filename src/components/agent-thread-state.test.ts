@@ -393,6 +393,14 @@ describe("agent thread composer and providers", () => {
     expect(canSubmit(initialAgentThreadState, "hola", false, blocker)).toBe(false);
   });
 
+  test("a definite no-admission result restores the composer and removes its unsubmitted message", () => {
+    const submitted = run([{ type: "prompt", text: "keep this draft" }]);
+    const restored = agentThreadReducer(submitted, { type: "unsubmit", text: "keep this draft" });
+    expect(restored.messages).toEqual([]);
+    expect(restored.busy).toBe(false);
+    expect(restored.seq).toBe(0);
+  });
+
   test("only tool and turn boundaries carry a workspace snapshot", () => {
     expect(carriesSnapshot({ type: "assistant-delta", text: "x" })).toBe(false);
     expect(carriesSnapshot({ type: "tool-start", id: "call_0", name: "edit", detail: "" })).toBe(false);

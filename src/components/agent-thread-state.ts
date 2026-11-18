@@ -44,6 +44,7 @@ export type AgentThreadSnapshot = {
 
 export type AgentThreadAction =
   | { type: "prompt"; text: string }
+  | { type: "unsubmit"; text: string }
   | { type: "event"; event: AgentUiEvent; snapshot?: AgentThreadSnapshot; keepBusy?: boolean }
   | { type: "settled"; snapshot?: AgentThreadSnapshot }
   | { type: "note"; text: string }
@@ -76,6 +77,11 @@ export function agentThreadReducer(state: AgentThreadState, action: AgentThreadA
         validation: null,
         seq: state.seq + 1,
       };
+    }
+    case "unsubmit": {
+      const last = state.messages[state.messages.length - 1];
+      if (last?.role !== "user" || last.text !== action.text.trim()) return state;
+      return { ...state, messages: state.messages.slice(0, -1), busy: false, seq: Math.max(0, state.seq - 1) };
     }
     case "event":
       return applyEvent(withSnapshot(state, action.snapshot), action.event, action.keepBusy);

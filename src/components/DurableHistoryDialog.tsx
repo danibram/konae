@@ -2,25 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog, Button } from "./ui";
 import {
   deleteDurableConversation, downloadDurableConversation, listDurableConversations,
-  readDurableCheckpointSummary, readDurableDetail, readDurableEffects, readDurableLease, readDurableRecord,
+  readDurableBlob, readDurableCheckpoint, readDurableCheckpointSummary, readDurableDetail, readDurableEffects, readDurableLease, readDurableRecord,
   readDurableRecords, requestDurableStop,
   type DurableConversationCursor, type DurableConversationInfo, type DurableRecordCursor,
   type DurableRecordSummaryItem,
 } from "../agent/durable-storage";
 import "./durable-history.css";
+import { inspectCheckpointCandidate } from "../agent/durable-checkpoints";
 
-type Props = { projectId: string; ownerId: string; open: boolean; onClose: () => void; onContinue: (conversationId: string) => void };
+type Props = { projectId: string; ownerId: string; open: boolean; onClose: () => void; onContinue: (conversationId: string) => void; canContinue?: boolean };
 type PageState = { items: DurableRecordSummaryItem[]; nextCursor: DurableRecordCursor | null };
 type Expanded = { loading: boolean; value?: Record<string, unknown>; error?: string };
 
-export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onContinue }: Props) {
+export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onContinue, canContinue = true }: Props) {
   const [conversations, setConversations] = useState<DurableConversationInfo[]>([]);
   const [conversationCursor, setConversationCursor] = useState<DurableConversationCursor | null>(null);
   const [selected, setSelected] = useState<DurableConversationInfo | null>(null);
   const [records, setRecords] = useState<PageState | null>(null);
   const [lease, setLease] = useState<Awaited<ReturnType<typeof readDurableLease>> | null>(null);
   const [effects, setEffects] = useState<Awaited<ReturnType<typeof readDurableEffects>>>([]);
-  const [checkpoint, setCheckpoint] = useState<{ sequence: number; status: string; sourcesRevision?: number; candidateId?: string; inspectionOnly?: boolean } | null>(null);
+  const [checkpoint, setCheckpoint] = useState<{ checkpointId: string; sequence: number; status: string; sourcesRevision?: number; candidateId?: string; inspectionOnly?: boolean } | null>(null);
+  const [candidate, setCandidate] = useState<Awaited<ReturnType<typeof inspectCheckpointCandidate>> | null>(null);
+  const [inspectingCandidate, setInspectingCandidate] = useState(false);
   const [checkpointError, setCheckpointError] = useState("");
   const [expanded, setExpanded] = useState<Record<string, Expanded>>({});
   const [error, setError] = useState("");
@@ -33,7 +36,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
     if (!open) return;
     let active = true;
     selectionToken.current += 1;
-    setError(""); setSelected(null); setRecords(null); setExpanded({}); setConfirmDelete(false); setCheckpoint(null); setCheckpointError(""); setWaitingForRelease(false);
+    setError(""); setSelected(null); setRecords(null); setExpanded({}); setConfirmDelete(false); setCheckpoint(null); setCandidate(null); setCheckpointError(""); setWaitingForRelease(false);
     void listDurableConversations(projectId, ownerId).then((page) => {
       if (active) { setConversations(page.items); setConversationCursor(page.nextCursor); }
     }).catch((cause) => { if (active) setError(message(cause)); });
@@ -42,7 +45,7 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
 
   const choose = async (item: DurableConversationInfo) => {
     const token = ++selectionToken.current;
-    setSelected(item); setRecords(null); setExpanded({}); setError(""); setCheckpointError(""); setLease(null); setEffects([]); setConfirmDelete(false); setWaitingForRelease(false); setBusy(false);
+    setSelected(item); setRecords(null); setExpanded({}); setCandidate(null); setError(""); setCheckpointError(""); setLease(null); setEffects([]); setConfirmDelete(false); setWaitingForRelease(false); setBusy(false);
     try {
       const [page, currentLease, currentEffects, checkpoints] = await Promise.all([
         readDurableRecords(projectId, item.id, ownerId), readDurableLease(projectId, item.id, ownerId), readDurableEffects(projectId, item.id, ownerId), readDurableCheckpointSummary(projectId, item.id, ownerId).then((value) => ({ value, error: "" })).catch((cause) => ({ value: null, error: message(cause) })),
@@ -51,9 +54,25 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
         setRecords(page); setLease(currentLease); setEffects(currentEffects);
         setCheckpointError(checkpoints.error);
         const latest = checkpoints.value?.item;
-        setCheckpoint(latest ? { sequence: latest.sequence, status: latest.status ?? "saved checkpoint", sourcesRevision: latest.sourcesRevision ?? undefined, candidateId: latest.candidateId ?? undefined, inspectionOnly: latest.inspectionOnly } : null);
+        setCheckpoint(latest ? { checkpointId: latest.checkpointId, sequence: latest.sequence, status: latest.status ?? "saved checkpoint", sourcesRevision: latest.sourcesRevision ?? undefined, candidateId: latest.candidateId ?? undefined, inspectionOnly: latest.inspectionOnly } : null);
       }
     } catch (cause) { if (token === selectionToken.current) setError(message(cause)); }
+  };
+  const inspectCandidate = async () => {
+    if (!selected || !checkpoint || inspectingCandidate) return;
+    const token = selectionToken.current;
+    const conversationId = selected.id;
+    setInspectingCandidate(true); setCheckpointError("");
+    try {
+      const saved = await readDurableCheckpoint({ projectId, conversationId, ownerId }, checkpoint.checkpointId);
+      if (!saved) throw new Error("The saved proposal checkpoint is no longer available.");
+      const files = await inspectCheckpointCandidate(saved, (digest) => readDurableBlob({ projectId, conversationId, ownerId }, digest));
+      if (token === selectionToken.current && selected?.id === conversationId) setCandidate(files);
+    } catch (cause) {
+      if (token === selectionToken.current && selected?.id === conversationId) setCheckpointError(message(cause));
+    } finally {
+      if (token === selectionToken.current && selected?.id === conversationId) setInspectingCandidate(false);
+    }
   };
   useEffect(() => {
     if (!open || !waitingForRelease || !selected) return;
@@ -156,14 +175,15 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
           {lease?.live && <div className="durable-status" role="status">Another browser holds the active writer lease (generation {lease.generation}, executor {lease.executorId ?? "unknown"}). <Button variant="secondary" onClick={() => void stopWriter()} disabled={busy}>Ask it to stop and release</Button></div>}
           {lease && !lease.live && lease.unresolvedEffects && <div className="durable-status" role="alert">A write outcome is unresolved. Continue stays blocked until its documented read-back reconciles it.</div>}
           {lease && !lease.live && !lease.unresolvedEffects && <div className="durable-status">No active writer. Saved source changes are checked again when you choose Continue.</div>}
-          {checkpoint && <div className="durable-status"><strong>Latest saved proposal checkpoint:</strong> {safeText(checkpoint.status)} · checkpoint sequence {checkpoint.sequence}{checkpoint.sourcesRevision !== undefined ? ` · source revision ${checkpoint.sourcesRevision}` : ""}{checkpoint.candidateId ? ` · candidate ${checkpoint.candidateId}` : ""}{checkpoint.inspectionOnly ? ". This local attachment is inspection-only because some native continuation details were not preserved." : ". Large files stay unopened until recovery."}</div>}
+          {checkpoint && <div className="durable-status"><strong>Latest saved proposal checkpoint:</strong> {safeText(checkpoint.status)} · checkpoint sequence {checkpoint.sequence}{checkpoint.sourcesRevision !== undefined ? ` · source revision ${checkpoint.sourcesRevision}` : ""}{checkpoint.candidateId ? ` · candidate ${checkpoint.candidateId}` : ""}{checkpoint.inspectionOnly ? ". This local attachment is inspection-only because some native continuation details were not preserved." : ". Candidate files load only when requested."} <Button variant="secondary" onClick={() => void inspectCandidate()} disabled={inspectingCandidate}>{inspectingCandidate ? "Loading candidate files…" : "Inspect candidate files"}</Button></div>}
+          {candidate && <section className="durable-status" aria-label="Read-only candidate comparison"><strong>Read-only proposal comparison</strong><p>Saved base and candidate files are displayed as text. This inspection does not claim a lease, call a model, or apply changes.</p>{[...new Set([...Object.keys(candidate.base.files), ...Object.keys(candidate.scratch.files)])].sort().map((path) => <details key={path} open><summary>{path}</summary><h4>Saved source</h4><pre>{candidate.base.files[path] ?? "(file absent)"}</pre><h4>Saved candidate</h4><pre>{candidate.scratch.files[path] ?? "(file absent)"}</pre></details>)}</section>}
           {checkpointError && <div className="durable-status" role="status">Checkpoint summary is temporarily unavailable; the saved timeline is still shown. {safeText(checkpointError)}</div>}
           <ol className="durable-timeline">
             {[...(records?.items ?? [])].reverse().map((item) => <HistoryEntry key={`${item.sequence}:${item.ordinal}`} item={item} expanded={expanded[String(item.id)]} onExpand={() => void expand(item)} effects={effects} projectId={projectId} conversationId={selected.id} ownerId={ownerId} />)}
           </ol>
           {records?.nextCursor && <Button variant="secondary" onClick={() => void olderRecords()} disabled={busy}>Load older entries</Button>}
-          {!confirmDelete && lease && !lease.live && !checkpoint?.inspectionOnly && (checkpoint?.status === "applied-unsaved" || checkpoint?.status === "apply-unknown") && <Button variant="primary" onClick={() => onContinue(selected.id)}>Check saved source outcome</Button>}
-          {!confirmDelete && lease && !lease.live && !lease.unresolvedEffects && !checkpoint?.inspectionOnly && checkpoint?.status !== "applied-unsaved" && checkpoint?.status !== "apply-unknown" && <Button variant="primary" onClick={() => onContinue(selected.id)}>Continue from this saved conversation</Button>}
+          {canContinue && !confirmDelete && lease && !lease.live && !checkpoint?.inspectionOnly && (checkpoint?.status === "applied-unsaved" || checkpoint?.status === "apply-unknown") && <Button variant="primary" onClick={() => onContinue(selected.id)}>Check saved source outcome</Button>}
+          {canContinue && !confirmDelete && lease && !lease.live && !lease.unresolvedEffects && !checkpoint?.inspectionOnly && checkpoint?.status !== "applied-unsaved" && checkpoint?.status !== "apply-unknown" && <Button variant="primary" onClick={() => onContinue(selected.id)}>Continue from this saved conversation</Button>}
           {confirmDelete && <div className="durable-delete-confirm" role="alertdialog" aria-label="Confirm conversation deletion"><p>Delete this conversation and its saved details? This cannot be undone.</p><Button variant="secondary" onClick={() => setConfirmDelete(false)}>Cancel</Button><Button variant="danger" onClick={() => void remove()} disabled={busy}>Delete conversation</Button></div>}
         </>}
       </section>

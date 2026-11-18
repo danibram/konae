@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { chromium, webkit, devices } from "playwright";
+import { fixtureEnvironment } from "../tests/durable-mvp/harness.mjs";
 
 const repo = process.argv[2];
 if (!repo) throw new Error("Pass the Konae checkout path.");
 const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
 const origin = `http://127.0.0.1:${probe.port}`;
 probe.stop(true);
-const vite = Bun.spawn([process.execPath, "run", "dev", "--", "--host", "127.0.0.1", "--port", String(new URL(origin).port), "--strictPort"], { cwd: repo, stdout: "ignore", stderr: "inherit" });
+const vite = Bun.spawn([process.execPath, "run", "dev", "--", "--host", "127.0.0.1", "--port", String(new URL(origin).port), "--strictPort"], { cwd: repo, env: fixtureEnvironment, stdout: "ignore", stderr: "inherit" });
 const keys = { anthropic: "fixture-anthropic-key-28", openai: "fixture-openai-key-28", openrouter: "fixture-openrouter-key-28" };
 
 function sse(provider, key) {

@@ -168,14 +168,14 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
   } else {
     let after = 0;
     for (;;) {
-      const page = await (await request(`${base}/batches?after=${after}&limit=50`, { method: "GET" })).json() as { batches: NativeBatch[]; nextCursor: number | null };
+      const page = await (await request(`${base}/batches?after=${after}&limit=250&maxBytes=786432`, { method: "GET" })).json() as { batches: NativeBatch[]; nextCursor: number | null };
       for (const batch of page.batches) {
         memory.prepareCommit(batch.writes, batch.sequence as never).apply();
         nativeSnapshot.push(batch);
-        after = batch.sequence;
         hydratedSeq = batch.sequence;
       }
-      if (page.batches.length < 50 || page.nextCursor === null || page.nextCursor === after && page.batches.length === 0) break;
+      if (!page.batches.length || page.nextCursor === null || page.nextCursor === after) break;
+      after = page.nextCursor;
     }
   }
 
@@ -332,10 +332,10 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
     const all: NativeBatch[] = [];
     let cursor = 0;
     for (;;) {
-      const page = await (await request(`${base}/batches?after=${cursor}&limit=50`, { method: "GET" })).json() as { batches: NativeBatch[] };
+      const page = await (await request(`${base}/batches?after=${cursor}&limit=250&maxBytes=786432`, { method: "GET" })).json() as { batches: NativeBatch[]; nextCursor: number | null };
       all.push(...page.batches);
-      if (page.batches.length < 50) return all;
-      cursor = page.batches.at(-1)!.sequence;
+      if (!page.batches.length || page.nextCursor === null || page.nextCursor === cursor) return all;
+      cursor = page.nextCursor;
     }
   }
   async function readLastSeq() {
@@ -380,6 +380,23 @@ export async function readDurableCheckpoints(options: Pick<DurableStorageOptions
   if (!response.ok) throw new Error(`Could not read conversation checkpoints (${response.status}).`);
   const page = await response.json() as { items: Array<{ checkpointId: string; sequence: number; payload: Record<string, unknown>; createdAt: number }> };
   return page.items;
+}
+
+async function readCheckpointSelection(options: Pick<DurableStorageOptions, "projectId" | "conversationId" | "ownerId">, query: URLSearchParams, fetcher: typeof fetch) {
+  const headers = options.ownerId ? { "x-konae-owner-id": options.ownerId } : undefined;
+  const response = await fetcher(`/_konae/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/checkpoints?${query}`, { credentials: "same-origin", cache: "no-store", headers });
+  if (!response.ok) throw new Error(`Could not read the selected proposal checkpoint (${response.status}).`);
+  return (await response.json() as { items: DurableCheckpoint[] }).items[0] ?? null;
+}
+
+/** Reads only the latest checkpoint metadata and files; preserves the owner route and sequence fence. */
+export function readLatestDurableCheckpoint(options: Pick<DurableStorageOptions, "projectId" | "conversationId" | "ownerId">, fetcher: typeof fetch = fetch) {
+  return readCheckpointSelection(options, new URLSearchParams({ latest: "true" }), fetcher);
+}
+
+/** Reads one immutable checkpoint by owner-scoped ID. */
+export function readDurableCheckpoint(options: Pick<DurableStorageOptions, "projectId" | "conversationId" | "ownerId">, checkpointId: string, fetcher: typeof fetch = fetch) {
+  return readCheckpointSelection(options, new URLSearchParams({ checkpoint_id: checkpointId }), fetcher);
 }
 
 async function sha256(bytes: Uint8Array) {
