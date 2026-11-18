@@ -72,6 +72,10 @@ def owner_session(port, env, signup=False):
 def check_projects(port, cookie, model):
     projects = cut["rpc"](port, "projects_list", {}, cookie)["projects"]
     equal({p["project"]["id"] for p in projects}, model.projects, "owner project list")
+    for project in sorted(model.projects):
+        inspected = cut["rpc"](port, "project_inspect", {"projectId": project}, cookie)
+        equal(inspected["project"]["id"], project, "owner opens project")
+        equal(inspected["deployment"] is not None, project == "probe", "draft or published project")
 
 
 def action(port, cookie, name, args):
