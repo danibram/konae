@@ -6,6 +6,8 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-18
+
 ### Added
 
 - App settings and the owner MCP can turn modules on and configure them per app. The available switches are search listing, app accounts, file storage, data and actions, HTTP routes and outbound calls.
@@ -15,6 +17,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - The editor has a browser-local path at `/local`. Describe, check, preview and apply changes with a provider key saved in that browser. A signed-in owner can explicitly attach a copy of a local conversation to a saved Project.
 - The staged Pi Durable agent saves owner-only conversation history, declared objectives, tool evidence and coherent proposals on the Konae installation. An owner can read or download history without a model key and deliberately continue from a second browser with its own key. History stays outside app exports. The legacy agent remains the default.
 - In staged Durable, an owner can restore an earlier checkpoint as a new proposal against current saved sources. Apply requires a fresh Validation Gate, Build and Preview. Earlier conversations and the effects recorded in them remain available for inspection.
+
+- Installation copies can publish encrypted, authenticated SQLite and file blocks to an optional v3 directory or S3 repository. The original writers remain available for compatible copies and rollback.
+- Operators can inventory installation storage and rehearse restores in isolation. Copies capture one installation cut across SQLite databases, drafts, uploaded files and queued work.
+- Running `bun run dev:local` opens Projects with a generated development owner on loopback. Manual sign-in is available with `KONAE_DEV_AUTO_LOGIN=0`.
 
 ### Changed
 
@@ -27,6 +33,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 ### Fixed
 
 - Installation copies verify indexed blobs and all referenced destination bytes before publishing. The writer checks the 4 MiB limit after signing the manifest. Health preserves the last complete point per target across restarts and reports its age and the last verified restore.
+- Upgrades retain owner projects and app sessions from older database layouts.
 - App settings keeps the selected tab when the dialog remounts.
 - Concurrent initialization of the Usage database no longer interrupts a scheduled run with a SQLite lock error.
 
