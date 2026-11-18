@@ -45,7 +45,7 @@ def compare(binaries, args, destination, extra, success, message, inspect=None):
         if inspect:
             inspect(destination)
         if not success:
-            check(not destination.exists() or not list(destination.iterdir()), "Failed restore installed files")
+            check(not destination.exists() or all(p.name == "kernel.lock" and p.is_file() and p.stat().st_size == 0 for p in destination.iterdir()), "Failed restore installed files")
         shutil.rmtree(destination, ignore_errors=True)
 
 

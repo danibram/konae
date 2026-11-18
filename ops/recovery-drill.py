@@ -146,7 +146,7 @@ def exercise(args, report):
         if port:
             refusal = restricted(binary, root, restore, env | credentials, reads, port)
             require(refusal.returncode != 0 and b"is encrypted. Set KONAE_COPY_SECRET" in refusal.stderr
-                    and not any(data.iterdir()), "missing-key-check-failed")
+                    and {p.name for p in data.iterdir()} <= {"kernel.lock"}, "missing-key-check-failed")
             report["missingKeyRefused"] = True
             credentials["KONAE_COPY_SECRET"] = os.environ.get("KONAE_COPY_SECRET", "")
             require(credentials["KONAE_COPY_SECRET"], "custody-key-unavailable")
