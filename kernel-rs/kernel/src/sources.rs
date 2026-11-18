@@ -120,6 +120,7 @@ pub fn manifest_without_runtime(manifest: &Value) -> Value {
 
 /// Holds a source write open until the owner store has advanced its revision.
 pub struct PendingWrite {
+    operation: crate::copies::Pending,
     staged: StagedRelease,
     settings_path: PathBuf,
     settings_before: Vec<u8>,
@@ -129,10 +130,11 @@ pub struct PendingWrite {
 
 impl PendingWrite {
     /// Keeps the new app and settings and removes migration input.
-    pub async fn commit(self) {
+    pub async fn commit(self) -> Result<()> {
         let legacy = self.staged.legacy_metadata.clone();
         self.staged.finish().await;
         let _ = tokio::fs::remove_file(legacy).await;
+        self.operation.finish()
     }
 
     /// Restores the source files, settings, Installed record and migration input.
@@ -140,8 +142,8 @@ impl PendingWrite {
         let mut failures = Vec::new();
         if let Err(error) = restore(&self.settings_path, Some(&self.settings_before)).await { failures.push(format!("konae.json: {error:#}")); }
         if let Err(error) = restore(&self.record_path, self.record_before.as_deref()).await { failures.push(format!(".konae/deployment.json: {error:#}")); }
-        self.staged.put_back().await;
-        if failures.is_empty() { Ok(()) } else { anyhow::bail!("{}", failures.join("; ")) }
+        if let Err(error) = self.staged.restore_previous().await { failures.push(format!("app/: {error:#}")); }
+        if failures.is_empty() { self.operation.finish() } else { anyhow::bail!("{}", failures.join("; ")) }
     }
 }
 
@@ -185,6 +187,13 @@ pub async fn stage_write(root: &Path, id: &str, source: &Value) -> Result<Pendin
     let directories = source["directories"].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned()).collect::<Vec<_>>();
     let metadata = json!({"name":name,"slug":slug,"manifest":source["manifest"],"directories":directories,"updatedAt":source["updatedAt"]});
     let staged = stage_release(root, id, &files, &metadata).await?;
+    let operation = match crate::copies::Pending::begin(root, id, "saving app sources, settings and their revision") {
+        Ok(operation) => operation,
+        Err(error) => {
+            staged.discard().await;
+            return Err(error);
+        }
+    };
     if let Err(error_value) = staged.swap().await {
         staged.discard().await;
         return Err(error_value);
@@ -192,10 +201,11 @@ pub async fn stage_write(root: &Path, id: &str, source: &Value) -> Result<Pendin
     if let Some(record) = installed {
         let bytes = match serde_json::to_vec_pretty(&record) {
             Ok(bytes) => bytes,
-            Err(error) => { staged.put_back().await; return Err(error.into()); }
+            Err(error) => { staged.restore_previous().await?; operation.finish()?; return Err(error.into()); }
         };
         if let Err(error) = crate::write_atomic(&record_path, &bytes).await {
-            staged.put_back().await;
+            staged.restore_previous().await?;
+            operation.finish()?;
             return Err(error.into());
         }
     }
@@ -210,18 +220,18 @@ pub async fn stage_write(root: &Path, id: &str, source: &Value) -> Result<Pendin
     if let Err(error_value) = settings.write(root).await {
         let settings_restore = restore(&settings_path, Some(&settings_before)).await;
         let record_restore = restore(&record_path, record_before.as_deref()).await;
-        staged.put_back().await;
+        staged.restore_previous().await?;
         settings_restore?;
         record_restore?;
+        operation.finish()?;
         return Err(error_value);
     }
-    Ok(PendingWrite { staged, settings_path, settings_before, record_path, record_before })
+    Ok(PendingWrite { operation, staged, settings_path, settings_before, record_path, record_before })
 }
 
 /// Writes source files into `app/` and their editable settings into `konae.json`.
 pub async fn write(root: &Path, id: &str, source: &Value) -> Result<()> {
-    stage_write(root, id, source).await?.commit().await;
-    Ok(())
+    stage_write(root, id, source).await?.commit().await
 }
 
 fn canonical_directories<'a>(directories: impl IntoIterator<Item = &'a str>) -> Result<Vec<String>> {
@@ -339,16 +349,20 @@ impl StagedRelease {
 
     /// Puts the old `app/` back after a later step of the release failed.
     pub async fn put_back(self) {
-        if let Err(error_value) = tokio::fs::rename(&self.app, &self.staged).await {
-            eprintln!("Could not move the sources of a failed release out of {}: {error_value}", self.app.display());
-            return;
+        if let Err(error) = self.restore_previous().await {
+            eprintln!("Could not restore the sources after a failed release: {error:#}");
         }
-        if tokio::fs::try_exists(&self.retired).await.unwrap_or(false) {
-            if let Err(error_value) = tokio::fs::rename(&self.retired, &self.app).await {
-                eprintln!("Could not put back {} after a failed release: {error_value}", self.app.display());
-            }
+    }
+
+    async fn restore_previous(self) -> Result<()> {
+        tokio::fs::rename(&self.app, &self.staged).await
+            .with_context(|| format!("Could not move the failed sources out of {}", self.app.display()))?;
+        if tokio::fs::try_exists(&self.retired).await? {
+            tokio::fs::rename(&self.retired, &self.app).await
+                .with_context(|| format!("Could not put back {}", self.app.display()))?;
         }
         let _ = tokio::fs::remove_dir_all(&self.staged).await;
+        Ok(())
     }
 
     /// Removes the old `app/` once the release serves.

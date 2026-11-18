@@ -1353,10 +1353,9 @@ async fn admin_call(
                         anyhow::ensure!(saved.as_ref() == Some(&source), "This project already has saved sources. Reload before saving.");
                         revision
                     } else {
-                        let journal = crate::copies::Pending::begin(&state.data_root, &id, "saving initial sources and the catalogue revision")?;
-                        super::sources::write(&state.data_root, &id, &source).await?;
+                        let pending = super::sources::stage_write(&state.data_root, &id, &source).await?;
                         db.execute("UPDATE projects SET sources=1 WHERE id=?1", [&id])?;
-                        journal.finish()?;
+                        pending.commit().await?;
                         1
                     };
                     project["sourcesRevision"] = json!(revision);
@@ -1520,18 +1519,15 @@ async fn admin_call(
             anyhow::ensure!(current == 0 || previous.is_some(), "Saved project sources are unavailable.");
             validate_sources(&source, id)?;
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
-            let journal = crate::copies::Pending::begin(&state.data_root, &format!("{id} revision {revision}"), "saving the sources and catalogue revision")?;
             let pending = super::sources::stage_write(&state.data_root, id, &source).await?;
             let update_result = store(state).and_then(|db| db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]).map_err(Into::into));
             if let Err(error) = update_result {
                 if let Err(restore) = pending.rollback().await {
                     anyhow::bail!("Saving sources failed: {error}. Restoring the saved sources failed: {restore:#}");
                 }
-                journal.finish()?;
                 return Err(error.into());
             }
-            pending.commit().await;
-            journal.finish()?;
+            pending.commit().await?;
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
