@@ -53,3 +53,26 @@ Rotate the data secret in place. Keep the previous value in custody until every 
 A collector can call `Repository::points`, authenticate each retained root with `open`, and enumerate its direct references with `VerifiedPoint::objects`. A missing data key or a failed authentication returns an error. The collector must stop deletion on that error. Rotating the installation revocation secret requires a separate ledger transition. The v3 data rotation described here keeps that secret in service.
 
 [Executable format vectors](../../kernel-rs/backup/src/blocks/tests.rs) · [Format measurements](../../kernel-rs/backup/block-measure.py) · [Installation and rotation trial](../../tests/smoke/block-copies.py)
+
+## Repeat the lab
+
+On mbpd, run these commands from the checkout root. The format trial uses macOS `time -lp` for peak RSS, Darwin's per-process disk counters, Python 3.11 or later with SQLite, and two local executables built with Rust 1.91.0. Cargo needs its locked dependencies available offline. The installation and compatibility trials also need the two operator binaries and the `catalog` example.
+
+```sh
+export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 TOKIO_WORKER_THREADS=2
+export CARGO_TARGET_DIR="$PWD/kernel-rs/target"
+export LAB=/Users/dbr/.bb-machines/danibram.getbb.app/thread-storage/thr_dur4bcq2ia/lab-bin
+cargo build --manifest-path kernel-rs/Cargo.toml --offline --locked --bins --examples
+cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked --workspace
+"$LAB/with-minio" python3 kernel-rs/backup/compatibility.py --bin-dir "$CARGO_TARGET_DIR/debug" --baseline-bin-dir "$LAB/../baseline" --mc "$LAB/bin/mc" --require-s3
+marker_dir=$(mktemp -d)
+"$LAB/with-minio" "$LAB/slow-s3" --kib-per-second 128 --marker "$marker_dir/transfer" python3 tests/smoke/block-copies.py --binary "$CARGO_TARGET_DIR/debug/konae" --mc "$LAB/bin/mc" --marker "$marker_dir/transfer" --require-s3
+unlink "$marker_dir/transfer" && rmdir "$marker_dir"
+"$LAB/with-minio" python3 kernel-rs/backup/block-measure.py --driver "$CARGO_TARGET_DIR/debug/examples/block-format" --meter "$LAB/minio-measure" --require-s3
+```
+
+The MinIO wrapper starts a loopback server, creates fresh credentials and an empty `konae-test` bucket, and configures the `lab` alias for `mc`. It passes `KONAE_TEST_S3_ENDPOINT`, `KONAE_TEST_S3_BUCKET`, `KONAE_TEST_S3_ACCESS_KEY` and `KONAE_TEST_S3_SECRET_KEY` to its child. The slow proxy forwards traffic to that server and creates its marker after 64 KiB on a connection. The test kills the writer at that marker. It checks the destination for zero published points, then starts the installation again. Running either trial without S3 prints `SKIP S3 destination`. The `--require-s3` flag makes an omission fail the run.
+
+The meter wraps one command at a time. It samples the server's S3 API counters before and after the command, preserves the child's output and appends one JSON line with `processExit`, elapsed `seconds` and `s3ServerDeltas`. Missing counters in the delta represent zero. It counts requests by type and reports `traffic_received_bytes` and `traffic_sent_bytes` at the server. Run against an otherwise idle bucket and server.
+
+The measurement script fixes the random seed and runs seven SQLite states at 4, 16 and 64 pages per object. It deletes the source before restoring each point into a fresh directory. It compares the whole-file hash with a digest taken before publication, runs SQLite integrity checking and counts the rows. Each phase has a separate process. Logical byte counts cover inventory, staged input, repository objects, manifests and reconstructed output. The Darwin counters report disk I/O charged to the measuring process and can remain zero for cached reads. Capture barriers, compaction, service startup and account reconciliation run in the separate installation trial.
