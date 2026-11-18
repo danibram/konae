@@ -24,9 +24,8 @@ pub struct Blob {
     pub reader: Pin<Box<dyn AsyncRead + Send>>,
 }
 
-pub enum CopyBlob {
-    Pinned(Blob),
-    Unversioned(Blob),
+fn immutable_version(version: Option<&str>) -> Option<&str> {
+    version.filter(|id| !id.is_empty() && *id != "null")
 }
 
 /// The bytes of a Deployment's files. Every method names the Deployment, so a
@@ -36,10 +35,13 @@ pub trait FileStore: Send + Sync {
     /// Stores the bytes of `source`, a local file, as `file`. A reader sees
     /// either the whole file or nothing.
     fn put<'a>(&'a self, deployment: &'a str, file: &'a str, source: &'a Path) -> BoxFuture<'a, Result<()>>;
-    /// The file's bytes, or the `range` of them. `None` when the store holds
+    /// The file's bytes, or the `range` of them. Returns `None` for a missing file.
     fn get<'a>(&'a self, deployment: &'a str, file: &'a str, range: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>>;
-    fn open_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<CopyBlob>>> {
-        Box::pin(async move { Ok(self.get(deployment, file, None).await?.map(CopyBlob::Unversioned)) })
+    fn get_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<(Blob, Option<String>)>>> {
+        Box::pin(async move { Ok(self.get(deployment, file, None).await?.map(|blob| (blob, None))) })
+    }
+    fn confirms_version<'a>(&'a self, _deployment: &'a str, _file: &'a str, _version: &'a str, _size: u64) -> BoxFuture<'a, bool> {
+        Box::pin(async { false })
     }
     /// Removes the file. Removing a file that is not there succeeds.
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>>;
@@ -115,11 +117,6 @@ impl FileStore for LocalFolder {
         })
     }
 
-    fn open_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<CopyBlob>>> {
-        // put renames a new inode into place. An open file keeps its previous bytes.
-        Box::pin(async move { Ok(self.get(deployment, file, None).await?.map(CopyBlob::Pinned)) })
-    }
-
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             match tokio::fs::remove_file(self.path(deployment, file)).await {
@@ -177,9 +174,9 @@ impl FileStore for LocalFolder {
 }
 
 /// An S3-compatible bucket. Each file is the object
-/// `<prefix><deployment id>/<file id>`. It sends only `PutObject`,
-/// `GetObject` with a `Range`, `DeleteObject` and `ListObjectsV2`, the
-/// operations R2, Scaleway and Hetzner all document (ADR-0009).
+/// `<prefix><deployment id>/<file id>`. A copy can use `HeadObject` to
+/// confirm the current version before reusing verified bytes. A store that
+/// cannot confirm the version gets a full read.
 pub struct S3Store {
     client: S3Client,
     pub settings: S3Settings,
@@ -253,11 +250,11 @@ impl S3Store {
         format!("{}{deployment}/{file}", self.settings.prefix)
     }
 
-    async fn read_object(&self, deployment: &str, file: &str, range: Option<Range<u64>>) -> Result<Option<CopyBlob>> {
+    async fn read_object(&self, deployment: &str, file: &str, range: Option<Range<u64>>) -> Result<Option<(Blob, Option<String>)>> {
         if let Some(range) = &range {
             ensure!(range.start <= range.end, "The range lies outside the file.");
             if range.start == range.end {
-                return Ok(Some(CopyBlob::Pinned(Blob { length: 0, reader: Box::pin(tokio::io::empty()) })));
+                return Ok(Some((Blob { length: 0, reader: Box::pin(tokio::io::empty()) }, None)));
             }
         }
         let mut request = self.client.get_object().bucket(&self.settings.bucket).key(self.key(deployment, file));
@@ -273,9 +270,8 @@ impl S3Store {
         if let Some(range) = &range {
             ensure!(length == range.end - range.start, "The store answered a different range than the one asked for.");
         }
-        let versioned = object.version_id().is_some_and(|id| !id.is_empty() && id != "null");
-        let blob = Blob { length, reader: Box::pin(object.body.into_async_read()) };
-        Ok(Some(if versioned { CopyBlob::Pinned(blob) } else { CopyBlob::Unversioned(blob) }))
+        let version = immutable_version(object.version_id()).map(str::to_owned);
+        Ok(Some((Blob { length, reader: Box::pin(object.body.into_async_read()) }, version)))
     }
 
     async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>, u64)>, Vec<String>)> {
@@ -345,15 +341,19 @@ impl FileStore for S3Store {
     }
 
     fn get<'a>(&'a self, deployment: &'a str, file: &'a str, range: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>> {
-        Box::pin(async move {
-            Ok(self.read_object(deployment, file, range).await?.map(|object| match object {
-                CopyBlob::Pinned(blob) | CopyBlob::Unversioned(blob) => blob,
-            }))
-        })
+        Box::pin(async move { Ok(self.read_object(deployment, file, range).await?.map(|(blob, _)| blob)) })
     }
 
-    fn open_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<CopyBlob>>> {
+    fn get_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<(Blob, Option<String>)>>> {
         Box::pin(self.read_object(deployment, file, None))
+    }
+
+    fn confirms_version<'a>(&'a self, deployment: &'a str, file: &'a str, version: &'a str, size: u64) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            self.client.head_object().bucket(&self.settings.bucket).key(self.key(deployment, file)).send().await
+                .is_ok_and(|object| immutable_version(object.version_id()) == Some(version)
+                    && object.content_length().and_then(|n| u64::try_from(n).ok()) == Some(size))
+        })
     }
 
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>> {

@@ -52,6 +52,10 @@ def run(args, root, report):
             raise ValueError("--legacy-s3-only requires a live S3 file store")
         omitted = ["directory", "directory-v3", "s3-v3"]
         print("SKIP directory, directory-v3 and s3-v3: only the legacy S3 writer was requested", flush=True)
+    elif args.s3_only:
+        if not live_s3:
+            raise ValueError("--s3-only requires a live S3 file store")
+        omitted = ["directory", "directory-v3"]
     report["omitted"] = omitted
     live = root / "live"
     base = dict(cut["setting"](live), PATH=os.defpath, AWS_EC2_METADATA_DISABLED="true", TOKIO_WORKER_THREADS="2")
@@ -92,6 +96,10 @@ def run(args, root, report):
         targets = {"s3": targets["s3"]}
         config = {"KONAE_COPY_S3": "1", "KONAE_COPY_STAGE_BYTES": str(1024**3), "KONAE_COPY_READERS": "512"}
 
+    if args.s3_only:
+        targets = {kind: target for kind, target in targets.items() if kind in {"s3", "s3-v3"}}
+        del config["KONAE_COPY_DIR"], config["KONAE_COPY_V3_DIR"]
+
     def mc(*args_, **kwargs):
         return subprocess.run([args.mc, *args_], check=True, capture_output=True, timeout=120, **kwargs).stdout
 
@@ -129,13 +137,14 @@ def run(args, root, report):
                     return status
             if args.delay_file_get:
                 started = time.monotonic()
-                year["action"](port, probe_cookie, "notes.add", {"title": "during-refusal"})
+                year["action"](port, probe_cookie, "notes.add", {"title": "during-get"})
                 report["writeDuringDelayMs"] = round((time.monotonic() - started) * 1000, 3)
                 completed = time.time_ns() // 1_000_000
                 target, = cut["targets"](port)
                 report["attemptToWriteCompleteMs"] = completed - target["lastAttemptAt"]
-                model.rows["during-refusal"] = year["MEMBERS"][0]
+                model.rows["during-get"] = year["MEMBERS"][0]
                 year["check_rows"](port, probe_cookie, year["MEMBERS"][0], model)
+                oracle.update(inventory(live, source=True))
             statuses = cut["wait"](finished, "pilot capture did not finish", 900)
             if args.second_cut:
                 assert all(s["lastCopyId"] for s in statuses)
@@ -146,7 +155,7 @@ def run(args, root, report):
                     if records and all(s["lastCopyId"] != first or s["lastError"] for s in records):
                         return records
                 following = cut["wait"](second, "No second complete cut", 900)
-                first_cut, = {s["lastCutAt"] for s in statuses}
+                first_cut, = {s.get("lastCutAt", s["lastAttemptAt"]) for s in statuses}
                 report["ageBeforeNextPointMs"] = {s["kind"]: s["lastSuccessAt"] - first_cut for s in following
                                                   if not s["lastError"]}
                 statuses = following
@@ -198,6 +207,9 @@ def run(args, root, report):
         point, = {s["lastCopyId"] for s in complete}
         at, = {s["lastCutAt"] for s in complete}
         assert point and at
+        if args.delay_file_get:
+            assert at >= completed, "The copy cut predates the acknowledged write"
+            assert report["writeDuringDelayMs"] <= 250, "The delayed GET stalled a write past 250 ms"
         if args.store == "replay":
             for target in ["s3", "s3-v3"]:
                 phase("replay-" + target)
@@ -279,7 +291,9 @@ def main():
     parser.add_argument("--delay-file-get", action="store_true", help="hold the standalone fixture's live GET for 2.2 s")
     parser.add_argument("--second-cut", type=int, metavar="SECONDS", help="observe age up to the next publication")
     parser.add_argument("--historical", action="store_true", help="af1a897 predates the inventory command")
-    parser.add_argument("--legacy-s3-only", action="store_true", help="isolate the v2 writer on a live S3 file store")
+    targets = parser.add_mutually_exclusive_group()
+    targets.add_argument("--legacy-s3-only", action="store_true", help="isolate the v2 writer on a live S3 file store")
+    targets.add_argument("--s3-only", action="store_true", help="publish the same cut to the v2 and v3 S3 writers")
     parser.add_argument("--mc", default="mc")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
@@ -287,8 +301,8 @@ def main():
         parser.error("six needs --six")
     if args.delay_file_get and not (args.profile == "standalone" and args.legacy_s3_only):
         parser.error("--delay-file-get needs the standalone profile with --legacy-s3-only")
-    if args.second_cut and (args.second_cut < 2 or args.historical or args.store == "replay"):
-        parser.error("choose an integrated live writer and an interval of at least two seconds")
+    if args.second_cut and (args.second_cut < 2 or args.store == "replay"):
+        parser.error("choose a live writer and an interval of at least two seconds")
     if args.historical and not args.legacy_s3_only:
         parser.error("the historical measurement requires --legacy-s3-only")
     if args.report.exists():

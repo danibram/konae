@@ -66,11 +66,15 @@ For the versioned-origin load test use `--store versioned --interval 70` and ano
 
 MinIO Prometheus deltas count requests and traffic per phase. Server trace records split shared publication traffic by prefix. The trace and Prometheus count different portions of the protocol. Directory repository size counts logical file bytes. Neither counter measures physical SSD reads. The sampler sums live SQLite WAL file lengths and staging file lengths and counts the writer's open descriptors about every 100 ms. Reported maxima are sampled lower bounds. The stage budget is 1 GiB and the reader budget is 512. Apply the operator's unit prices to the operation counts, retained byte-months and chargeable traffic. Supply an independent failure domain, custody keys, remote alerting and elapsed retention time for a production decision.
 
-## Reproduce the shared S3 cut refusal
+## Check that a slow GET stays outside the cut
 
 ```sh
 remote --binary "$bin/kernel" --profile standalone --store versioned --legacy-s3-only --delay-file-get \
-  --report "$lab/reports/one-file-refusal.json"
+  --report "$lab/reports/one-file.json"
 ```
 
-The relay holds the live GET of one 512-byte private file for 2.2 s. The capture has a budget of 1.85 s. The test sends a write when the live GET reaches the relay and times its response. Expect a failed exit, no point in the fresh repository and a second successful write and read-back after the refusal. Repeat without the delay in another empty MinIO to exercise the same fixture normally. A refusal in this phase affects the integrated legacy writer as well as v3. Switching off the v3 destinations keeps the shared capture code.
+The relay holds the live GET of one 512-byte private file for 2.2 s. The test sends a write when the GET reaches the relay and requires a response within 250 ms. The cut must follow that write. Restore the point after removing the live files and check that the acknowledged row and all file bytes and permissions survived. Repeat with `--store unversioned` in an empty MinIO.
+
+Use `--profile six --s3-only` to run v2 and v3 from one cut and restore each from S3. A new process with an empty repository starts cold. Use `--second-cut 95` to measure a second publication in the same process. Read preparation, pause and materialization separately in the report, and compare the live file GET and HEAD counts between publication phases.
+
+On a versioned store, the process can keep one generation of verified blobs in the private staging directory. The next attempt checks the current version and length with HEAD and hashes the local bytes before reuse. A missing version, including the S3 version ID `null`, requires a full GET. Removing staging or restarting the process makes the next capture cold.

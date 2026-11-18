@@ -95,8 +95,17 @@ def observed_server(binary, env, request, result, ready_event=None):
             process.wait(timeout=15)
             log.seek(0)
             pattern = rb"admitted writers after (\d+) ms \(drain (\d+) ms, (\d+) databases, (\d+) open readers"
+            output = log.read()
             result["cuts"] = [dict(zip(("pauseMs", "drainMs", "images", "readers"), map(int, match)))
-                              for match in re.findall(pattern, log.read())]
+                              for match in re.findall(pattern, output)]
+            result["preparation"] = [dict(files=int(files), bytes=int(size), ms=int(elapsed))
+                                     for files, size, elapsed in re.findall(
+                                         rb"Copy prepared (\d+) remote files \((\d+) bytes\) in (\d+) ms", output)]
+            result["rejectedCuts"] = [dict(pauseMs=int(pause), drainMs=int(drain))
+                                      for pause, drain in re.findall(
+                                          rb"Copy released writers after (\d+) ms \(drain (\d+) ms\)\. The file index changed", output)]
+            result["materializeMs"] = [int(ms) for ms in re.findall(
+                rb"Copy materialized the pinned database and file views in (\d+) ms", output)]
 
 
 class Traffic:

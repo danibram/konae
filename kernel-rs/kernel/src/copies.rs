@@ -180,12 +180,13 @@ struct CopyState {
 struct StagedCopy {
     manifest: Manifest,
     legacy_blobs: HashMap<String, String>,
+    checked_files: Vec<cut::CheckedFile>,
 }
 
 /// Takes one copy and sends it to every target, then prunes old copies.
 /// Returns the copy ID when every target succeeded.
 pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
-    let _worker = state.copies.worker.lock().await;
+    let mut source_cache = state.copies.worker.lock().await;
     let started = now_ms();
     for target in targets {
         state.copies.update(target.kind(), |report| {
@@ -197,7 +198,7 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
     let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
     let _scratch = Staging(staging.clone());
     let mut cache = ManifestCache::new();
-    let staged = stage_copy(state, &staging, &mut cache).await;
+    let staged = stage_copy(state, &staging, &mut cache, &mut source_cache).await;
     let cut_at = staged.as_ref().map_or(started, |s| s.manifest.created_at);
     let id = copy_id(cut_at);
     let mut failures = Vec::new();
@@ -242,6 +243,9 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
         }).await;
     }
     if published && let Ok(staged) = staged {
+        if let Err(error) = source_cache.keep(&staging, staged.checked_files) {
+            eprintln!("Could not retain verified file versions for the next copy: {error:#}");
+        }
         let saved = CopyState {
             files: staged.manifest.files,
             s3_manifests: cache.into_iter().filter_map(|(key, result)| result.ok().map(|manifest| (key, manifest))).collect(),
@@ -291,7 +295,7 @@ impl Drop for Staging {
     }
 }
 
-async fn stage_copy(state: &AppState, staging: &Path, cache: &mut ManifestCache) -> Result<StagedCopy> {
+async fn stage_copy(state: &AppState, staging: &Path, cache: &mut ManifestCache, source_cache: &mut cut::SourceCache) -> Result<StagedCopy> {
     let prior = tokio::fs::read(state.data_root.join(".copy-state.json")).await.ok()
         .and_then(|bytes| serde_json::from_slice::<CopyState>(&bytes).ok());
     if let Some(prior) = prior.as_ref() {
@@ -306,18 +310,19 @@ async fn stage_copy(state: &AppState, staging: &Path, cache: &mut ManifestCache)
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut directory, 0o700);
     directory.create(crate::layout::apps(staging))?;
-    let (created_at, indexed_files) = cut::stage(state, staging, &previous_files).await?;
+    let (created_at, indexed_files) = cut::stage(state, staging, &previous_files, source_cache).await?;
     let root = staging.to_owned();
     tokio::task::spawn_blocking(move || {
         let manifest = Manifest::capture(&root, created_at)?;
         let staged: HashMap<_, _> = manifest.files.iter().map(|file| (file.path.as_str(), file)).collect();
         let mut legacy_blobs = HashMap::new();
-        for (path, size, digest, legacy) in indexed_files {
+        for checked in &indexed_files {
+            let path = &checked.path;
             let file = staged.get(path.as_str()).with_context(|| format!("Staging is missing indexed file {path}"))?;
-            ensure!(file.size == size && file.sha256 == digest, "Indexed file {path} changed in staging.");
-            if legacy { legacy_blobs.insert(path, digest); }
+            ensure!(file.size == checked.size && file.sha256 == checked.digest, "Indexed file {path} changed in staging.");
+            if checked.legacy { legacy_blobs.insert(path.clone(), checked.digest.clone()); }
         }
-        Ok(StagedCopy { manifest, legacy_blobs })
+        Ok(StagedCopy { manifest, legacy_blobs, checked_files: indexed_files })
     })
     .await?
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::file_store::{BoxFuture, FileStore, StoredObject};
 use rusqlite::Connection;
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 use tokio::sync::Notify;
 
 struct Fixture {
@@ -53,7 +53,10 @@ impl Fixture {
     fn released(&self) {
         assert!(self.state.copies.operations.try_write().is_ok());
         assert!(self.state.copies.generations.try_read().is_ok());
-        for path in [self.state.data_root.clone(), layout::apps(&self.state.data_root)] {
+        for path in [
+            self.state.data_root.clone(),
+            layout::apps(&self.state.data_root),
+        ] {
             File::open(path).unwrap().try_lock().unwrap();
         }
         let writer = Connection::open(layout::database(&self.state.data_root, "app")).unwrap();
@@ -85,8 +88,13 @@ async fn common_cut_keeps_wal_rollback_journal_and_reused_file_id() {
     let app = layout::folder(&f.state.data_root, "app");
     let before: i64 = 1;
     let writer = Connection::open(app.join("data/database.sqlite")).unwrap();
-    writer.execute_batch("BEGIN IMMEDIATE; UPDATE seq SET n=2").unwrap();
-    let views = pin(&f.state, &stage, &HashMap::new(), u64::MAX, 32).await.unwrap();
+    writer
+        .execute_batch("BEGIN IMMEDIATE; UPDATE seq SET n=2")
+        .unwrap();
+    let views = pin(&f.state, &stage, &HashMap::new(), u64::MAX, 32, None, PAUSE)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(f.state.copies.operations.try_read().is_ok());
     assert!(f.state.copies.generations.try_read().is_err());
     assert!(File::open(layout::apps(&f.state.data_root))
@@ -117,7 +125,10 @@ async fn common_cut_keeps_wal_rollback_journal_and_reused_file_id() {
         fs::read_to_string(before_app.join(format!("data/files/{}.blob", f.file))).unwrap(),
         "old"
     );
-    assert_eq!(fs::read_to_string(before_app.join("app/code")).unwrap(), "draft one");
+    assert_eq!(
+        fs::read_to_string(before_app.join("app/code")).unwrap(),
+        "draft one"
+    );
     assert_eq!(
         fs::read_to_string(before_app.join("dist/index.html")).unwrap(),
         "release one"
@@ -132,10 +143,18 @@ async fn common_cut_keeps_wal_rollback_journal_and_reused_file_id() {
 async fn common_cut_releases_partial_inventory_on_space_and_reader_limits() {
     for (bytes, readers, diagnostic) in [(u64::MAX, 1, "reader limit"), (1, 32, "staging space")] {
         let f = Fixture::new();
-        let error = pin(&f.state, &f.stage(), &HashMap::new(), bytes, readers)
-            .await
-            .err()
-            .unwrap();
+        let error = pin(
+            &f.state,
+            &f.stage(),
+            &HashMap::new(),
+            bytes,
+            readers,
+            None,
+            PAUSE,
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains(diagnostic), "{error}");
         f.released();
     }
@@ -143,27 +162,25 @@ async fn common_cut_releases_partial_inventory_on_space_and_reader_limits() {
 
 struct DelayedObject {
     opened: Notify,
+    release: Notify,
 }
 
 impl FileStore for DelayedObject {
     fn kind(&self) -> &'static str {
         "unversioned-test"
     }
-    fn get<'a>(&'a self, _: &'a str, _: &'a str, _: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>> {
+    fn get<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+        _: Option<Range<u64>>,
+    ) -> BoxFuture<'a, Result<Option<Blob>>> {
         Box::pin(async {
-            let (reader, writer) = tokio::io::duplex(16);
-            // Wait for the copy to drop the reader on cancellation.
-            tokio::spawn(async move {
-                use tokio::io::AsyncWriteExt;
-                let mut writer = writer;
-                while writer.write_all(b"x").await.is_ok() {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                }
-            });
             self.opened.notify_one();
+            self.release.notified().await;
             Ok(Some(Blob {
                 length: 3,
-                reader: Box::pin(reader),
+                reader: Box::pin(&b"old"[..]),
             }))
         })
     }
@@ -182,48 +199,133 @@ impl FileStore for DelayedObject {
 }
 
 #[tokio::test]
-async fn common_cut_timeout_and_abort_reopen_admission_in_drain_and_staging() {
-    for staging in [false, true] {
-        for abort in [false, true] {
-            let mut f = Fixture::new();
-            let slow = Arc::new(DelayedObject { opened: Notify::new() });
-            f.state.files.store = slow.clone();
-            let admitted = if staging {
-                None
-            } else {
-                Some(f.state.copies.operations.read().await)
-            };
-            let start = Instant::now();
-            let worker = tokio::spawn({
-                let (state, stage) = (f.state.clone(), f.stage());
-                async move { pin(&state, &stage, &HashMap::new(), u64::MAX, 32).await }
-            });
-            if staging {
-                slow.opened.notified().await;
-            } else {
-                while f.state.copies.operations.try_read().is_ok() {
-                    tokio::task::yield_now().await;
-                }
-            }
-            if abort {
-                worker.abort();
-                assert!(worker.await.err().unwrap().is_cancelled());
-            } else {
-                let error = worker.await.unwrap().err().unwrap().to_string();
-                assert!(error.contains(if staging { "staging" } else { "draining" }), "{error}");
-            }
-            let read = f.state.copies.operations.read().await;
-            let elapsed = start.elapsed();
-            println!(
-                "common-cut phase={} outcome={} admission-ms={}",
-                if staging { "staging" } else { "drain" },
-                if abort { "abort" } else { "timeout" },
-                elapsed.as_millis()
-            );
-            assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
-            drop((read, admitted));
-            f.released();
+async fn slow_remote_get_leaves_admission_open_and_the_cut_includes_the_write() {
+    let mut f = Fixture::new();
+    let slow = Arc::new(DelayedObject {
+        opened: Notify::new(),
+        release: Notify::new(),
+    });
+    f.state.files.store = slow.clone();
+    let worker = tokio::spawn({
+        let (state, staging) = (f.state.clone(), f.stage());
+        async move {
+            stage(
+                &state,
+                &staging,
+                &HashMap::new(),
+                &mut SourceCache::default(),
+            )
+            .await
         }
+    });
+    slow.opened.notified().await;
+    let permission = f.state.copies.operations.try_read().unwrap();
+    Connection::open(layout::database(&f.state.data_root, "app"))
+        .unwrap()
+        .execute("UPDATE seq SET n=2", [])
+        .unwrap();
+    drop(permission);
+    slow.release.notify_one();
+    worker.await.unwrap().unwrap();
+    assert_eq!(seq(layout::database(&f.stage(), "app")), 2);
+    assert_eq!(
+        fs::read(layout::files(&f.stage(), "app").join(format!("{}.blob", f.file))).unwrap(),
+        b"old"
+    );
+    f.released();
+}
+
+#[tokio::test]
+async fn a_replaced_index_discards_the_remote_preparation_and_retries() {
+    let mut f = Fixture::new();
+    let slow = Arc::new(DelayedObject {
+        opened: Notify::new(),
+        release: Notify::new(),
+    });
+    f.state.files.store = slow.clone();
+    let worker = tokio::spawn({
+        let (state, staging) = (f.state.clone(), f.stage());
+        async move {
+            stage(
+                &state,
+                &staging,
+                &HashMap::new(),
+                &mut SourceCache::default(),
+            )
+            .await
+        }
+    });
+    slow.opened.notified().await;
+    let permission = f.state.copies.operations.try_read().unwrap();
+    let index = layout::files(&f.state.data_root, "app").join("index.json");
+    // Even a byte-for-byte rewrite publishes a new index generation.
+    crate::write_atomic(&index, &fs::read(&index).unwrap())
+        .await
+        .unwrap();
+    drop(permission);
+    slow.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(3), slow.opened.notified())
+        .await
+        .unwrap();
+    let permission = f.state.copies.operations.try_read().unwrap();
+    fs::remove_file(index).unwrap();
+    drop(permission);
+    slow.release.notify_one();
+    let (_, files) = worker.await.unwrap().unwrap();
+    assert!(files.is_empty());
+    assert!(!layout::files(&f.stage(), "app").exists());
+    f.released();
+}
+
+#[tokio::test]
+async fn abort_while_preparing_remote_files_leaves_admission_open() {
+    let mut f = Fixture::new();
+    let slow = Arc::new(DelayedObject {
+        opened: Notify::new(),
+        release: Notify::new(),
+    });
+    f.state.files.store = slow.clone();
+    let worker = tokio::spawn({
+        let (state, staging) = (f.state.clone(), f.stage());
+        async move {
+            stage(
+                &state,
+                &staging,
+                &HashMap::new(),
+                &mut SourceCache::default(),
+            )
+            .await
+        }
+    });
+    slow.opened.notified().await;
+    worker.abort();
+    assert!(worker.await.err().unwrap().is_cancelled());
+    f.released();
+}
+
+#[tokio::test]
+async fn common_cut_timeout_and_abort_reopen_admission_in_drain() {
+    for abort in [false, true] {
+        let f = Fixture::new();
+        let admitted = f.state.copies.operations.read().await;
+        let start = Instant::now();
+        let worker = tokio::spawn({
+            let (state, stage) = (f.state.clone(), f.stage());
+            async move { pin(&state, &stage, &HashMap::new(), u64::MAX, 32, None, PAUSE).await }
+        });
+        while f.state.copies.operations.try_read().is_ok() {
+            tokio::task::yield_now().await;
+        }
+        if abort {
+            worker.abort();
+            assert!(worker.await.err().unwrap().is_cancelled());
+        } else {
+            let error = worker.await.unwrap().err().unwrap();
+            assert!(error.to_string().contains("draining"), "{error}");
+        }
+        assert!(start.elapsed() < Duration::from_secs(2));
+        drop(admitted);
+        f.released();
     }
 }
 
@@ -232,9 +334,10 @@ async fn common_cut_timeout_and_abort_reopen_admission_in_drain_and_staging() {
 async fn common_cut_minio_reuses_an_id_with_and_without_bucket_versions() {
     use crate::file_store::{S3Settings, S3Store};
     use aws_sdk_s3::types::{BucketVersioningStatus, VersioningConfiguration};
-    let settings = S3Settings::files(&|name| std::env::var(name.replacen("KONAE_", "KONAE_TEST_", 1)).ok())
-        .unwrap()
-        .expect("Run with-minio to supply the disposable bucket and credentials.");
+    let settings =
+        S3Settings::files(&|name| std::env::var(name.replacen("KONAE_", "KONAE_TEST_", 1)).ok())
+            .unwrap()
+            .expect("Run with-minio to supply the disposable bucket and credentials.");
     assert!(settings.endpoint.starts_with("http://127.0.0.1:"));
     let client = crate::file_store::s3_client(&settings);
     let bucket = &settings.bucket;
@@ -275,12 +378,44 @@ async fn common_cut_minio_reuses_an_id_with_and_without_bucket_versions() {
         let path = layout::files(&f.state.data_root, "app").join(format!("{}.blob", f.file));
         store.put("app", &f.file, &path).await.unwrap();
         f.state.files.store = store.clone();
-        let views = pin(&f.state, &stage, &HashMap::new(), u64::MAX, 32).await.unwrap();
-        assert_eq!(views.cut.blobs[0].reader.is_some(), versioned);
+        let prepared = Prepared::read(
+            &f.state,
+            &stage,
+            &HashMap::new(),
+            u64::MAX,
+            &SourceCache::default(),
+        )
+        .await
+        .unwrap();
+        let views = pin(
+            &f.state,
+            &stage,
+            &HashMap::new(),
+            u64::MAX,
+            32,
+            Some(prepared),
+            PAUSE,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         store.delete("app", &f.file).await.unwrap();
         fs::write(&path, b"new").unwrap();
         store.put("app", &f.file, &path).await.unwrap();
-        views.write(&stage).await.unwrap();
+        let saved = views.write(&stage).await.unwrap();
+        assert_eq!(saved[0].version.is_some(), versioned);
+        let mut cache = SourceCache::default();
+        cache.keep(&stage, saved).unwrap();
+        let next_stage = f.root.join("next");
+        fs::create_dir_all(layout::apps(&next_stage)).unwrap();
+        let (_, files) = super::stage(&f.state, &next_stage, &HashMap::new(), &mut cache)
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            fs::read(layout::files(&next_stage, "app").join(format!("{}.blob", f.file))).unwrap(),
+            b"new"
+        );
         assert_eq!(
             fs::read(layout::files(&stage, "app").join(format!("{}.blob", f.file))).unwrap(),
             b"old"
@@ -312,7 +447,11 @@ fn common_cut_releases_readers_after_os_descriptor_exhaustion() {
             serde_json::json!({"id":id, "size":0})
         })
         .collect();
-    fs::write(files.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        files.join("index.json"),
+        serde_json::to_vec(&index).unwrap(),
+    )
+    .unwrap();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -323,12 +462,22 @@ fn common_cut_releases_readers_after_os_descriptor_exhaustion() {
     };
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
     rt.block_on(async {
-        let error = pin(&f.state, &f.stage(), &HashMap::new(), u64::MAX, 512)
-            .await
-            .err()
-            .unwrap();
+        let error = pin(
+            &f.state,
+            &f.stage(),
+            &HashMap::new(),
+            u64::MAX,
+            512,
+            None,
+            PAUSE,
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(
-            error.downcast_ref::<std::io::Error>().and_then(|e| e.raw_os_error()),
+            error
+                .downcast_ref::<std::io::Error>()
+                .and_then(|e| e.raw_os_error()),
             Some(libc::EMFILE),
             "{error:?}"
         );

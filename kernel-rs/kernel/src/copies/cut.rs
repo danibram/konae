@@ -1,13 +1,11 @@
 use super::{history, DEPLOYMENT_DATABASES};
-use crate::{
-    file_store::{Blob, CopyBlob},
-    layout, AppState,
-};
+use crate::{file_store::Blob, layout, AppState};
 use anyhow::{ensure, Context, Result};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use konae_backup::SqliteSnapshot;
 use std::{
-    collections::HashSet,
-    fs::{self, File},
+    collections::{HashMap, HashSet},
+    fs::{self, File, Metadata},
     io::{Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -19,7 +17,11 @@ const PAUSE: Duration = Duration::from_millis(1850);
 fn regular(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
-            ensure!(meta.is_file(), "Expected a regular file at {}.", path.display());
+            ensure!(
+                meta.is_file(),
+                "Expected a regular file at {}.",
+                path.display()
+            );
             Ok(true)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -35,7 +37,10 @@ struct Budget {
 
 impl Budget {
     fn check(&self) -> Result<()> {
-        ensure!(Instant::now() < self.deadline, "The copy exceeded its staging pause.");
+        ensure!(
+            Instant::now() < self.deadline,
+            "The copy exceeded its staging pause."
+        );
         Ok(())
     }
 
@@ -81,17 +86,41 @@ struct Image {
 }
 
 struct Attachment {
+    id: String,
     path: String,
     size: u64,
     expected: Option<String>,
     legacy: bool,
     reader: Option<Blob>,
     digest: Option<String>,
+    version: Option<String>,
 }
 
 impl Attachment {
+    async fn open(&mut self, state: &AppState, app: &str) -> Result<()> {
+        let id = &self.id;
+        let (blob, version) = state
+            .files
+            .store
+            .get_for_copy(app, id)
+            .await?
+            .with_context(|| format!("Indexed file {id} is missing from the file store."))?;
+        ensure!(
+            blob.length == self.size,
+            "File {id} has {} bytes in the store. The index requires {}.",
+            blob.length,
+            self.size
+        );
+        self.version = version;
+        self.reader = Some(blob);
+        Ok(())
+    }
+
     async fn save(&mut self, staging: &Path) -> Result<()> {
-        let blob = self.reader.take().context("The attachment has no open reader.")?;
+        let blob = self
+            .reader
+            .take()
+            .context("The attachment has no open reader.")?;
         let (size, digest) = crate::file_store::save_blob(blob, &staging.join(&self.path)).await?;
         ensure!(
             size == self.size,
@@ -117,7 +146,8 @@ struct Cut {
 
 impl Cut {
     fn database(&mut self, source: &Path, target: PathBuf) -> Result<()> {
-        let pin = SqliteSnapshot::pin(source).with_context(|| format!("Could not pin {}", source.display()))?;
+        let pin = SqliteSnapshot::pin(source)
+            .with_context(|| format!("Could not pin {}", source.display()))?;
         self.budget.reserve(pin.bytes.saturating_mul(2))?;
         let raw = target.with_extension("copy-image");
         let wal = if pin.wal {
@@ -187,7 +217,9 @@ impl Cut {
                             history_dir.symlink_metadata()?.is_dir(),
                             "The app's backups path must be a directory."
                         );
-                        history::stage_records(&history_dir, &to.join("backups"), |a, b| self.budget.file(a, b))?;
+                        history::stage_records(&history_dir, &to.join("backups"), |a, b| {
+                            self.budget.file(a, b)
+                        })?;
                     }
                 }
                 _ => {}
@@ -220,59 +252,315 @@ impl Cut {
         state: &AppState,
         staging: &Path,
         app: &str,
-        prior: &std::collections::HashMap<&str, &str>,
+        prior: &HashMap<&str, &str>,
     ) -> Result<()> {
         let index = layout::files(staging, app).join("index.json");
         if !index.try_exists()? {
             return Ok(());
         }
-        let entries: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(index)?)?;
-        let mut seen = HashSet::new();
-        for entry in &entries {
+        for mut file in attachments(app, &fs::read(index)?, prior)? {
+            self.budget.reserve(file.size)?;
+            self.budget.reader()?;
+            file.open(state, app).await?;
+            self.blobs.push(file);
+        }
+        Ok(())
+    }
+}
+
+fn attachments(app: &str, index: &[u8], prior: &HashMap<&str, &str>) -> Result<Vec<Attachment>> {
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(index)?;
+    let mut seen = HashSet::new();
+    entries
+        .iter()
+        .map(|entry| {
             let id = entry["id"]
                 .as_str()
                 .filter(|id| crate::valid_file_id(id))
                 .context("The file index has an invalid ID.")?;
             ensure!(seen.insert(id), "The file index lists {id} twice.");
-            let size = entry["size"].as_u64().context("An indexed file has no size.")?;
-            self.budget.reserve(size)?;
-            let path = format!("apps/{app}/data/files/{id}.blob");
+            let size = entry["size"]
+                .as_u64()
+                .context("An indexed file has no size.")?;
             let indexed = entry
                 .get("sha256")
                 .map(|v| v.as_str().context("Invalid indexed SHA-256."))
                 .transpose()?;
-            let mut file = Attachment {
-                expected: indexed.or_else(|| prior.get(path.as_str()).copied()).map(str::to_owned),
+            let path = format!("apps/{app}/data/files/{id}.blob");
+            Ok(Attachment {
+                id: id.to_owned(),
+                expected: indexed
+                    .or_else(|| prior.get(path.as_str()).copied())
+                    .map(str::to_owned),
                 path,
                 size,
                 legacy: indexed.is_none(),
                 reader: None,
                 digest: None,
-            };
-            let object = state
+                version: None,
+            })
+        })
+        .collect()
+}
+
+struct Index {
+    // Keeping the old file open prevents the filesystem from recycling its inode.
+    _file: File,
+    metadata: Metadata,
+    bytes: Vec<u8>,
+}
+
+impl Index {
+    fn open(path: &Path) -> Result<Option<Self>> {
+        if !regular(path)? {
+            return Ok(None);
+        }
+        let mut file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(Some(Self {
+            _file: file,
+            metadata,
+            bytes,
+        }))
+    }
+
+    fn matches(&self, current: &Self) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if self.metadata.dev() != current.metadata.dev()
+                || self.metadata.ino() != current.metadata.ino()
+            {
+                return false;
+            }
+        }
+        self.metadata.modified().ok() == current.metadata.modified().ok()
+            && self.bytes == current.bytes
+    }
+}
+
+fn indexes(root: &Path, mut visit: impl FnMut(String, Index) -> Result<()>) -> Result<()> {
+    for entry in fs::read_dir(layout::apps(root))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let app = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("Invalid app folder name."))?;
+        if let Some(index) = Index::open(&layout::files(root, &app).join("index.json"))? {
+            visit(app, index)?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) struct CheckedFile {
+    pub path: String,
+    pub size: u64,
+    pub digest: String,
+    pub legacy: bool,
+    version: Option<String>,
+}
+
+#[derive(Default)]
+pub(super) struct SourceCache {
+    directory: Option<super::Staging>,
+    files: HashMap<String, CheckedFile>,
+}
+
+impl SourceCache {
+    pub(super) fn keep(&mut self, staging: &Path, files: Vec<CheckedFile>) -> Result<()> {
+        let files: Vec<_> = files
+            .into_iter()
+            .filter(|file| file.version.is_some())
+            .collect();
+        if files.is_empty() {
+            *self = Self::default();
+            return Ok(());
+        }
+        let parent = staging
+            .parent()
+            .context("The copy has no staging directory.")?;
+        let cache = super::Staging(parent.join(format!("cache-{}", uuid::Uuid::new_v4())));
+        // The staging directory already limits access to the files. Keep a single generation.
+        let mut options = fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut options, 0o700);
+        options.create(&cache.0)?;
+        let mut entries = HashMap::new();
+        for file in files {
+            let target = cache.0.join(&file.path);
+            fs::create_dir_all(
+                target
+                    .parent()
+                    .context("The cached file has no directory.")?,
+            )?;
+            fs::hard_link(staging.join(&file.path), target)?;
+            entries.insert(file.path.clone(), file);
+        }
+        *self = Self {
+            directory: Some(cache),
+            files: entries,
+        };
+        Ok(())
+    }
+
+    fn evict_if_space_is_low(&mut self, available: u64) {
+        let retained = self.files.values().map(|file| file.size).sum::<u64>();
+        if available / 2 < retained {
+            *self = Self::default();
+        }
+    }
+
+    async fn reuse(
+        &self,
+        state: &AppState,
+        app: &str,
+        staging: &Path,
+        file: &mut Attachment,
+    ) -> bool {
+        let Some(cached) = self.files.get(&file.path) else {
+            return false;
+        };
+        let Some(version) = cached.version.as_deref() else {
+            return false;
+        };
+        let Some(directory) = &self.directory else {
+            return false;
+        };
+        if !file
+            .expected
+            .as_ref()
+            .is_none_or(|expected| expected == &cached.digest)
+            || !state
                 .files
                 .store
-                .open_for_copy(app, id)
-                .await?
-                .with_context(|| format!("Indexed file {id} is missing from the file store."))?;
-            let pinned = matches!(object, CopyBlob::Pinned(_));
-            let blob = match object {
-                CopyBlob::Pinned(blob) | CopyBlob::Unversioned(blob) => blob,
-            };
-            ensure!(
-                blob.length == size,
-                "File {id} has {} bytes in the store. The index requires {size}.",
-                blob.length
-            );
-            file.reader = Some(blob);
-            if pinned {
-                self.budget.reader()?;
-            } else {
-                file.save(staging).await?;
-            }
-            self.blobs.push(file);
+                .confirms_version(app, &file.id, version, file.size)
+                .await
+        {
+            return false;
         }
-        Ok(())
+        let source = directory.0.join(&file.path);
+        let target = staging.join(&file.path);
+        let size = file.size;
+        let digest = cached.digest.clone();
+        let reused = tokio::task::spawn_blocking(move || -> Result<bool> {
+            if super::checksum_file(&source)? != (size, digest) {
+                return Ok(false);
+            }
+            fs::hard_link(source, target)?;
+            Ok(true)
+        })
+        .await
+        .is_ok_and(|outcome| outcome.unwrap_or_default());
+        if reused {
+            file.digest = Some(cached.digest.clone());
+            file.version = Some(version.to_owned());
+        }
+        reused
+    }
+}
+
+struct Prepared {
+    scratch: super::Staging,
+    indexes: HashMap<String, Index>,
+    blobs: Result<Vec<Attachment>>,
+}
+
+impl Prepared {
+    async fn read(
+        state: &AppState,
+        staging: &Path,
+        prior: &HashMap<&str, &str>,
+        bytes: u64,
+        cache: &SourceCache,
+    ) -> Result<Self> {
+        let started = Instant::now();
+        let scratch = super::Staging(staging.join(format!(".prepare-{}", uuid::Uuid::new_v4())));
+        let staging = &scratch.0;
+        fs::create_dir_all(layout::apps(staging))?;
+        let mut captured = HashMap::new();
+        indexes(&state.data_root, |app, index| {
+            captured.insert(app, index);
+            Ok(())
+        })?;
+        let blobs = tokio::time::timeout(Duration::from_secs(60), async {
+            let mut pending = Vec::new();
+            let mut remaining = bytes;
+            for (app, index) in &captured {
+                let files = attachments(app, &index.bytes, prior)?;
+                for file in &files {
+                    remaining = remaining
+                        .checked_sub(file.size)
+                        .context("Insufficient staging space for the copy.")?;
+                }
+                if !files.is_empty() {
+                    fs::create_dir_all(layout::files(staging, app))?;
+                }
+                pending.extend(files.into_iter().map(|file| (app.clone(), file)));
+            }
+            stream::iter(pending)
+                .map(|(app, mut file)| async move {
+                    if !cache.reuse(state, &app, staging, &mut file).await {
+                        file.open(state, &app).await?;
+                        file.save(staging).await?;
+                    }
+                    Ok(file)
+                })
+                .buffer_unordered(8)
+                .try_collect::<Vec<_>>()
+                .await
+        })
+        .await
+        .context("Timed out preparing files from the file store.")
+        .and_then(|outcome| outcome);
+        if let Ok(blobs) = &blobs {
+            println!(
+                "Copy prepared {} remote files ({} bytes) in {} ms.",
+                blobs.len(),
+                blobs.iter().map(|file| file.size).sum::<u64>(),
+                started.elapsed().as_millis()
+            );
+        }
+        Ok(Self {
+            scratch,
+            indexes: captured,
+            blobs,
+        })
+    }
+
+    fn install(&mut self, staging: &Path) -> Result<Vec<Attachment>> {
+        let blobs = std::mem::replace(&mut self.blobs, Ok(Vec::new()))?;
+        let apps = layout::apps(staging);
+        fs::remove_dir(&apps)?;
+        fs::rename(layout::apps(&self.scratch.0), apps)?;
+        Ok(blobs)
+    }
+
+    fn matches(&self, root: &Path, deadline: Instant) -> Result<bool> {
+        let mut count = 0;
+        let mut matches = true;
+        indexes(root, |app, current| {
+            ensure!(
+                Instant::now() < deadline,
+                "The copy exceeded its staging pause."
+            );
+            count += 1;
+            matches &= self
+                .indexes
+                .get(&app)
+                .is_some_and(|old| old.matches(&current));
+            Ok(())
+        })?;
+        Ok(matches && count == self.indexes.len())
     }
 }
 
@@ -291,7 +579,9 @@ async fn volume(root: &Path) -> Result<File> {
     loop {
         match volume.try_lock() {
             Ok(()) => return Ok(volume),
-            Err(std::fs::TryLockError::WouldBlock) => tokio::time::sleep(Duration::from_millis(5)).await,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(5)).await
+            }
             Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
     }
@@ -307,12 +597,15 @@ struct Views {
 async fn pin(
     state: &AppState,
     staging: &Path,
-    prior: &std::collections::HashMap<&str, &str>,
+    prior: &HashMap<&str, &str>,
     bytes: u64,
     readers: usize,
-) -> Result<Views> {
+    prepared: Option<Prepared>,
+    pause: Duration,
+) -> Result<Option<Views>> {
+    let mut prepared = prepared;
     let start = Instant::now();
-    let deadline = start + PAUSE;
+    let deadline = start + pause;
     let until = tokio::time::Instant::from_std(deadline);
     let drain = async {
         let gate = state.copies.operations.write().await;
@@ -331,6 +624,26 @@ async fn pin(
     let drained = start.elapsed();
     super::operation::check(&state.data_root)?;
     (state.installation.check_cut)(&state.data_root)?;
+    // A file writer publishes a new index after storing its bytes. A failed
+    // replacement leaves an operation record, which the cut checks above.
+    let remote = prepared.is_some();
+    let blobs = if let Some(prepared) = prepared.as_mut() {
+        let matches = prepared.matches(&state.data_root, deadline)?;
+        ensure!(
+            Instant::now() < deadline,
+            "The copy exceeded its staging pause."
+        );
+        if !matches {
+            drop((gate, external, imports, generations));
+            println!("Copy released writers after {} ms (drain {} ms). The file index changed during preparation.",
+                start.elapsed().as_millis(), drained.as_millis());
+            return Ok(None);
+        }
+        prepared.indexes.clear();
+        prepared.install(staging)?
+    } else {
+        Vec::new()
+    };
     let at = crate::now_ms();
     let mut cut = Cut {
         budget: Budget {
@@ -339,8 +652,11 @@ async fn pin(
             readers,
         },
         images: vec![],
-        blobs: vec![],
+        blobs,
     };
+    for file in &cut.blobs {
+        cut.budget.reserve(file.size)?;
+    }
     tokio::time::timeout_at(until, async {
         for db in &state.installation.databases {
             let source = state.data_root.join(db.file);
@@ -358,31 +674,35 @@ async fn pin(
                 .into_string()
                 .map_err(|_| anyhow::anyhow!("Invalid app folder name."))?;
             cut.deployment(&entry.path(), &layout::folder(staging, &app))?;
-            cut.attachments(state, staging, &app, prior).await?;
+            if !remote {
+                cut.attachments(state, staging, &app, prior).await?;
+            }
         }
         cut.budget.check()
     })
     .await
     .context("The copy timed out staging the common cut.")??;
     drop((gate, external));
+    let paused = start.elapsed();
+    drop(prepared);
     println!(
         "Copy cut admitted writers after {} ms (drain {} ms, {} databases, {} open readers).",
-        start.elapsed().as_millis(),
+        paused.as_millis(),
         drained.as_millis(),
         cut.images.len(),
         readers - cut.budget.readers
     );
 
-    Ok(Views {
+    Ok(Some(Views {
         at,
         cut,
         imports,
         generations,
-    })
+    }))
 }
 
 impl Views {
-    async fn write(self, staging: &Path) -> Result<Vec<(String, u64, String, bool)>> {
+    async fn write(self, staging: &Path) -> Result<Vec<CheckedFile>> {
         let Self {
             cut,
             imports,
@@ -401,7 +721,8 @@ impl Views {
                 if let Some(pin) = image.wal {
                     pin.materialize(&image.raw, || {
                         ensure!(
-                            stopped.try_recv() == Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+                            stopped.try_recv()
+                                == Err(tokio::sync::oneshot::error::TryRecvError::Empty),
                             "The copy was cancelled."
                         );
                         ensure!(Instant::now() < deadline, "Timed out copying WAL pages.");
@@ -427,12 +748,13 @@ impl Views {
             if file.reader.is_some() {
                 file.save(staging).await?;
             }
-            checked.push((
-                file.path,
-                file.size,
-                file.digest.context("Missing staged digest.")?,
-                file.legacy,
-            ));
+            checked.push(CheckedFile {
+                path: file.path,
+                size: file.size,
+                digest: file.digest.context("Missing staged digest.")?,
+                legacy: file.legacy,
+                version: file.version,
+            });
         }
         Ok(checked)
     }
@@ -441,15 +763,41 @@ impl Views {
 pub(super) async fn stage(
     state: &AppState,
     staging: &Path,
-    prior: &std::collections::HashMap<&str, &str>,
-) -> Result<(u64, Vec<(String, u64, String, bool)>)> {
-    let bytes = limit("KONAE_COPY_STAGE_BYTES", u64::MAX)?.min(crate::package::free_bytes(staging)?);
+    prior: &HashMap<&str, &str>,
+    cache: &mut SourceCache,
+) -> Result<(u64, Vec<CheckedFile>)> {
+    cache.evict_if_space_is_low(crate::package::free_bytes(staging)?);
+    let bytes =
+        limit("KONAE_COPY_STAGE_BYTES", u64::MAX)?.min(crate::package::free_bytes(staging)?);
     let readers = usize::try_from(limit("KONAE_COPY_READERS", 512)?)?;
-    let views = pin(state, staging, prior, bytes, readers).await?;
+    let remote = state.files.store.kind() != "local";
+    let mut pause = PAUSE;
+    let mut pinned = None;
+    for _ in 0..3 {
+        let prepared = if remote {
+            Some(Prepared::read(state, staging, prior, bytes, cache).await?)
+        } else {
+            None
+        };
+        let start = Instant::now();
+        pinned = pin(state, staging, prior, bytes, readers, prepared, pause).await?;
+        if pinned.is_some() {
+            break;
+        }
+        pause = pause.saturating_sub(start.elapsed());
+        ensure!(!pause.is_zero(), "The copy exceeded its staging pause.");
+    }
+    let views =
+        pinned.context("The file indexes kept changing while the copy prepared the files.")?;
     let at = views.at;
+    let start = Instant::now();
     let files = tokio::time::timeout(Duration::from_secs(60), views.write(staging))
         .await
         .context("Timed out materializing the pinned copy.")??;
+    println!(
+        "Copy materialized the pinned database and file views in {} ms.",
+        start.elapsed().as_millis()
+    );
     Ok((at, files))
 }
 
