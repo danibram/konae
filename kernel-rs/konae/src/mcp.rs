@@ -156,14 +156,47 @@ pub(super) fn installation() -> super::installation::Installation {
     use super::installation::{AccountDatabase, RootDatabase};
     let mut installation = super::installation::Installation::kernel();
     installation.databases.splice(0..0, [
-        RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges"] },
-        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans"] },
+        RootDatabase { file: "owners.sqlite", sign_out: &["app_sessions", "creator_sessions", "account_challenges", "entry_links"] },
+        RootDatabase { file: "mcp.sqlite", sign_out: &["credentials", "oauth_codes", "plans", "source_read_requests", "package_imports"] },
     ]);
     installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
+    installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "clerk-owner", file: "owners.sqlite" });
     installation.mail_group = project_owner;
+    installation.check_catalog = check_restored_catalog;
     installation
 }
 
+
+fn check_restored_catalog(root: &Path) -> Result<()> {
+    let path = root.join("mcp.sqlite");
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    let read = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let catalog = Connection::open_with_flags(path, read)?;
+    if !catalog.query_row("SELECT EXISTS(SELECT 1 FROM projects)", [], |row| row.get::<_, bool>(0))? {
+        return Ok(());
+    }
+    let owners = Connection::open_with_flags(root.join("owners.sqlite"), read)?;
+    let mut owner_tables = Vec::new();
+    for (table, column) in [("app_users", "id"), ("creator_identities", "owner")] {
+        if crate::table_exists(&owners, table)? {
+            owner_tables.push(format!("SELECT 1 FROM {table} WHERE {column}=?1"));
+        }
+    }
+    anyhow::ensure!(!owner_tables.is_empty(), "The project catalog has no owner store.");
+    let mut owner = owners.prepare(&format!("SELECT EXISTS({})", owner_tables.join(" UNION ALL ")))?;
+    let mut projects = catalog.prepare("SELECT id, owner FROM projects")?;
+    let mut rows = projects.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let account: String = row.get(1)?;
+        anyhow::ensure!(crate::runtime::valid_app_id(&id) && crate::layout::settings(root, &id).is_file(),
+            "Catalog project {id} has no matching app folder.");
+        anyhow::ensure!(owner.query_row([account], |r| r.get::<_, bool>(0))?, "Catalog project {id} has no matching owner.");
+    }
+    Ok(())
+}
 
 fn project_owner(root: &Path, project_id: &str) -> Option<String> {
     let connection = Connection::open_with_flags(root.join("mcp.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
@@ -2313,6 +2346,28 @@ mod tests {
             assert_eq!(refusal.code, case["code"].as_str().unwrap());
             assert_eq!(refusal.message, case["error"].as_str().unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn restored_catalog_requires_the_app_and_its_local_or_hosted_owner() {
+        let root = std::env::temp_dir().join(format!("konae-catalog-{}", Uuid::new_v4()));
+        crate::Settings::new("notes", "Notes", "notes", &json!({})).write(&root).await.unwrap();
+        let db = store_at(&root).unwrap();
+        check_restored_catalog(&root).unwrap();
+        assert!(!root.join("owners.sqlite").exists());
+        db.execute("INSERT INTO projects(id,owner,body) VALUES('notes','fixture','{}')", []).unwrap();
+        let owners = Connection::open(root.join("owners.sqlite")).unwrap();
+        super::super::clerk::install(&owners).unwrap();
+        assert!(check_restored_catalog(&root).unwrap_err().to_string().contains("no matching owner"));
+        owners.execute("INSERT INTO creator_identities(owner,provider,subject) VALUES('fixture','lab','person')", []).unwrap();
+        check_restored_catalog(&root).unwrap();
+        let suspended = crate::recovery::Entry::new("clerk-owner", None, "fixture", "suspended");
+        assert_eq!(crate::recovery::reconcile(&root, &installation(), &[suspended]).unwrap(), 1);
+        assert!(owners.query_row("SELECT suspended FROM creator_identities", [], |row| row.get::<_, bool>(0)).unwrap());
+        db.execute("UPDATE projects SET id='missing'", []).unwrap();
+        assert!(check_restored_catalog(&root).unwrap_err().to_string().contains("no matching app folder"));
+        drop((db, owners));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

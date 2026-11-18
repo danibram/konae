@@ -742,10 +742,22 @@ pub async fn start(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<Running> {
-    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
+    start_with_mail_key(startup, installation, || Ok(mail_key.to_owned()), own_origins, audit).await
+}
+
+pub async fn start_with_mail_key(
+    startup: &Startup,
+    installation: installation::Installation,
+    mail_key: impl FnOnce() -> Result<String>,
+    own_origins: Vec<String>,
+    audit: Option<runtime::AuditSink>,
+) -> Result<Running> {
     let lock = file_store::hold_kernel_lock(&startup.data_root)?;
+    copies::check_activation(&startup.data_root)?;
+    let mail_key = mail_key()?;
+    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
-    let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
+    let (state, copy_config) = state_from_env(startup, installation, &mail_key, own_origins, audit).await?;
     path::load(&state);
     let own_hosts = domain::Rules::of(&state).installation_hosts;
     for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {

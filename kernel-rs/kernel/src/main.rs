@@ -9,8 +9,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let startup = kernel::Startup::from_env()?;
-    let mail_key = kernel::operator::mail_key(&startup.data_root)?;
-    let running = kernel::start(&startup, installation, &mail_key, Vec::new(), None).await?;
+    let running = kernel::start_with_mail_key(&startup, installation, || kernel::operator::mail_key(&startup.data_root), Vec::new(), None).await?;
     let confirmation = std::env::var(kernel::folder::CONFIRM_SCHEMA).ok();
     for (id, opened) in kernel::folder::open_all(&running.state, confirmation.as_deref()).await? {
         match opened {

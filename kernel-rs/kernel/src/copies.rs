@@ -1,5 +1,6 @@
 
 pub(crate) mod history;
+mod validation;
 #[cfg(test)]
 mod history_tests;
 
@@ -541,6 +542,7 @@ async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Op
             if !folder.join(start).is_file() {
                 return Ok(None);
             }
+            check_record_start(&tokio::fs::read(folder.join(start)).await?)?;
             let mut files = Vec::new();
             for entry in std::fs::read_dir(&folder)? {
                 let name = entry?.file_name().to_string_lossy().into_owned();
@@ -556,6 +558,7 @@ async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Op
             if !keys.iter().any(|key| key[base.len()..] == *start) {
                 return Ok(None);
             }
+            check_record_start(&read_s3_bytes(client, bucket, &format!("{base}{start}")).await?)?;
             let mut files = Vec::new();
             for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
                 let bytes = read_s3_bytes(client, bucket, object).await?;
@@ -567,6 +570,12 @@ async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Op
             Ok(Some(files))
         }
     }
+}
+
+fn check_record_start(bytes: &[u8]) -> Result<()> {
+    let marker: Value = serde_json::from_slice(bytes).context("Invalid revocation record start marker.")?;
+    ensure!(marker["version"] == 1, "Unsupported revocation record start marker.");
+    Ok(())
 }
 
 struct RestoreSummary {
@@ -596,6 +605,7 @@ async fn restore_with_witness(
     installation: &Installation,
     witness: Option<&str>,
 ) -> Result<RestoreSummary> {
+    let _volume = crate::file_store::hold_while_stopped(destination, "restore")?;
     ensure_empty(destination)?;
     let direct;
     let (source, copy) = match (source, copy) {
@@ -628,20 +638,26 @@ async fn restore_with_witness(
         let root = staging.clone();
         let stores = installation.clone();
         let copy_id = copy.clone();
+        let files = manifest.files.clone();
         let removed = tokio::task::spawn_blocking(move || -> Result<usize> {
+            validation::check_materialized(&root, &files)?;
             history::warn_incomplete(&root, &copy_id)?;
             check_databases(&root, &stores)?;
+            validation::check_cut(&root, &stores)?;
             invalidate_sessions(&root, &stores)
         })
         .await??;
         let record = read_source_record(source, key).await;
         let witness = witness.map(str::to_owned);
         let cut = manifest.created_at;
+        let key_check = if matches!(source, Source::S3 { .. }) {
+            key.map(|k| k.fingerprint().to_owned())
+        } else { None };
         let root = staging.clone();
         let stores = installation.clone();
         let reconciled = tokio::task::spawn_blocking(move || match witness {
             Some(hash) => recovery::prove_revocation(&root, &stores, record, &hash, cut).map(Ok),
-            None => recovery::apply_or_hold(&root, &stores, record),
+            None => recovery::apply_or_hold_for_key(&root, &stores, record, key_check.as_deref()),
         }).await??;
         Ok((removed, reconciled))
     }
@@ -653,11 +669,8 @@ async fn restore_with_witness(
             return Err(error_value);
         }
     };
-    let mut entries = tokio::fs::read_dir(&staging).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        tokio::fs::rename(entry.path(), destination.join(entry.file_name())).await?;
-    }
-    tokio::fs::remove_dir(&staging).await?;
+    let root = destination.to_owned();
+    tokio::task::spawn_blocking(move || activate(&staging, &root, sync_path)).await??;
     let deployments = manifest
         .files
         .iter()
@@ -666,25 +679,53 @@ async fn restore_with_witness(
     Ok(RestoreSummary { copy_id: copy, deployments, files: manifest.files.len(), sessions_removed, reconciled })
 }
 
-fn ensure_empty(destination: &Path) -> Result<()> {
-    match std::fs::read_dir(destination) {
-        Ok(entries) => {
-            for entry in entries {
-                if entry?.file_name() != "lost+found" {
-                    bail!(
-                        "Restore refuses {}: it is not empty. Point KONAE_DATA_DIR at an empty directory.",
-                        destination.display()
-                    );
-                }
-            }
-            Ok(())
+fn sync_path(path: &Path) -> Result<()> {
+    std::fs::File::open(path)?.sync_all().with_context(|| format!("Could not sync {}", path.display()))
+}
+
+fn sync_tree(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            sync_tree(&entry?.path())?;
         }
-        Err(error_value) if error_value.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(destination)?;
-            Ok(())
-        }
-        Err(error_value) => Err(error_value.into()),
     }
+    sync_path(path)
+}
+
+fn activate(staging: &Path, destination: &Path, sync_dir: impl Fn(&Path) -> Result<()>) -> Result<()> {
+    sync_dir(destination)?;
+    for entry in std::fs::read_dir(staging)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        ensure!(!target.try_exists()?, "Restore destination is occupied at {}.", target.display());
+        sync_tree(&entry.path())?;
+        std::fs::rename(entry.path(), target)?;
+        sync_dir(destination)?;
+    }
+    sync_dir(staging)?;
+    std::fs::remove_dir(staging)?;
+    // At this point every installed entry is durable. Either state of the marker is safe.
+    sync_dir(destination)?;
+    Ok(())
+}
+
+pub(crate) fn check_activation(root: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(root)? {
+        ensure!(!entry?.file_name().to_string_lossy().starts_with(".restore-"),
+            "Installation restore is incomplete. Repeat restore into an empty data directory before starting the Kernel.");
+    }
+    Ok(())
+}
+
+fn ensure_empty(destination: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(destination)? {
+        let entry = entry?;
+        if entry.file_name() == crate::file_store::KERNEL_LOCK_FILE || entry.file_name() == "lost+found" {
+            continue;
+        }
+        bail!("Restore refuses {}: it is not empty. Point KONAE_DATA_DIR at an empty directory.", destination.display());
+    }
+    Ok(())
 }
 
 fn sqlite_files(root: &Path, installation: &Installation) -> Result<Vec<PathBuf>> {
@@ -704,8 +745,10 @@ fn sqlite_files(root: &Path, installation: &Installation) -> Result<Vec<PathBuf>
 
 fn check_databases(root: &Path, installation: &Installation) -> Result<()> {
     for path in sqlite_files(root, installation)? {
-        let result: String = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let result: String = db.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         ensure!(result == "ok", "{} failed SQLite's integrity check.", path.display());
+        ensure!(db.prepare("PRAGMA foreign_key_check")?.query([])?.next()?.is_none(), "{} has a broken foreign key.", path.display());
     }
     Ok(())
 }
@@ -731,10 +774,11 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
         for entry in entries {
             let identity = entry?.path().join("data").join("identity.sqlite");
             if identity.is_file() {
-                clear(&identity, &["app_sessions", "account_challenges"])?;
+                clear(&identity, &["app_sessions", "account_challenges", "entry_links"])?;
             }
         }
     }
+    retire_restored_work(root)?;
     let mail = root.join(crate::mail::MAIL_DATABASE);
     if mail.is_file() {
         removed += crate::mail::end_pending_after_restore(&mail)?;
@@ -742,8 +786,36 @@ fn invalidate_sessions(root: &Path, installation: &Installation) -> Result<usize
     Ok(removed)
 }
 
+fn retire_restored_work(root: &Path) -> Result<()> {
+    let path = root.join(crate::calls::CALLS_DATABASE);
+    if path.try_exists()? {
+        let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        if crate::table_exists(&db, "calls")? {
+            db.execute_batch("UPDATE calls SET state='failed', error='restored-outcome-unknown', leased_until=NULL
+                              WHERE state='pending';
+                              UPDATE calls SET then_state='interrupted', then_message='Check the continuation before repeating it.', leased_until=NULL
+                              WHERE then_state='processing';")?;
+        }
+    }
+    // The first timer tick takes a new baseline. The run history stays available.
+    let apps = crate::layout::apps(root);
+    if apps.try_exists()? {
+        for entry in std::fs::read_dir(apps)? {
+            let path = entry?.path().join("data/usage.sqlite");
+            if path.try_exists()? {
+                let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+                if crate::table_exists(&db, "schedule_state")? {
+                    db.execute("DELETE FROM schedule_state", [])?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    mod activation;
     mod integrity;
     use super::*;
 
@@ -808,6 +880,10 @@ mod tests {
         Deployment, SignupPolicy, auth::AuthService, initialize_database, load_deployments, read_artifact,
     };
     use std::sync::Arc;
+
+    fn installed_entries(root: &Path) -> usize {
+        std::fs::read_dir(root).unwrap().filter(|entry| entry.as_ref().unwrap().file_name() != crate::file_store::KERNEL_LOCK_FILE).count()
+    }
 
     fn scratch(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("konae-{label}-{}", uuid::Uuid::new_v4()))
@@ -1187,7 +1263,7 @@ mod tests {
         let folder = crate::layout::folder(&restored, &deployment.id);
         assert_eq!(count(&folder.join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
         AuthService::open(folder.join("data/identity.sqlite")).unwrap().login("writer@copy.test", "correct horse battery").unwrap();
-        assert_eq!(std::fs::read_dir(&refused_root).unwrap().count(), 0, "a refused restore installs nothing");
+        assert_eq!(installed_entries(&refused_root), 0, "a refused restore installs nothing");
         for path in [source, plain, sealed, restored, moved, refused_root] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -1364,14 +1440,14 @@ mod tests {
             .body(ByteStream::from(serde_json::to_vec(&tampered).unwrap())).send().await.unwrap();
         let refused = scratch("tampered-reference");
         assert!(restore(&s3_source(&client), Some(&third), &refused, Some(state.copies.key().unwrap()), &crate::installation::Installation::for_test()).await.is_err());
-        assert_eq!(std::fs::read_dir(&refused).unwrap().count(), 0);
+        assert_eq!(installed_entries(&refused), 0);
         client.put_object().bucket("data").key(format!("copies/{third}/{MANIFEST}"))
             .body(ByteStream::from(bytes)).send().await.unwrap();
         let missing_file = manifest.files.iter().find(|file| file.home_copy.as_deref() == Some(first.as_str()) && !file.path.ends_with(".sqlite")).unwrap();
         client.delete_object().bucket("data").key(format!("copies/{}/{}", first, missing_file.path)).send().await.unwrap();
         let refused_missing = scratch("missing-reference");
         assert!(restore(&s3_source(&client), Some(&third), &refused_missing, Some(state.copies.key().unwrap()), &crate::installation::Installation::for_test()).await.is_err());
-        assert_eq!(std::fs::read_dir(&refused_missing).unwrap().count(), 0);
+        assert_eq!(installed_entries(&refused_missing), 0);
         for path in [source, restored, refused, refused_missing] { let _ = std::fs::remove_dir_all(path); }
     }
 
@@ -1534,7 +1610,7 @@ mod tests {
         let restored = scratch("planted-restored");
         let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
         assert!(refused.contains("is not encrypted") && refused.contains("KONAE_COPY_SECRET") && refused.contains("Nothing was installed"), "{refused}");
-        assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0, "a refused restore installs nothing");
+        assert_eq!(installed_entries(&restored), 0, "a refused restore installs nothing");
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -1553,7 +1629,7 @@ mod tests {
             assert_eq!(count(&crate::layout::folder(&root, &deployment.id).join("data/database.sqlite"), "SELECT COUNT(*) FROM notes"), 1);
             summary.copy_id
         });
-        let installed = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        let installed = installed_entries(&root);
         let _ = std::fs::remove_dir_all(&root);
         (installed.to_string(), outcome)
     }
@@ -1740,7 +1816,7 @@ mod tests {
         let refused = restore(&s3_source(&client), None, &root, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a read error is not a verdict").to_string();
         assert!(refused.contains(LATER_ID) && refused.contains("Nothing was installed"), "{refused}");
         assert_eq!(older_asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the restore did not roll back to the older copy");
-        assert_eq!(std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0), 0);
+        assert_eq!(installed_entries(&root), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1818,7 +1894,7 @@ mod tests {
         let restored = scratch("trimmed-restored");
         let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("an altered manifest is refused").to_string();
         assert!(refused.contains("Nothing was installed"), "{refused}");
-        assert_eq!(std::fs::read_dir(&restored).map(|entries| entries.count()).unwrap_or(0), 0);
+        assert_eq!(installed_entries(&restored), 0);
         for path in [source, copies, restored] {
             let _ = std::fs::remove_dir_all(path);
         }
@@ -1911,7 +1987,7 @@ mod tests {
         let refused_root = scratch("unsigned-refused");
         let refused = restore(&s3_source(&client), None, &refused_root, Some(&key), &stores).await.err().expect("no MAC, no restore").to_string();
         assert!(refused.contains("no manifest MAC") && refused.contains("was altered") && refused.contains("Nothing was installed"), "{refused}");
-        assert_eq!(std::fs::read_dir(&refused_root).map(|entries| entries.count()).unwrap_or(0), 0);
+        assert_eq!(installed_entries(&refused_root), 0);
         assert!(!crate::layout::folder(&refused_root, &deployment.id).exists());
         for path in [source, copies, refused_root] {
             let _ = std::fs::remove_dir_all(path);
@@ -2065,7 +2141,7 @@ mod tests {
         std::fs::write(&artifact, "<main>tampered</main>").unwrap();
         let message = restore(&Source::Directory(copies.join(&id)), None, &empty, None, &crate::installation::Installation::for_test()).await.err().unwrap().to_string();
         assert!(message.contains("does not match its checksum"), "{message}");
-        assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0, "a refused restore leaves the directory empty");
+        assert_eq!(installed_entries(&empty), 0, "a refused restore leaves the directory empty");
 
         let manifest_path = copies.join(&id).join(MANIFEST);
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();

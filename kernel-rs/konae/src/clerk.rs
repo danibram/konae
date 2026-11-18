@@ -384,6 +384,7 @@ pub fn operator_command() -> Result<bool> {
         mcp.busy_timeout(std::time::Duration::from_secs(5))?;
         revoke_delegations(&mut mcp, &owner)?;
     }
+    super::recovery::record_offline(&root, super::recovery::Entry::new("clerk-owner", None, &owner, "suspended"))?;
     println!(
         "Suspended owner {owner}. Projects and app accounts remain available to the installation operator."
     );

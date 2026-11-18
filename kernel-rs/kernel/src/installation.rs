@@ -23,6 +23,7 @@ pub struct AccountDatabase {
 pub struct Installation {
     pub databases: Vec<RootDatabase>,
     pub accounts: Vec<AccountDatabase>,
+    pub check_catalog: fn(&Path) -> anyhow::Result<()>,
     /// Who answers for an app's daily email allowance, by project ID. `None`
     /// counts the app under the installation.
     pub mail_group: fn(&Path, &str) -> Option<String>,
@@ -39,6 +40,7 @@ impl Installation {
                 RootDatabase { file: crate::transfers::TRANSFERS_DATABASE, sign_out: &["transfers"] },
             ],
             accounts: Vec::new(),
+            check_catalog: |_| Ok(()),
             mail_group: |_, _| None,
         }
     }
