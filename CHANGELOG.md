@@ -8,19 +8,19 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [0.11.0] - 2026-11-18
 
+This release adds per-app modules, shareable pages backed by app data, and a browser-local editor. It also adds staged Pi Durable conversations and a new optional installation backup format.
+
 ### Added
 
 - App settings and the owner MCP can turn modules on and configure them per app. The available switches are search listing, app accounts, file storage, data and actions, HTTP routes and outbound calls.
 - Public apps can opt in to indexing with the `seo` module. Konae generates canonical URLs, robots rules, sitemaps and social previews from the pages the app serves. The home and docs include page titles and share images.
 - A page action can serve a URL such as `/posts/:slug` and use a row for its title and description. Apps can supply a bounded query that lists their published URLs for the sitemap.
 - Owners can read and change the contact email per app. Settings writes can check the value the owner last read, so an older form cannot overwrite a later edit.
-- The editor has a browser-local path at `/local`. Describe, check, preview and apply changes with a provider key saved in that browser. A signed-in owner can explicitly attach a copy of a local conversation to a saved Project.
-- The staged Pi Durable agent saves owner-only conversation history, declared objectives, tool evidence and coherent proposals on the Konae installation. An owner can read or download history without a model key and deliberately continue from a second browser with its own key. History stays outside app exports. The legacy agent remains the default.
-- In staged Durable, an owner can restore an earlier checkpoint as a new proposal against current saved sources. Apply requires a fresh Validation Gate, Build and Preview. Earlier conversations and the effects recorded in them remain available for inspection.
-
-- Installation copies can publish encrypted, authenticated SQLite and file blocks to an optional v3 directory or S3 repository. The original writers remain available for compatible copies and rollback.
-- Operators can inventory installation storage and rehearse restores in isolation. Copies capture one installation cut across SQLite databases, drafts, uploaded files and queued work.
-- Running `bun run dev:local` opens Projects with a generated development owner on loopback. Manual sign-in is available with `KONAE_DEV_AUTO_LOGIN=0`.
+- Open `/local` to describe, check, preview and apply an app with a provider key saved in the browser. Signed-in owners can attach a copy of a local conversation to a saved Project.
+- Builds with Pi Durable staging enabled let an owner read or download conversation history without a provider key, continue from another browser with its own key, and restore a checkpoint as a proposal. Apply runs a fresh Validation Gate, Build and Preview. History stays owner-only and outside app exports. The release image uses the legacy agent by default.
+- Operators can inventory installation storage and rehearse restores in isolation. Copies capture a consistent point across SQLite databases, drafts, uploaded files and queued work, including the app's internal backups.
+- Optional v3 copy destinations store encrypted, authenticated blocks for SQLite and files in a directory or S3. Existing destinations continue to write the compatible formats. Operators can rehearse a rollback while keeping both formats.
+- `bun run dev:local` signs in a generated development owner and opens Projects on loopback. Set `KONAE_DEV_AUTO_LOGIN=0` to exercise manual sign-in.
 
 ### Changed
 
