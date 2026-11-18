@@ -541,16 +541,19 @@ pub async fn api_keys_call(state: &AppState, deployment: &Deployment, name: &str
         }
         "api_keys_revoke" => {
             let id = a["keyId"].as_str().unwrap_or("");
-            let changed = db.execute(
-                "UPDATE api_keys SET revoked_at=?1 WHERE id=?2 AND revoked_at IS NULL",
-                rusqlite::params![now_ms() as i64, id],
-            )?;
-            anyhow::ensure!(
-                changed == 1
-                    || db.query_row("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id=?1)", [id], |row| row.get::<_, bool>(0))?,
-                "Key not found."
-            );
+            let pending = {
+                let tx = db.unchecked_transaction()?;
+                let changed = tx.execute(
+                    "UPDATE api_keys SET revoked_at=?1 WHERE id=?2 AND revoked_at IS NULL",
+                    rusqlite::params![now_ms() as i64, id],
+                )?;
+                anyhow::ensure!(changed == 1 || tx.query_row("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id=?1)", [id], |row| row.get::<_, bool>(0))?, "Key not found.");
+                let pending = crate::copies::Pending::begin(&state.data_root, &format!("{}/{id}", deployment.id), "revoking the app key and recording its revocation")?;
+                tx.commit()?;
+                pending
+            };
             super::recovery::record(state, super::recovery::Entry::new("api-key", Some(&deployment.id), id, "revoked")).await?;
+            pending.finish()?;
             Ok(json!({"keyId": id, "revoked": true}))
         }
         _ => anyhow::bail!("Unknown tool."),
@@ -1212,50 +1215,50 @@ async fn run_verified(
     let db_path = database_path(state, &deployment.id);
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
     super::copies::operation::action(state, &deployment.id, name, action, async {
-    let result = match state.guards.statement_permit(&deployment.id).await {
-        Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
-        Err(wait) => return rate_limited(wait),
-    };
-    drop(_guard);
-    let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
-    match result {
-        Ok(ran) => {
-            let changed = match super::guard::outcome(name, action, &ran.answer) {
-                super::guard::Outcome::Refused(message) => {
-                    if counted {
-                        super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
-                        super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+        let result = match state.guards.statement_permit(&deployment.id).await {
+            Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+            Err(wait) => return rate_limited(wait),
+        };
+        drop(_guard);
+        let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
+        match result {
+            Ok(ran) => {
+                let changed = match super::guard::outcome(name, action, &ran.answer) {
+                    super::guard::Outcome::Refused(message) => {
+                        if counted {
+                            super::usage::execution(&state.data_root, &deployment.id, name, "route", "refused");
+                            super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Refused(name.to_owned()));
+                        }
+                        return refusal(StatusCode::FORBIDDEN, &message);
                     }
-                    return refusal(StatusCode::FORBIDDEN, &message);
-                }
-                outcome => matches!(outcome, super::guard::Outcome::Changed),
-            };
-            if counted {
-                super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
-                super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
-            }
-            if changed {
-                if counted {
-                    super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
-                }
-                let account = match &caller {
-                    Caller::Person(user) => Some(user.user_id.as_str()),
-                    Caller::Key(_) | Caller::Visitor => None,
+                    outcome => matches!(outcome, super::guard::Outcome::Changed),
                 };
-                let notice = super::notify::Caller { account, actor_id: caller.actor_id() };
-                super::notify::record(state, deployment, name, action, &input, notice, ran.changed(super::now_ms())).await;
+                if counted {
+                    super::usage::execution(&state.data_root, &deployment.id, name, "route", "ok");
+                    super::usage::count(&state.data_root, &deployment.id, super::usage::Operation::Route(http.method.clone(), http.path.clone()));
+                }
+                if changed {
+                    if counted {
+                        super::usage::signal(&state.data_root, &deployment.id, name, action, &input, caller.actor_id());
+                    }
+                    let account = match &caller {
+                        Caller::Person(user) => Some(user.user_id.as_str()),
+                        Caller::Key(_) | Caller::Visitor => None,
+                    };
+                    let notice = super::notify::Caller { account, actor_id: caller.actor_id() };
+                    super::notify::record(state, deployment, name, action, &input, notice, ran.changed(super::now_ms())).await;
+                }
+                let mut response = Json(json!({"result": ran.answer})).into_response();
+                response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                response
             }
-            let mut response = Json(json!({"result": ran.answer})).into_response();
-            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            response
+            Err(error_value) => {
+                if counted {
+                    super::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
+                }
+                refusal(StatusCode::BAD_REQUEST, &error_value.to_string())
+            },
         }
-        Err(error_value) => {
-            if counted {
-                super::usage::execution(&state.data_root, &deployment.id, name, "route", "failed");
-            }
-            refusal(StatusCode::BAD_REQUEST, &error_value.to_string())
-        },
-    }
     }).await
 }
 

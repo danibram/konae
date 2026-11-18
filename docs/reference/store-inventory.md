@@ -38,6 +38,22 @@ Paths below the crate names are relative to `kernel-rs/<crate>/src/`. The same r
 | Addresses and maintenance | `kernel/domain.rs`, `hostname.rs`, `path.rs` and `maintenance.rs` commit or remove per-app markers. `recovery.rs` writes the installation hold and reconciles identities. |
 | Offline or outside the server process | `kernel/operator.rs` runs SQL, changes accounts, keys, modules and maintenance, and imports into a stopped Kernel. `file_store.rs` migrates stores or reconciles orphan bytes. `copies.rs` snapshots, prunes and restores. Owner suspend/resume and admission commands update the owner stores. A folder author's build, local reset, editor save or direct filesystem edit can replace files outside the server's locks. |
 
+## How a copy admits writers
+
+Both servers hold a shared permit through the HTTP handler, including its blocking database work. The mail, scheduled-action and call workers hold the same permit while they commit their outcomes. A copy takes the exclusive permit, waits for operator commands and drains queued Usage writes. Its cut time is the time after this drain. Directory and S3 targets receive the same staged files.
+
+| Writer or storage mode | What protects the cut |
+| --- | --- |
+| Running server | Requests and workers resume after the copy opens its readers and stages files that can change in place. A project deletion, import, internal database restore or publish that replaces a database waits for the SQLite readers to close. |
+| Operator command | Commands that change a live installation take a shared file lock on its data directory. An external import also takes a shared lock on `apps/`. A copy takes both locks exclusively to fix its readers. It releases the root at admission and releases `apps/` when the SQLite pages have been copied. |
+| Restore, file-store migration or reconciliation | `hold_while_stopped` takes `kernel.lock` and an exclusive lock on the data directory before inspection. Keep the directory and lock file in place throughout the command. For an editor, build, reset or direct database repair on the live tree, stop the server and hold these same locks through the last write. A process or S3 client writing independently of this protocol can change the volume during capture. |
+| SQLite | A read-only connection executes `BEGIN` and reads the schema. The backup API reads pages from that connection. A rollback-journal database is staged during the pause. A WAL reader can keep its view while new transactions commit. |
+| Sources, artifacts, history, file indexes and blobs | The copy stages ordinary files during the pause. It opens local blobs by inode and versioned S3 objects by GET. It stages unversioned S3 bytes before admitting writers. It checks the length and recorded digest before publishing the manifest. |
+
+The pause has one 1,850 ms budget for draining and staging together. Health records a failed attempt if the budget expires. `KONAE_COPY_READERS` caps simultaneous pins (default 512). `KONAE_COPY_STAGE_BYTES` can lower the space budget below available disk space. Once writers resume, the copy has 60 seconds to materialize its readers. Compression, encryption and uploading a sealed point take place after admission.
+
+An interrupted owner suspension leaves an intent in `owners.sqlite`. Konae finishes credential and ledger revocation at startup before serving. For a release, import, project change, action with declared effects, or delivery whose outcome is uncertain, the copy diagnostic names the subject, the phase and its record in `.copy-operations/`. Keep the record while investigating the app, catalogue or delivery. If the commits cannot be verified, restore the last verified installation point into an empty volume. An ordinary page read holds only the in-memory permit.
+
 ## Read-only observations
 
 The 18 November 2026 sample used v0.10.0 at `af1a897` as its code reference. The observations below report counts. The tests create their own files with fictitious names.
