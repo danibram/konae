@@ -183,6 +183,28 @@ def inventory(root, source=False):
     return files
 
 
+def historical_indexes(root):
+    return {p.relative_to(root): json.dumps(json.loads(p.read_bytes()), sort_keys=True, allow_nan=False)
+            for p in root.glob("apps/*/data/files/index.json")}
+
+
+def compare_image(oracle, image, indexes):
+    observed = inventory(image)
+    expected = dict(oracle)
+    reencoded = 0
+    if indexes:
+        # af1a897 serialized its kept entries again, including whitespace and object key order.
+        if historical_indexes(image) != indexes:
+            raise AssertionError("Historical file index entries differ from the source")
+        for path in indexes:
+            if expected[path] != observed[path]:
+                reencoded += 1
+                expected[path] = observed[path]
+    result = compare(expected, observed)
+    result["reencodedIndexes"] = reencoded
+    return result
+
+
 def compare(expected, actual):
     missing = expected.keys() - actual.keys()
     extra = actual.keys() - expected.keys()
