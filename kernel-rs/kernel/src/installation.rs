@@ -24,6 +24,7 @@ pub struct Installation {
     pub databases: Vec<RootDatabase>,
     pub accounts: Vec<AccountDatabase>,
     pub check_catalog: fn(&Path) -> anyhow::Result<()>,
+    pub check_cut: fn(&Path) -> anyhow::Result<()>,
     /// Who answers for an app's daily email allowance, by project ID. `None`
     /// counts the app under the installation.
     pub mail_group: fn(&Path, &str) -> Option<String>,
@@ -41,6 +42,7 @@ impl Installation {
             ],
             accounts: Vec::new(),
             check_catalog: |_| Ok(()),
+            check_cut: |_| Ok(()),
             mail_group: |_, _| None,
         }
     }

@@ -236,6 +236,7 @@ async fn tick(state: &AppState, clock: Clock, running: &Arc<Mutex<HashSet<String
         work.sort_by(|a, b| a.0.cmp(&b.0));
         let (state, running, id) = (state.clone(), running.clone(), deployment.id.clone());
         tokio::spawn(async move {
+            let _operation = state.copies.operations.read().await;
             if let Err(error) = run_due(&state, clock, &deployment, &work, &super::now_ms).await {
                 eprintln!("Scheduled work for deployment {id} could not be read or recorded: {error:#}");
             }
@@ -273,6 +274,7 @@ async fn run_due(
             return Ok(());
         }
         let at = now();
+        let pending = crate::copies::Pending::begin(&state.data_root, &format!("{id}/{name} slot {slot}"), "committing a scheduled action and its run")?;
         let outcome = super::run_action(folder.join("database.sqlite"), action, parameters(action, at)).await;
         let (ran, error) = match outcome {
             Ok(ran) => (Some(ran), None),
@@ -295,6 +297,8 @@ async fn run_due(
                 ran.changed(at),
             ).await;
         }
+        anyhow::ensure!(usage::flush_status(), "Scheduled Usage did not drain.");
+        pending.finish()?;
     }
     Ok(())
 }

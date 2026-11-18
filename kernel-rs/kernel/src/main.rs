@@ -9,7 +9,9 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let startup = kernel::Startup::from_env()?;
-    let running = kernel::start_with_mail_key(&startup, installation, || kernel::operator::mail_key(&startup.data_root), Vec::new(), None).await?;
+    let lock = kernel::file_store::hold_kernel_lock(&startup.data_root)?;
+    let mail_key = kernel::operator::mail_key(&startup.data_root)?;
+    let mut running = kernel::start_locked(&startup, lock, installation, &mail_key, Vec::new(), None).await?;
     let confirmation = std::env::var(kernel::folder::CONFIRM_SCHEMA).ok();
     for (id, opened) in kernel::folder::open_all(&running.state, confirmation.as_deref()).await? {
         match opened {
@@ -17,6 +19,7 @@ async fn main() -> anyhow::Result<()> {
             Err(error_value) => eprintln!("Not serving apps/{id}: {error_value:#}"),
         }
     }
+    running.start_copies();
     kernel::folder::follow_settings(running.state.clone());
     kernel::listen(&startup, running.state.clone(), axum::Router::new(), "Kernel").await
 }

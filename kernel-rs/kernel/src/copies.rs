@@ -1,4 +1,7 @@
 
+mod cut;
+pub(crate) mod operation;
+pub use operation::Pending;
 pub(crate) mod history;
 mod validation;
 #[cfg(test)]
@@ -6,7 +9,7 @@ mod history_tests;
 
 use crate::installation::Installation;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -16,12 +19,15 @@ use anyhow::{Context, Result, bail, ensure};
 use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::collections::HashSet;
+#[cfg(test)]
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 #[cfg(test)]
 use sha2::{Digest, Sha256};
-use crate::{AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery};
+use crate::{AppState, list_s3_keys, now_ms, read_s3_bytes, recovery};
 pub use konae_backup::{checksum_file, civil_from_days, vacuum_into};
 use konae_backup::{
     CopyReader, MANIFEST, Manifest, ManifestCache, ManifestFile, PathScope, S3CopyTarget, Source,
@@ -130,6 +136,11 @@ pub(crate) use health::status_directory;
 
 pub fn spawn_schedule(state: AppState, config: CopyConfig) {
     tokio::spawn(async move {
+        let stale = state.data_root.join(".copy-staging");
+        if let Err(e) = tokio::fs::remove_dir_all(stale).await
+            && e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("Could not remove old copy staging: {e}");
+        }
         let mut ticker = tokio::time::interval(config.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -155,8 +166,8 @@ struct StagedCopy {
 /// Takes one copy and sends it to every target, then prunes old copies.
 /// Returns the copy ID when every target succeeded.
 pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
+    let _worker = state.copies.worker.lock().await;
     let started = now_ms();
-    let id = copy_id(started);
     for target in targets {
         state.copies.update(target.kind(), |report| {
             report.last_attempt_at = Some(started);
@@ -164,10 +175,12 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
         }).await;
     }
     let staging_root = state.data_root.join(".copy-staging");
-    let _ = tokio::fs::remove_dir_all(&staging_root).await;
-    let staging = staging_root.join(&id);
+    let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
+    let _scratch = Staging(staging.clone());
     let mut cache = ManifestCache::new();
-    let staged = stage_copy(state, &staging, started, &mut cache).await;
+    let staged = stage_copy(state, &staging, &mut cache).await;
+    let cut_at = staged.as_ref().map_or(started, |s| s.manifest.created_at);
+    let id = copy_id(cut_at);
     let mut failures = Vec::new();
     let mut published = false;
     for target in targets {
@@ -183,7 +196,7 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
             Ok(()) => {
                 published = true;
                 state.copies.update(kind, |report| {
-                    report.last_cut_at = Some(started);
+                    report.last_cut_at = Some(cut_at);
                     report.last_success_at = Some(now_ms());
                     report.last_copy_id = Some(id.clone());
                     report.last_error = None;
@@ -209,7 +222,6 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
             report.last_error = error;
         }).await;
     }
-    let _ = tokio::fs::remove_dir_all(&staging_root).await;
     if published && let Ok(staged) = staged {
         let saved = CopyState {
             files: staged.manifest.files,
@@ -249,10 +261,16 @@ async fn prune(state: &AppState, target: &Target, id: &str, cache: &mut Manifest
     }
 }
 
-/// Builds the copy in `staging`. Each Deployment is snapshotted under its
-/// data and identity locks, the same locks an action, an upload, a signup and
-/// a publish take, so its databases, files and artifact agree with each other.
-async fn stage_copy(state: &AppState, staging: &Path, created_at: u64, cache: &mut ManifestCache) -> Result<StagedCopy> {
+struct Staging(PathBuf);
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+        if let Some(root) = self.0.parent() { let _ = std::fs::remove_dir(root); }
+    }
+}
+
+async fn stage_copy(state: &AppState, staging: &Path, cache: &mut ManifestCache) -> Result<StagedCopy> {
     let prior = tokio::fs::read(state.data_root.join(".copy-state.json")).await.ok()
         .and_then(|bytes| serde_json::from_slice::<CopyState>(&bytes).ok());
     if let Some(prior) = prior.as_ref() {
@@ -262,34 +280,12 @@ async fn stage_copy(state: &AppState, staging: &Path, created_at: u64, cache: &m
     }
     let previous_files: HashMap<_, _> = prior.iter().flat_map(|prior| &prior.files)
         .map(|file| (file.path.as_str(), file.sha256.as_str())).collect();
-    tokio::fs::create_dir_all(crate::layout::apps(staging)).await?;
-    for name in state.installation.databases.iter().map(|database| database.file) {
-        let source = state.data_root.join(name);
-        if source.exists() {
-            let target = staging.join(name);
-            tokio::task::spawn_blocking(move || vacuum_into(&source, &target)).await??;
-        }
-    }
-    let mut indexed_files = Vec::new();
-    let mut entries = tokio::fs::read_dir(crate::layout::apps(&state.data_root)).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        if !entry.file_type().await?.is_dir() {
-            continue;
-        }
-        let Some(deployment) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        // An editor save swaps app/ under the project lock.
-        let _project = database_lock(state, &format!("project:{deployment}")).await;
-        let _data = database_lock(state, &deployment).await;
-        let _identity = database_lock(state, &format!("identity:{deployment}")).await;
-        let (source, target) = (entry.path(), crate::layout::folder(staging, &deployment));
-        tokio::task::spawn_blocking(move || copy_deployment(&source, &target))
-            .await?
-            .with_context(|| format!("Deployment {deployment}"))?;
-        drop((_project, _identity));
-        copy_file_bytes(state, &deployment, &crate::layout::files(staging, &deployment), &previous_files, &mut indexed_files)
-            .await
-            .with_context(|| format!("The files of Deployment {deployment}"))?;
-    }
+    let mut directory = std::fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut directory, 0o700);
+    directory.create(crate::layout::apps(staging))?;
+    let (created_at, indexed_files) = cut::stage(state, staging, &previous_files).await?;
     let root = staging.to_owned();
     tokio::task::spawn_blocking(move || {
         let manifest = Manifest::capture(&root, created_at)?;
@@ -305,108 +301,7 @@ async fn stage_copy(state: &AppState, staging: &Path, created_at: u64, cache: &m
     .await?
 }
 
-async fn copy_file_bytes(
-    state: &AppState, deployment: &str, files: &Path, previous_files: &HashMap<&str, &str>,
-    indexed_files: &mut Vec<(String, u64, String, bool)>,
-) -> Result<()> {
-    let index = match tokio::fs::read(files.join("index.json")).await {
-        Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    let inventory: HashMap<_, _> = state.files.store.objects(deployment).await?
-        .into_iter().map(|object| (object.id, object.size)).collect();
-    let mut seen = HashSet::new();
-    for entry in &index {
-        let id = entry["id"].as_str().filter(|id| crate::valid_file_id(id)).context("The file index has an invalid ID.")?;
-        ensure!(seen.insert(id), "The file index lists {id} twice.");
-        let indexed_size = entry["size"].as_u64().with_context(|| format!("File {id} has no indexed size."))?;
-        let stored_size = inventory.get(id).with_context(|| format!("Indexed file {id} is missing from the file store."))?;
-        ensure!(*stored_size == indexed_size, "File {id} has {stored_size} bytes in the store. The index requires {indexed_size}.");
-        let blob = state.files.store.get(deployment, id, None).await
-            .with_context(|| format!("Could not read indexed file {id}"))?
-            .with_context(|| format!("Indexed file {id} disappeared before it could be read."))?;
-        let (size, digest) = crate::file_store::save_blob(blob, &files.join(format!("{id}.blob"))).await
-            .with_context(|| format!("Could not stage indexed file {id}"))?;
-        ensure!(size == indexed_size, "Read {size} bytes from file {id}. The index requires {indexed_size}.");
-        let path = format!("apps/{deployment}/data/files/{id}.blob");
-        let expected = match entry.get("sha256") {
-            Some(value) => Some(value.as_str().with_context(|| format!("File {id} has an invalid indexed SHA-256."))?),
-            None => previous_files.get(path.as_str()).copied(),
-        };
-        ensure!(expected.is_none_or(|expected| expected == digest), "File {id} does not match its recorded SHA-256.");
-        indexed_files.push((path, size, digest, entry.get("sha256").is_none()));
-    }
-    Ok(())
-}
-
-fn copy_deployment(source: &Path, target: &Path) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let name = entry.file_name();
-        let (from, to) = (entry.path(), target.join(&name));
-        match &*name.to_string_lossy() {
-            crate::layout::SETTINGS_FILE if kind.is_file() => {
-                std::fs::copy(&from, &to)?;
-            }
-            "app" | "dist" if kind.is_dir() => copy_tree(&from, &to)?,
-            "data" if kind.is_dir() => copy_data(&from, &to)?,
-            ".konae" => {
-                ensure!(kind.is_dir(), "The app's .konae path must be a directory.");
-                copy_private(&from, &to)?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn copy_data(source: &Path, target: &Path) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let name = entry.file_name();
-        let (from, to) = (entry.path(), target.join(&name));
-        match &*name.to_string_lossy() {
-            database if kind.is_file() && DEPLOYMENT_DATABASES.contains(&database) => vacuum_into(&from, &to)?,
-            "files" if kind.is_dir() => {
-                std::fs::create_dir_all(&to)?;
-                match std::fs::copy(from.join("index.json"), to.join("index.json")) {
-                    Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn copy_private(source: &Path, target: &Path) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let name = entry.file_name();
-        let (from, to) = (entry.path(), target.join(&name));
-        match &*name.to_string_lossy() {
-            "deployment.json" | "sources.json" | crate::maintenance::MARKER_FILE | crate::domain::RECORD_FILE | crate::path::RECORD_FILE | crate::hostname::RECORD_FILE if kind.is_file() => {
-                std::fs::copy(&from, &to)?;
-            }
-            "backups" => {
-                ensure!(kind.is_dir(), "The app's backups path must be a directory.");
-                history::copy_records(&from, &to)?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
@@ -871,7 +766,7 @@ mod tests {
             std::fs::write(source.join(".konae").join(name), "{}").unwrap();
         }
         let target = target.join(".konae");
-        copy_deployment(&source, &target.parent().unwrap()).unwrap();
+        cut::test_deployment(&source, target.parent().unwrap()).unwrap();
         assert!(target.join("deployment.json").exists());
         assert!(target.join(crate::domain::RECORD_FILE).exists());
         assert!(target.join(crate::path::RECORD_FILE).exists());
@@ -2163,13 +2058,13 @@ mod tests {
         let (source, copies) = (scratch("lock-source"), scratch("lock-copies"));
         let (deployment, _) = seed(&source);
         let state = state(&source);
-        let held = database_lock(&state, &deployment.id).await;
+        let held = state.copies.operations.read().await;
         let copying = tokio::spawn({
             let (state, copies) = (state.clone(), copies.clone());
             async move { run_copy(&state, &[Target::Directory(copies)]).await }
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(!copying.is_finished(), "the copy waits for the Deployment's lock");
+        assert!(!copying.is_finished(), "the copy waits for the admitted operation");
         let database = crate::layout::database(&source, &deployment.id);
         Connection::open(&database).unwrap().execute("INSERT INTO notes VALUES ('during')", []).unwrap();
         drop(held);

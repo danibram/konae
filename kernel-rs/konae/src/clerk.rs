@@ -363,6 +363,7 @@ pub fn operator_command() -> Result<bool> {
     let root = std::path::PathBuf::from(
         std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()),
     );
+    let _operation = crate::file_store::external_operation(&root)?;
     let mut db = Connection::open_with_flags(
         root.join("owners.sqlite"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
@@ -376,6 +377,7 @@ pub fn operator_command() -> Result<bool> {
         )
         .optional()?
         .context("Owner not found for this issuer and subject.")?;
+    let pending = crate::copies::Pending::begin(&root, &owner, "suspending the hosted owner and revoking delegated credentials")?;
     suspend(&mut db, &owner)?;
     let mcp_path = root.join("mcp.sqlite");
     if mcp_path.exists() {
@@ -385,6 +387,7 @@ pub fn operator_command() -> Result<bool> {
         revoke_delegations(&mut mcp, &owner)?;
     }
     super::recovery::record_offline(&root, super::recovery::Entry::new("clerk-owner", None, &owner, "suspended"))?;
+    pending.finish()?;
     println!(
         "Suspended owner {owner}. Projects and app accounts remain available to the installation operator."
     );

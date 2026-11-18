@@ -666,6 +666,10 @@ impl AuthService {
     /// Suspends an account by email. Its sessions and open challenges end at
     /// once; its ID, password and rows stay. Returns the account ID.
     pub fn suspend(&self, email: &str) -> Result<String, AuthError> {
+        self.suspend_with(email, |_, _| Ok(()))
+    }
+
+    pub fn suspend_with(&self, email: &str, record: impl FnOnce(&rusqlite::Transaction<'_>, &str) -> rusqlite::Result<()>) -> Result<String, AuthError> {
         let email = normalize_email(email)?;
         let mut connection = self.connection()?;
         let transaction = immediate(&mut connection)?;
@@ -690,6 +694,7 @@ impl AuthService {
                 [&user_id],
             )
             .map_err(AuthError::Storage)?;
+        record(&transaction, &user_id).map_err(AuthError::Storage)?;
         transaction.commit().map_err(AuthError::Storage)?;
         Ok(user_id)
     }

@@ -1211,6 +1211,7 @@ async fn run_verified(
     };
     let db_path = database_path(state, &deployment.id);
     let _guard = action_lock(state, &deployment.id, &action.kind).await;
+    super::copies::operation::action(state, &deployment.id, name, action, async {
     let result = match state.guards.statement_permit(&deployment.id).await {
         Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
         Err(wait) => return rate_limited(wait),
@@ -1255,6 +1256,7 @@ async fn run_verified(
             refusal(StatusCode::BAD_REQUEST, &error_value.to_string())
         },
     }
+    }).await
 }
 
 

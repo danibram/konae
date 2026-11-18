@@ -316,6 +316,7 @@ pub async fn restore_held(state: &AppState, deployment: &Deployment, record: &Da
 }
 
 async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incoming, schema: Option<(&Target, Option<&str>)>) -> Result<Change> {
+    let _generation = state.copies.generations.read().await;
     let stage = state.data_root.join("transfers").join(format!(".import-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&stage).await?;
     let result = async {
@@ -351,6 +352,7 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
         if let Some(staged) = &identity {
             carry_access(staged, &live.join("identity.sqlite"))?;
         }
+        let pending = crate::copies::Pending::begin(&state.data_root, &deployment.id, "replacing the imported file index, blobs and SQLite stores")?;
         let index = match &incoming.files {
             Some(archive) => {
                 let accounts = crate::app_db::read_optional(&identity.clone().unwrap_or_else(|| live.join("identity.sqlite")))?;
@@ -377,6 +379,7 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             tokio::fs::rename(&index, files.join("index.json")).await?;
             forget_unlisted(state, deployment).await?;
         }
+        pending.finish()?;
         Ok::<_, anyhow::Error>(change)
     }
     .await;

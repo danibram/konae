@@ -103,10 +103,15 @@ pub async fn command(installation: &Installation) -> Result<bool> {
     let mut words = Arguments::new(&args[1..]);
     let app = words.option("app")?;
     let startup = Startup::from_env()?;
+    let _operation = crate::file_store::external_operation(&startup.data_root)?;
+    let _generation = if name == "import" {
+        Some(crate::file_store::external_operation(&layout::apps(&startup.data_root))?)
+    } else { None };
     let state = crate::state_from_env(&startup, installation.clone(), &mail_key(&startup.data_root)?, Vec::new(), None).await?.0;
     let id = app_id(&state, app).await?;
-    let answer = if name == "test" { test_command(&state, &id, &mut words).await? } else { run(&state, &id, name, &mut words).await? };
-    println!("{}", serde_json::to_string_pretty(&answer)?);
+    let answer = if name == "test" { test_command(&state, &id, &mut words).await } else { run(&state, &id, name, &mut words).await };
+    ensure!(crate::usage::flush_status(), "Could not drain operator Usage writes.");
+    println!("{}", serde_json::to_string_pretty(&answer?)?);
     Ok(true)
 }
 

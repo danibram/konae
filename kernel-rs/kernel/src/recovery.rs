@@ -344,6 +344,7 @@ pub async fn drill_check(installation: &Installation) -> Result<bool> {
     ensure!(denied(std::net::TcpListener::bind(("127.0.0.1", 0)).err()), "The drill must deny listeners before loading the Kernel.");
     let outbound = std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], 9).into(), std::time::Duration::from_secs(1));
     ensure!(denied(outbound.err()), "The drill must deny outbound connections before loading the Kernel.");
+    let _operation = crate::file_store::external_operation(&startup.data_root)?;
     let (state, _) = state_from_env(&startup, installation.clone(), "recovery-drill-local-mail-key-only", Vec::new(), None).await?;
     let deployments = state.deployments.read().await.len();
     let request = Request::builder().uri("/_konae/health").body(Body::empty())?;

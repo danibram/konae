@@ -11,6 +11,7 @@ both	root	mail-test.sqlite	sqlite	optional	Test mode queues local messages and r
 both	root	mailbox.jsonl|mail-testbox.jsonl	file	optional	Development and test mail transports append messages.	Omit transport transcripts.	Start a new mailbox on first delivery.	samples
 both	root	files-store.json	file	optional	Startup, files-migrate and files-reconcile record the active store and migration state.	Omit the live backend marker.	Use the restored local blobs. Migrate after verification if required.	files
 both	root	kernel.lock	file	optional	A serving Kernel and offline file-store commands take the volume lock.	Omit the process lock.	The next process acquires its own lock.	profiles
+both	root	.copy-operations	tree	optional	Requests, workers and commands record unfinished operations.	Refuse capture until each operation finishes or is reconciled.	Start with an empty journal.	recovery
 both	root	.copy-state.json	file	optional	The copy worker records blob stamps, hashes and manifest cache.	Omit the cache.	Read the blobs on the next copy.	files
 both	root	.copy-staging|.restore-{uuid}	tree	optional	Copy stages snapshots. Restore materializes a copy before installation.	Omit staging.	A remaining restore directory prevents startup. Repeat restore on an empty volume.	samples
 both	root	.copy-health	tree	optional	The copy and restore commands record per-target diagnostics (#38).	Omit local health history. Operators can place it outside the volume.	Start fresh or consult the separately retained history.	samples
