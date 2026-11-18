@@ -2,6 +2,8 @@
 mod crypto;
 mod reader;
 mod writer;
+mod snapshot;
+pub use snapshot::SqliteSnapshot;
 #[cfg(feature = "s3")]
 mod s3;
 
