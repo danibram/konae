@@ -330,7 +330,8 @@ def exercise(args, root, report, traffic, remote):
         report[decision + "Holds"] = holds
     for case, changes in {
         "sharedCutFailure": dict(completeCut=failed_cut, remoteCopy=shadow, remoteCutMs=cut_ms(shadow)),
-        "usualWriterWithoutPoint": dict(completeCut=failed_legacy, remoteCopy=None, remoteCutMs=None),
+        "usualWriterWithoutPoint": dict(completeCut=failed_legacy, remoteCopy=None, remoteCutMs=None,
+                                        publicationJournal={t: [] for t in TARGETS}, drills=[]),
     }.items():
         directory = root / case
         directory.mkdir()
@@ -338,7 +339,8 @@ def exercise(args, root, report, traffic, remote):
         holds = GATE["review"](path, public, "promote")
         assert "usual writer cut incomplete" in holds and "v3 writer cut incomplete" in holds
         if case == "usualWriterWithoutPoint":
-            assert "no identified complete remote cut" in holds
+            assert {"no identified complete remote cut", "s3 has no confirmed publication",
+                    "missing targets for rollback"} <= set(holds)
         report[case] = holds
     report["remoteCutAgeAtReviewMs"] = now() - cut_ms(point)
     report["b11"] = args.pilot
