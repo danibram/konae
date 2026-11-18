@@ -1,4 +1,5 @@
 //! Write directory v1 and S3 v2 copies. Read directory and S3 copies in either format.
+pub mod blocks;
 mod crypto;
 mod reader;
 mod writer;
@@ -22,6 +23,8 @@ use std::{collections::HashMap, path::Path};
 /// The application selects which paths can enter a copy or a restored volume.
 pub trait PathScope: Sync {
     fn allows(&self, path: &str) -> bool;
+
+    fn sqlite_image(&self, _path: &str) -> bool { false }
 }
 
 impl<F: Fn(&str) -> bool + Sync> PathScope for F {
