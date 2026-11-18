@@ -6,8 +6,31 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- App settings and the owner MCP can turn modules on and configure them per app. The available switches are search listing, app accounts, file storage, data and actions, HTTP routes and outbound calls.
+- Public apps can opt in to indexing with the `seo` module. Konae generates canonical URLs, robots rules, sitemaps and social previews from the pages the app serves. The home and docs include page titles and share images.
+- A page action can serve a URL such as `/posts/:slug` and use a row for its title and description. Apps can supply a bounded query that lists their published URLs for the sitemap.
+- Owners can read and change the contact email per app. Settings writes can check the value the owner last read, so an older form cannot overwrite a later edit.
+
 ### Changed
 
+- On first startup after an upgrade, Konae records module settings for existing apps from their published release and existing app state. Private apps retain sign-in, and apps with uploaded files retain file storage and their published file access policy. Search listing starts off.
+- With data and actions off, static apps can publish without `actions.json`, `schema.sql` or a database. An export with no database requires a Kernel that supports optional databases to import it.
+- Owner MCP clients use `modules_read` and `module_set` with `module: "auth"` to manage signup policy and sign-in methods. This replaces `signup_policy_set`, `sign_in_methods_read` and `sign_in_methods_set`.
+- HTTP routes and outbound calls require data and actions. Files API keys require file storage, and route API keys require HTTP routes and data and actions.
+- Konae adds `noindex` to app pages by default and keeps sign-in and other system pages out of search.
+
+### Fixed
+
+- App settings keeps the selected tab when the dialog remounts.
+- Concurrent initialization of the Usage database no longer interrupts a scheduled run with a SQLite lock error.
+
+## [0.10.0] - 2026-11-17
+
+### Changed
+
+- Installation copies are incremental. A directory copy hard-links each file that did not change since the previous copy, so every copy folder stays complete while unchanged bytes take disk space once. An S3 copy uploads only changed files, and its version 2 manifest names the earlier copy that holds each unchanged object. Pruning keeps every object a retained manifest names. A copy skips reading a file blob from the file store when its size and modification time match the previous copy. Restore reads version 1 and version 2 copies. An installation that holds version 2 copies needs 0.10.0 or later to restore and prune them.
 - The installation home is redesigned. The hero shows the editor building an example app, then the page covers how an app is made, what every app has, the move to another server, the example apps, the developer paths and the questions people ask before asking for an invitation. Layouts name their columns at each width, and the Spanish and English texts are written together.
 
 ## [0.9.0] - 2026-11-16
