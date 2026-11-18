@@ -38,3 +38,10 @@ worker=$(cargo test --offline --locked --manifest-path kernel-rs/Cargo.toml -p k
 ```
 
 Each destination receives 1,080 synthetic hourly points across two key epochs. The runner compares the listed survivors against the UTC calendar and checks exact bytes in a new process for each restore. The MinIO run measures creation, pruning, both restores, stable publication and the next recovery separately. It also exercises real pagination and injects a truncated response, a failed second page and a refused manifest PUT through a loopback proxy. The capacity run fills a disposable encrypted macOS volume until the directory writer hits ENOSPC. Running without `--mc` reports the skipped S3 destination. With `--require-s3` that omission fails the run.
+
+To exercise the historical collectors, set `BASELINE` to the verified `af1a897` binary directory. The runner starts the historical Kernel on loopback, expires two old manifests per destination and restores the v3 point on each backend.
+
+```sh
+"$LAB_BIN/with-minio" python3 tests/smoke/block-retention.py --worker "$worker" \
+  --historical-kernel "$BASELINE/kernel" --mc "$LAB_BIN/bin/mc" --require-s3
+```
