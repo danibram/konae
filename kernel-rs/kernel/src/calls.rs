@@ -653,35 +653,7 @@ async fn target(state: &AppState, url: &url::Url) -> Result<Target, (&'static st
 fn connection(data_root: &Path) -> Result<Connection> {
     let connection = Connection::open(data_root.join(CALLS_DATABASE))?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    connection.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         CREATE TABLE IF NOT EXISTS calls (
-           id TEXT PRIMARY KEY,
-           deployment TEXT NOT NULL,
-           action TEXT NOT NULL,
-           input TEXT NOT NULL,
-           state TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'failed')),
-           attempts INTEGER NOT NULL DEFAULT 0,
-           next_attempt_at INTEGER NOT NULL,
-           leased_until INTEGER,
-           method TEXT,
-           url TEXT,
-           status INTEGER,
-           error TEXT,
-           answer TEXT,
-           then_action TEXT,
-           then_state TEXT,
-           then_message TEXT,
-           execution_mode TEXT NOT NULL DEFAULT 'live' CHECK (execution_mode IN ('live', 'test')),
-           request_body TEXT,
-           request_headers TEXT,
-           response_body BLOB,
-           created_at INTEGER NOT NULL,
-           updated_at INTEGER NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS calls_due ON calls(state, next_attempt_at);
-         CREATE INDEX IF NOT EXISTS calls_deployment ON calls(deployment, created_at);",
-    )?;
+    connection.execute_batch(include_str!("calls.sql"))?;
     // `calls.sqlite` predates execution modes. Additive columns keep existing
     // live outbox rows deliverable after an upgrade.
     for (column, declaration) in [

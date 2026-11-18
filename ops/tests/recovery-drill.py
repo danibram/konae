@@ -130,7 +130,10 @@ def permissions(store):
 def check_due_jobs(live, app, binary):
     run = runpy.run_path(str(DRILL))["restricted"]
     env = {"KONAE_DATA_DIR": str(live), "KONAE_EXECUTION_MODE": "test", "TMPDIR": str(live)}
+    outbox = live / "calls.sqlite"
+    assert not outbox.exists(), "The fixture created an outbox before its first call."
     assert run(binary, live, ["drill-check"], env).returncode == 0
+    assert not outbox.exists(), "drill-check created the optional call outbox."
 
     def sql(db, statement):
         with contextlib.closing(sqlite3.connect(db)) as connection:
@@ -141,8 +144,11 @@ def check_due_jobs(live, app, binary):
     sql(live / "mail-test.sqlite", """INSERT INTO jobs(id,purpose,recipient,scope,app_name,token_hash,
         link_expires_at,state,next_attempt_at,created_at,updated_at) VALUES
         ('due','notify','job@drill.test','app','Drill','fixture',1,'pending',0,0,0)""")
-    sql(live / "calls.sqlite", """INSERT INTO calls(id,deployment,action,input,state,next_attempt_at,
-        created_at,updated_at) VALUES ('due','app_legacy_schedule_route','job','{}','pending',0,0,0)""")
+    with contextlib.closing(sqlite3.connect(outbox)) as connection:
+        connection.executescript((OPS.parent / "kernel-rs/kernel/src/calls.sql").read_text())
+        connection.execute("""INSERT INTO calls(id,deployment,action,input,state,next_attempt_at,
+            created_at,updated_at) VALUES ('due','app_legacy_schedule_route','job','{}','pending',0,0,0)""")
+        connection.commit()
     data = app / "data"
     data.mkdir(exist_ok=True)
     sql(data / "database.sqlite", (app / "app/schema.sql").read_text())

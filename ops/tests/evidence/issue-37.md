@@ -8,7 +8,7 @@ The installation exercise used disposable identities, one Deployment and two nat
 | Restore after loss of the volume and primary | Directory, primary S3 and independent S3 restores recovered the same point. Each verified eight files, loaded one Deployment and applied one owner suspension. The Kernel checked the subject in staging before and after reconciliation. The independent restore ran with only the replica reader and custody key. | Restore a real retained installation on a separate clean host using only the independent account. Match the full ledger to the custodian's independent receipt. |
 | Isolation, missing key and disposal | The OS refused reads of an unrelated file and connections to a second listening port. Before loading the recovered Kernel, the OS denied both TCP bind and outbound connect. A due email and call stayed pending with zero attempts. The overdue schedule produced zero writes. The encrypted-copy refusal with the key withheld left the destination empty. Every trial detached the AES-256 image and removed its backing file. | Repeat under the installation's recovery host, encrypted storage and access controls. Full user-facing recovery time, fresh login and private file authorization require separate tests. |
 
-## Timed installation trials
+## Timed installation trials before the inventory integration
 
 All eight trials used point fingerprint `a61be63bad72004e263cab820ff612c53d70a6504643d6c79265ec981ba2e610` and Konae `0.10.0`, binary SHA-256 `ca1b2fb24dc58857be6534d9fe49a3375c670716dca47ff1bbf802c28b400dc9`. Durations include volume creation and removal.
 
@@ -42,3 +42,28 @@ bun test --timeout 60000 scripts/docs-site.test.ts
 ```
 
 All 5 recovery tests, 37 copy tests and 10 documentation tests passed. The default five-second documentation timeout expired once during concurrent builds on mbpd. The command above completed all 503 documentation assertions.
+
+## Rerun with the installation inventory
+
+On integration commit `719284c`, MinIO passed the permission probes and the job fixture stopped with `no such table: calls`. The installation had never queued a call. The corrected fixture checked that its first health read left the optional outbox absent, created the queue with the Kernel schema, then inserted a due call. The next health read left the call and email pending with zero attempts. The schedule made zero writes.
+
+The rerun used binary SHA-256 `10e23519eaae4900462ccc3896379b19319e1a65193b5e47d32a9cb3678ffa5b` and point fingerprint `5b3b84acdd84cb2bc9d9e7a2f254feebb255a7a2e70825fe68dd0799603af88f`. All three restores verified seven files and applied the witnessed suspension. MinIO denied six writer deletes and four reader writes. The sandbox denied the unrelated file read and connection. All eight trials detached the encrypted volume and removed its backing file.
+
+| UTC start | Source | Outcome | Seconds |
+| --- | --- | --- | ---: |
+| 03:15:16 | primary directory | passed | 5.361 |
+| 03:15:22 | primary sealed-s3 | passed | 5.722 |
+| 03:15:32 | independent sealed-s3 | passed | 5.677 |
+| 03:15:38 | independent sealed-s3 | custody-key-unavailable | 5.061 |
+| 03:15:43 | independent sealed-s3 | wrong-custody-key | 5.229 |
+| 03:15:49 | independent sealed-s3 | missing-witness | 4.317 |
+| 03:15:53 | independent sealed-s3 | unsigned-input | 5.234 |
+| 03:15:59 | independent sealed-s3 | record-unavailable | 5.300 |
+
+Repeat from the repository root after building the integrated binaries.
+
+```sh
+python3 -B ops/tests/recovery-drill.py --minio-bin-dir "$MINIO_BIN_DIR"
+cargo test --offline --locked --manifest-path kernel-rs/Cargo.toml -p kernel --lib calls::tests::test_calls_are_captured_across_restart_and_replies_run_then_once
+cargo test --offline --locked --manifest-path kernel-rs/Cargo.toml -p konae --test inventory
+```
