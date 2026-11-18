@@ -1574,12 +1574,13 @@ async fn admin_call(
         }
         "project_delete" => {
             let id = a["projectId"].as_str().unwrap();
-            let _guard = database_lock(state, &format!("project:{id}")).await;
-            let (project, _) = owned_project(state, owner, id, "write")?;
-            anyhow::ensure!(project["name"] == a["name"], "{}", DELETE_NAME_MISMATCH);
+            owner.require("write", Some(id))?;
             let _project_effects = database_lock(state, &format!("conversation-effects:{id}")).await;
             super::conversations::ensure_no_running_project_effect(&owner.id, id)
                 .map_err(|message| anyhow::anyhow!(message))?;
+            let _guard = database_lock(state, &format!("project:{id}")).await;
+            let (project, _) = owned_project(state, owner, id, "write")?;
+            anyhow::ensure!(project["name"] == a["name"], "{}", DELETE_NAME_MISMATCH);
             let deleted = delete_project(state, id).await?;
             Ok(json!({"deleted":true,"projectId":id,"deployments":deleted}))
         }
