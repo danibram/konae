@@ -1,20 +1,68 @@
 import { Database } from "bun:sqlite";
 import { expect } from "bun:test";
+import { copyFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer, connect } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 type Access = "seed" | "observe" | "frozen";
 
-function use<T>(file: string, access: Access, run: (db: Database) => T): T {
-  // A published copy has no WAL. SQLite can read it without creating shared memory.
-  const frozen = access === "frozen";
-  const source = frozen ? pathToFileURL(file).href + "?immutable=1" : file;
-  const db = new Database(source, frozen ? { readonly: true } : { readwrite: true, create: access === "seed" });
+function query<T>(file: string, readonly: boolean, run: (db: Database) => T) {
+  const db = new Database(file, readonly ? { readonly: true } : { readwrite: true });
   try {
-    if (access !== "seed") db.run("PRAGMA query_only=ON");
+    db.run("PRAGMA query_only=ON");
     return run(db);
   } finally { db.close(true); }
+}
+
+// macOS SQLite can refuse a read-only WAL database when its shared-memory file is absent.
+// Copy the journals too. SQLite rebuilds the WAL index in the scratch directory.
+function readonlySnapshot<T>(file: string, run: (db: Database) => T) {
+  const suffixes = ["", "-wal", "-journal"];
+  const versions = () => suffixes.map(suffix => {
+    const st = statSync(file + suffix, { bigint: true, throwIfNoEntry: false });
+    return st && `${st.ino}:${st.ctimeNs}:${st.size}`;
+  });
+  const before = versions();
+  if (!before[0]) throw Error(`Missing SQLite database: ${file}`);
+  const dir = mkdtempSync(path.join(tmpdir(), "konae-sqlite-read-"));
+  try {
+    const snapshot = path.join(dir, "snapshot.sqlite");
+    try {
+      suffixes.forEach((suffix, i) => {
+        if (before[i]) copyFileSync(file + suffix, snapshot + suffix);
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (versions().every((value, i) => value === before[i])) return { value: query(snapshot, false, run) };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+function use<T>(file: string, access: Access, run: (db: Database) => T, deadline = performance.now() + 5000): T {
+  if (access === "seed") {
+    const db = new Database(file, { readwrite: true, create: true });
+    try { return run(db); } finally { db.close(true); }
+  }
+  if (access === "frozen") return query(pathToFileURL(file).href + "?immutable=1", true, run);
+  for (;;) {
+    try {
+      return query(file, true, run);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "SQLITE_CANTOPEN") {
+        const snapshot = readonlySnapshot(file, run);
+        if (snapshot) return snapshot.value;
+      } else if (code !== "SQLITE_BUSY" && !code?.startsWith("SQLITE_BUSY_")) {
+        throw error;
+      }
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw error;
+      Bun.sleepSync(Math.min(50, Math.ceil(remaining)));
+    }
+  }
 }
 
 // The receiver commits the effect and drops the connection before acknowledging it.
@@ -139,10 +187,15 @@ export function checkRevocations(root: string, id: string, reconciled: boolean, 
 
 export async function checkWorkers(root: string, id: string) {
   const data = path.join(root, "apps", id, "data");
+  const deadline = performance.now() + 5000;
   const slot = () => use(path.join(data, "usage.sqlite"), "observe", db =>
-    db.query("SELECT slot FROM schedule_state WHERE action='notes.tick'").values());
-  for (let n = 0; n < 50 && slot().length === 0; n++) await Bun.sleep(100);
-  expect(Number(slot()[0]?.[0])).toBeGreaterThan(0);
+    db.query("SELECT slot FROM schedule_state WHERE action='notes.tick'").values(), deadline);
+  let slots = slot();
+  while (slots.length === 0 && performance.now() < deadline) {
+    await Bun.sleep(100);
+    slots = slot();
+  }
+  expect(Number(slots[0]?.[0])).toBeGreaterThan(0);
   expect(use(path.join(data, "database.sqlite"), "observe", db =>
     db.query("SELECT count(*) FROM notes WHERE user_id='timer'").values())).toEqual([[0]]);
   expect(use(path.join(root, "calls.sqlite"), "observe", db =>
