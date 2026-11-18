@@ -3,7 +3,6 @@ import { defaultSessionConfig } from "../agent/catalog";
 import { createAgentKeyStore } from "../agent/key-store";
 import type { KonaeAgentHandle } from "../agent/harness";
 import type { AgentSessionConfig } from "../agent/contracts";
-import { createDurableKonaeAgent } from "../agent/harness";
 import { useAgentThread } from "./useAgentThread";
 import { AgentPanel } from "./AgentPanel";
 import { AgentSettingsModal } from "./AgentSettingsModal";
@@ -45,7 +44,7 @@ export function LocalFirstRun() {
 
   const ensureAgent = () => {
     if (agentRef.current) return Promise.resolve(agentRef.current);
-    if (!loadRef.current) loadRef.current = Promise.resolve(createDurableKonaeAgent(projectRef.current, sessionConfig, keyStore, {
+    if (!loadRef.current) loadRef.current = import("../agent/harness").then(({ createDurableKonaeAgent }) => createDurableKonaeAgent(projectRef.current, sessionConfig, keyStore, {
       isCurrent: () => projectRef.current.id === project.id,
       onValidation: () => undefined,
     })).then(async (handle) => { await handle.initialize?.(); agentRef.current = handle; setAgent(handle); return handle; }).catch(() => null).finally(() => { loadRef.current = null; });

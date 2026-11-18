@@ -48,9 +48,6 @@ import { switcherProjects } from "./components/project-list";
 import { suggestedChanges } from "./components/agent-suggestions";
 import "./components/workbench.css";
 import { AgentPanel } from "./components/AgentPanel";
-import { LocalFirstRun } from "./components/LocalFirstRun";
-import { DurableHistoryDialog } from "./components/DurableHistoryDialog";
-import { LocalHistoryAttachmentDialog } from "./components/LocalHistoryAttachmentDialog";
 import type { AppSettingsSection } from "./components/AppSettingsDialog";
 import { proposalPreviewProject, type ProposalPreview } from "./components/proposal-preview";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
@@ -93,11 +90,13 @@ import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
 import { ProposalHostLifecycle, RECOVERED_PREVIEW_RESET_NOTICE } from "./runtime/proposal-host";
-import { reconcileInterruptedApply } from "./agent/durable-checkpoints";
 
 const WhatHappenedView = heldLazy(() => import("./components/WhatHappenedView").then((module) => module.WhatHappenedView));
 const CapabilityWorkspace = heldLazy(() => import("./components/CapabilityWorkspace").then((module) => module.CapabilityWorkspace));
 const AppSettingsDialog = heldLazy(() => import("./components/AppSettingsDialog").then((module) => module.AppSettingsDialog));
+const LocalFirstRun = lazy(() => import("./components/LocalFirstRun").then((module) => ({ default: module.LocalFirstRun })));
+const DurableHistoryDialog = lazy(() => import("./components/DurableHistoryDialog").then((module) => ({ default: module.DurableHistoryDialog })));
+const LocalHistoryAttachmentDialog = lazy(() => import("./components/LocalHistoryAttachmentDialog").then((module) => ({ default: module.LocalHistoryAttachmentDialog })));
 
 type EditorFile = string;
 type StagedRecoveryReview = { checkpointId: string; reason: string; files: Array<{ path: string; base?: string; candidate?: string }> };
@@ -126,7 +125,7 @@ const DesignSystem = lazy(() => import("./components/DesignSystem").then((module
 const modKey = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
 
 export function App() {
-  if (window.location.pathname === "/local") return <LocalFirstRun />;
+  if (window.location.pathname === "/local") return <Suspense fallback={<main className="local-first-run" aria-busy="true">Opening local app…</main>}><LocalFirstRun /></Suspense>;
   if (window.location.pathname === "/platform-access") return <PlatformAccess />;
   if (window.location.pathname === "/design-system") return <PublicDesignSystem />;
   return <PlatformGate />;
@@ -1012,6 +1011,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                   callId: crypto.randomUUID(), observesCallId: pending.callId,
                 });
                 if (!observed.project) throw new Error("The authorized source read-back did not return the saved project. Its outcome remains unknown; no save was replayed.");
+                const { reconcileInterruptedApply } = await import("./agent/durable-checkpoints");
                 const applyOutcome = await reconcileInterruptedApply(lateApplyCandidate, { revision: observed.revision, files: observed.project });
                 if (applyOutcome === "conflict" || applyOutcome === "unknown") throw new Error("The authorized source read-back found a changed or incomplete source state. The candidate remains preserved; no save was replayed.");
                 checkpointStatus = applyOutcome === "saved" ? "saved" : "proposal";
@@ -1333,6 +1333,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       let observed: Awaited<ReturnType<typeof sources.observeSaved>> | null = null;
       try { observed = await sources.observeSaved(project.id, applyExecution ? agentRef.current.execution?.(crypto.randomUUID(), applyCallId) ?? undefined : undefined); }
       catch (error) { saveError ??= error; }
+      const { reconcileInterruptedApply } = await import("./agent/durable-checkpoints");
       const reconciled = await reconcileInterruptedApply(
         { sourcesRevision: expectedRevision, base: { files: project.files, encodings: project.encodings }, scratch: { files: next.files, encodings: next.encodings } },
         observed?.project ? { revision: observed.revision, files: observed.project } : null,
@@ -1747,9 +1748,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   if (screen === "projects") {
     return <><ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />
-      {localAttachment !== null && <LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
+      {localAttachment !== null && <Suspense fallback={null}><LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
         sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
-      }} />}
+      }} /></Suspense>}
     </>;
   }
 
@@ -2188,10 +2189,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
 
-      {durableRecoveryStaging && <DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} />}
-      {localAttachment !== null && <LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
+      {durableRecoveryStaging && durableHistoryOpen && <Suspense fallback={null}><DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} /></Suspense>}
+      {localAttachment !== null && <Suspense fallback={null}><LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
         sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
-      }} />}
+      }} /></Suspense>}
 
       <AgentSettingsModal
         open={settingsOpen}
