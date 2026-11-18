@@ -92,7 +92,7 @@ Both binaries read these at startup unless a row says otherwise. Defaults are th
 | `KONAE_ACCOUNT_VERIFICATION` | `local` | `required` makes new owner and app accounts prove their email before they are active, and moves accounts that never verified to pending with their sessions revoked. `local` keeps unverified signup for development. See [Verified accounts](#verified-accounts). |
 | `KONAE_MAIL_TRANSPORT` | unset (`development` under `bun run dev:local` and `konae dev`) | How email leaves: `resend`, `smtp` or `development`. Every transport sends through the queue in `mail.sqlite`. `development` appends each message to `mailbox.jsonl` in the data directory; `konae dev` writes test mail to `.konae/kernel/mail-testbox.jsonl`. Unset means no email, so signup under required verification, recovery and invitations are refused. See [Account email](#account-email). |
 | `KONAE_MAIL_FROM` | `Konae <konae@localhost>` for `development`; required otherwise | Sender address, such as `Konae <no-reply@mail.example.com>`. The sender preflight checks its domain. |
-| `KONAE_MAIL_SECRET` | unset | Secret of at least 32 characters from which the Kernel derives the key that encrypts queued links. When it is unset, `konae` derives the key from `KONAE_SETUP_KEY` and refuses to start `resend` or `smtp` while that is the development default. `kernel` writes a random key to `mail-key` in the data directory on its first start, readable by its owner alone, and every later start and command reads it. |
+| `KONAE_MAIL_SECRET` | unset | Secret of at least 32 characters from which the Kernel derives the key that encrypts queued links. When it is unset, `konae` derives the key from `KONAE_SETUP_KEY` and refuses to start `resend` or `smtp` while that is the development default. The `kernel` server and its app commands create or reuse the owner-only `mail-key` file in the data directory, including when an operator runs `kernel import` on a Konae volume. They use that key when `KONAE_MAIL_SECRET` is unset. |
 | `KONAE_RESEND_API_KEY` | unset | Resend API key for `resend`. A sending-only key is enough to send. |
 | `KONAE_RESEND_DOMAINS_KEY` | `KONAE_RESEND_API_KEY` | Resend key that can list domains, for the sender preflight. Set it when the sending key has `sending_access` only. |
 | `KONAE_RESEND_WEBHOOK_SECRET` | unset | The `whsec_` signing secret of the Resend webhook that posts to `/_konae/mail/resend-events`. Unset means the route answers 404 and jobs stop at accepted. |
@@ -171,7 +171,7 @@ Each app is one app folder in the data directory. `kernel-rs/kernel/src/layout.r
 ├── transfers/              # the bytes of unfinished MCP uploads and downloads
 ├── owners.sqlite           # konae only: owner accounts, sessions and invitation codes
 ├── mcp.sqlite              # konae only: projects, agent credentials, OAuth and the audit log
-├── mail-key                # kernel only, without KONAE_MAIL_SECRET: the key that seals queued links
+├── mail-key                # private fallback for kernel mail, created by kernel startup or app commands
 └── apps/<id>/              # one app folder (ADR-0001)
     ├── konae.json          # name, visibility, Signup Policy, sign-in methods, contact email
     ├── app/                # the Capsule
@@ -297,7 +297,7 @@ Before it sends anything, the Kernel runs the sender preflight. For Resend the s
 
 A job is `pending` until the provider takes it, then `accepted`, then `delivered` when the provider reports delivery to the recipient's server, or `failed`. A provider outage keeps jobs pending, with up to nine attempts that wait 30 seconds at first and double up to an hour. A job whose link was replaced, used or expired before sending fails without being sent. Delivery says the recipient's server took the email, not that a person read it, and it never activates an account.
 
-The Kernel encrypts each queued link with AES-256-GCM under a key derived from `KONAE_MAIL_SECRET`, or, when that is unset, from `KONAE_SETUP_KEY` on `konae` and from `mail-key` on `kernel`. It deletes the link once the provider accepts the email. Changing the secret leaves pending links unreadable, so those jobs fail and people ask for a new link.
+The Kernel encrypts each queued link with AES-256-GCM under a key derived from `KONAE_MAIL_SECRET`, or, when that is unset, from `KONAE_SETUP_KEY` on `konae` and from `mail-key` on `kernel`. It deletes the link once the provider accepts the email. When both binaries enqueue mail on the same volume, give both processes the same `KONAE_MAIL_SECRET`. Changing the secret leaves pending links unreadable, so those jobs fail and people ask for a new link.
 
 To record delivery, add a webhook in Resend that posts `email.sent`, `email.delivered`, `email.bounced`, `email.failed` and `email.suppressed` to `<KONAE_PUBLIC_ORIGIN>/_konae/mail/resend-events`, and set `KONAE_RESEND_WEBHOOK_SECRET` to its signing secret. The Kernel rejects an event without a valid signature, records each event ID once, and only moves a job forward.
 

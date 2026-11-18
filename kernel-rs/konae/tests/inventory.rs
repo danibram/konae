@@ -146,9 +146,14 @@ fn local_sample_keeps_the_draft_and_absent_optional_stores() {
     v.file("apps/project_3/.konae/sources.json");
     v.file("apps/project_0/.konae/backups/no-modules.json");
     v.file("apps/project_0/.konae/backups/no-modules/.empty-data");
+    assert!(!v.0.join("mail-key").exists());
+    assert!(v.report(&[])["components"].get("root/mail-key").is_none());
+    assert!(!v.0.join("mail-key").exists());
+    v.file("mail-key");
     let before = snapshot(&v.0);
     let report = v.report(&[]);
     let components = &report["components"];
+    assert_eq!(components["root/mail-key"], 1);
     assert_eq!(components["payload/.empty-data"], 1);
     assert_eq!(components["app/app"], 4);
     assert_eq!(components["app/dist"], 3);
@@ -205,7 +210,9 @@ fn policy_uses_the_real_konae_registry_and_needs_no_data_directory() {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     let policies = report["policies"].as_array().unwrap();
     assert!(policies.iter().any(|row| row["component"] == "owners.sqlite"));
-    assert!(!policies.iter().any(|row| row["component"] == "mail-key"));
+    let mail_key = policies.iter().find(|row| row["component"] == "mail-key").unwrap();
+    assert_eq!(mail_key["binary"], "both");
+    assert_eq!(mail_key["presence"], "optional");
     assert_eq!(report["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         report["operations"]["installationCopy"]["recover"],

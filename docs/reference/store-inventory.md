@@ -11,7 +11,7 @@ KONAE_DATA_DIR=/mnt/volume/standalone /path/to/kernel inventory
 
 Use a read-only view of a stable volume for certification. The command reads directory entries and file types. It starts no workers, takes no Kernel lock and opens no SQLite, secret, app file or network connection. Standard output contains the binary name, version, catalogue version and counts by component. An unknown name, unexpected type, unreadable directory or missing required store ends the command with a nonzero status. The diagnostic identifies the path on the operator's machine. Keep those paths local.
 
-`--policy` prints the matrix for the binary even when the volume is unavailable. Each row gives the scope, component name, writer, required or optional presence, capture rule, restore treatment and test group. A `dir:` row names the scope to inspect next. A `tree` row assigns the whole directory to one writer, such as the app's artifact or transfer scratch. The inventory does not inspect those contents. The `external` rows describe dependencies that the operator checks separately. A successful count certifies classification. The operator still verifies the manifest, object bytes, access rules and recovery of the selected point. [Version 1 policy matrix](../../kernel-rs/kernel/src/inventory.tsv)
+`--policy` prints the matrix for the binary even when the volume is unavailable. Each row gives the scope, component name, writer, required or optional presence, capture rule, restore treatment and test group. A `dir:` row names the scope to inspect next. A `tree` row assigns the whole directory to one writer, such as the app's artifact or transfer scratch. The inventory does not inspect those contents. The `external` rows describe dependencies that the operator checks separately. A successful count certifies classification. The operator still verifies the manifest, object bytes, access rules and recovery of the selected point. [Version 2 policy matrix](../../kernel-rs/kernel/src/inventory.tsv)
 
 ## Which operation to run
 
@@ -21,7 +21,7 @@ Use a read-only view of a stable volume for certification. The command reads dir
 | Move one published app to another installation | Export the app folder and import its sources and selected data parts. The destination runs the same rules and has its own installation metadata. | The portable identity file carries accounts. Imported session tokens and API keys grant no access. The destination supplies secrets. Import into an existing app preserves its current access under the import rules. |
 | Undo a change in one app | Use the Data panel or `database_execute` with `list-backups` and `restore-backup`. The record names its database snapshot or the data and sources it holds. Restore first saves the state it replaces. | An internal restore keeps the app on its installation. Compound restores preserve current sessions and keys according to the import rules. |
 
-A directory containing a single exported app cannot establish the presence of root databases or their owners. The standalone profile recognizes `mail-key`, which the binary generates locally. The Konae profile recognizes `owners.sqlite` and `mcp.sqlite`. Both profiles expire open Google flows and retain the app's configured Google client in `data/secrets.sqlite`. [Export and import](./export-and-import.md) · [Restore and reconcile](../operate.md#data-directory-and-copies)
+A directory containing a single exported app cannot establish the presence of root databases or their owners. Both profiles recognize the optional `mail-key`. Standalone `kernel` startup and app commands such as `kernel import` create or reuse this file, including on a Konae volume. The operator keeps the file private. Installation copies and app exports omit it. The `konae` server uses `KONAE_MAIL_SECRET` or its setup key to seal mail. The Konae profile recognizes `owners.sqlite` and `mcp.sqlite`. Both profiles expire open Google flows and retain the app's configured Google client in `data/secrets.sqlite`. [Export and import](./export-and-import.md) · [Restore and reconcile](../operate.md#data-directory-and-copies)
 
 ## Write paths
 
@@ -91,7 +91,14 @@ cargo test --locked --offline --manifest-path kernel-rs/Cargo.toml --workspace
 
 ## Verification on mbpd
 
-On 18 November 2026, both server binaries reported v0.10.0 and catalogue version 1. `konae inventory --policy` listed 59 rows. `kernel inventory --policy` listed 60. On first startup in test mode, each disposable volume acquired `apps/`, `kernel.lock` and the test mail queue. The standalone volume also acquired `mail-key`. The Konae volume acquired `owners.sqlite`. Both answered the health request and passed inventory after shutdown.
+Both v0.10.0 binaries list 61 rows each with `inventory --policy` in catalogue version 2. On first startup in test mode, each disposable volume acquired `apps/`, `kernel.lock` and the test mail queue. The standalone volume also acquired `mail-key`. The Konae volume acquired `owners.sqlite`. Both answered the health request and passed inventory after shutdown.
+
+The #45 fixture starts the standalone Kernel, opens three Deployments and a draft in Konae, then imports data with the offline Kernel. The custody regression inventories this volume and restores its directory copy. On the restored volume, the first inventory leaves the key absent. An offline import creates it with mode `0600`. The next inventory counts one key, three Deployments and four app folders. Adding an unregistered root file makes the command exit with status 1.
+
+```sh
+cargo build --locked --offline --manifest-path kernel-rs/Cargo.toml --bin kernel --bin konae
+python3 ops/tests/inventory-mail-key.py
+```
 
 | Issue #36 criterion | Observed result |
 | --- | --- |
