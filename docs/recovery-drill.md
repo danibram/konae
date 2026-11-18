@@ -84,3 +84,57 @@ A missing continuation, repeated token, inconsistent key count, or failed page s
 S3 reservations have no timeout. After process loss or an unconfirmed manifest write or delete, fence all clients of the affected prefix and confirm that pending storage requests have finished. Inspect the remaining entries in `users/` and `collectors/` and remove only reservations known to be abandoned. Start a fresh cycle with all retained data keys. Never resume an old deletion list. Keep lifecycle rules off the active objects, manifests and reservations. In a versioned bucket a DELETE removes the current key from the listing. The storage operator accounts separately for historical object versions.
 
 To recover from an independent read-only S3 replica, have its custodian present a stationary prefix at the verified recovery time, including revocations. Mirror that prefix with the read-only credential into a private empty directory ending in `copies-v3/<repository-id>`. Check it against the custodian's recorded inventory and restore from the local directory with the required historical keys. This path needs no write permission on the replica. Mirroring a prefix while another client prunes it does not provide a snapshot.
+
+## Change the installation copy writer
+
+The release operator keeps the usual directory and S3 writers enabled while qualifying the reader. Deploy the candidate binary to the isolated recovery host first. Restore a known directory point and a signed S3 point by ID. Apply the revocation record, start the matching server, log in, call an action and read a private file. Verify that another app user cannot read it. Record the build commit, binary SHA-256 and times. Keep the historical binary, matching OS dependencies, all required key generations and the reconciled revocation record available through the expiry of the last copy that needs them.
+
+For a shadow run, retain the existing writer settings and add `KONAE_COPY_V3_DIR` and `KONAE_COPY_V3_S3`. The directory ends in `copies-v3/<repository-id>`. S3 takes a different 32-character lowercase hex ID under `copies-v3/`. Give the historical process its own writable volume and legacy destination. Restrict its object permissions to the legacy prefix and its file-store needs. Test overwrite and delete on disposable objects and manifests under the actual v3 protection rules. Exercise its cleaner on expired legacy points.
+
+Confirm that all four targets reported the same cut. Qualify each destination against the B11 inventory and app checks. Hold promotion if the pilot fails, the common cut fails for either writer, the latest remote cut is missing or stale, a restore fails, an inventory difference lacks a classification, an integrity alert remains open or a budget is exceeded. The pilot targets are 65 minutes for remote cut age, 30 minutes to usable service on the 292 MB profile, 250 ms additional p99 write wait and two seconds for the capture barrier. Use the budgets agreed before the pilot. A verified lab restore cannot clear a failed pilot.
+
+### Return to the historical executable
+
+1. Stop the candidate copy worker and isolate writes on the affected installation. Preserve the repositories, key generations and revocations through the incident. Turning off the v3 settings keeps the integrated binary and its common cut. A failure in that cut can still prevent the usual writer from publishing.
+2. Read the retained manifests under the legacy directory or `copies/` prefix. Order complete points by cut time, newest first. Select the newest point that the exact rollback build can verify and restore into an empty volume. Verify its internal backup history and apply later revocations. Preserve any refused point and record the reason if an earlier point is needed. A v3 point requires a v3 reader. If there is no verified, sufficiently recent compatible point on the surviving destination, hold the handoff and keep service closed.
+3. Record the actual cuts. Subtract the compatible cut from the newest verified cut to measure the additional interval lost by choosing the historical reader. Subtract the compatible cut from incident time for the full potential loss. Measure RTO from the empty recovery host with access to custody through reconciliation, fresh login, an action and private file access. Confirm denied access as well. Keep the rollback process under the tested permissions after reopening.
+4. While v3 is primary, keep making compatible points and delivering revocations to both generations until retirement is approved. A rehearsal of a v3-only interval measures what would be lost if compatible writes stopped.
+
+### Record the decision
+
+Restore a recent point each UTC day. Each week restore the oldest retained point. Alternate directory and S3 within each series. Record successes and failures, including missed runs. Alert on a missed deadline. After a prune, read each destination's retained list and recover its oldest and newest points. For retirement, repeat both restores after a prune at the end of at least 30 elapsed days of operation. Use the separate custody account and emergency key for an independent restore. A coordinated restore on active v3 needs list and get access plus put and delete on that repository's `users/` reservations. A list/get-only reader can mirror a stationary replica, including its revocation record, then restore the mirror offline.
+
+Operations and maintenance keep a restricted JSON receipt and sign the same bytes. Take the public keys for both roles from the installation's trust store. Keep raw IDs, signatures, trusted keys and source reports under custody. Share aggregate counts, build digests, cut differences and timings. The receipt fields and time units are illustrated by `example()` in `ops/tests/writer-cutover.py`. Operators attest the complete B11 report, inventory, alerts, actual build and role, custody, permission checks, observed retained lists and drill results. A later success requires disposition of any earlier failure before a new release review.
+
+Keep the publication journal outside the repositories. Append each destination's confirmed cut ID to it when the writer publishes. At the prune boundary, seal that journal and list the surviving roots independently on each destination. Include both lists in the signed receipt. The review keeps the newest 24 and the last cut of each UTC day whose age at pruning is at most 30 days. It compares the complete expected set with the observed set and checks gaps against the agreed RPO. For legacy points, record the format from each selected manifest. Bind each restore to its repository, copy format, reader commit and SHA-256. Keep the frozen inventory with both endpoint restore records.
+
+Use `openssl dgst -sha256 -sign` with each role's signing mechanism. Store the detached signatures beside the receipt as `<receipt>.operations.sig` and `<receipt>.maintenance.sig`. Run the read-only review on the recovery host with a trusted UTC clock. Exit 1 holds the change. The review checks the signed record and calendar. Operations and maintenance verify its source evidence and own the release decision.
+
+```sh
+python3 ops/writer-cutover.py promote "$RECEIPT" \
+  --operations-key "$OPS_PUBLIC_KEY" --maintenance-key "$MAINT_PUBLIC_KEY"
+python3 ops/writer-cutover.py retire "$RECEIPT" \
+  --operations-key "$OPS_PUBLIC_KEY" --maintenance-key "$MAINT_PUBLIC_KEY"
+```
+
+### Repeat the synthetic rehearsal
+
+Use a macOS checkout, Python 3.11 or later, OpenSSL, AWS CLI v2, `sandbox-exec` and a fresh loopback MinIO for each binary. The launcher provisions an empty `konae-test` bucket, exports `KONAE_TEST_S3_*` and the matching `mc` alias `lab`, and removes the server after the command exits. The rehearsal creates a second bucket and restricted identities on that disposable server. Independent account recovery and loss of the S3 provider need a separate operational exercise.
+
+Build with the same optimized profile as the historical binaries. Set `BASELINE` to the directory of release artifacts. Each full commit directory contains `kernel`, `konae` and the trusted `binaries.sha256`. The rehearsal checks the exact v0.10.0 commit and the later af1a897 base. Use an empty restricted output directory.
+
+```sh
+set -eu
+export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2
+export CARGO_TARGET_DIR="$PWD/kernel-rs/target"
+build_commit=$(git rev-parse HEAD)
+cargo build --locked --offline --release --bins --manifest-path kernel-rs/Cargo.toml
+python3 -B ops/tests/writer-cutover.py
+for binary in kernel konae; do
+  "$WITH_MINIO" python3 -B ops/tests/writer-rollback.py --binary "$CARGO_TARGET_DIR/release/$binary" \
+    --build-commit "$build_commit" --baseline "$BASELINE" --mc "$MC" --pilot "${PILOT_RESULT:-pending}" \
+    --report "$REPORTS/$binary.json"
+done
+```
+
+The rehearsal advances the drill schedule through 30 synthetic days. The writers, pruning, clocks used for cuts, restore commands, access checks and permission refusals run on the host. The signed lab receipt and its signing keys expire with the fixture. The aggregate report records the refusal to retire, the cut difference, per-destination timings and S3 server traffic by phase. Each emergency RTO includes the full replica download. Run the two profiles outside another pilot's latency window.
