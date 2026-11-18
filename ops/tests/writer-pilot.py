@@ -12,7 +12,7 @@ import time
 import uuid
 
 from pilot_delay import delayed_reads
-from pilot_fixture import check_access, compare, cut, inventory, invoke, session, small_profile, year
+from pilot_fixture import check_access, compare, cut, edit_restored_draft, inventory, invoke, session, small_profile, year
 from pilot_observation import observed_server, Traffic, tree_bytes
 
 
@@ -226,6 +226,8 @@ def run(args, root, report):
                     result["restoreSeconds"] = round(restored - start, 3)
                     result["access"] = check_access(binary, base, dest, args.six, model)
                     result["rtoSeconds"] = round(time.monotonic() - start, 3)
+                    if args.profile == "draft":
+                        result["editableDraftRevision"] = edit_restored_draft(binary, base, dest)
                     if not args.historical:
                         result["catalogue"] = catalogue(binary, base, dest)
                         if not result["catalogue"]["certified"]:
