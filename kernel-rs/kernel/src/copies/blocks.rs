@@ -93,6 +93,27 @@ pub(crate) fn source(
     })
 }
 
+fn repository<'a>(state: &AppState, source: &'a Source) -> Result<Repository<'a>> {
+    let key = state
+        .copies
+        .key()
+        .context("Set KONAE_COPY_SECRET for v3 copies.")?;
+    let (active, previous) = key.block_keys();
+    Ok(Repository::new(
+        source,
+        source_identity(source).context("Invalid v3 repository path.")?,
+        active,
+    )?
+    .with_previous(previous))
+}
+
+pub(super) async fn prune(state: &AppState, target: &Target, current: &str) -> Result<usize> {
+    let source = source(target, state.s3.as_ref(), &state.data_bucket)?;
+    repository(state, &source)?
+        .prune(state.installation.as_ref(), crate::now_ms(), current)
+        .await
+}
+
 pub(super) async fn publish(
     state: &AppState,
     target: &Target,
@@ -100,17 +121,7 @@ pub(super) async fn publish(
     cut: &StagedCopy,
 ) -> Result<()> {
     let source = source(target, state.s3.as_ref(), &state.data_bucket)?;
-    let key = state
-        .copies
-        .key()
-        .context("Set KONAE_COPY_SECRET for v3 copies.")?;
-    let (active, previous) = key.block_keys();
-    let repo = Repository::new(
-        &source,
-        source_identity(&source).context("Invalid v3 repository path.")?,
-        active,
-    )?
-    .with_previous(previous);
+    let repo = repository(state, &source)?;
     repo.publish(
         staging,
         &cut.manifest,
@@ -134,19 +145,9 @@ pub(super) async fn restore(
         .context("Set KONAE_COPY_SECRET to open a v3 point.")?
         .block_keys();
     let repo = Repository::new(source, identity, active)?.with_previous(previous);
-    let latest;
-    let id = match selected {
-        Some(id) => id,
-        None => {
-            latest = repo
-                .points()
-                .await?
-                .pop()
-                .context("No complete v3 point.")?;
-            &latest
-        }
-    };
-    let point = repo.open(id, installation).await?;
-    repo.restore(&point, staging).await?;
-    Ok(point.inventory())
+    let point = repo.open_selected(selected, installation).await?;
+    let result = repo.restore(&point, staging).await;
+    let inventory = point.inventory();
+    point.close().await?;
+    result.map(|()| inventory)
 }

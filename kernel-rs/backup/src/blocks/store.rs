@@ -163,27 +163,47 @@ pub(super) async fn matches(source: &Source, id: &str, bytes: &[u8]) -> Result<b
     Ok(true)
 }
 
-pub(super) async fn points(source: &Source) -> Result<Vec<String>> {
-    let names = match source {
+pub(super) struct Stored {
+    pub name: String,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+pub(super) async fn list(source: &Source, group: &str) -> Result<Vec<Stored>> {
+    let mut stored = Vec::new();
+    match source {
         Source::Directory(root) => {
-            let mut names = Vec::new();
-            let dir = root.join("points");
-            if dir.try_exists()? {
-                ensure!(
-                    dir.symlink_metadata()?.is_dir(),
-                    "Expected points directory."
-                );
-                for entry in fs::read_dir(dir)? {
-                    names.push(
-                        entry?
-                            .file_name()
-                            .into_string()
-                            .ok()
-                            .context("Invalid point name")?,
-                    );
-                }
+            let dir = root.join(group);
+            match dir.symlink_metadata() {
+                Ok(meta) => ensure!(meta.is_dir(), "Expected repository directory {group}."),
+                Err(e) if e.kind() == ErrorKind::NotFound => return Ok(stored),
+                Err(e) => return Err(e.into()),
             }
-            names
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let name = entry
+                    .file_name()
+                    .into_string()
+                    .ok()
+                    .context("Invalid repository filename.")?;
+                let meta = match entry.path().symlink_metadata() {
+                    Ok(meta) => meta,
+                    Err(e) if e.kind() == ErrorKind::NotFound && temporary(source, &name) => {
+                        continue
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                ensure!(meta.is_file(), "Expected a regular file in {group}.");
+                stored.push(Stored {
+                    name,
+                    size: meta.len(),
+                    modified_ms: meta
+                        .modified()?
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_millis()
+                        .try_into()?,
+                });
+            }
         }
         #[cfg(feature = "s3")]
         Source::S3 {
@@ -191,18 +211,84 @@ pub(super) async fn points(source: &Source) -> Result<Vec<String>> {
             bucket,
             prefix,
         } => {
-            let prefix = format!("{prefix}points/");
-            crate::list_s3_keys(client, bucket, &prefix)
-                .await?
-                .into_iter()
-                .map(|s| s[prefix.len()..].to_owned())
-                .collect()
+            let base = format!("{prefix}{group}/");
+            for object in crate::s3::list_s3_objects(client, bucket, &base).await? {
+                stored.push(Stored {
+                    name: object.key().context("Missing listed object key.")?[base.len()..]
+                        .to_owned(),
+                    size: object
+                        .size()
+                        .context("Missing listed object size.")?
+                        .try_into()?,
+                    modified_ms: object
+                        .last_modified()
+                        .context("Missing listed object timestamp.")?
+                        .to_millis()?
+                        .try_into()?,
+                });
+            }
         }
-    };
-    let mut points: Vec<_> = names
-        .into_iter()
-        .filter(|s| crate::parse_copy_id(s).is_some())
-        .collect();
+    }
+    Ok(stored)
+}
+
+pub(super) fn temporary(source: &Source, name: &str) -> bool {
+    matches!(source, Source::Directory(_))
+        && name
+            .strip_prefix(".write-")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+
+pub(super) struct Roots {
+    pub points: Vec<String>,
+    pub abandoned: Vec<String>,
+}
+
+pub(super) async fn roots(source: &Source) -> Result<Roots> {
+    let mut points = Vec::new();
+    let mut abandoned = Vec::new();
+    for object in list(source, "points").await? {
+        if temporary(source, &object.name) {
+            abandoned.push(object.name);
+        } else {
+            ensure!(
+                crate::parse_copy_id(&object.name).is_some(),
+                "Unknown v3 point name."
+            );
+            points.push(object.name);
+        }
+    }
     points.sort();
-    Ok(points)
+    Ok(Roots { points, abandoned })
+}
+
+pub(super) async fn remove(source: &Source, group: &str, name: &str) -> Result<()> {
+    match source {
+        Source::Directory(root) => {
+            fs::remove_file(crate::reader::directory_file(root, group, name)?)?;
+        }
+        #[cfg(feature = "s3")]
+        Source::S3 {
+            client,
+            bucket,
+            prefix,
+        } => {
+            client
+                .delete_object()
+                .bucket(bucket)
+                .key(format!("{prefix}{group}/{name}"))
+                .send()
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn sync_group(source: &Source, group: &str) -> Result<()> {
+    match source {
+        Source::Directory(root) => fs::File::open(root.join(group))?.sync_all()?,
+        #[cfg(feature = "s3")]
+        Source::S3 { .. } => {}
+    }
+    Ok(())
 }

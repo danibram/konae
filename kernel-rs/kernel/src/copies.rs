@@ -270,7 +270,7 @@ async fn send(state: &AppState, target: &Target, staging: &Path, staged: &Staged
 
 async fn prune(state: &AppState, target: &Target, id: &str, cache: &mut ManifestCache) -> Result<usize> {
     match target {
-        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => Ok(0),
+        Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => blocks::prune(state, target, id).await,
         Target::Directory(directory) => {
             let directory = directory.clone();
             tokio::task::spawn_blocking(move || prune_directory(&directory, now_ms())).await?
