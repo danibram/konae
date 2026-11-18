@@ -34,11 +34,15 @@ describe("durable trace privacy and model boundary", () => {
 
   test("preserves untouched URLs and bounds the exact model-visible text", () => {
     expect(redactText("See https://example.test/path?a=1")).toBe("See https://example.test/path?a=1");
-    const providerError = redactText("Provider refused request: https://api.example.test/error?access_token=synthetic-private-access&refresh_token=synthetic-private-refresh&reason=denied");
+    const invitation = redactText("Open http://fixture.local/_konae/invitation#invitation=fixture-one-use-value");
+    expect(invitation).not.toContain("fixture-one-use-value");
+    expect(invitation).toContain("/_konae/invitation");
+    const providerError = redactText("Provider refused request: https://api.example.test/error?access_token=synthetic-private-access&refresh_token=synthetic-private-refresh&client_secret=synthetic-private-client-secret&reason=denied");
     expect(providerError).toContain("Provider refused request:");
     expect(providerError).toContain("reason=denied");
     expect(providerError).not.toContain("synthetic-private-access");
     expect(providerError).not.toContain("synthetic-private-refresh");
+    expect(providerError).not.toContain("synthetic-private-client-secret");
     const result = boundModelText({ output: "x".repeat(20_001), apiKey: "sk-real-credential-1234567890" });
     expect(result.truncated).toBe(true);
     expect(result.redacted).toBe(true);

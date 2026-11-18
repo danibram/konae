@@ -1,4 +1,4 @@
-const secretAliases = new Set(["apikey", "xapikey", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "credential", "credentials", "secret", "password", "invitationcode", "verificationtoken", "ownertoken"]);
+const secretAliases = new Set(["apikey", "xapikey", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "credential", "credentials", "clientsecret", "secret", "password", "invitationcode", "verificationtoken", "ownertoken"]);
 const credentialMarker = /\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-or-v1-[A-Fa-f0-9]{16,}|sk-proj-[A-Za-z0-9_-]{8,}|lb_[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._~+/-]{12,})\b/g;
 const sensitiveParameter = /^(?:token|key|api[_-]?key|code|invite|invitation|invitation[_-]?code|verification|verification[_-]?token|email[_-]?verification|auth|authorization|signature)$/i;
 
@@ -12,8 +12,7 @@ export function redactDurableValue(value: unknown, knownCredentials: readonly st
   if (!value || typeof value !== "object") return value;
   const entries: Array<[string, unknown]> = [];
   for (const [key, item] of Object.entries(value)) {
-    const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
-    if (secretAliases.has(normalized) || normalized === "clientsecret") entries.push([key, "[redacted]"]);
+    if (isSecretAlias(key)) entries.push([key, "[redacted]"]);
     else entries.push([key, redactDurableValue(item, knownCredentials)]);
   }
   return Object.fromEntries(entries);
@@ -78,10 +77,10 @@ function redactUrl(value: string) {
     const original = value;
     if (url.username || url.password) { url.username = "[redacted]"; url.password = "[redacted]"; }
     for (const key of [...url.searchParams.keys()]) if (isSensitiveParameter(key) || /invite|verif/i.test(key)) url.searchParams.set(key, "[redacted]");
-    if (url.hash && /invite|verif|token|auth|code/i.test(url.hash)) url.hash = "#[redacted]";
+    if (url.hash && /invit(?:e|ation)|verif|token|auth|code/i.test(url.hash)) url.hash = "#[redacted]";
     const result = url.toString();
     const originalUrl = new URL(original);
-    const sensitive = Boolean(originalUrl.username || originalUrl.password) || [...originalUrl.searchParams.keys()].some((key) => isSensitiveParameter(key) || /invite|verif/i.test(key)) || /#.*(?:invite|verif|token|auth|code)/i.test(original);
+    const sensitive = Boolean(originalUrl.username || originalUrl.password) || [...originalUrl.searchParams.keys()].some((key) => isSensitiveParameter(key) || /invite|verif/i.test(key)) || /#.*(?:invit(?:e|ation)|verif|token|auth|code)/i.test(original);
     return sensitive ? result : original;
   } catch {
     return value.replace(credentialMarker, "[redacted credential]");
@@ -89,8 +88,11 @@ function redactUrl(value: string) {
 }
 
 function isSensitiveParameter(key: string) {
-  const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
-  return secretAliases.has(normalized) || sensitiveParameter.test(key);
+  return isSecretAlias(key) || sensitiveParameter.test(key);
+}
+
+function isSecretAlias(key: string) {
+  return secretAliases.has(key.replace(/[^a-z0-9]/gi, "").toLowerCase());
 }
 
 function redactCredentialAssignments(value: string) {

@@ -910,6 +910,8 @@ test("provider error evidence redacts configured keys and sensitive URL paramete
   const ownerPrefix="/_konae/projects/"+projectId+"/conversations";
   const localKey="synthetic-current-provider-credential-unused";
   const urlToken="fixture-secret-in-access-query";
+  const clientSecret="fixture-private-oauth-client-secret";
+  const invitationCode="fixture-private-one-use-invitation";
   const marker="synthetic provider refuses the request";
   const sameOriginRequests:string[]=[];
   page.on("request",req=>{
@@ -925,7 +927,7 @@ test("provider error evidence redacts configured keys and sensitive URL paramete
     expect(request.headers()["x-api-key"]).toBe(localKey);
     await route.fulfill({status:400,headers,contentType:"application/json",body:JSON.stringify({
       type:"error",
-      error:{type:"invalid_request_error",message:marker+" "+localKey+" https://fixture.invalid/continue?access_token="+urlToken},
+      error:{type:"invalid_request_error",message:marker+" "+localKey+" https://fixture.invalid/continue?access_token="+urlToken+"&client_secret="+clientSecret+"&reason=denied http://fixture.invalid/_konae/invitation#invitation="+invitationCode},
     })});
   });
   await page.goto(path+"?agent=durable-recovery");
@@ -938,11 +940,12 @@ test("provider error evidence redacts configured keys and sensitive URL paramete
   const endpoint=ownerPrefix+"/"+items[0].id;
   const download=await(await page.request.get(endpoint+"/download")).json();
   const exported=JSON.stringify(download);
-  console.log(JSON.stringify({providerErrorRecorded:exported.includes(marker),keyRedactedFromDownload:!exported.includes(localKey),queryRedactedFromDownload:!exported.includes(urlToken),keyOnKonaeWire:sameOriginRequests.some(body=>body.includes(localKey)),queryOnKonaeWire:sameOriginRequests.some(body=>body.includes(urlToken))}));
-  expect(exported).not.toContain(localKey);
-  expect(sameOriginRequests.every(body=>!body.includes(localKey))).toBe(true);
-  expect(exported).not.toContain(urlToken);
-  expect(sameOriginRequests.every(body=>!body.includes(urlToken))).toBe(true);
+  expect(exported).toContain(marker);
+  expect(exported).toContain("reason=denied");
+  for (const credential of [localKey, urlToken, clientSecret, invitationCode]) {
+    expect(exported).not.toContain(credential);
+    expect(sameOriginRequests.some((body) => body.includes(credential))).toBe(false);
+  }
 });
 
 test("an offline active browser keeps its unsent prompt and preserves the last acknowledged turn", async ({ page }) => {
@@ -1710,6 +1713,11 @@ test("restore before schema proposal keeps deployed rows and invitation, exposes
   }
   await expect.poll(async () => (await (await page.request.get(`${parentPath}/lease`)).json()).live).toBe(false);
   const parentFinal = await (await page.request.get(parentPath)).json();
+  const archived = await (await page.request.get(`${parentPath}/download`)).json();
+  expect(JSON.stringify(archived)).not.toContain("#invitation=");
+  for (const blob of archived.blobs as Array<{ base64: string }>) {
+    expect(Buffer.from(blob.base64, "base64").toString("utf8")).not.toContain("#invitation=");
+  }
   const parentCheckpoints = (await (await page.request.get(`${parentPath}/checkpoints`)).json()).items;
   const beforeSchema = parentCheckpoints.filter((item: any) => item.payload.status === "working").sort((a: any, b: any) => a.sequence - b.sequence)[0];
   expect(beforeSchema).toBeTruthy();
