@@ -118,6 +118,23 @@ class Lab:
         return subprocess.run([self.args.mc, *args], input=data, capture_output=True,
                               env=dict(self.env, **settings), check=True, timeout=120).stdout
 
+    def block_versions(self):
+        if self.remote:
+            return {o["key"]: (o["size"], o["lastModified"], o["etag"])
+                    for line in self.mc("ls", "--json", PREFIX+"objects/").splitlines()
+                    if (o := json.loads(line))["type"] == "file"}
+        versions = {}
+        for path in (self.data/"objects").iterdir():
+            info = path.stat()
+            versions[path.name] = (info.st_size, info.st_mtime_ns, info.st_ino)
+        return versions
+
+    def publish_unchanged(self):
+        before = self.block_versions()
+        self.run("next", measure=True)
+        assert before and self.block_versions() == before
+        print(f"PASS {self.target} stable publication preserved all {len(before)} stored block versions", flush=True)
+
     def bytes(self, name):
         return self.mc("cat", PREFIX+name) if self.remote else (self.data / name).read_bytes()
 
@@ -235,7 +252,7 @@ class Lab:
         self.run("reachable")
         if self.remote:
             self.readonly_restore()
-        self.run("next", measure=True)
+        self.publish_unchanged()
         self.run("next-prune", measure=True)
         self.cold("newest", measure=True)
         retained, survivors = self.inventory()
