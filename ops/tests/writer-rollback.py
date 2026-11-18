@@ -125,7 +125,8 @@ def exercise(args, root, report, traffic, remote):
     if actual.name == "konae":
         report["fixtureKernelSha256"] = digest(actual.with_name("kernel"))
     model = seed(binary, base, live)
-    env = dict(base, **remote, KONAE_COPY_SECRET=secret)
+    _, primary = store.user(store.bucket, "", "")
+    env = dict(base, **primary, KONAE_COPY_SECRET=secret)
     snapshots = {}
     legacy_inventory = {t: {} for t in TARGETS}
     suspended = set()
@@ -214,12 +215,12 @@ def exercise(args, root, report, traffic, remote):
     phase("post-prune")
     kept = sorted(p.name for p in (local / "points").iterdir())
     assert kept == store.files(prefix + "points/") and len(kept) < len(published) and kept[-1] == point
+    final_prune = now()
     report.update(prunedPerDestination=len(published)-len(kept), retainedPerDestination=len(kept))
     phase("remove-source")
     shutil.rmtree(live)
     store.call("rm", "--recursive", "--force", "lab/konae-test/files/")
     assert not store.files("files/")
-    final_prune = now()
     phase("lease-permissions")
     _, lease_settings = store.user(store.bucket, prefix, prefix + "users/")
     keys = ["points/" + point, "objects/" + store.files(prefix + "objects/")[0]]
@@ -239,6 +240,7 @@ def exercise(args, root, report, traffic, remote):
     phase("vault-permissions")
     emergency, vault_settings = store.user(vault, prefix, None)
     _, legacy_settings = store.user(store.bucket, "copies/", "copies/")
+    store.deny_changes(primary, vault, prefix, keys)
     store.deny_changes(legacy_settings, vault, prefix, keys)
     store.deny_changes(vault_settings, vault, prefix, keys)
     store.call("cat", f"user/konae-test/{prefix}{keys[0]}", env=emergency, denied=True)
@@ -340,7 +342,7 @@ def exercise(args, root, report, traffic, remote):
         report[case] = holds
     report["remoteCutAgeAtReviewMs"] = now() - cut_ms(point)
     report["b11"] = args.pilot
-    report["s3WriteDenials"] = dict(legacyOnActive=4, legacyOnVault=4, activeReader=4, vaultReader=4)
+    report["s3WriteDenials"] = dict(legacyOnActive=4, legacyOnVault=4, primaryOnVault=4, activeReader=4, vaultReader=4)
     report["verifiedAccess"] = dict(counts)
     summary = report["drills"] = {}
     for drill in results:

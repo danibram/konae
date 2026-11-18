@@ -66,7 +66,7 @@ class Minio:
              "Condition": {"StringLike": {"s3:prefix": prefix + "*"}}},
             {"Effect": "Allow", "Action": "s3:GetObject", "Resource": arn + "/" + prefix + "*"},
         ]
-        if writes:
+        if writes is not None:
             statements.append({"Effect": "Allow", "Action": ["s3:PutObject", "s3:DeleteObject"],
                                "Resource": arn + "/" + writes + "*"})
         policy = self.root / (name + ".json")

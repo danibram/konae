@@ -119,7 +119,7 @@ python3 ops/writer-cutover.py retire "$RECEIPT" \
 
 ### Repeat the synthetic rehearsal
 
-Use a macOS checkout, Python 3.11 or later, OpenSSL, AWS CLI v2, `sandbox-exec` and a fresh loopback MinIO for each binary. The launcher provisions an empty `konae-test` bucket, exports `KONAE_TEST_S3_*` and the matching `mc` alias `lab`, and removes the server after the command exits. The rehearsal creates a second bucket and restricted identities on that disposable server. Independent account recovery and loss of the S3 provider need a separate operational exercise.
+Use a macOS checkout, Python 3.11 or later, OpenSSL, AWS CLI v2, `sandbox-exec` and a fresh loopback MinIO for each binary. The launcher provisions an empty `konae-test` bucket, exports `KONAE_TEST_S3_*` and the matching `mc` alias `lab`, and removes the server after the command exits. The rehearsal creates a second bucket and restricted identities on that disposable server. The primary writer and the historical cleaner must each receive an S3 AccessDenied when they try to overwrite or delete objects in the second bucket. Independent account recovery and loss of the S3 provider need a separate operational exercise.
 
 Build with the same optimized profile as the historical binaries. Set `BASELINE` to the directory of release artifacts. Each full commit directory contains `kernel`, `konae` and the trusted `binaries.sha256`. The rehearsal checks the exact v0.10.0 commit and the later af1a897 base. Use an empty restricted output directory.
 
