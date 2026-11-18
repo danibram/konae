@@ -10,6 +10,14 @@ A person who does not write code describes an app to the editor's build agent an
 
 The agent runs pi's `Agent` from `@earendil-works/pi-agent-core` with `@earendil-works/pi-ai` (MIT) in the editor's tab. The core imports no Node builtins, and its one platform seam is an `ExecutionEnv` that `src/agent/capsule-env.ts` backs with the app's files in memory. The package gives the loop, streaming, interruption and incremental `edit` diffs. The model layer is swappable, and the agent chunk loads only when the agent opens.
 
+### Staged shared conversations use Pi Durable 1.5.2
+
+The reviewed staged path uses the pinned Pi Durable 1.5.2 browser Harness and its public Storage interface. The Konae installation keeps ordered native records, effect receipts and immutable file references in SQLite. Each acknowledged checkpoint binds model context and candidate files to the observed source revision. One browser generation at a time can write for a Project. History pages the signed-in owner's saved entries without a provider key or task dispatch. App exports exclude owner conversations.
+
+The browser runs the agent, provider calls, Validation Gate, Build and Preview. Provider keys stay in the browser. Continue explicitly obtains authority and rechecks current sources. Recovery and Restore require a fresh Gate, Build and Preview before Apply. Deploy retains its separate confirmation. When a write outcome is unknown, History lets the owner inspect the documented read-back before explicitly linking the observation. Deleting a conversation cannot discard that fence. Confirmed deletion of a whole Project refuses during an active write. When it succeeds, it clears that Project's trace state and authority.
+
+The staged build selects the shared writer with `VITE_KONAE_DURABLE_STAGING=true` and `?agent=durable-recovery`. Legacy pi-agent-core remains the default. Falling back to it starts separate work from current saved sources and leaves Durable History available for inspection and download. The spike records the choice of native transactions and the IndexedDB checkpoint finding. The acceptance matrix records the exercised adapters and the rollout boundary. [Compatibility spike](../../spikes/pi-durable-1.5.2/README.md) · [Acceptance matrix](../implementation/issue-32-mvp-acceptance.md)
+
 ### It edits a draft, and Apply needs the Gate
 
 - The agent edits a copy of the app's files with `read`, `edit` and `write`. It has no shell.

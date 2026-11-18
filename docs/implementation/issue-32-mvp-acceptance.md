@@ -1,6 +1,6 @@
 # #32 Durable MVP acceptance gate
 
-Status: validation record for the MVP gate. This document does not declare release acceptance or enable shared Durable execution. The legacy engine remains the default; `SHARED_DURABLE_ACTIVATION` remains false. ADR-0007 stays accepted as the running-product decision until the implementation has been reviewed.
+The MVP gate passed for the staged path. Legacy remains the default and `SHARED_DURABLE_ACTIVATION` is false. Shared writing in a built editor requires `VITE_KONAE_DURABLE_STAGING=true` and an explicit `?agent=durable-recovery` route. [Reviewed rollout decision](../adr/0007-the-build-agent-edits-a-scratch-copy-and-operates-through-the-owners-mcp.md)
 
 ## Reproducible local setup
 
@@ -12,6 +12,7 @@ bun run test:durable-mvp:access
 bun run test:durable-mvp:format
 bun run test:durable-mvp:export
 bun run test:durable-mvp:confirmation
+bun tests/durable-mvp/effect-observation.mjs "$PWD"
 bun run test:durable-mvp:native-profile
 KONAE_PROFILE_NATIVE_LIMIT=250 KONAE_PROFILE_NATIVE_BYTES=786432 bun run test:durable-mvp:native-profile:bounded
 bun run test:durable-mvp:providers
@@ -24,6 +25,8 @@ Provider traffic is intercepted in the browser. The provider adapter probe exerc
 The project’s existing owner login and `/app/<id>` route remain protected. The local first-run case uses `/local`, both without an owner cookie and with an already valid cookie, and asserts zero owner/session/source/history/MCP traffic. It does not change the registered-project route.
 
 ## Ten-scenario matrix
+
+The table records the original `3681b19` gate. The integrated validation below covers the subsequent fixes and the two post-MVP issues.
 
 | # | PRD scenario and exact evidence | Command | Result |
 | --- | --- | --- | --- |
@@ -40,14 +43,20 @@ The project’s existing owner login and `/app/<id>` route remain protected. The
 
 ## Performance and evidence limits
 
-The independent production-bundle iPhone profile on the pinned `3a9ed8f` baseline measured 5,123 ms from Continue click to ready Preview, 636,917 bytes received, 1,851 bytes sent and 28 requests, under the same simulated 120 ms RTT / 2 Mbps up / 10 Mbps down profile. The final same-scope profile measured 5,359 ms, 468,512 bytes received, 1,851 bytes sent and 28 requests: 236 ms slower and 168,405 fewer received bytes. This includes validation and browser build; it is not comparable to the smaller claim-plus-replay benchmark. The scoped latest-checkpoint request reduced the checkpoint response from 173,150 bytes to 4,743 bytes while preserving the auth, source revision and native sequence fences. The timing is fixture evidence, not a release latency guarantee.
+The independent production-bundle iPhone profile on the pinned `3a9ed8f` baseline measured 5,123 ms from Continue click to ready Preview, 636,917 bytes received, 1,851 bytes sent and 28 requests, under a simulated 120 ms RTT / 2 Mbps up / 10 Mbps down profile. The integrated `0c65daf` run measured 5,413 ms, 468,512 bytes received, 1,851 bytes sent and 28 requests in the same scope. This includes validation and browser build. The scoped latest-checkpoint request reduced the checkpoint response from 173,150 bytes to 4,743 bytes while preserving the auth, source revision and native sequence fences. These are fixture measurements.
 
 The separate authenticated native handoff profile on the pinned baseline measures only owner lease claim plus 1,000 sequence reads into Pi `MemoryStorage`, under the same simulated network profile. It measured 4,825 ms, 2,376,736 bytes and 21 requests. The final strict-environment legacy 50-batch run measured 5,309 ms, 2,376,736 bytes and 21 requests; the bounded 250-sequence / 768 KiB variant measured 2,936 ms, 2,376,257 bytes and 5 requests. Replay keeps every native sequence atomic; an individual oversized first sequence is returned whole, then the next page begins after that sequence. These claim-and-replay numbers are narrower than the Continue-to-Preview measurement.
 
-The 1,000-entry WebKit history profile is separately scoped: 50 rows / 13,222 bytes on the first page and 421 ms to readable content in the final exact browser run; one blob is fetched after explicit detail expansion. The first page and next page were 13,222 and 11,907 bytes; no provider dispatch or lease claim occurred. These are local fixture measurements with browser-side throttling, not production SLOs. The browser fixture output records layout width as well as timing.
+The separate 1,000-entry WebKit history profile at `0c65daf` took 202 ms to readable content. The initial 50 entries used 13,222 bytes and the next page used 11,907 bytes. The fixture fetched one blob after explicit expansion and made zero provider requests or lease claims. The dialog was 374 px wide in a 390 px viewport.
 
 All provider results are deterministic interceptions through the actual browser adapters. This proves request construction, key placement, stream parsing and local redaction; it does not prove a live provider account, model behavior, provider billing or network availability. Native data, browser cache, permissions, app accounts and schema used by each run are fixture-only.
 
 An already-dispatched provider request may still finish and cost money after interruption. An unknown MCP write is not replayed; it blocks conflicting work until read-back or explicit resolution. Preview test rows, uploaded test files, actor sessions and compiled preview are recreated after recovery. They are not restored from Durable data. App export excludes conversations. Deleting a conversation removes it from the active installation, but a separately retained older whole-installation copy may still contain it; this gate does not erase historical operator backups.
 
-The final regular build passed: main editor entry 866.38 kB / 258.91 kB gzip. `bun test scripts/docs-site.test.ts --timeout 30000` passed 10 tests / 496 assertions. `cargo fmt` could not run with the pinned toolchain because rustfmt is not installed for Rust 1.91.0; the attempted unpinned fallback cannot parse this workspace's resolver 3 manifest. These results are local validation evidence, not release acceptance. Do not set default activation or update ADR-0007 until the orchestrator has independently reviewed the final evidence and the backend gate is accepted.
+## Integrated validation
+
+- The production editor suite passed 25/25 at `0c65daf`. It covered both #33 restore cases, manual and legacy Deploy, and two-step receipt observation alongside the ten MVP scenarios. The six affected browser cases passed again at `f4437ec`. The final `f5f8978` reran the affected provider-redaction, fallback and owner read-back browser cases, all 3 passed. The normal build's editor entry was 874.17 kB / 260.92 kB gzip, with the Durable agent in a separate lazy chunk.
+- The final code passed 369 TypeScript, runtime, owner-login and documentation tests with 3,215 assertions. The Rust workspace passed 546 Kernel tests with one existing ignored and 90 Konae tests. The Kernel tree is identical between the integrated workspace run and `f5f8978`. The final Konae-only rerun covered the SQL correction and passed all 90 tests. `cargo fmt` was unavailable in pinned Rust 1.91.0.
+- The authenticated effect fixture verified refusal to delete a conversation while its write outcome is pending. Reading evidence alone kept the fence. The owner could link the documented read after reviewing it, without a provider request, an execution claim or another write. SQL comments, nested limits and arithmetic failed the bounded read-back check on the server. The held-SQL probe killed the client, refused whole-Project deletion while the actual dispatch remained active, and observed one row after draining. Confirmed deletion of a whole Project clears its receipts and expires its authority so a recreated ID does not inherit the previous fence. [Effect fixture](../../tests/durable-mvp/effect-observation.mjs)
+- Recovered Apply retained the opaque binary through a fresh Gate, Build and Preview and verified one committed source save after response loss. #33 retained a real fixture row and invitation across restored proposal Apply and exercised Redo with the same parent checkpoint. #34 ran its synthetic permission fixture and the existing owner-access probe. [Discovery evidence](issue-34-authorized-trace-analysis.md)
+- Independent `Standards` and `Spec` reviews compared the implementation to `origin/main` at `af1a897`. Review follow-ups verified redaction of absolute and relative OAuth state values and the literal top-level SQL limit in both TypeScript and Rust. App Export, version compatibility, ownership isolation, documentation links and confirmation fixtures passed.
