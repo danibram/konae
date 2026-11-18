@@ -62,6 +62,22 @@ fn a_failed_sync_keeps_the_volume_closed() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn a_failed_final_sync_restores_the_startup_guard() {
+    let root = scratch("activation-final-sync");
+    let stage = root.join(".restore-staged");
+    fs::create_dir_all(&stage).unwrap();
+    fs::write(stage.join("fixture"), b"whole file").unwrap();
+    let error = activate(&stage, &root, |dir| {
+        if !stage.exists() { bail!("injected final sync failure"); }
+        sync_path(dir)
+    }).unwrap_err();
+    assert_eq!(error.to_string(), "injected final sync failure");
+    assert!(check_activation(&root).is_err());
+    assert_eq!(fs::read(root.join("fixture")).unwrap(), b"whole file");
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn restore_checks_the_cut_before_signing_out() {
     let root = scratch("invalid-cut");

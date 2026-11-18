@@ -704,8 +704,12 @@ fn activate(staging: &Path, destination: &Path, sync_dir: impl Fn(&Path) -> Resu
     }
     sync_dir(staging)?;
     std::fs::remove_dir(staging)?;
-    // At this point every installed entry is durable. Either state of the marker is safe.
-    sync_dir(destination)?;
+    if let Err(error) = sync_dir(destination) {
+        // The tree is durable. Restore the startup guard while the volume lock is still held.
+        std::fs::create_dir(staging).context("Could not restore the activation marker after a failed sync")?;
+        sync_dir(destination).context("Could not sync the restored activation marker")?;
+        return Err(error);
+    }
     Ok(())
 }
 
