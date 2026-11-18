@@ -694,7 +694,8 @@ fn whole_number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::resul
 pub async fn operator_command(installation: &installation::Installation) -> Result<bool> {
     Ok(copies::operator_command(installation).await?
         || file_store::operator_command().await?
-        || recovery::operator_command(installation).await?)
+        || recovery::operator_command(installation).await?
+        || recovery::drill_check(installation).await?)
 }
 
 /// What a Kernel process reads from its environment before it serves.
