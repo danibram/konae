@@ -62,7 +62,9 @@ Run these commands from the checkout root on macOS. Set `LAB` to the directory h
 export RUSTUP_TOOLCHAIN=1.91.0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 TOKIO_WORKER_THREADS=2
 export CARGO_TARGET_DIR="$PWD/kernel-rs/target"
 cargo build --manifest-path kernel-rs/Cargo.toml --offline --locked --bins --examples
-cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked --workspace
+cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked -p konae-backup --features s3
+"$LAB/with-minio" cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked -p kernel --lib copies::
+"$LAB/with-minio" cargo test --manifest-path kernel-rs/Cargo.toml --offline --locked -p kernel --lib recovery::
 "$LAB/with-minio" python3 kernel-rs/backup/compatibility.py --bin-dir "$CARGO_TARGET_DIR/debug" --baseline-bin-dir "$BASELINE" --mc "$LAB/bin/mc" --require-s3
 marker_dir=$(mktemp -d)
 "$LAB/with-minio" "$LAB/slow-s3" --kib-per-second 128 --marker "$marker_dir/transfer" python3 tests/smoke/block-copies.py --binary "$CARGO_TARGET_DIR/debug/konae" --mc "$LAB/bin/mc" --marker "$marker_dir/transfer" --require-s3
