@@ -12,7 +12,7 @@ import time
 import uuid
 
 from pilot_delay import delayed_reads
-from pilot_fixture import check_access, compare, cut, edit_restored_draft, inventory, invoke, session, small_profile, year
+from pilot_fixture import check_access, compare, compare_image, cut, edit_restored_draft, historical_indexes, inventory, invoke, session, small_profile, year
 from pilot_observation import observed_server, Traffic, tree_bytes
 
 
@@ -67,6 +67,7 @@ def run(args, root, report):
         report["sourceCatalogue"] = catalogue(binary, base, live)
     oracle = inventory(live, source=True)
     report["inventory"] = compare(oracle, oracle)
+    indexes = historical_indexes(live) if args.historical else {}
     if args.profile == "six":
         assets = json.loads((args.six / "expected.json").read_bytes())
         expected = {Path("apps") / a["app"] / "data/files" / (a["id"] + ".blob"):
@@ -243,7 +244,7 @@ def run(args, root, report):
                         PILOT_BINARY=binary.name, PILOT_SOURCE=str(source)), capture_output=True, timeout=600)
                     assert read.returncode == 0 and b"1 passed" in read.stdout, read.stderr.decode()[-500:]
                     result["imageSeconds"] = round(time.monotonic() - started, 3)
-                    result["inventory"] = compare(oracle, inventory(image))
+                    result["inventory"] = compare_image(oracle, image, indexes)
                 except Exception as error:
                     failures.append((target, "inventory", str(error)))
             save(report, args.report)
