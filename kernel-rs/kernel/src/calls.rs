@@ -1093,8 +1093,7 @@ pub async fn run_once(state: &AppState) -> Result<usize> {
         tasks.spawn(async move {
             let result = async {
                 let pending = crate::copies::Pending::begin(&state.data_root, &format!("{}/{} job {}", job.deployment, job.action, job.id), "delivering a call and committing its continuation")?;
-                process(&state, job).await?;
-                anyhow::ensure!(crate::usage::flush_status(), "Call Usage did not drain.");
+                crate::usage::confirmed_signals(process(&state, job)).await??;
                 pending.finish()
             }.await;
             if let Err(error_value) = result {

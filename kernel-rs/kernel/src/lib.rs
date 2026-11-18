@@ -1170,6 +1170,17 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_staged_dist(&state, &id, &artifact_version).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
     }
+    let subject = format!("{id} revision {artifact_version}");
+    let journal_release = || copies::Pending::begin(&state.data_root, &subject, "installing the database, sources and release record");
+    let initializes_stores = input.initial_package.is_some()
+        || (modules::is_on(&deployment.modules, "actions") && !layout::database(&state.data_root, &id).exists())
+        || (modules::is_on(&deployment.modules, "auth") && !layout::identity(&state.data_root, &id).exists());
+    let preparing = if initializes_stores {
+        match journal_release() {
+            Ok(pending) => Some(pending),
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    } else { None };
     let mut notices = Vec::new();
     if let Some(package) = input.initial_package.as_ref() {
         if let Err(error_value) = package::install(&state, package, &id)
@@ -1258,10 +1269,12 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
     let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
-    let subject = format!("{id} revision {artifact_version}");
-    let pending = match copies::Pending::begin(&state.data_root, &subject, "installing the database, sources and release record") {
-        Ok(pending) => pending,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    let pending = match preparing {
+        Some(pending) => pending,
+        None => match journal_release() {
+            Ok(pending) => pending,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
     };
     let swapped = if !actions_enabled || change.statements.is_empty() && !has_transformation_changes {
         remove_database_files(&staged_database);
@@ -1594,52 +1607,52 @@ pub async fn invoke_action(
 
 
     copies::operation::action(&state, &deployment.id, &name, action, async {
-    let result = if action.kind == "signal" {
-        Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
-    } else {
-        let _guard = action_lock(&state, &deployment.id, &action.kind).await;
-        match state.guards.statement_permit(&deployment.id).await {
-            Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
-            Err(wait) => return http::rate_limited(wait),
-        }
-    };
-    let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
+        let result = if action.kind == "signal" {
+            Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
+        } else {
+            let _guard = action_lock(&state, &deployment.id, &action.kind).await;
+            match state.guards.statement_permit(&deployment.id).await {
+                Ok(permit) => run_action_in_slot(db_path, action, params, permit).await,
+                Err(wait) => return http::rate_limited(wait),
+            }
+        };
+        let actor_id = actor.as_ref().map(|user| user.user_id.as_str());
 
-    let counted = !enter::entered(actor.as_ref());
-    match result {
-        Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
-            guard::Outcome::Refused(message) => {
-                if counted {
-                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
-                    usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
-                }
-                error(StatusCode::FORBIDDEN, &message)
-            }
-            changed => {
-                if counted {
-                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
-                    usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
-                    if let Some(account) = actor_id {
-                        usage::count_account(&state.data_root, &deployment.id, account, usage::AccountKind::Action);
-                    }
-                }
-                if matches!(changed, guard::Outcome::Changed) {
+        let counted = !enter::entered(actor.as_ref());
+        match result {
+            Ok(ran) => match guard::outcome(&name, action, &ran.answer) {
+                guard::Outcome::Refused(message) => {
                     if counted {
-                        usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                        usage::execution(&state.data_root, &deployment.id, &name, "runtime", "refused");
+                        usage::count(&state.data_root, &deployment.id, usage::Operation::Refused(name.clone()));
                     }
-                    let caller = notify::Caller { account: actor_id, actor_id };
-                    notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
+                    error(StatusCode::FORBIDDEN, &message)
                 }
-                Json(json!({"result": ran.answer})).into_response()
-            }
-        },
-        Err(error_value) => {
-            if counted {
-                usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
-            }
-            error(StatusCode::BAD_REQUEST, &error_value.to_string())
-        },
-    }
+                changed => {
+                    if counted {
+                        usage::execution(&state.data_root, &deployment.id, &name, "runtime", "ok");
+                        usage::count(&state.data_root, &deployment.id, usage::Operation::Action(name.clone()));
+                        if let Some(account) = actor_id {
+                            usage::count_account(&state.data_root, &deployment.id, account, usage::AccountKind::Action);
+                        }
+                    }
+                    if matches!(changed, guard::Outcome::Changed) {
+                        if counted {
+                            usage::signal(&state.data_root, &deployment.id, &name, action, &input, actor_id);
+                        }
+                        let caller = notify::Caller { account: actor_id, actor_id };
+                        notify::record(&state, &deployment, &name, action, &input, caller, ran.changed(now_ms())).await;
+                    }
+                    Json(json!({"result": ran.answer})).into_response()
+                }
+            },
+            Err(error_value) => {
+                if counted {
+                    usage::execution(&state.data_root, &deployment.id, &name, "runtime", "failed");
+                }
+                error(StatusCode::BAD_REQUEST, &error_value.to_string())
+            },
+        }
     }).await
 }
 

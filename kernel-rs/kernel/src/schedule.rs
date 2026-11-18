@@ -290,14 +290,15 @@ async fn run_due(
         })
         .await?;
         if let Some(ran) = ran.filter(|_| changes.is_some_and(|changes| changes > 0)) {
-            usage::signal(&state.data_root, id, name, action, &json!({}), None);
+            usage::confirmed_signals(async {
+                usage::signal(&state.data_root, id, name, action, &json!({}), None);
+            }).await?;
             super::notify::record(
                 state, deployment, name, action, &json!({}),
                 super::notify::Caller { account: None, actor_id: None },
                 ran.changed(at),
             ).await;
         }
-        anyhow::ensure!(usage::flush_status(), "Scheduled Usage did not drain.");
         pending.finish()?;
     }
     Ok(())

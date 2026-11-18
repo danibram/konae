@@ -1353,8 +1353,10 @@ async fn admin_call(
                         anyhow::ensure!(saved.as_ref() == Some(&source), "This project already has saved sources. Reload before saving.");
                         revision
                     } else {
+                        let journal = crate::copies::Pending::begin(&state.data_root, &id, "saving initial sources and the catalogue revision")?;
                         super::sources::write(&state.data_root, &id, &source).await?;
                         db.execute("UPDATE projects SET sources=1 WHERE id=?1", [&id])?;
+                        journal.finish()?;
                         1
                     };
                     project["sourcesRevision"] = json!(revision);
@@ -1518,15 +1520,18 @@ async fn admin_call(
             anyhow::ensure!(current == 0 || previous.is_some(), "Saved project sources are unavailable.");
             validate_sources(&source, id)?;
             let revision = current.checked_add(1).ok_or_else(|| anyhow::anyhow!("Source revision exhausted."))?;
+            let journal = crate::copies::Pending::begin(&state.data_root, &format!("{id} revision {revision}"), "saving the sources and catalogue revision")?;
             let pending = super::sources::stage_write(&state.data_root, id, &source).await?;
             let update_result = store(state).and_then(|db| db.execute("UPDATE projects SET sources=?2 WHERE id=?1", params![id, revision]).map_err(Into::into));
             if let Err(error) = update_result {
                 if let Err(restore) = pending.rollback().await {
                     anyhow::bail!("Saving sources failed: {error}. Restoring the saved sources failed: {restore:#}");
                 }
+                journal.finish()?;
                 return Err(error.into());
             }
             pending.commit().await;
+            journal.finish()?;
             Ok(json!({"revision":revision}))
         }
         "project_delete" => {
@@ -1782,7 +1787,7 @@ async fn admin_call(
                 json!({"planId":id,"projectId":input.project.id,"expectedRevision":revision,"expectedSourcesRevision":source_revision,"artifactSha256":artifact_sha256,"visibility":input.visibility,"expiresAt":expires,"schema":schema.to_json(),"hostname":hostname,"url":url,"firstRelease":first_release}),
             )
         }
-        "release_apply" => {
+        "release_apply" => crate::copies::Pending::through_catalogue(async {
             let id = a["planId"].as_str().unwrap();
             let row: (String,u64,String,u64,Option<String>,Option<String>,u64)=store(state)?.query_row("SELECT project,revision,transfer,expires,receipt,sources,source_revision FROM plans WHERE id=?1 AND owner=?2",params![id,owner.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)))?;
             let _guard = database_lock(state, &format!("project:{}", row.0)).await;
@@ -1823,8 +1828,8 @@ async fn admin_call(
             tx.commit()?;
             drop(db);
             Ok(receipt)
-        }
-        "project_import" => project_import(state, owner, principal, &a).await,
+        }).await,
+        "project_import" => crate::copies::Pending::through_catalogue(project_import(state, owner, principal, &a)).await,
         "app_user_enter" => {
             anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
