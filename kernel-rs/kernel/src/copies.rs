@@ -206,7 +206,7 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
         let kind = target.kind();
         let outcome = match &staged {
             Err(error_value) => Err(anyhow::anyhow!("the snapshot failed: {error_value:#}")),
-            Ok(staged) => match recovery::start(target, state.s3.as_ref(), &state.data_bucket, state.copies.key()).await {
+            Ok(staged) => match recovery::start_with_key(target, state.s3.as_ref(), &state.data_bucket, state.copies.key()).await {
                 Ok(()) => send(state, target, &staging, staged, &id, &mut cache).await,
                 Err(error_value) => Err(error_value.context("the revocation record could not be started")),
             },
@@ -1539,7 +1539,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(&std::fs::read(copy.join(MANIFEST)).unwrap()).unwrap();
         let mut cache = ManifestCache::new();
         send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key: key.map(CopyKey::files) }, copy, &manifest, id, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
-        recovery::start(&s3_target(), Some(client), "data", None).await.unwrap();
+        recovery::start(&s3_target(), Some(client), "data").await.unwrap();
     }
 
     async fn plain_copy(label: &str) -> (PathBuf, PathBuf, String, Deployment) {
@@ -1554,7 +1554,7 @@ mod tests {
         let (source, copies, id, _) = plain_copy("planted").await;
         let client = fake_s3_client().await;
         upload_plain(&client, &copies.join(&id), &id).await;
-        recovery::start(&s3_target(), Some(&client), "data", None).await.unwrap();
+        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
         let key = CopyKey::derive(TEST_SECRET);
         let restored = scratch("planted-restored");
         let refused = restore(&s3_source(&client), None, &restored, Some(&key), &crate::installation::Installation::for_test()).await.err().expect("a plain copy is refused while a secret is set").to_string();
@@ -1625,7 +1625,7 @@ mod tests {
         let key = CopyKey::derive(TEST_SECRET);
         upload_plain(&client, &copies.join(&id), &id).await;
         upload_plain(&client, &copies.join(&id), LATER_ID).await;
-        recovery::start(&s3_target(), Some(&client), "data", None).await.unwrap();
+        recovery::start(&s3_target(), Some(&client), "data").await.unwrap();
         let (installed, outcome) = restored_notes(&s3_source(&client), None, "planted-only-restored", &deployment, &key).await;
         let refused = outcome.err().expect("no copy can be authenticated").to_string();
         assert!(refused.contains("2 skipped") && refused.contains("Nothing was installed"), "{refused}");

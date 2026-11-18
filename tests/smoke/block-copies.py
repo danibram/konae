@@ -47,7 +47,13 @@ def rejected_config(binary, env, root):
         out = subprocess.run([binary], env=settings, capture_output=True, timeout=15)
         assert out.returncode and (b"outside the data directory" in out.stderr or b"separate directory trees" in out.stderr), out.stderr
         assert not (destination / "missing").exists()
-    print("PASS two overlapping target configurations refused before repository creation", flush=True)
+    for name in (".partial-fixture", "2026-01-01T00-00-00.000Z"):
+        candidate = root / name / "copies-v3" / uuid.uuid4().hex
+        settings = dict(env, KONAE_COPY_V3_DIR=str(candidate), KONAE_KERNEL_PORT=settings["KONAE_KERNEL_PORT"])
+        out = subprocess.run([binary],env=settings,capture_output=True,timeout=15)
+        assert out.returncode and b"legacy cleaner" in out.stderr, out.stderr
+        assert not (root/name).exists()
+    print("PASS two alias overlaps and two legacy cleaner paths refused before repository creation", flush=True)
 
 
 class Remote:
@@ -183,8 +189,11 @@ def exercise(args, root, remote):
             record, = [p for p in (source/"revocations").iterdir() if p.name != "started.json"]
             signed = record.read_bytes()
         witness = hashlib.sha256(signed).hexdigest()
+        elapsed = []
         for point in [first,second]:
+            started = time.monotonic()
             output = restore(binary,env,root,source,point,witness if point == first else None)
+            elapsed.append(time.monotonic() - started)
             assert cut["number"](output/"owners.sqlite","SELECT count(*) FROM app_users WHERE state='suspended'") == 1
             count = 6 if args.marker and point == second else 1
             assert cut["number"](output/"apps/probe/data/database.sqlite","SELECT count(*) FROM notes") == count
@@ -211,7 +220,7 @@ def exercise(args, root, remote):
             assert cut["number"](held/"owners.sqlite","SELECT count(*) FROM app_users WHERE state='suspended'") == 1
             missing = {k:v for k,v in env.items() if k != "KONAE_COPY_V3_PREVIOUS_SECRETS"}
             restore(binary,missing,root,source,first,ok=False)
-        print(f"PASS {kind} restored both cuts with the suspended owner and zero deleted markers", flush=True)
+        print(f"PASS {kind} restored both cuts in {elapsed[0]:.3f}/{elapsed[1]:.3f} s with the suspended owner and zero deleted markers", flush=True)
     for backend in (["directory", "s3"] if remote else ["directory"]):
         local = backend == "directory"
         source = directory if local else remote.source

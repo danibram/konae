@@ -190,7 +190,14 @@ async fn append_record(target: &Target, s3: Option<&S3Client>, bucket: &str, key
 }
 
 /// Marks a target as keeping a revocation record.
-pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>) -> Result<()> {
+pub async fn start(target: &Target, s3: Option<&S3Client>, bucket: &str) -> Result<()> {
+    let key = if matches!(target, Target::BlocksDirectory(_) | Target::BlocksS3 { .. }) {
+        CopyKey::from_env()?
+    } else { None };
+    start_with_key(target, s3, bucket, key.as_ref()).await
+}
+
+pub(crate) async fn start_with_key(target: &Target, s3: Option<&S3Client>, bucket: &str, key: Option<&CopyKey>) -> Result<()> {
     let bytes = serde_json::to_vec(&json!({"version": 1}))?;
     match target {
         Target::BlocksDirectory(_) | Target::BlocksS3 { .. } => {
@@ -438,7 +445,7 @@ mod tests {
     async fn entries_reach_every_directory_target_and_parse_back() {
         let (one, two) = (scratch(), scratch());
         let targets = [Target::Directory(one.clone()), Target::Directory(two.clone())];
-        start(&targets[0], None, "data", None).await.unwrap();
+        start(&targets[0], None, "data").await.unwrap();
         let entry = Entry::new("app-user", Some("app-1"), "user-1", "suspended");
         write(&targets, None, "data", &entry, None).await.unwrap();
         for root in [&one, &two] {
