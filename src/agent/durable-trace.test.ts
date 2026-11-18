@@ -52,6 +52,21 @@ describe("durable trace privacy and model boundary", () => {
     expect(declaredIntent("owner-message", "entry-1", " objective ", 1)).toEqual({ origin: "owner-message", sourceEntryId: "entry-1", text: "objective", declaredAt: 1 });
   });
 
+  test("redacts OAuth state on authorization and callback links while retaining ordinary state filters", () => {
+    const oauthState = "fixture-oauth-state";
+    for (const link of [
+      `https://fixture.test/oauth/authorize?state=${oauthState}&reason=denied`,
+      `/oauth/authorize?client_id=fixture-client&state=${oauthState}`,
+      `https://fixture.test/connect/authorize?client_id=fixture-client&redirect_uri=https%3A%2F%2Ffixture.test&state=${oauthState}`,
+      `https://fixture.test/oauth/callback?error=access_denied&state=${oauthState}`,
+      `https://fixture.test/oauth/callback#state=${oauthState}`,
+    ]) {
+      expect(redactText(`Authorization refused: ${link}`)).not.toContain(oauthState);
+      expect(redactText(`Authorization refused: ${link}`)).toContain("Authorization refused:");
+    }
+    expect(redactText("https://fixture.test/orders?state=paid")).toBe("https://fixture.test/orders?state=paid");
+  });
+
   test("an explicit Objective line adds redacted self-sourced metadata without rewriting the prompt", () => {
     const prompt = "Objective: Keep the app portable with sk-proj-abcdefgh\n\nBuild a checklist.";
     const prepared = durableOwnerMessage(prompt, 1_700_000_000_123, ["owner-secret-value"]);

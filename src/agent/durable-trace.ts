@@ -1,6 +1,8 @@
-const secretAliases = new Set(["apikey", "xapikey", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "credential", "credentials", "clientsecret", "secret", "password", "invitationcode", "verificationtoken", "ownertoken"]);
+const secretAliases = new Set(["apikey", "xapikey", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "credential", "credentials", "clientsecret", "secret", "password", "invitationcode", "verificationtoken", "ownertoken", "codeverifier", "oauthstate"]);
 const credentialMarker = /\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-or-v1-[A-Fa-f0-9]{16,}|sk-proj-[A-Za-z0-9_-]{8,}|lb_[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._~+/-]{12,})\b/g;
 const sensitiveParameter = /^(?:token|key|api[_-]?key|code|invite|invitation|invitation[_-]?code|verification|verification[_-]?token|email[_-]?verification|auth|authorization|signature)$/i;
+const oauthPath = /\/oauth2?\/(?:v\d+\/)?(?:authorize|authorization|callback)(?:\/|$)/i;
+const relativeUrlOrigin = "https://redaction.invalid";
 
 export type BoundedText = { text: string; originalLength: number; retainedLength: number; truncated: boolean; redacted: boolean; method: "head" };
 export const DURABLE_SELF_ENTRY = "$self";
@@ -21,7 +23,7 @@ export function redactDurableValue(value: unknown, knownCredentials: readonly st
 export function redactText(value: string, knownCredentials: readonly string[] = []): string {
   let credentialSafe = value.replace(credentialMarker, "[redacted credential]");
   for (const credential of knownCredentials) if (credential) credentialSafe = credentialSafe.split(credential).join("[redacted credential]");
-  credentialSafe = credentialSafe.replace(/https?:\/\/[^\s"'<>]+/gi, (candidate) => redactUrl(candidate));
+  credentialSafe = credentialSafe.replace(/(?:https?:\/\/|(?<![\w/])\/oauth\/(?:authorize|callback)\?)[^\s"'<>]+/gi, redactUrl);
   try {
     const parsed = JSON.parse(credentialSafe);
     const safe = JSON.stringify(redactDurableValue(parsed, knownCredentials));
@@ -73,15 +75,23 @@ export function durableOwnerMessage(text: string, declaredAt: number, knownCrede
 
 function redactUrl(value: string) {
   try {
-    const url = new URL(value);
-    const original = value;
-    if (url.username || url.password) { url.username = "[redacted]"; url.password = "[redacted]"; }
-    for (const key of [...url.searchParams.keys()]) if (isSensitiveParameter(key) || /invite|verif/i.test(key)) url.searchParams.set(key, "[redacted]");
-    if (url.hash && /invit(?:e|ation)|verif|token|auth|code/i.test(url.hash)) url.hash = "#[redacted]";
-    const result = url.toString();
-    const originalUrl = new URL(original);
-    const sensitive = Boolean(originalUrl.username || originalUrl.password) || [...originalUrl.searchParams.keys()].some((key) => isSensitiveParameter(key) || /invite|verif/i.test(key)) || /#.*(?:invit(?:e|ation)|verif|token|auth|code)/i.test(original);
-    return sensitive ? result : original;
+    const relative = value.startsWith("/");
+    const url = new URL(value, relativeUrlOrigin);
+    const oauth = oauthPath.test(url.pathname) || (url.searchParams.has("client_id") && url.searchParams.has("redirect_uri"));
+    let redacted = Boolean(url.username || url.password);
+    if (redacted) { url.username = "[redacted]"; url.password = "[redacted]"; }
+    for (const key of [...url.searchParams.keys()]) {
+      if (isSensitiveParameter(key) || /invite|verif/i.test(key) || (oauth && /^state$/i.test(key))) {
+        url.searchParams.set(key, "[redacted]");
+        redacted = true;
+      }
+    }
+    if (url.hash && (/invit(?:e|ation)|verif|token|auth|code/i.test(url.hash) || (oauth && /[#&]state=/i.test(url.hash)))) {
+      url.hash = "#[redacted]";
+      redacted = true;
+    }
+    if (!redacted) return value;
+    return relative ? `${url.pathname}${url.search}${url.hash}` : url.toString();
   } catch {
     return value.replace(credentialMarker, "[redacted credential]");
   }

@@ -911,6 +911,7 @@ test("provider error evidence redacts configured keys and sensitive URL paramete
   const localKey="synthetic-current-provider-credential-unused";
   const urlToken="fixture-secret-in-access-query";
   const clientSecret="fixture-private-oauth-client-secret";
+  const oauthState="fixture-private-oauth-state";
   const invitationCode="fixture-private-one-use-invitation";
   const marker="synthetic provider refuses the request";
   const sameOriginRequests:string[]=[];
@@ -927,7 +928,7 @@ test("provider error evidence redacts configured keys and sensitive URL paramete
     expect(request.headers()["x-api-key"]).toBe(localKey);
     await route.fulfill({status:400,headers,contentType:"application/json",body:JSON.stringify({
       type:"error",
-      error:{type:"invalid_request_error",message:marker+" "+localKey+" https://fixture.invalid/continue?access_token="+urlToken+"&client_secret="+clientSecret+"&reason=denied http://fixture.invalid/_konae/invitation#invitation="+invitationCode},
+      error:{type:"invalid_request_error",message:marker+" "+localKey+" https://fixture.invalid/continue?access_token="+urlToken+"&client_secret="+clientSecret+"&reason=denied https://fixture.invalid/oauth/authorize?state="+oauthState+" http://fixture.invalid/_konae/invitation#invitation="+invitationCode},
     })});
   });
   await page.goto(path+"?agent=durable-recovery");
@@ -942,7 +943,7 @@ test("provider error evidence redacts configured keys and sensitive URL paramete
   const exported=JSON.stringify(download);
   expect(exported).toContain(marker);
   expect(exported).toContain("reason=denied");
-  for (const credential of [localKey, urlToken, clientSecret, invitationCode]) {
+  for (const credential of [localKey, urlToken, clientSecret, oauthState, invitationCode]) {
     expect(exported).not.toContain(credential);
     expect(sameOriginRequests.some((body) => body.includes(credential))).toBe(false);
   }
