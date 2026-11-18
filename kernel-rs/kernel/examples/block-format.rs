@@ -76,9 +76,9 @@ async fn main() -> Result<()> {
         "restore" => {
             let id = copy_id(timestamp);
             let point = repo.open(&id, &scope).await?;
-            repo.restore(&point, path).await?;
+            let result = repo.restore(&point, path).await;
             let restored: u64 = point.inventory().files.iter().map(|f| f.size).sum();
-            let directory_read = match source {
+            let directory_read = match &source {
                 Source::Directory(root) => {
                     restored
                         + point.objects().count() as u64 * 16
@@ -86,6 +86,8 @@ async fn main() -> Result<()> {
                 }
                 Source::S3 { .. } => 0,
             };
+            point.close().await?;
+            result?;
             json!({"restoredBytesWritten":restored,"directoryBytesRead":directory_read})
         }
         _ => anyhow::bail!("Choose publish or restore."),
