@@ -242,7 +242,7 @@ async fn manifest_reader_and_writer_agree_at_the_final_byte() {
                 } else {
                     let plain = Manifest { mac: None, encryption: None, ..manifest.clone() };
                     if signing_key.is_some() { assert!(encode_manifest(&Installation::for_test(), &id, &plain).is_ok()); }
-                    let target = S3CopyTarget { client: &client, bucket: &bucket, prefix: &prefix, key: signing_key };
+                    let target = S3CopyTarget { client: &client, bucket: &bucket, prefix: &prefix, key: signing_key.map(CopyKey::files) };
                     let err = send_to_s3(target, &root.join("unreadable-staging"), &plain, &id, &mut ManifestCache::new(), &HashMap::new(), &Installation::for_test()).await.err().unwrap();
                     assert!(err.to_string().contains("4194305"), "{err:#}");
                     assert!(!remote.complete_copies().await.unwrap().contains(&id));
@@ -262,7 +262,7 @@ async fn manifest_reader_and_writer_agree_at_the_final_byte() {
             } else {
                 let read = read.unwrap();
                 assert_eq!(read.files.len(), 16_000);
-                check_sealed(&id, &read, signing_key).unwrap();
+                check_sealed(&id, &read, signing_key.map(CopyKey::files)).unwrap();
             }
         }
     }

@@ -1343,6 +1343,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "hex",
+ "konae-backup",
  "lettre",
  "libc",
  "reqwest",
@@ -1382,6 +1383,22 @@ dependencies = [
  "tokio-util",
  "tower",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "konae-backup"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-s3",
+ "hex",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
  "uuid",
 ]
 

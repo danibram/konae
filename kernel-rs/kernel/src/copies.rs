@@ -6,41 +6,37 @@ mod history_tests;
 use crate::installation::Installation;
 use std::{
     collections::{HashMap, HashSet},
-    io::Read,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
+#[cfg(test)]
 use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
-
-use ring::{
-    aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey},
-    hkdf, hmac,
-    rand::{SecureRandom, SystemRandom},
+use crate::{AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery};
+pub use konae_backup::{checksum_file, civil_from_days, vacuum_into};
+use konae_backup::{
+    CopyReader, MANIFEST, Manifest, ManifestCache, ManifestFile, PathScope, S3CopyTarget, Source,
+    check_sealed, copy_id, newest_authentic_copy, normalize_prefix, parse_copy_id, prune_directory, prune_s3_cached,
+    read_manifest, send_to_directory, send_to_s3, verified_bytes,
 };
+#[cfg(test)]
+use konae_backup::{DAY_MS, MAX_MANIFEST_BYTES, manifest_cache_key, encode_manifest, expired_copies, list_files, sealed_manifest};
 
-use crate::{
-    AppState, database_lock, list_s3_keys, now_ms, read_s3_bytes, recovery,
-    safe_relative_path,
-};
+impl PathScope for Installation {
+    fn allows(&self, path: &str) -> bool { self.holds(path) || path.starts_with("apps/") }
+}
 
 pub(crate) const DEPLOYMENT_DATABASES: [&str; 4] = ["database.sqlite", "identity.sqlite", "usage.sqlite", crate::layout::SECRETS_DATABASE];
-const MANIFEST: &str = "manifest.json";
 /// The prefix of copies in the installation's one bucket.
 pub const S3_PREFIX: &str = "copies/";
-const ENCRYPTION: &str = "AES-256-GCM";
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_SKIPPED_COPIES: usize = 50;
-const KEEP_RECENT: usize = 24;
-const KEEP_DAILY_DAYS: u64 = 30;
-const DAY_MS: u64 = 86_400_000;
 const DEFAULT_INTERVAL_SECONDS: u64 = 3600;
 
 
@@ -121,128 +117,8 @@ impl CopyConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Encryption at rest
-
-/// The key that seals copy files on S3. HKDF-SHA256 of `KONAE_COPY_SECRET`
-/// with a fixed salt and label, as `mail.rs` derives its link key, so the
-/// secret itself never encrypts anything.
-pub struct CopyKey {
-    key: LessSafeKey,
-    check: String,
-    /// Signs each manifest of a sealed copy. Its own HKDF label, so it is
-    /// neither the sealing key nor the `check` value.
-    manifest_mac: hmac::Key,
-    /// Signs each revocation entry sent to S3, under another label.
-    entry_mac: hmac::Key,
-}
-
-impl CopyKey {
-    /// Reads the secret as written, untrimmed.
-    pub fn from_env() -> Result<Option<Self>> {
-        match std::env::var("KONAE_COPY_SECRET").ok().filter(|value| !value.is_empty()) {
-            None => Ok(None),
-            Some(secret) => {
-                ensure!(secret.len() >= 32, "KONAE_COPY_SECRET must be at least 32 characters.");
-                Ok(Some(Self::derive(&secret)))
-            }
-        }
-    }
-
-    /// The `keyCheck` a sealed manifest carries. It tells two secrets apart
-    /// without revealing either.
-    pub fn fingerprint(&self) -> &str {
-        &self.check
-    }
-
-    pub fn derive(secret: &str) -> Self {
-        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, b"konae-copy-v1").extract(secret.as_bytes());
-        let okm = prk.expand(&[b"copy file"], &AES_256_GCM).expect("HKDF output fits AES-256");
-        let key = LessSafeKey::new(UnboundKey::from(okm));
-        // A second expansion, so the manifest can tell a wrong secret from a
-        // damaged file without revealing anything about the key.
-        let mut check = [0u8; 32];
-        prk.expand(&[b"key check"], HkdfLength(32)).expect("HKDF output fits 32 bytes").fill(&mut check).expect("32 bytes");
-        let mac_key = |label: &'static [u8]| hmac::Key::from(prk.expand(&[label], hmac::HMAC_SHA256).expect("HKDF output fits HMAC-SHA256"));
-        Self { key, check: hex::encode(check), manifest_mac: mac_key(b"manifest mac"), entry_mac: mac_key(b"revocation entry mac") }
-    }
-
-    fn sign_manifest(&self, copy: &str, manifest: &Manifest) -> String {
-        hex::encode(hmac::sign(&self.manifest_mac, &manifest_message(copy, manifest)).as_ref())
-    }
-
-    fn verify_manifest(&self, copy: &str, manifest: &Manifest, mac: &str) -> bool {
-        hex::decode(mac).is_ok_and(|mac| hmac::verify(&self.manifest_mac, &manifest_message(copy, manifest), &mac).is_ok())
-    }
-
-    pub(crate) fn sign_entry(&self, name: &str, entry: &recovery::Entry) -> Result<String> {
-        Ok(hex::encode(hmac::sign(&self.entry_mac, &entry_message(name, entry)?).as_ref()))
-    }
-
-    pub(crate) fn verify_entry(&self, name: &str, entry: &recovery::Entry, mac: &str) -> Result<bool> {
-        Ok(hex::decode(mac).is_ok_and(|mac| hmac::verify(&self.entry_mac, &entry_message(name, entry).unwrap_or_default(), &mac).is_ok()))
-    }
-
-    /// Seals one file. The copy ID and the file's path are the associated
-    /// data, so a sealed file moved to another copy or path does not open.
-    /// The output is the nonce followed by the ciphertext and its tag.
-    pub fn seal(&self, copy: &str, path: &str, mut bytes: Vec<u8>) -> Result<Vec<u8>> {
-        let mut nonce = [0u8; NONCE_LEN];
-        SystemRandom::new().fill(&mut nonce).map_err(|_| anyhow::anyhow!("Could not generate a nonce."))?;
-        self.key
-            .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(format!("{copy}/{path}").as_bytes()), &mut bytes)
-            .map_err(|_| anyhow::anyhow!("Could not encrypt {path}."))?;
-        let mut sealed = nonce.to_vec();
-        sealed.extend_from_slice(&bytes);
-        Ok(sealed)
-    }
-
-    pub fn open(&self, copy: &str, path: &str, sealed: &[u8]) -> Option<Vec<u8>> {
-        if sealed.len() < NONCE_LEN {
-            return None;
-        }
-        let (nonce, body) = sealed.split_at(NONCE_LEN);
-        let nonce = Nonce::try_assume_unique_for_key(nonce).ok()?;
-        let mut buffer = body.to_vec();
-        let plain = self.key.open_in_place(nonce, Aad::from(format!("{copy}/{path}").as_bytes()), &mut buffer).ok()?;
-        Some(plain.to_vec())
-    }
-}
-
-fn manifest_message(copy: &str, manifest: &Manifest) -> Vec<u8> {
-    let mut message = copy.as_bytes().to_vec();
-    message.push(0);
-    let plain = Manifest { mac: None, ..manifest.clone() };
-    message.extend(serde_json::to_vec(&plain).expect("a manifest serialises"));
-    message
-}
-
-fn entry_message(name: &str, entry: &recovery::Entry) -> Result<Vec<u8>> {
-    let mut message = name.as_bytes().to_vec();
-    message.push(0);
-    message.extend(serde_json::to_vec(entry)?);
-    Ok(message)
-}
-
-struct HkdfLength(usize);
-
-impl hkdf::KeyType for HkdfLength {
-    fn len(&self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Encryption {
-    algorithm: String,
-    key_check: String,
-}
-
-fn normalize_prefix(prefix: &str) -> String {
-    let trimmed = prefix.trim().trim_matches('/');
-    if trimmed.is_empty() { String::new() } else { format!("{trimmed}/") }
-}
+mod key;
+pub use key::CopyKey;
 
 mod health;
 pub use health::CopyStatus;
@@ -264,45 +140,10 @@ pub fn spawn_schedule(state: AppState, config: CopyConfig) {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Manifest {
-    version: u32,
-    copy_id: String,
-    created_at: u64,
-    files: Vec<ManifestFile>,
-    /// Present when the files are sealed; sizes and checksums are of the
-    /// plain files.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    encryption: Option<Encryption>,
-    /// Present on a sealed copy: HMAC-SHA256 of the copy ID and the
-    /// manifest without this field, so no entry can be added or dropped.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mac: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ManifestFile {
-    path: String,
-    size: u64,
-    sha256: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    home_copy: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 struct CopyState {
     files: Vec<ManifestFile>,
     #[serde(default)]
     s3_manifests: HashMap<String, Manifest>,
-}
-
-type ManifestCache = HashMap<String, std::result::Result<Manifest, String>>;
-
-struct S3CopyTarget<'a> {
-    client: &'a S3Client,
-    bucket: &'a str,
-    prefix: &'a str,
-    key: Option<&'a CopyKey>,
 }
 
 struct StagedCopy {
@@ -325,7 +166,7 @@ pub async fn run_copy(state: &AppState, targets: &[Target]) -> Result<String> {
     let _ = tokio::fs::remove_dir_all(&staging_root).await;
     let staging = staging_root.join(&id);
     let mut cache = ManifestCache::new();
-    let staged = stage_copy(state, &staging, &id, started, &mut cache).await;
+    let staged = stage_copy(state, &staging, started, &mut cache).await;
     let mut failures = Vec::new();
     let mut published = false;
     for target in targets {
@@ -384,12 +225,12 @@ async fn send(state: &AppState, target: &Target, staging: &Path, staged: &Staged
             let (staging, directory, id, manifest) = (staging.to_owned(), directory.clone(), id.to_owned(), staged.manifest.clone());
             let legacy = staged.legacy_blobs.clone();
             let installation = state.installation.clone();
-            tokio::task::spawn_blocking(move || send_to_directory(&staging, &directory, &id, &manifest, &legacy, &installation)).await?
+            tokio::task::spawn_blocking(move || send_to_directory(&staging, &directory, &id, &manifest, &legacy, installation.as_ref())).await?
         }
         Target::S3 { prefix } => {
             let client = state.s3.as_ref().context("S3 is not configured.")?;
-            let target = S3CopyTarget { client, bucket: &state.data_bucket, prefix, key: state.copies.key() };
-            send_to_s3(target, staging, &staged.manifest, id, cache, &staged.legacy_blobs, &state.installation).await
+            let target = S3CopyTarget { client, bucket: &state.data_bucket, prefix, key: state.copies.key().map(CopyKey::files) };
+            send_to_s3(target, staging, &staged.manifest, id, cache, &staged.legacy_blobs, state.installation.as_ref()).await
         }
     }
 }
@@ -410,7 +251,7 @@ async fn prune(state: &AppState, target: &Target, id: &str, cache: &mut Manifest
 /// Builds the copy in `staging`. Each Deployment is snapshotted under its
 /// data and identity locks, the same locks an action, an upload, a signup and
 /// a publish take, so its databases, files and artifact agree with each other.
-async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64, cache: &mut ManifestCache) -> Result<StagedCopy> {
+async fn stage_copy(state: &AppState, staging: &Path, created_at: u64, cache: &mut ManifestCache) -> Result<StagedCopy> {
     let prior = tokio::fs::read(state.data_root.join(".copy-state.json")).await.ok()
         .and_then(|bytes| serde_json::from_slice::<CopyState>(&bytes).ok());
     if let Some(prior) = prior.as_ref() {
@@ -448,17 +289,16 @@ async fn stage_copy(state: &AppState, staging: &Path, id: &str, created_at: u64,
             .await
             .with_context(|| format!("The files of Deployment {deployment}"))?;
     }
-    let (root, id) = (staging.to_owned(), id.to_owned());
+    let root = staging.to_owned();
     tokio::task::spawn_blocking(move || {
-        let files = list_files(&root)?;
-        let staged: HashMap<_, _> = files.iter().map(|file| (file.path.as_str(), file)).collect();
+        let manifest = Manifest::capture(&root, created_at)?;
+        let staged: HashMap<_, _> = manifest.files.iter().map(|file| (file.path.as_str(), file)).collect();
         let mut legacy_blobs = HashMap::new();
         for (path, size, digest, legacy) in indexed_files {
             let file = staged.get(path.as_str()).with_context(|| format!("Staging is missing indexed file {path}"))?;
             ensure!(file.size == size && file.sha256 == digest, "Indexed file {path} changed in staging.");
             if legacy { legacy_blobs.insert(path, digest); }
         }
-        let manifest = Manifest { version: 1, copy_id: id, created_at, files, encryption: None, mac: None };
         Ok(StagedCopy { manifest, legacy_blobs })
     })
     .await?
@@ -566,13 +406,6 @@ fn copy_private(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn vacuum_into(source: &Path, target: &Path) -> Result<()> {
-    let connection = Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    connection.busy_timeout(Duration::from_secs(10))?;
-    connection.execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])?;
-    Ok(())
-}
-
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
@@ -588,284 +421,6 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
             std::fs::copy(entry.path(), target.join(&name))?;
         }
     }
-    Ok(())
-}
-
-fn manifest_path(root: &Path, path: &Path) -> Result<String> {
-    let relative = path.strip_prefix(root)?.to_str().context("The copy contains a non-UTF-8 path.")?;
-    Ok(relative.replace(std::path::MAIN_SEPARATOR, "/"))
-}
-
-fn list_files(root: &Path) -> Result<Vec<ManifestFile>> {
-    fn walk(root: &Path, directory: &Path, files: &mut Vec<ManifestFile>) -> Result<()> {
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                walk(root, &path, files)?;
-                continue;
-            }
-            ensure!(kind.is_file(), "Expected a regular file at {}.", path.display());
-            let relative = manifest_path(root, &path)?;
-            if relative == MANIFEST {
-                continue;
-            }
-            let (size, sha256) = checksum_file(&path)?;
-            files.push(ManifestFile { path: relative, size, sha256, home_copy: None });
-        }
-        Ok(())
-    }
-    let mut files = Vec::new();
-    walk(root, root, &mut files)?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
-}
-
-pub fn checksum_file(path: &Path) -> Result<(u64, String)> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut size = 0u64;
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        size += read as u64;
-    }
-    Ok((size, hex::encode(hasher.finalize())))
-}
-
-fn check_legacy_blobs(previous: &Manifest, legacy: &HashMap<String, String>) -> Result<()> {
-    for file in &previous.files {
-        if let Some(digest) = legacy.get(&file.path) {
-            ensure!(digest == &file.sha256, "Indexed file {} does not match the SHA-256 in copy {}.", file.path, previous.copy_id);
-        }
-    }
-    Ok(())
-}
-
-fn send_to_directory(staging: &Path, directory: &Path, id: &str, manifest: &Manifest, legacy: &HashMap<String, String>, installation: &Installation) -> Result<()> {
-    let manifest_bytes = encode_manifest(installation, id, manifest)?;
-    ensure!(manifest.files.iter().all(|file| file.home_copy.as_deref().is_none_or(|home| home == id)),
-        "A directory copy must contain each file under its own copy ID.");
-    std::fs::create_dir_all(directory)
-        .with_context(|| format!("Could not create {}", directory.display()))?;
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(".partial-") {
-            std::fs::remove_dir_all(entry.path())?;
-        }
-    }
-    let partial_name = format!(".partial-{id}");
-    let partial = directory.join(&partial_name);
-    let previous = std::fs::read_dir(directory)?.filter_map(|entry| entry.ok()).filter_map(|entry| {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        (parse_copy_id(&name).is_some() && entry.path().join(MANIFEST).is_file()).then_some(name)
-    }).max();
-    let previous_manifest = previous.as_deref().map(|copy| -> Result<Manifest> {
-        Ok(serde_json::from_slice(&std::fs::read(directory_file(directory, copy, MANIFEST)?)?)?)
-    }).transpose()?;
-    if let Some(previous) = &previous_manifest { check_legacy_blobs(previous, legacy)?; }
-    let previous_files = previous_manifest.into_iter().flat_map(|manifest| manifest.files)
-        .map(|file| (file.path.clone(), file)).collect();
-    let previous = previous.as_deref().map(|copy| (directory, copy));
-    copy_tree_incremental(staging, staging, &partial, previous, &previous_files)?;
-    for file in &manifest.files {
-        let (size, digest) = directory_file(directory, &partial_name, &file.path).and_then(|path| checksum_file(&path))
-            .with_context(|| format!("Could not verify {} in directory copy {id}", file.path))?;
-        ensure!(size == file.size && digest == file.sha256, "File {} in directory copy {id} does not match its checksum.", file.path);
-    }
-    std::fs::write(partial.join(MANIFEST), manifest_bytes)?;
-    std::fs::rename(&partial, directory.join(id))?;
-    Ok(())
-}
-
-fn copy_tree_incremental(root: &Path, source: &Path, target: &Path, previous: Option<(&Path, &str)>, previous_files: &HashMap<String, ManifestFile>) -> Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = target.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_tree_incremental(root, &from, &to, previous, previous_files)?;
-            continue;
-        }
-        if source == root && entry.file_name() == MANIFEST { continue; }
-        let rel = manifest_path(root, &from)?;
-        let unchanged = match previous_files.get(&rel) {
-            Some(expected) => checksum_file(&from)? == (expected.size, expected.sha256.clone()),
-            None => false,
-        };
-        if let Some((directory, copy)) = previous.filter(|_| unchanged) {
-            let candidate = directory_file(directory, copy, &rel)
-                .with_context(|| format!("Could not reuse {rel} from directory copy {copy}"))?;
-            if std::fs::hard_link(&candidate, &to).is_err() {
-                std::fs::copy(&candidate, &to).with_context(|| format!("Could not copy unchanged file {rel}"))?;
-            }
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
-}
-
-fn prune_directory(directory: &Path, now: u64) -> Result<usize> {
-    let mut complete = Vec::new();
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if parse_copy_id(&name).is_some() && entry.path().join(MANIFEST).is_file() {
-            complete.push(name);
-        }
-    }
-    let expired = expired_copies(&complete, now);
-    for name in &expired {
-        std::fs::remove_dir_all(directory.join(name))?;
-    }
-    Ok(expired.len())
-}
-
-fn check_manifest_paths(installation: &Installation, copy: &str, manifest: &Manifest) -> Result<()> {
-    for file in &manifest.files {
-        let allowed = installation.holds(&file.path) || file.path.starts_with("apps/");
-        ensure!(
-            safe_relative_path(&file.path) && allowed,
-            "The copy's manifest names a path outside a data directory: {}",
-            file.path
-        );
-    }
-    for file in &manifest.files {
-        let home = file.home_copy.as_deref().unwrap_or(copy);
-        ensure!(
-            parse_copy_id(home).is_some(),
-            "Copy {copy} has an invalid object reference. Nothing was installed."
-        );
-    }
-    Ok(())
-}
-
-fn encode_manifest(installation: &Installation, id: &str, manifest: &Manifest) -> Result<Vec<u8>> {
-    ensure!(parse_copy_id(id).is_some() && manifest.copy_id == id, "The manifest must name the copy being published.");
-    check_manifest_paths(installation, id, manifest)?;
-    let bytes = serde_json::to_vec_pretty(manifest)?;
-    ensure!(bytes.len() as u64 <= MAX_MANIFEST_BYTES,
-        "The final manifest of copy {} is {} bytes. Restore accepts at most {MAX_MANIFEST_BYTES} bytes.",
-        manifest.copy_id, bytes.len());
-    Ok(bytes)
-}
-
-fn sealed_manifest(manifest: &Manifest, key: &CopyKey) -> Manifest {
-    let mut sealed = Manifest {
-        encryption: Some(Encryption { algorithm: ENCRYPTION.into(), key_check: key.check.clone() }),
-        mac: None,
-        ..manifest.clone()
-    };
-    sealed.mac = Some(key.sign_manifest(&manifest.copy_id, &sealed));
-    sealed
-}
-
-async fn send_to_s3(
-    target: S3CopyTarget<'_>,
-    staging: &Path,
-    manifest: &Manifest,
-    id: &str,
-    cache: &mut ManifestCache,
-    legacy: &HashMap<String, String>,
-    installation: &Installation,
-) -> Result<()> {
-    let S3CopyTarget { client: s3, bucket, prefix, key } = target;
-    let source = Source::S3 { client: s3.clone(), bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) };
-    let complete = source.complete_copies().await?;
-    ensure!(!complete.iter().any(|copy| copy == id), "S3 already holds complete copy {id}.");
-    let previous_id = complete.into_iter().filter(|copy| copy.as_str() < id).max();
-    let previous = match previous_id.as_deref() {
-        Some(copy) => read_manifest_cached(&source, copy, cache).await?.ok(),
-        None => None,
-    };
-    let previous = previous.filter(|manifest| match key {
-        Some(key) => manifest.encryption.as_ref().is_some_and(|encryption| {
-            encryption.algorithm == ENCRYPTION && encryption.key_check == key.fingerprint()
-        }) && check_sealed(&manifest.copy_id, manifest, Some(key)).is_ok(),
-        None => manifest.encryption.is_none(),
-    });
-    if let Some(previous) = &previous { check_legacy_blobs(previous, legacy)?; }
-    let previous_files: HashMap<&str, &ManifestFile> = previous.as_ref().map(|manifest| {
-        manifest.files.iter().map(|file| (file.path.as_str(), file)).collect()
-    }).unwrap_or_default();
-    let mut next = manifest.clone();
-    next.version = 2;
-    for file in &mut next.files {
-        let home = previous_files.get(file.path.as_str())
-            .filter(|old| old.size == file.size && old.sha256 == file.sha256)
-            .and_then(|old| old.home_copy.as_deref().or(previous_id.as_deref()))
-            .unwrap_or(id);
-        file.home_copy = Some(home.to_owned());
-    }
-    let stored = match key {
-        Some(key) => sealed_manifest(&next, key),
-        None => next,
-    };
-    let manifest_bytes = encode_manifest(installation, id, &stored)?;
-    let mut uploads = tokio::task::JoinSet::new();
-    for file in stored.files.iter().filter(|file| file.home_copy.as_deref() == Some(id)) {
-        if uploads.len() >= 8 && let Some(result) = uploads.join_next().await {
-            result??;
-        }
-        let mut bytes = tokio::fs::read(staging.join(&file.path)).await?;
-        if let Some(key) = key {
-            bytes = key.seal(id, &file.path, bytes)?;
-        }
-        let request = s3
-            .put_object()
-            .bucket(bucket)
-            .key(format!("{prefix}{id}/{}", file.path))
-            .body(ByteStream::from(bytes));
-        uploads.spawn(async move { request.send().await.map(|_| ()).map_err(anyhow::Error::from) });
-    }
-    while let Some(result) = uploads.join_next().await {
-        result??;
-    }
-    for file in &stored.files {
-        let home = file.home_copy.as_deref().unwrap_or(id);
-        verify_s3_file(&target, home, file).await
-            .with_context(|| format!("Could not verify {} in S3 copy {home}", file.path))?;
-    }
-    s3.put_object()
-        .bucket(bucket)
-        .key(format!("{prefix}{id}/{MANIFEST}"))
-        .body(ByteStream::from(manifest_bytes))
-        .send()
-        .await?;
-    cache.insert(manifest_cache_key(&source, id), Ok(stored));
-    Ok(())
-}
-
-async fn verify_s3_file(target: &S3CopyTarget<'_>, home: &str, file: &ManifestFile) -> Result<()> {
-    let object = format!("{}{home}/{}", target.prefix, file.path);
-    let response = target.client.get_object().bucket(target.bucket).key(object).send().await?;
-    let overhead = if target.key.is_some() { (NONCE_LEN + 16) as u64 } else { 0 };
-    let expected = file.size.checked_add(overhead).context("Object size overflow")?;
-    if let Some(length) = response.content_length() {
-        ensure!(u64::try_from(length)? == expected, "S3 reports {length} bytes. The manifest requires {expected}.");
-    }
-    let mut body = response.body;
-    let mut length = 0u64;
-    let mut sealed = Vec::new();
-    let mut hash = Sha256::new();
-    while let Some(chunk) = body.try_next().await? {
-        length += chunk.len() as u64;
-        ensure!(length <= expected, "S3 returned more than {expected} bytes.");
-        if target.key.is_some() { sealed.extend_from_slice(&chunk); } else { hash.update(&chunk); }
-    }
-    ensure!(length == expected, "S3 returned {length} bytes. The manifest requires {expected}.");
-    if let Some(key) = target.key {
-        let plain = key.open(home, &file.path, &sealed).context("The stored bytes do not decrypt.")?;
-        hash.update(plain);
-    }
-    ensure!(hex::encode(hash.finalize()) == file.sha256, "The stored bytes do not match the manifest SHA-256.");
     Ok(())
 }
 
@@ -893,132 +448,6 @@ async fn s3_object_sizes(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Ha
 async fn prune_s3(s3: &S3Client, bucket: &str, prefix: &str, current: &str, now: u64) -> Result<usize> {
     prune_s3_cached(s3, bucket, prefix, current, now, &mut ManifestCache::new()).await
 }
-
-async fn prune_s3_cached(s3: &S3Client, bucket: &str, prefix: &str, current: &str, now: u64, cache: &mut ManifestCache) -> Result<usize> {
-    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-    for key in list_s3_keys(s3, bucket, prefix).await? {
-        let Some((id, _)) = key[prefix.len()..].split_once('/') else { continue };
-        if parse_copy_id(id).is_some() {
-            groups.entry(id.to_owned()).or_default().push(key);
-        }
-    }
-    let manifest_suffix = format!("/{MANIFEST}");
-    let complete = groups
-        .iter()
-        .filter(|(_, keys)| keys.iter().any(|key| key.ends_with(&manifest_suffix)))
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    let expired = expired_copies(&complete, now);
-    let mut keep = complete.iter().filter(|id| !expired.contains(id)).cloned().collect::<HashSet<_>>();
-    keep.insert(current.to_owned());
-    let mut marked = HashSet::new();
-    for id in &keep {
-        let source = Source::S3 { client: s3.clone(), bucket: bucket.to_owned(), prefix: normalize_prefix(prefix) };
-        let manifest = read_manifest_cached(&source, id, cache).await?
-            .map_err(|reason| anyhow::anyhow!("Cannot prune copy {id} because its manifest is invalid: {reason}"))?;
-        ensure!(manifest.copy_id == *id, "Cannot prune copy {id} because its manifest names another copy.");
-        for file in manifest.files {
-            let home = file.home_copy.as_deref().unwrap_or(id);
-            ensure!(safe_relative_path(&file.path) && parse_copy_id(home).is_some(), "Cannot prune copy {id} because it has an invalid object reference.");
-            marked.insert(format!("{prefix}{home}/{}", file.path));
-        }
-    }
-    for id in &expired {
-        let key = format!("{prefix}{id}/{MANIFEST}");
-        s3.delete_object().bucket(bucket).key(key).send().await?;
-    }
-    for (id, keys) in &groups {
-        for key in keys {
-            if key.ends_with(&manifest_suffix) {
-                if !keep.contains(id) && !expired.contains(id) {
-                    s3.delete_object().bucket(bucket).key(key).send().await?;
-                }
-            } else if !marked.contains(key) {
-                s3.delete_object().bucket(bucket).key(key).send().await?;
-            }
-        }
-    }
-    let cache_prefix = format!("{bucket}/{}", normalize_prefix(prefix));
-    cache.retain(|key, _| {
-        let Some(id) = key.strip_prefix(&cache_prefix) else { return true };
-        parse_copy_id(id).is_none() || keep.contains(id)
-    });
-    Ok(expired.len())
-}
-
-fn expired_copies(ids: &[String], now: u64) -> Vec<String> {
-    let mut dated = ids
-        .iter()
-        .filter_map(|id| parse_copy_id(id).map(|at| (at, id)))
-        .collect::<Vec<_>>();
-    dated.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut days = HashSet::new();
-    let mut expired = Vec::new();
-    for (index, (at, id)) in dated.into_iter().enumerate() {
-        let newest_of_day = days.insert(at / DAY_MS);
-        if index < KEEP_RECENT {
-            continue;
-        }
-        if newest_of_day && now.saturating_sub(at) <= KEEP_DAILY_DAYS * DAY_MS {
-            continue;
-        }
-        expired.push(id.clone());
-    }
-    expired
-}
-
-
-fn copy_id(at_ms: u64) -> String {
-    let days = (at_ms / DAY_MS) as i64;
-    let (year, month, day) = civil_from_days(days);
-    let in_day = at_ms % DAY_MS;
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}-{:02}-{:02}.{:03}Z",
-        in_day / 3_600_000,
-        in_day / 60_000 % 60,
-        in_day / 1000 % 60,
-        in_day % 1000
-    )
-}
-
-fn parse_copy_id(id: &str) -> Option<u64> {
-    if id.len() != 24 || !id.is_ascii() {
-        return None;
-    }
-    let number = |range: std::ops::Range<usize>| id[range].parse::<u64>().ok();
-    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
-    let (hour, minute, second, millis) = (number(11..13)?, number(14..16)?, number(17..19)?, number(20..23)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 59 {
-        return None;
-    }
-    let days = u64::try_from(days_from_civil(year as i64, month as u32, day as u32)).ok()?;
-    let at = days * DAY_MS + hour * 3_600_000 + minute * 60_000 + second * 1000 + millis;
-    (copy_id(at) == id).then_some(at)
-}
-
-pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let year = yoe as i64 + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = (year - era * 400) as u64;
-    let mp = u64::from(if month > 2 { month - 3 } else { month + 9 });
-    let doy = (153 * mp + 2) / 5 + u64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe as i64 - 719_468
-}
-
 
 fn restore_usage() -> String {
     format!("Usage: {} restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>] [--require-revocation <entry SHA-256>]", crate::program())
@@ -1087,7 +516,7 @@ pub async fn read_record(from: &str, key: Option<&CopyKey>) -> Result<Option<Vec
         Source::Directory(path) if path.join(MANIFEST).is_file() => Source::Directory(path.parent().unwrap_or(Path::new(".")).to_owned()),
         other => other,
     };
-    source.record(key).await
+    read_source_record(&source, key).await
 }
 
 async fn source_for(from: &str) -> Result<Source> {
@@ -1103,116 +532,39 @@ async fn source_for(from: &str) -> Result<Source> {
     })
 }
 
-enum Source {
-    Directory(PathBuf),
-    S3 { client: S3Client, bucket: String, prefix: String },
-}
-
-// Directory copies store regular files and hard links. Resolve each component
-// inside the selected repository before opening manifest or payload bytes.
-fn directory_file(root: &Path, copy: &str, relative: &str) -> Result<PathBuf> {
-    ensure!(safe_relative_path(relative) && safe_relative_path(copy) && !copy.contains('/'), "Invalid copy path.");
-    let mut path = root.join(copy);
-    for name in relative.split('/') {
-        ensure!(std::fs::symlink_metadata(&path)?.is_dir(), "Expected a directory in copy {copy}.");
-        path.push(name);
-    }
-    ensure!(std::fs::symlink_metadata(&path)?.is_file(), "Expected a regular file in copy {copy}.");
-    Ok(path)
-}
-
-impl Source {
-    async fn complete_copies(&self) -> Result<Vec<String>> {
-        let mut ids = match self {
-            Source::Directory(root) => {
-                let mut ids = Vec::new();
-                for entry in std::fs::read_dir(root).with_context(|| format!("Could not read {}", root.display()))? {
-                    let entry = entry?;
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if parse_copy_id(&name).is_some() && entry.path().join(MANIFEST).is_file() {
-                        ids.push(name);
-                    }
-                }
-                ids
+async fn read_source_record(source: &Source, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
+    let dir = recovery::LEDGER_DIR;
+    let start = recovery::LEDGER_START;
+    match source {
+        Source::Directory(root) => {
+            let folder = root.join(dir);
+            if !folder.join(start).is_file() {
+                return Ok(None);
             }
-            Source::S3 { client, bucket, prefix } => list_s3_keys(client, bucket, prefix)
-                .await?
-                .iter()
-                .filter_map(|key| key[prefix.len()..].strip_suffix(&format!("/{MANIFEST}")).map(str::to_owned))
-                .filter(|id| parse_copy_id(id).is_some())
-                .collect(),
-        };
-        ids.sort();
-        Ok(ids)
-    }
-
-    async fn read(&self, copy: &str, path: &str) -> Result<Vec<u8>> {
-        match self {
-            Source::Directory(root) => Ok(tokio::fs::read(directory_file(root, copy, path)?).await?),
-            Source::S3 { client, bucket, prefix } => read_s3_bytes(client, bucket, &format!("{prefix}{copy}/{path}")).await,
+            let mut files = Vec::new();
+            for entry in std::fs::read_dir(&folder)? {
+                let name = entry?.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".json") && name != start && !name.starts_with('.') {
+                    files.push(tokio::fs::read(folder.join(&name)).await?);
+                }
+            }
+            Ok(Some(files))
         }
-    }
-
-    async fn read_manifest_bytes(&self, copy: &str) -> Result<Option<Vec<u8>>> {
-        match self {
-            Source::Directory(root) => {
-                use tokio::io::AsyncReadExt;
-                let file = tokio::fs::File::open(directory_file(root, copy, MANIFEST)?).await?;
-                if file.metadata().await?.len() > MAX_MANIFEST_BYTES { return Ok(None); }
-                let mut bytes = Vec::new();
-                file.take(MAX_MANIFEST_BYTES + 1).read_to_end(&mut bytes).await?;
-                Ok((bytes.len() as u64 <= MAX_MANIFEST_BYTES).then_some(bytes))
+        Source::S3 { client, bucket, prefix } => {
+            let base = format!("{prefix}{dir}/");
+            let keys = list_s3_keys(client, bucket, &base).await?;
+            if !keys.iter().any(|key| key[base.len()..] == *start) {
+                return Ok(None);
             }
-            Source::S3 { client, bucket, prefix } => {
-                let object = client.get_object().bucket(bucket).key(format!("{prefix}{copy}/{MANIFEST}")).send().await?;
-                if object.content_length().is_some_and(|length| length > MAX_MANIFEST_BYTES as i64) {
-                    return Ok(None);
+            let mut files = Vec::new();
+            for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
+                let bytes = read_s3_bytes(client, bucket, object).await?;
+                if let Some(key) = key {
+                    recovery::check_signed(key, &object[base.len()..], &bytes)?;
                 }
-                let mut body = object.body;
-                let mut bytes = Vec::new();
-                while let Some(chunk) = body.try_next().await? {
-                    if bytes.len().saturating_add(chunk.len()) as u64 > MAX_MANIFEST_BYTES { return Ok(None); }
-                    bytes.extend_from_slice(&chunk);
-                }
-                Ok(Some(bytes))
+                files.push(bytes);
             }
-        }
-    }
-
-    async fn record(&self, key: Option<&CopyKey>) -> Result<Option<Vec<Vec<u8>>>> {
-        let dir = recovery::LEDGER_DIR;
-        let start = recovery::LEDGER_START;
-        match self {
-            Source::Directory(root) => {
-                let folder = root.join(dir);
-                if !folder.join(start).is_file() {
-                    return Ok(None);
-                }
-                let mut files = Vec::new();
-                for entry in std::fs::read_dir(&folder)? {
-                    let name = entry?.file_name().to_string_lossy().into_owned();
-                    if name.ends_with(".json") && name != start && !name.starts_with('.') {
-                        files.push(tokio::fs::read(folder.join(&name)).await?);
-                    }
-                }
-                Ok(Some(files))
-            }
-            Source::S3 { client, bucket, prefix } => {
-                let base = format!("{prefix}{dir}/");
-                let keys = list_s3_keys(client, bucket, &base).await?;
-                if !keys.iter().any(|key| key[base.len()..] == *start) {
-                    return Ok(None);
-                }
-                let mut files = Vec::new();
-                for object in keys.iter().filter(|object| object.ends_with(".json") && object[base.len()..] != *start) {
-                    let bytes = read_s3_bytes(client, bucket, object).await?;
-                    if let Some(key) = key {
-                        recovery::check_signed(key, &object[base.len()..], &bytes)?;
-                    }
-                    files.push(bytes);
-                }
-                Ok(Some(files))
-            }
+            Ok(Some(files))
         }
     }
 }
@@ -1223,115 +575,6 @@ struct RestoreSummary {
     files: usize,
     sessions_removed: usize,
     reconciled: std::result::Result<usize, String>,
-}
-
-async fn read_manifest(source: &Source, copy: &str) -> Result<std::result::Result<Manifest, String>> {
-    let Some(bytes) = source.read_manifest_bytes(copy).await? else {
-        return Ok(Err(format!("The manifest of copy {copy} is larger than 4 MiB.")));
-    };
-    let manifest: Manifest = match serde_json::from_slice(&bytes) {
-        Ok(manifest) => manifest,
-        Err(_) => return Ok(Err(format!("The manifest of copy {copy} is invalid."))),
-    };
-    if manifest.version != 1 && manifest.version != 2 {
-        return Ok(Err(format!("The manifest version of copy {copy} is not supported.")));
-    }
-    Ok(Ok(manifest))
-}
-
-fn manifest_cache_key(source: &Source, copy: &str) -> String {
-    match source {
-        Source::Directory(path) => format!("{}:{copy}", path.display()),
-        Source::S3 { bucket, prefix, .. } => format!("{bucket}/{prefix}{copy}"),
-    }
-}
-
-async fn read_manifest_cached(source: &Source, copy: &str, cache: &mut ManifestCache) -> Result<std::result::Result<Manifest, String>> {
-    let cache_key = manifest_cache_key(source, copy);
-    if let Some(manifest) = cache.get(&cache_key) {
-        return Ok(manifest.clone());
-    }
-    let manifest = read_manifest(source, copy).await?;
-    cache.insert(cache_key, manifest.clone());
-    Ok(manifest)
-}
-
-fn not_encrypted(copy: &str) -> String {
-    format!("Copy {copy} is not encrypted, but KONAE_COPY_SECRET is set, and a copy this installation sends to S3 with the secret is always encrypted.")
-}
-
-fn check_sealed(copy: &str, manifest: &Manifest, key: Option<&CopyKey>) -> Result<()> {
-    let Some(encryption) = &manifest.encryption else {
-        return Ok(());
-    };
-    ensure!(encryption.algorithm == ENCRYPTION, "Copy {copy} uses {:?}, which this Kernel cannot open.", encryption.algorithm);
-    let key = key.with_context(|| {
-        format!("Copy {copy} is encrypted. Set KONAE_COPY_SECRET to the secret the copies were made with. Nothing was installed.")
-    })?;
-    ensure!(
-        key.check == encryption.key_check,
-        "KONAE_COPY_SECRET does not open copy {copy}: it is not the secret the copy was encrypted with. Nothing was installed."
-    );
-    match &manifest.mac {
-        Some(mac) => ensure!(
-            key.verify_manifest(copy, manifest, mac),
-            "Copy {copy} has a manifest that does not match its MAC: the file list was altered after the Kernel wrote it. Nothing was installed."
-        ),
-        None => bail!("Copy {copy} has no manifest MAC. The Kernel signs every manifest it encrypts, so this one was altered. Nothing was installed."),
-    }
-    Ok(())
-}
-
-async fn newest_authentic_copy(source: &Source, key: &CopyKey, report: &mut dyn FnMut(String)) -> Result<String> {
-    let copies = source.complete_copies().await?;
-    ensure!(!copies.is_empty(), "No complete copy found. A complete copy has a manifest.json.");
-    let mut skipped = 0;
-    let mut newest_reason = String::new();
-    for copy in copies.iter().rev() {
-        ensure!(
-            skipped < MAX_SKIPPED_COPIES,
-            "Stopped after {MAX_SKIPPED_COPIES} skipped copies without finding one that could be authenticated. The newest: {newest_reason} Nothing was installed."
-        );
-        let manifest = read_manifest(source, copy)
-            .await
-            .map_err(|error| anyhow::anyhow!("Could not read the manifest of copy {copy}: {error:#}. Nothing was installed."))?;
-        let verdict = manifest.and_then(|manifest| {
-            if manifest.encryption.is_none() {
-                return Err(not_encrypted(copy));
-            }
-            check_sealed(copy, &manifest, Some(key)).map_err(|error| format!("{error:#}"))
-        });
-        match verdict {
-            Ok(()) => return Ok(copy.clone()),
-            Err(reason) => {
-                let reason = reason.trim_end_matches(" Nothing was installed.").to_owned();
-                report(format!("Skipped copy {copy}: {reason}"));
-                if skipped == 0 {
-                    newest_reason = reason;
-                }
-                skipped += 1;
-            }
-        }
-    }
-    bail!(
-        "No copy in the source could be authenticated, {skipped} skipped. The newest: {newest_reason} While KONAE_COPY_SECRET is set, only a copy encrypted and signed with it is chosen automatically, and a copy that is not encrypted never is. Nothing was installed."
-    )
-}
-
-async fn verified_bytes(source: &Source, copy: &str, manifest: &Manifest, file: &ManifestFile, key: Option<&CopyKey>) -> Result<Vec<u8>> {
-    let home = file.home_copy.as_deref().unwrap_or(copy);
-    let mut bytes = source.read(home, &file.path).await.with_context(|| format!("Could not read {} from copy {home}", file.path))?;
-    if let (Some(_), Some(key)) = (&manifest.encryption, key) {
-        bytes = key
-            .open(home, &file.path, &bytes)
-            .with_context(|| format!("Copy {copy} is damaged: {} does not decrypt. Nothing was installed.", file.path))?;
-    }
-    ensure!(
-        bytes.len() as u64 == file.size && hex::encode(Sha256::digest(&bytes)) == file.sha256,
-        "Copy {copy} is damaged: {} does not match its checksum. Nothing was installed.",
-        file.path
-    );
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -1371,30 +614,17 @@ async fn restore_with_witness(
             (source, latest.context("No complete copy found. A complete copy has a manifest.json.")?)
         }
     };
-    ensure!(
-        !copy.is_empty() && !copy.contains('/') && copy != "." && copy != "..",
-        "The copy ID is invalid."
-    );
-    let manifest = read_manifest(source, &copy)
-        .await
-        .with_context(|| format!("Copy {copy} has no manifest.json, so it is incomplete or missing."))?
-        .map_err(|reason| anyhow::anyhow!("{reason} Nothing was installed."))?;
-    ensure!(
-        !(matches!(source, Source::S3 { .. }) && key.is_some() && manifest.encryption.is_none()),
-        "{} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.",
-        not_encrypted(&copy),
-        crate::program()
-    );
-    check_sealed(&copy, &manifest, key)?;
-    check_manifest_paths(installation, &copy, &manifest)?;
-    let staging = destination.join(format!(".restore-{}", uuid::Uuid::new_v4()));
-    let staged = async {
-        for file in &manifest.files {
-            let bytes = verified_bytes(source, &copy, &manifest, file, key).await?;
-            let target = staging.join(&file.path);
-            tokio::fs::create_dir_all(target.parent().expect("file has a parent")).await?;
-            tokio::fs::write(&target, &bytes).await?;
+    let reader = CopyReader::open(source, &copy, key.map(CopyKey::files), installation).await.map_err(|error| {
+        if error.is::<konae_backup::UnencryptedS3Copy>() {
+            anyhow::anyhow!("{error} Name a copy this installation sent with --copy, for example from the copy IDs under the S3 prefix: {} restore --from <source> --copy <copy ID>. Nothing was installed.", crate::program())
+        } else {
+            error
         }
+    })?;
+    let manifest = reader.manifest();
+    let staging = destination.join(format!(".restore-{}", uuid::Uuid::new_v4()));
+    reader.restore(&staging).await?;
+    let staged = async {
         let root = staging.clone();
         let stores = installation.clone();
         let copy_id = copy.clone();
@@ -1404,7 +634,7 @@ async fn restore_with_witness(
             invalidate_sessions(&root, &stores)
         })
         .await??;
-        let record = source.record(key).await;
+        let record = read_source_record(source, key).await;
         let witness = witness.map(str::to_owned);
         let cut = manifest.created_at;
         let root = staging.clone();
@@ -2283,7 +1513,7 @@ mod tests {
     async fn send_genuine(client: &S3Client, copy: &Path, id: &str, key: Option<&CopyKey>) {
         let manifest: Manifest = serde_json::from_slice(&std::fs::read(copy.join(MANIFEST)).unwrap()).unwrap();
         let mut cache = ManifestCache::new();
-        send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key }, copy, &manifest, id, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
+        send_to_s3(S3CopyTarget { client, bucket: "data", prefix: "copies/", key: key.map(CopyKey::files) }, copy, &manifest, id, &mut cache, &HashMap::new(), &Installation::for_test()).await.unwrap();
         recovery::start(&s3_target(), Some(client), "data").await.unwrap();
     }
 
@@ -2661,7 +1891,7 @@ mod tests {
         assert!(!key.verify_manifest(&id, &shorter, &mac), "a dropped entry changes the MAC");
         assert!(!CopyKey::derive("another secret that is long enough for tests").verify_manifest(&id, &sealed, &mac));
         assert!(!key.verify_manifest(&id, &sealed, "not hex"));
-        assert_ne!(mac, key.check);
+        assert_ne!(mac, key.fingerprint());
         for path in [source, copies] {
             let _ = std::fs::remove_dir_all(path);
         }

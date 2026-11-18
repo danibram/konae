@@ -3663,14 +3663,7 @@ pub fn decode_base64(value: &str) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-pub fn safe_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
-}
+pub use konae_backup::safe_relative_path;
 
 /// Persists changes made to the applied Deployment while keeping editable settings intact.
 pub async fn persist_deployment(state: &AppState, deployment: &Deployment) -> Result<()> {
@@ -3820,31 +3813,9 @@ pub async fn load_deployments(root: &Path, public_origin: &str) -> Result<HashMa
     Ok(result)
 }
 
-pub async fn read_s3_bytes(s3: &S3Client, bucket: &str, key: &str) -> Result<Vec<u8>> {
-    let object = s3.get_object().bucket(bucket).key(key).send().await?;
-    Ok(object.body.collect().await?.into_bytes().to_vec())
-}
+pub use konae_backup::read_s3_bytes;
 
-pub async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<String>> {
-    let mut keys = Vec::new();
-    let mut continuation: Option<String> = None;
-    loop {
-        let page = s3
-            .list_objects_v2()
-            .bucket(bucket)
-            .prefix(prefix)
-            .set_continuation_token(continuation.take())
-            .send()
-            .await
-            .with_context(|| format!("Listing s3://{bucket}/{prefix} failed"))?;
-        keys.extend(page.contents().iter().filter_map(|object| object.key().map(str::to_owned)));
-        match page.next_continuation_token() {
-            Some(token) if page.is_truncated() == Some(true) => continuation = Some(token.to_owned()),
-            _ => break,
-        }
-    }
-    Ok(keys)
-}
+pub use konae_backup::list_s3_keys;
 
 /// The Deployment a request is for. A generated hostname and a verified
 /// alias answer first, as before. Otherwise the request is on the path host,
