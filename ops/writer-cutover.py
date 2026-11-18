@@ -27,10 +27,15 @@ def point_ms(p):
     return round(stamp.timestamp() * 1000)
 
 
-def retained_at(journal, prune):
-    cuts = sorted(journal, key=point_ms)
-    if not cuts or len(set(cuts)) != len(cuts) or point_ms(cuts[-1]) > prune:
-        raise ValueError("invalid publication journal")
+def retained_at(journal, prune, reviewed):
+    if len(journal) != len(set(journal)):
+        raise ValueError("duplicate publication")
+    dated = sorted((point_ms(p), p) for p in journal)
+    if not dated or dated[-1][0] > reviewed:
+        raise ValueError("empty or future publication journal")
+    cuts = [p for at, p in dated if at <= prune]
+    if not cuts:
+        raise ValueError("no confirmed cut before prune")
     daily = {}
     for copy in cuts:
         at = point_ms(copy)
@@ -73,7 +78,8 @@ def check_receipt(r, request, now):
     repos = r["repositories"]
     require(all(isinstance(repos[t], str) and repos[t] for t in (*FORMATS, "vault")) and
             len(set(repos.values())) == len(repos), "repository identities missing or repeated")
-    require(r["remoteCopy"] in r["publicationJournal"]["s3"], "latest remote point absent from journal")
+    remote = r["publicationJournal"]["s3"]
+    require(remote and r["remoteCopy"] == max(remote), "latest remote point differs from publication journal")
     drills = r["drills"]
     for d in drills:
         require(d["result"] == "passed" and point(d["copy"]) and number(d["elapsedMs"]) and
@@ -144,13 +150,13 @@ def check_receipt(r, request, now):
                 inventory["oldest"] < inventory["latest"], target + " missing retained range")
         journal = r["publicationJournal"][target]
         retained = sorted(inventory["points"])
-        expected = retained_at(journal, prune)
+        expected = retained_at(journal, prune, now)
         require(retained == expected and [inventory["oldest"], inventory["latest"]] == [expected[0], expected[-1]],
                 target + " retained inventory differs from the publication journal")
         require(inventory["repository"] == repos[target + "-v3"], target + " prune repository mismatch")
         if request == "retire":
             begin = max(start, prune - 30 * DAY)
-            times = [begin, *sorted(at for p in journal if begin <= (at := point_ms(p)) <= prune), prune]
+            times = [begin, *sorted(at for p in journal if begin <= (at := point_ms(p)) <= now), now]
             require(all(b - a <= r["limits"]["rpoMs"] for a, b in zip(times, times[1:])),
                     target + " publication journal has a gap beyond RPO")
             require(prune >= start + 30 * DAY, target + " final prune preceded the retention window")
