@@ -222,6 +222,13 @@ def remote_settings(mc):
             for k in ("ENDPOINT", "BUCKET", "ACCESS_KEY", "SECRET_KEY")}
 
 
+def save(report, path):
+    if path:
+        pending = path.with_name(path.name + ".tmp")
+        pending.write_text(json.dumps(report, sort_keys=True) + "\n")
+        pending.replace(path)
+
+
 def campaign(args, root, report):
     binary = args.binary.resolve(strict=True)
     with binary.open("rb") as image:
@@ -261,6 +268,7 @@ def campaign(args, root, report):
     def restore(point):
         for kind, source in sources.items():
             report.update(phase="restore", operation="restore", destination=kind, cutDay=snapshots[point][0])
+            save(report, args.report)
             with tempfile.TemporaryDirectory(dir=root) as clean:
                 destination = Path(clean) / "restored"
                 cli(binary, dict(env, KONAE_DATA_DIR=str(destination)), "restore", "--from", source, "--copy", point)
@@ -271,6 +279,7 @@ def campaign(args, root, report):
     for index, end in enumerate(dates):
         begin = dates[index - 1] + 1 if index else 1
         report.update(day=begin, phase="mutate", destination=None, cutDay=None)
+        save(report, args.report)
         if index in {0, len(dates) // 3, 2 * len(dates) // 3}:
             report["operation"] = "import"
             import_version(binary, env, live, model, rng, counts["imports"])
@@ -367,8 +376,7 @@ def main():
         report["seconds"] = round(time.monotonic() - started, 3)
         summary = json.dumps(report, sort_keys=True)
         print(summary, flush=True)
-        if args.report:
-            args.report.write_text(summary + "\n")
+        save(report, args.report)
 
 
 if __name__ == "__main__":
