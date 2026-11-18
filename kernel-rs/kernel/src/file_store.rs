@@ -24,6 +24,11 @@ pub struct Blob {
     pub reader: Pin<Box<dyn AsyncRead + Send>>,
 }
 
+pub enum CopyBlob {
+    Pinned(Blob),
+    Unversioned(Blob),
+}
+
 /// The bytes of a Deployment's files. Every method names the Deployment, so a
 /// store never derives one Deployment's keys from another's.
 pub trait FileStore: Send + Sync {
@@ -33,6 +38,9 @@ pub trait FileStore: Send + Sync {
     fn put<'a>(&'a self, deployment: &'a str, file: &'a str, source: &'a Path) -> BoxFuture<'a, Result<()>>;
     /// The file's bytes, or the `range` of them. `None` when the store holds
     fn get<'a>(&'a self, deployment: &'a str, file: &'a str, range: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>>;
+    fn open_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<CopyBlob>>> {
+        Box::pin(async move { Ok(self.get(deployment, file, None).await?.map(CopyBlob::Unversioned)) })
+    }
     /// Removes the file. Removing a file that is not there succeeds.
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>>;
     fn list<'a>(&'a self, deployment: &'a str) -> BoxFuture<'a, Result<Vec<String>>> {
@@ -105,6 +113,11 @@ impl FileStore for LocalFolder {
             let length = range.end - range.start;
             Ok(Some(Blob { length, reader: Box::pin(handle.take(length)) }))
         })
+    }
+
+    fn open_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<CopyBlob>>> {
+        // put renames a new inode into place. An open file keeps its previous bytes.
+        Box::pin(async move { Ok(self.get(deployment, file, None).await?.map(CopyBlob::Pinned)) })
     }
 
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>> {
@@ -240,6 +253,31 @@ impl S3Store {
         format!("{}{deployment}/{file}", self.settings.prefix)
     }
 
+    async fn read_object(&self, deployment: &str, file: &str, range: Option<Range<u64>>) -> Result<Option<CopyBlob>> {
+        if let Some(range) = &range {
+            ensure!(range.start <= range.end, "The range lies outside the file.");
+            if range.start == range.end {
+                return Ok(Some(CopyBlob::Pinned(Blob { length: 0, reader: Box::pin(tokio::io::empty()) })));
+            }
+        }
+        let mut request = self.client.get_object().bucket(&self.settings.bucket).key(self.key(deployment, file));
+        if let Some(range) = &range {
+            request = request.range(format!("bytes={}-{}", range.start, range.end - 1));
+        }
+        let object = match request.send().await {
+            Ok(object) => object,
+            Err(error) if not_found(&error) => return Ok(None),
+            Err(error) => return Err(anyhow::Error::new(error).context(format!("Reading file {file} from s3://{} failed", self.settings.bucket))),
+        };
+        let length = object.content_length().and_then(|length| u64::try_from(length).ok()).context("The store did not say how long the file is.")?;
+        if let Some(range) = &range {
+            ensure!(length == range.end - range.start, "The store answered a different range than the one asked for.");
+        }
+        let versioned = object.version_id().is_some_and(|id| !id.is_empty() && id != "null");
+        let blob = Blob { length, reader: Box::pin(object.body.into_async_read()) };
+        Ok(Some(if versioned { CopyBlob::Pinned(blob) } else { CopyBlob::Unversioned(blob) }))
+    }
+
     async fn keys(&self, prefix: &str, delimiter: bool) -> Result<(Vec<(String, Option<u64>, u64)>, Vec<String>)> {
         let mut keys = Vec::new();
         let mut folders = Vec::new();
@@ -308,27 +346,14 @@ impl FileStore for S3Store {
 
     fn get<'a>(&'a self, deployment: &'a str, file: &'a str, range: Option<Range<u64>>) -> BoxFuture<'a, Result<Option<Blob>>> {
         Box::pin(async move {
-            if let Some(range) = &range {
-                ensure!(range.start <= range.end, "The range lies outside the file.");
-                if range.start == range.end {
-                    return Ok(Some(Blob { length: 0, reader: Box::pin(tokio::io::empty()) }));
-                }
-            }
-            let mut request = self.client.get_object().bucket(&self.settings.bucket).key(self.key(deployment, file));
-            if let Some(range) = &range {
-                request = request.range(format!("bytes={}-{}", range.start, range.end - 1));
-            }
-            let object = match request.send().await {
-                Ok(object) => object,
-                Err(error) if not_found(&error) => return Ok(None),
-                Err(error) => return Err(anyhow::Error::new(error).context(format!("Reading file {file} from s3://{} failed", self.settings.bucket))),
-            };
-            let length = object.content_length().and_then(|length| u64::try_from(length).ok()).context("The store did not say how long the file is.")?;
-            if let Some(range) = &range {
-                ensure!(length == range.end - range.start, "The store answered a different range than the one asked for.");
-            }
-            Ok(Some(Blob { length, reader: Box::pin(object.body.into_async_read()) }))
+            Ok(self.read_object(deployment, file, range).await?.map(|object| match object {
+                CopyBlob::Pinned(blob) | CopyBlob::Unversioned(blob) => blob,
+            }))
         })
+    }
+
+    fn open_for_copy<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<Option<CopyBlob>>> {
+        Box::pin(self.read_object(deployment, file, None))
     }
 
     fn delete<'a>(&'a self, deployment: &'a str, file: &'a str) -> BoxFuture<'a, Result<()>> {
@@ -630,6 +655,7 @@ pub async fn save_blob(mut blob: Blob, target: &Path) -> Result<(u64, String)> {
         if read == 0 {
             break;
         }
+        ensure!(length.saturating_add(read as u64) <= blob.length, "The file store sent more bytes than declared.");
         sha2::Digest::update(&mut hasher, &buffer[..read]);
         output.write_all(&buffer[..read]).await?;
         length += read as u64;
@@ -773,12 +799,30 @@ pub fn hold_kernel_lock(data_root: &Path) -> Result<std::fs::File> {
     }
 }
 
+/// Cooperating commands hold a shared flock on the data directory while writing.
+pub fn external_operation(root: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(root)?;
+    let volume = std::fs::File::open(root)?;
+    volume.lock_shared()?;
+    Ok(volume)
+}
+
+#[derive(Debug)]
+pub struct StoppedVolume {
+    _kernel: std::fs::File,
+    _volume: std::fs::File,
+}
+
 /// Takes the Kernel's lock for an operator command, so the command refuses
 /// while a Kernel serves and a Kernel cannot start while the command runs.
-pub fn hold_while_stopped(data_root: &Path, command: &str) -> Result<std::fs::File> {
+pub fn hold_while_stopped(data_root: &Path, command: &str) -> Result<StoppedVolume> {
     let file = lock_file(data_root)?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
+        Ok(()) => {
+            let volume = std::fs::File::open(data_root)?;
+            volume.try_lock().with_context(|| format!("An operator command is using the volume. Retry {command} after it exits."))?;
+            Ok(StoppedVolume { _kernel: file, _volume: volume })
+        }
         Err(std::fs::TryLockError::WouldBlock) => bail!(
             "A Kernel is running on {}. Stop it before {command}, so no upload lands while the command reads the files.",
             data_root.display()
@@ -1101,8 +1145,8 @@ pub mod tests {
             region: "us-east-1".into(),
             bucket: std::env::var("KONAE_TEST_S3_BUCKET").unwrap_or_else(|_| "konae-files".into()),
             prefix: format!("test-{}/", uuid::Uuid::new_v4().simple()),
-            access_key: "konae".into(),
-            secret_key: "konae-secret".into(),
+            access_key: std::env::var("KONAE_TEST_S3_ACCESS_KEY").unwrap_or_else(|_| "konae".into()),
+            secret_key: std::env::var("KONAE_TEST_S3_SECRET_KEY").unwrap_or_else(|_| "konae-secret".into()),
             path_style: true,
         })
     }

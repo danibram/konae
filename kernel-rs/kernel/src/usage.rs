@@ -84,6 +84,10 @@ static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
 
+pub(crate) fn write_failures() -> u64 {
+    DROPPED.load(Ordering::Relaxed).saturating_add(WRITE_ERRORS.load(Ordering::Relaxed))
+}
+
 fn sender() -> &'static SyncSender<Message> {
     QUEUE_SENDER.get_or_init(|| {
         let (sender, receiver) = sync_channel(QUEUE);

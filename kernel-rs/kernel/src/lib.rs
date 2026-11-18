@@ -728,6 +728,7 @@ impl Startup {
 pub struct Running {
     pub state: AppState,
     pub _lock: std::fs::File,
+    copy_config: Option<copies::CopyConfig>,
 }
 
 /// Loads every app folder, builds the state and starts the workers: copies,
@@ -742,8 +743,30 @@ pub async fn start(
     own_origins: Vec<String>,
     audit: Option<runtime::AuditSink>,
 ) -> Result<Running> {
-    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let lock = file_store::hold_kernel_lock(&startup.data_root)?;
+    let mut running = start_locked(startup, lock, installation, mail_key, own_origins, audit).await?;
+    running.start_copies();
+    Ok(running)
+}
+
+impl Running {
+    pub fn start_copies(&mut self) {
+        if let Some(config) = self.copy_config.take() {
+            copies::spawn_schedule(self.state.clone(), config);
+        }
+    }
+}
+
+/// The binaries acquire the volume before opening accounts or reading the local mail key.
+pub async fn start_locked(
+    startup: &Startup,
+    lock: std::fs::File,
+    installation: installation::Installation,
+    mail_key: &str,
+    own_origins: Vec<String>,
+    audit: Option<runtime::AuditSink>,
+) -> Result<Running> {
+    tokio::fs::create_dir_all(crate::layout::apps(&startup.data_root)).await?;
     let schedule_clock = schedule::Clock::from_env(&startup.bind)?;
     let (state, copy_config) = state_from_env(startup, installation, mail_key, own_origins, audit).await?;
     path::load(&state);
@@ -751,9 +774,7 @@ pub async fn start(
     for deployment in state.deployments.read().await.values().filter(|deployment| own_hosts.contains(&deployment.hostname)) {
         eprintln!("Not serving apps/{}: {} is this installation's own host. Move the app with hostname_set.", deployment.id, deployment.hostname);
     }
-    if let Some(config) = copy_config {
-        copies::spawn_schedule(state.clone(), config);
-    }
+
     schedule::spawn(state.clone(), schedule_clock);
     if let Some(queue) = state.accounts.queue.clone() {
 
@@ -765,14 +786,14 @@ pub async fn start(
                 mailbox.display()
             );
         }
-        mail::spawn_worker(queue);
+        mail::spawn_worker(queue, state.copies.clone());
     }
     calls::spawn_worker(state.clone());
-    Ok(Running { state, _lock: lock })
+    Ok(Running { state, _lock: lock, copy_config })
 }
 
 /// The state a Kernel serves with, read from the environment, without its
-/// workers. An operator command works on the same state beside a running
+/// workers. An operator command holds the volume permit beside a running
 /// Kernel. Also answers the copy settings the workers need.
 pub async fn state_from_env(
     startup: &Startup,
@@ -902,11 +923,23 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .layer(axum::middleware::from_fn_with_state(state.clone(), maintenance::guard))
         .with_state(state.clone());
     let service = ServiceBuilder::new()
+        .layer(axum::middleware::from_fn_with_state(state.clone(), logical_request))
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::headers))
         .layer(axum::middleware::from_fn_with_state(state.clone(), hostname::redirect))
         .layer(axum::middleware::from_fn_with_state(state, path::route))
         .service(routes);
     tower::util::BoxCloneSyncService::new(service)
+}
+
+async fn logical_request(State(state): State<AppState>, request: Request, next: axum::middleware::Next) -> Response {
+    // A disconnected client can leave SQLite work running on a blocking thread.
+    // Keep the permit until the handler has joined that work.
+    let operation = state.copies.operations.clone().read_owned().await;
+    let task = tokio::spawn(async move {
+        let _operation = operation;
+        next.run(request).await
+    });
+    task.await.unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -949,6 +982,7 @@ pub async fn deploy(state: &AppState, body: &[u8]) -> Response {
 /// imports. `app/`, `dist/`, the database and the record change together, or
 /// none of them does.
 pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
+    let _generation = state.copies.generations.read().await;
     if let Err(error_value) = runtime::validate_release(&state, &input, None).await {
         return match refusal::of(&error_value) {
             Some(refused) => refusal_error(refused),
@@ -1224,6 +1258,11 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
     let recorded = Recorded::read(&state.data_root, &id).await;
     let replaced = layout::private(&state.data_root, &id).join(format!("release-{artifact_version}-replaced.sqlite"));
     let has_transformation_changes = change.transformations.as_ref().is_some_and(|items| !items.is_empty());
+    let subject = format!("{id} revision {artifact_version}");
+    let pending = match copies::Pending::begin(&state.data_root, &subject, "installing the database, sources and release record") {
+        Ok(pending) => pending,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
     let swapped = if !actions_enabled || change.statements.is_empty() && !has_transformation_changes {
         remove_database_files(&staged_database);
         false
@@ -1282,6 +1321,7 @@ pub async fn deploy_input(state: &AppState, input: DeployInput) -> Response {
         remove_database_files(&replaced);
     }
     staged_sources.finish().await;
+    if let Err(e) = pending.finish() { return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()); }
     http::routes_published(&deployment);
     remove_stale_dist(&state, &id).await;
     let mut result = match serde_json::to_value(&deployment) {
@@ -1553,6 +1593,7 @@ pub async fn invoke_action(
         .data_root, &deployment.id);
 
 
+    copies::operation::action(&state, &deployment.id, &name, action, async {
     let result = if action.kind == "signal" {
         Ok(Ran { answer: json!({"recorded": true}), rows: Vec::new() })
     } else {
@@ -1599,6 +1640,7 @@ pub async fn invoke_action(
             error(StatusCode::BAD_REQUEST, &error_value.to_string())
         },
     }
+    }).await
 }
 
 pub async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -3071,6 +3113,7 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> Resu
         let _ = tokio::fs::remove_file(&temp_path).await;
         anyhow::bail!("The backup failed SQLite's integrity check.");
     }
+    let _generation = state.copies.generations.read().await;
     replace_database_file(&temp_path, &database_path(state, id))?;
     Ok(json!({"id":backup_id,"sizeBytes":bytes.len()}))
 }

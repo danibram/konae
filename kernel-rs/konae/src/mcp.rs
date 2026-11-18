@@ -161,6 +161,7 @@ pub(super) fn installation() -> super::installation::Installation {
     ]);
     installation.accounts.push(AccountDatabase { scope: super::owners::CREATOR_SCOPE, kind: "creator", file: "owners.sqlite" });
     installation.mail_group = project_owner;
+    installation.check_cut = super::owners::check_suspensions;
     installation
 }
 
@@ -377,6 +378,8 @@ pub(super) const DELETE_NAME_MISMATCH: &str = "The name does not match this proj
 
 
 async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
+    let _generation = state.copies.generations.read().await;
+    let pending = crate::copies::Pending::begin(&state.data_root, id, "removing the project folder and catalogue entry")?;
     let published = {
         let mut deployments = state.deployments.write().await;
         let hosts: Vec<String> = deployments.iter().filter(|(_, d)| d.id == id).map(|(host, _)| host.clone()).collect();
@@ -410,6 +413,7 @@ async fn delete_project(state: &Konae, id: &str) -> Result<Vec<String>> {
     }
     tx.execute("DELETE FROM projects WHERE id=?1", [id])?;
     tx.commit()?;
+    pending.finish()?;
     Ok(ids)
 }
 
@@ -1374,6 +1378,7 @@ async fn admin_call(
             let mut project = json!({"id":id,"name":a["name"],"slug":a["slug"].as_str().map(str::to_owned).unwrap_or_else(||safe_slug(a["name"].as_str().unwrap())),"manifest":a.get("manifest").map(super::sources::manifest_without_runtime).unwrap_or(json!({"version":1,"visibility":template["visibility"]})),"files":template["files"]});
 
 
+            let pending = crate::copies::Pending::begin(&state.data_root, &id, "creating the project folder and catalogue entry")?;
             let created = async {
                 super::Settings::new(&id, project["name"].as_str().unwrap_or_default(), project["slug"].as_str().unwrap_or_default(), &project["manifest"])
                     .write(&state.data_root)
@@ -1399,9 +1404,14 @@ async fn admin_call(
                 Ok(())
             });
             if let Err(error_value) = created {
-                let _ = tokio::fs::remove_dir_all(crate::layout::folder(&state.data_root, &id)).await;
+                match tokio::fs::remove_dir_all(crate::layout::folder(&state.data_root, &id)).await {
+                    Ok(()) => pending.finish()?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => pending.finish()?,
+                    Err(e) => return Err(error_value.context(format!("Could not remove the incomplete project: {e}"))),
+                }
                 return Err(error_value);
             }
+            pending.finish()?;
             Ok(project)
         }
         "project_inspect" => {

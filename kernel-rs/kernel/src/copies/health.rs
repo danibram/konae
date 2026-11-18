@@ -59,6 +59,9 @@ fn read_report<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 
 #[derive(Default)]
 pub struct CopyStatus {
+    pub(crate) operations: Arc<tokio::sync::RwLock<()>>,
+    pub generations: std::sync::Arc<tokio::sync::RwLock<()>>,
+    pub(super) worker: tokio::sync::Mutex<()>,
     interval_seconds: Option<u64>,
     reports: Mutex<HashMap<&'static str, TargetReport>>,
     ledger: Vec<Target>,

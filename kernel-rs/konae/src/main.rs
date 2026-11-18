@@ -60,8 +60,10 @@ async fn main() -> Result<()> {
         std::env::var("KONAE_SETUP_KEY").ok().as_deref(),
         std::env::var("KONAE_ALLOW_DEFAULT_KEY").as_deref() == Ok("1"),
     )?;
+    let lock = kernel::file_store::hold_kernel_lock(&startup.data_root)?;
+    owners::recover_suspensions(&startup.data_root)?;
     let audit = mcp::runtime_audit(startup.data_root.clone());
-    let running = kernel::start(&startup, installation, &setup_key, mcp_origin.iter().cloned().collect(), Some(audit)).await?;
+    let mut running = kernel::start_locked(&startup, lock, installation, &setup_key, mcp_origin.iter().cloned().collect(), Some(audit)).await?;
     let konae = Konae {
         kernel: running.state.clone(),
         setup_key,
@@ -69,6 +71,7 @@ async fn main() -> Result<()> {
         owner_verification: auth::Verification::from_env().map_err(anyhow::Error::msg)?,
     };
     owners::creator_store(&konae)?;
+    running.start_copies();
     let editor = editor::Editor::from_env(&running.state.public_origin, security::https(&running.state))?;
     let listener = kernel::bind(&startup).await?;
     println!("Konae listening on {}", startup.port);

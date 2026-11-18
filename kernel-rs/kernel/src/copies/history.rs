@@ -107,13 +107,18 @@ pub(crate) fn checked_record(dir: &Path, id: &str) -> Result<DatabaseBackup> {
     disk_record(dir, id).map(|v| v.0).map_err(|e| anyhow::anyhow!("{e:#}"))
 }
 
+#[cfg(test)]
 pub(super) fn copy_records(source: &Path, target: &Path) -> Result<()> {
+    stage_records(source, target, |from, to| Ok(fs::copy(from, to)?))
+}
+
+pub(super) fn stage_records(source: &Path, target: &Path, mut copy: impl FnMut(&Path, &Path) -> Result<u64>) -> Result<()> {
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source)? {
         let name = entry?.file_name();
         if Path::new(&name).extension().is_none_or(|ext| ext != "json") { continue; }
         let id = name.to_str().context("Backup record filename must be UTF-8.")?.strip_suffix(".json").unwrap();
-        let (backup, files, record) = disk_record(source, id).with_context(|| format!("Internal backup {id}"))?;
+        let (backup, files, _) = disk_record(source, id).with_context(|| format!("Internal backup {id}"))?;
         if files.is_empty() {
             fs::create_dir(target.join(id))?;
             fs::write(target.join(id).join(EMPTY), [])?;
@@ -122,10 +127,10 @@ pub(super) fn copy_records(source: &Path, target: &Path) -> Result<()> {
         for path in files {
             let to = target.join(&path);
             fs::create_dir_all(to.parent().unwrap())?;
-            copied = copied.checked_add(fs::copy(source.join(path), to)?).context("Invalid internal backup size.")?;
+            copied = copied.checked_add(copy(&source.join(path), &to)?).context("Invalid internal backup size.")?;
         }
         ensure!(copied == backup.size_bytes, "Backup {id} ({}) changed during the copy.", scope(&backup));
-        fs::write(target.join(name), record)?;
+        copy(&source.join(&name), &target.join(name))?;
     }
     Ok(())
 }

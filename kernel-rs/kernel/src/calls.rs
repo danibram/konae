@@ -1091,7 +1091,13 @@ pub async fn run_once(state: &AppState) -> Result<usize> {
     for job in claimed {
         let state = state.clone();
         tasks.spawn(async move {
-            if let Err(error_value) = process(&state, job).await {
+            let result = async {
+                let pending = crate::copies::Pending::begin(&state.data_root, &format!("{}/{} job {}", job.deployment, job.action, job.id), "delivering a call and committing its continuation")?;
+                process(&state, job).await?;
+                anyhow::ensure!(crate::usage::flush_status(), "Call Usage did not drain.");
+                pending.finish()
+            }.await;
+            if let Err(error_value) = result {
                 eprintln!("Call worker pass failed: {error_value}");
             }
         });
@@ -1163,9 +1169,11 @@ fn capture_test_requests(data_root: &Path, deployments: &HashMap<String, Deploym
 pub fn spawn_worker(state: AppState) {
     tokio::spawn(async move {
         loop {
+            let operation = state.copies.operations.read().await;
             if let Err(error_value) = run_once(&state).await {
                 eprintln!("Call worker pass failed: {error_value}");
             }
+            drop(operation);
             tokio::select! {
                 _ = wake().notified() => {}
                 _ = tokio::time::sleep(WORKER_INTERVAL) => {}
