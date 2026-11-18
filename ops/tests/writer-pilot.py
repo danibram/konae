@@ -24,9 +24,10 @@ def run(args, root, report):
     assert binary.name == ("kernel" if args.profile == "standalone" else "konae")
     check = subprocess.run([args.reader, "--list"], env=dict(cut["setting"](root / "reader-probe"),
                            KONAE_KERNEL_PORT="0"), capture_output=True, timeout=5, check=True)
-    if b"copies::read_pilot_cut: test" not in check.stdout:
+    if b"copies::pilot::read_pilot_cut: test" not in check.stdout:
         raise ValueError("--reader must be the release kernel --lib test executable")
     remote = args.store != "local"
+    live_s3 = remote and args.store != "replay"
     if remote:
         settings = year["remote_settings"](args.mc)
     else:
@@ -60,7 +61,8 @@ def run(args, root, report):
                   KONAE_COPY_STAGE_BYTES=str(1024**3), KONAE_COPY_READERS="512")
     if remote:
         rid = uuid.uuid4().hex
-        config.update(KONAE_COPY_S3="1", KONAE_COPY_V3_S3=rid)
+        if live_s3:
+            config.update(KONAE_COPY_S3="1", KONAE_COPY_V3_S3=rid)
         targets.update({"s3": "s3://konae-test/copies/", "s3-v3": "s3://konae-test/copies-v3/" + rid})
 
     def mc(*args_, **kwargs):
@@ -72,18 +74,20 @@ def run(args, root, report):
             save(report, args.report)
             if traffic:
                 traffic.boundary(name)
-        if remote:
+        if live_s3:
             if args.store == "versioned":
                 mc("version", "enable", "lab/konae-test")
             phase("migration")
             subprocess.run([binary, "files-migrate", "--to", "s3"], env=env, check=True, capture_output=True)
         phase("publish")
         observation = report["resources"] = {}
-        with observed_server(binary, dict(env, **config), cut["request"], observation) as port:
+        online = set(targets) if live_s3 else {"directory", "directory-v3"}
+        writer = env if live_s3 else {k: v for k, v in env.items() if not k.startswith("KONAE_S3_")}
+        with observed_server(binary, dict(writer, **config), cut["request"], observation) as port:
             def finished():
                 status = cut["targets"](port)
                 kinds = {s["kind"] for s in status}
-                assert kinds == set(targets), f"Missing targets {set(targets) - kinds}; unexpected {kinds - set(targets)}"
+                assert kinds == online, f"Missing targets {online - kinds}; unexpected {kinds - online}"
                 if all(s["lastAttemptAt"] and not s["inProgress"] for s in status):
                     return status
             statuses = cut["wait"](finished, "pilot capture did not finish", 900)
@@ -98,6 +102,18 @@ def run(args, root, report):
         point, = {s["lastCopyId"] for s in statuses}
         at, = {s["lastCutAt"] for s in statuses}
         assert point and at
+        if args.store == "replay":
+            for target in ["s3", "s3-v3"]:
+                phase("replay-" + target)
+                replay_env = dict(env, PILOT_COPY=point, PILOT_BINARY=binary.name,
+                                  PILOT_DIRECTORY=str(targets["directory"]), PILOT_TARGET="s3" if target == "s3" else rid)
+                start = time.monotonic()
+                replay = subprocess.run([args.reader, "--exact", "copies::pilot::replay_pilot_cut", "--ignored"],
+                                        env=replay_env, capture_output=True, timeout=900)
+                assert replay.returncode == 0 and b"1 passed" in replay.stdout, replay.stdout[-800:]
+                report["publication"][target] = dict(point=point, cutMs=at, replay=True,
+                    replaySeconds=round(time.monotonic() - start, 3), lagMs=time.time_ns() // 1_000_000 - at)
+        phase("storage")
         report["stored"] = {}
         for target, source in targets.items():
             if isinstance(source, Path):
@@ -108,7 +124,7 @@ def run(args, root, report):
                 report["stored"][target] = sum(json.loads(line)["size"] for line in entries.splitlines())
         phase("remove-source")
         shutil.rmtree(live)
-        if remote:
+        if live_s3:
             args_ = ["--versions"] if args.store == "versioned" else []
             mc("rm", "--force", "--recursive", *args_, "lab/konae-test/files/")
             assert not mc("ls", "--recursive", "--versions", "--json", "lab/konae-test/files/").strip()
@@ -135,7 +151,7 @@ def run(args, root, report):
                 phase("inspect-" + target)
                 image = temp / "image"
                 try:
-                    command = [args.reader, "--exact", "copies::read_pilot_cut", "--ignored", "--nocapture"]
+                    command = [args.reader, "--exact", "copies::pilot::read_pilot_cut", "--ignored", "--nocapture"]
                     read = subprocess.run(command, env=dict(env, PILOT_COPY=point, PILOT_IMAGE=str(image),
                         PILOT_BINARY=binary.name, PILOT_SOURCE=str(source)), capture_output=True, timeout=600)
                     assert read.returncode == 0 and b"1 passed" in read.stdout, read.stderr.decode()[-500:]
@@ -154,7 +170,7 @@ def main():
     parser.add_argument("--reader", type=Path, required=True, help="release kernel --lib test executable")
     parser.add_argument("--profile", choices=["draft", "standalone", "six"], required=True)
     parser.add_argument("--six", type=Path, help="synthetic six-apps fixture and external oracle")
-    parser.add_argument("--store", choices=["local", "unversioned", "versioned"], required=True)
+    parser.add_argument("--store", choices=["local", "unversioned", "versioned", "replay"], required=True)
     parser.add_argument("--mc", default="mc")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
