@@ -2,6 +2,7 @@
 import argparse
 from collections import Counter
 from contextlib import ExitStack
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ import time
 import uuid
 
 from pilot_delay import delayed_reads
-from pilot_fixture import check_access, compare, compare_image, cut, edit_restored_draft, historical_indexes, inventory, invoke, session, small_profile, year
+from pilot_fixture import check_access, check_six_files, compare, compare_image, cut, edit_restored_draft, historical_indexes, inventory, invoke, session, small_profile, year
 from pilot_observation import observed_server, Traffic, tree_bytes
 
 
@@ -76,11 +77,7 @@ def run(args, root, report):
     report["inventory"] = compare(oracle, oracle)
     indexes = historical_indexes(live) if args.historical else {}
     if args.profile == "six":
-        assets = json.loads((args.six / "expected.json").read_bytes())
-        expected = {Path("apps") / a["app"] / "data/files" / (a["id"] + ".blob"):
-                    bytes.fromhex(a["sha256"]) for a in assets}
-        assert {p: v for p, v in oracle.items() if p.suffix == ".blob"} == expected
-        report.update(privateFiles=len(expected), privateBytes=sum(a["size"] for a in assets))
+        report.update(check_six_files(live, args.six, oracle))
     blocks = root / "copies-v3" / uuid.uuid4().hex
     targets = {"directory": root / "directory", "directory-v3": blocks}
     config = dict(KONAE_COPY_DIR=str(targets["directory"]), KONAE_COPY_V3_DIR=str(blocks),
@@ -297,7 +294,8 @@ def main():
     if args.report.exists():
         parser.error("choose a new report path")
     os.umask(0o077)
-    report = dict(profile=args.profile, store=args.store, result="failed")
+    report = dict(profile=args.profile, store=args.store, result="failed",
+                  startUtc=datetime.now(timezone.utc).isoformat(), loadAverageBefore=os.getloadavg())
     try:
         with tempfile.TemporaryDirectory(prefix="writer-pilot-") as tmp:
             run(args, Path(tmp).resolve(), report)
@@ -306,6 +304,7 @@ def main():
         report["failure"] = str(error)
         raise
     finally:
+        report.update(endUtc=datetime.now(timezone.utc).isoformat(), loadAverageAfter=os.getloadavg())
         save(report, args.report)
         print(f"{args.profile} {args.store}: {report['result']} ({args.report})")
 
