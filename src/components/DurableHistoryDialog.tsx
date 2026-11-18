@@ -53,6 +53,9 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
   const choose = async (item: DurableConversationInfo) => {
     const token = ++selectionToken.current;
     checkpointSelectionToken.current += 1;
+    setCheckpoint(null);
+    setCheckpoints([]);
+    setBrowsingCheckpoints(false);
     setSelected(item); setRecords(null); setExpanded({}); setCandidate(null); setCandidateCheckpointId(null); setInspectingCandidate(false); setError(""); setCheckpointError(""); setLease(null); setEffects([]); setEffectsState({ kind: "available" }); setConfirmDelete(false); setWaitingForRelease(false); setBusy(false);
     try {
       const [page, currentLease, effectsResult, checkpointSummary] = await Promise.all([
@@ -106,7 +109,12 @@ export function DurableHistoryDialog({ projectId, ownerId, open, onClose, onCont
       const summaries = items.map((value) => ({ checkpointId: value.checkpointId, sequence: value.sequence, createdAt: value.createdAt, status: String(value.payload?.status ?? "unknown"), sourcesRevision: typeof value.payload?.sourcesRevision === "number" ? value.payload.sourcesRevision : undefined, candidateId: typeof value.payload?.candidateId === "string" ? value.payload.candidateId : undefined, inspectionOnly: (value.payload?.lifecycle as any)?.inspectionOnly === true }));
       setCheckpoints(summaries);
       setBrowsingCheckpoints(true);
-    } catch (cause) { if (token === selectionToken.current && selected?.id === conversationId) setCheckpointError(message(cause)); }
+    } catch (cause) {
+      if (token === selectionToken.current && selected?.id === conversationId) {
+        setBrowsingCheckpoints(false);
+        setCheckpointError(message(cause));
+      }
+    }
   };
   useEffect(() => {
     if (!open || !waitingForRelease || !selected) return;

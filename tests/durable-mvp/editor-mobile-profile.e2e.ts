@@ -1618,6 +1618,18 @@ test("restoring a selected Durable checkpoint creates a linked candidate from ex
   const wire = JSON.stringify(providerRequests.at(-1));
   expect(wire).toContain(originalPrompt);
   expect(wire).toContain("PROPOSAL PREVIEW");
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+
+  await dialogOpen.click();
+  await history.locator(".durable-conversation-choice").filter({ hasText: parent.title }).click();
+  await history.getByRole("button", { name: "Browse earlier checkpoints", exact: true }).click();
+  const originalChoice = history.getByRole("button", { name: new RegExp(`proposal · sequence ${selected.sequence}$`) });
+  await expect(originalChoice).toBeVisible();
+  await history.locator(".durable-conversation-choice").filter({ hasText: created.title }).click();
+  await expect(history.getByRole("button", { name: "Browse earlier checkpoints", exact: true })).toBeVisible();
+  await expect(originalChoice).toHaveCount(0);
+  await history.getByRole("button", { name: "Close Conversation history", exact: true }).click();
 
   const cookies = await page.context().cookies();
   const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
