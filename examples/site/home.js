@@ -26,8 +26,8 @@ const links = {
   "mcp-guide": docs("reference"),
   pieces: docs("pieces"),
   invite: at(apps, "/p/invitation/"),
-  privacy: at(apps, "/p/politica-de-privacidad/"),
-  terms: at(apps, "/p/terminos-y-condiciones/"),
+  privacy: at(domain, "/politica-de-privacidad"),
+  terms: at(domain, "/terminos-y-condiciones"),
   examples: docs("examples"),
 };
 const point = () => {
@@ -410,9 +410,5 @@ if (heroCta && barCta && "IntersectionObserver" in window) {
   new IntersectionObserver((entries) => barCta.classList.toggle("quiet", entries.some((entry) => entry.isIntersecting))).observe(heroCta);
 }
 
-for (const element of document.querySelectorAll("[data-legal]")) {
-  if (apps !== domain) element.hidden = false;
-  else fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
-}
 
 for (const draw of redraw) draw();

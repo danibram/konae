@@ -171,9 +171,8 @@ The documentation is markdown under [`docs/`](./docs/README.md). The docs site i
 - [`examples/showcase`](./examples/showcase/README.md) has six complete apps, each with a replay that publishes it and runs every flow. `starter` is the one to copy first.
 - [`examples/product-fit`](./examples/product-fit/README.md) has eight smaller apps and a smoke run.
 - [`examples/probes`](./examples/probes/README.md) has small Capsules that each prove one capability.
-- [`examples/site`](./examples/site/README.md) is the home, the docs and `llms.txt` in one app.
+- [`examples/site`](./examples/site/README.md) is the home, the docs, `llms.txt` and the legal pages in one app.
 - [`examples/invitation`](./examples/invitation/README.md) is the public form where a visitor asks the operator for an invitation code, at `<domain>/p/invitation/`.
-- [`examples/politica-de-privacidad`](./examples/politica-de-privacidad/README.md) and [`examples/terminos-y-condiciones`](./examples/terminos-y-condiciones/README.md) are the legal pages at `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/`.
 - [`examples/architecture-map`](./examples/architecture-map/README.md) is a map of the system.
 
 ## Tests

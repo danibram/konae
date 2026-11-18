@@ -9,8 +9,8 @@ const links = {
   home: onSite("/"),
   docs: onSite(site ? "/docs/" : "/p/docs/"),
   "first-app": onSite(site ? "/docs/guides/first-app-from-the-editor" : "/p/docs/guides/first-app-from-the-editor"),
-  privacy: at("/p/politica-de-privacidad/"),
-  terms: at("/p/terminos-y-condiciones/"),
+  privacy: onSite(site ? "/politica-de-privacidad" : "/p/politica-de-privacidad/"),
+  terms: onSite(site ? "/terminos-y-condiciones" : "/p/terminos-y-condiciones/"),
 };
 const point = () => { for (const element of document.querySelectorAll("[data-link]")) element.href = links[element.dataset.link]; };
 
@@ -86,6 +86,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 for (const element of document.querySelectorAll("[data-legal]")) {
+  if (site) { element.hidden = false; continue; }
   fetch(links[element.dataset.link], { method: "HEAD" }).then((response) => { element.hidden = !response.ok; }).catch(() => {});
 }
 

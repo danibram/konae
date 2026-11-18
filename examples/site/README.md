@@ -1,6 +1,6 @@
 # The Konae site
 
-The home, the docs and `llms.txt` of Konae, published as one Konae app. On konae.es it answers as the app's custom domain: the home at `/`, the Spanish home at `/es/`, the docs at `/docs/` and the index for agents at `/llms.txt`. The markdown under `docs/` is the only source of the docs.
+The home, the docs, `llms.txt` and the legal pages of Konae, published as one Konae app. On konae.es it answers as the app's custom domain: the home at `/`, the Spanish home at `/es/`, the docs at `/docs/`, the index for agents at `/llms.txt`, and the privacy policy and terms at `/politica-de-privacidad` and `/terminos-y-condiciones`. The markdown under `docs/` is the only source of the docs.
 
 The home's hero is a drawing of the editor that builds an example app when it scrolls into view, with a working list the visitor can add a name to. Below it come how an app is made, what every app has, the move of an app to another server, the two ways of working on one app, the example apps, a developer section, the questions people ask before requesting an invitation, and the steps to start. The editor in the hero is a recreation in the editor's own words, not a capture, so it needs updating when the editor's labels change.
 
@@ -9,16 +9,17 @@ The home's hero is a drawing of the editor that builds an example app when it sc
 | Link | Where it points |
 | --- | --- |
 | Editor and owner MCP | `app.<host>`, where `<host>` is the address the page answers on |
-| Docs and `llms.txt` | `/docs/` and `/llms.txt` on the same host |
-| Invitation, privacy policy, terms | `<apps>/p/invitation/`, `<apps>/p/politica-de-privacidad/`, `<apps>/p/terminos-y-condiciones/` |
+| Docs, `llms.txt`, privacy policy, terms | `/docs/`, `/llms.txt`, `/politica-de-privacidad`, `/terminos-y-condiciones` on the same host |
+| Invitation | `<apps>/p/invitation/` |
 
-`<apps>` is the `data-apps` attribute of `<html>` in `index.html`, the domain where this installation's path addresses answer (`KONAE_DOMAIN`). Without it the page uses its own host, which fits an installation that serves this site through the path name `konae-home` instead of a custom domain. [Invitation](../invitation/README.md) and the two legal pages are separate apps.
+`<apps>` is the `data-apps` attribute of `<html>` in `index.html`, the domain where this installation's path addresses answer (`KONAE_DOMAIN`). Without it the page uses its own host, which fits an installation that serves this site through the path name `konae-home` instead of a custom domain. [Invitation](../invitation/README.md) is a separate app, because it holds the requests in its own table.
 
 ## Files
 
 | File | Role |
 | --- | --- |
 | `index.html` | The home. |
+| `pages/politica-de-privacidad.html`, `pages/terminos-y-condiciones.html`, `legal.css` | The legal pages, in Spanish, and their rules. Raise `?v=` on `legal.css` when it changes. |
 | `pages/es/index.html` | The Spanish home at `/es/`. `bun run home:site` writes it from `index.html` and `i18n.js`. |
 | `home.js`, `home.css`, `i18n.js` | The home's script, rules and Spanish text. Raise `?v=` in `index.html` when `home.css` or `home.js` changes, because a proxy may let browsers keep CSS and JavaScript for hours. |
 | `query-bound.ts`, `sql-tokens.ts` | Copies of `src/lib/query-bound.ts` and `src/lib/sql-tokens.ts`, so the row-limit box runs the editor's own check. `bun run ui:render` writes them. |

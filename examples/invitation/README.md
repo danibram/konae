@@ -9,7 +9,7 @@ The home links to it at `<domain>/p/invitation/`.
 - `requests.create` inserts the email, what the person wants to build and the page's language.
 - Its `guard` refuses an address that already asked, and a value that is not an email address.
 - Its `notify` sends one email to the app's contact email for each new row. A first publish from Konae fills the contact email with the owner's. `contact_email_set` changes it.
-- The privacy and terms links show only when `<domain>/p/politica-de-privacidad/` and `<domain>/p/terminos-y-condiciones/` answer.
+- The home, docs, privacy and terms links point at the site that `data-site` on `<html>` names, such as `konae.es/politica-de-privacidad`. Without `data-site`, they point at `<domain>/p/...` and the privacy and terms links show only when those pages answer.
 
 The app sends no code itself. The operator reads the requests and issues each code with `konae owner-code-create`, as [Operate an installation](../../docs/operate.md#owner-admission) describes.
 
