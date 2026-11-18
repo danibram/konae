@@ -69,6 +69,13 @@ fn check_declarations(rows: &[Policy], kind: &str, declared: BTreeSet<&str>) -> 
 }
 
 fn check_registry(rows: &[Policy], installation: &Installation) -> Result<()> {
+    for account in &installation.accounts {
+        ensure!(
+            installation.holds(account.file),
+            "No installation snapshot declared for account store {}.",
+            account.file
+        );
+    }
     check_declarations(
         rows,
         "root-db",
@@ -124,9 +131,10 @@ fn database(kind: &str) -> bool {
     matches!(kind, "root-db" | "app-db" | "sqlite" | "scratch-db")
 }
 
-fn auxiliary(scope: &[&Policy], name: &str) -> Option<&'static str> {
+fn auxiliary(scope: &[&Policy], name: &str, entries: &BTreeMap<String, fs::FileType>) -> Option<&'static str> {
     for suffix in ["-wal", "-shm", "-journal"] {
         if let Some(base) = name.strip_suffix(suffix)
+            && entries.get(base).is_some_and(fs::FileType::is_file)
             && scope.iter().any(|row| database(row.kind) && matches(row, base))
         {
             return Some("SQLite -wal|-shm|-journal");
@@ -164,7 +172,7 @@ impl Scan<'_> {
         for (name, ty) in &entries {
             let path = relative.join(name);
             if ty.is_file()
-                && let Some(kind) = auxiliary(&policies, name)
+                && let Some(kind) = auxiliary(&policies, name, &entries)
             {
                 *self.counts.entry(format!("auxiliary/{kind}")).or_default() += 1;
                 continue;
@@ -267,6 +275,15 @@ mod tests {
             assert!(error.contains("No inventory policy") && error.contains(name), "{error}");
         }
         let mut next_release = installation;
+        next_release.accounts.push(crate::installation::AccountDatabase {
+            kind: "next",
+            scope: "next",
+            file: "new.sqlite",
+        });
+        assert!(check_registry(&rows, &next_release)
+            .unwrap_err()
+            .to_string()
+            .contains("account store new.sqlite"));
         next_release.databases.push(crate::installation::RootDatabase {
             file: "new.sqlite",
             sign_out: &[],

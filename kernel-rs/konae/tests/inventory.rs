@@ -169,6 +169,7 @@ fn unclassified_components_wrong_types_and_missing_settings_refuse_certification
     for name in [
         "new.sqlite",
         "new.sqlite-wal",
+        "google.sqlite-wal",
         "apps/test/data/new.store",
         "apps/test/.konae/notes.json",
         "apps/test/.konae/backups/unpaired.sqlite",

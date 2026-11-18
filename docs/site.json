@@ -44,6 +44,7 @@
     ] },
     { "section": "Operate", "pages": [
       "operate.md",
+      "reference/store-inventory.md",
       "releasing.md",
       { "page": "architecture.md", "label": "Architecture" },
       "clerk-owner-access.md",
