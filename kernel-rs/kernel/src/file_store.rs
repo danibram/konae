@@ -1101,8 +1101,8 @@ pub mod tests {
             region: "us-east-1".into(),
             bucket: std::env::var("KONAE_TEST_S3_BUCKET").unwrap_or_else(|_| "konae-files".into()),
             prefix: format!("test-{}/", uuid::Uuid::new_v4().simple()),
-            access_key: "konae".into(),
-            secret_key: "konae-secret".into(),
+            access_key: std::env::var("KONAE_TEST_S3_ACCESS_KEY").unwrap_or_else(|_| "konae".into()),
+            secret_key: std::env::var("KONAE_TEST_S3_SECRET_KEY").unwrap_or_else(|_| "konae-secret".into()),
             path_style: true,
         })
     }
