@@ -1069,10 +1069,14 @@ async fn admin(State(state): State<Konae>, request: Request) -> Response {
                     Err(_) => return rpc_error(id, -32602, "Invalid agent execution generation."),
                 };
                 let observes = get("x-konae-execution-observes").map(str::to_owned);
-                let write = match super::conversations::authorize_agent_mcp_call(
-                    &state, &owner.id, project, conversation, executor, generation, call_id,
-                    name, &arguments, observes.as_deref(),
-                ) {
+                let admission = {
+                    let _project_effects = database_lock(&state, &format!("conversation-effects:{project}")).await;
+                    super::conversations::authorize_agent_mcp_call(
+                        &state, &owner.id, project, conversation, executor, generation, call_id,
+                        name, &arguments, observes.as_deref(),
+                    )
+                };
+                let write = match admission {
                     Ok(value) => value,
                     Err(message) => return rpc_error(id, -32000, &message),
                 };
@@ -1573,6 +1577,9 @@ async fn admin_call(
             let _guard = database_lock(state, &format!("project:{id}")).await;
             let (project, _) = owned_project(state, owner, id, "write")?;
             anyhow::ensure!(project["name"] == a["name"], "{}", DELETE_NAME_MISMATCH);
+            let _project_effects = database_lock(state, &format!("conversation-effects:{id}")).await;
+            super::conversations::ensure_no_running_project_effect(&owner.id, id)
+                .map_err(|message| anyhow::anyhow!(message))?;
             let deleted = delete_project(state, id).await?;
             Ok(json!({"deleted":true,"projectId":id,"deployments":deleted}))
         }

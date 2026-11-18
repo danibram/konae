@@ -7,7 +7,7 @@ import { release } from "../kernel-harness.ts";
 import { McpClient } from "../../src/mcp/client.ts";
 import { Database } from "bun:sqlite";
 
-const repo = process.argv[2];
+const repo = process.argv[2] ?? process.cwd();
 const root = await mkdtemp(join(tmpdir(), "konae-effect-observation-"));
 const fixture = await testInstallation(join(repo, "kernel-rs/target/debug/konae"), { root, port: 4249, env: { TOKIO_WORKER_THREADS: "6" } });
 const projectId = "effect-observation-private-fixture";
@@ -40,11 +40,11 @@ try {
   const base = `/_konae/projects/${projectId}/conversations`;
   const conversation = `${base}/${conversationId}`;
   const request = (path, session, method = "GET", body) => fixture.request(path, { cookie: session.cookie, method, body, headers: { connection: "close" } });
-  const headersFor = ({ id, observes } = {}) => ({
+  const headersFor = ({ id, observes, conversation = conversationId, executor = device, generation = 1 } = {}) => ({
     "x-konae-execution-project": projectId,
-    "x-konae-execution-conversation": conversationId,
-    "x-konae-execution-id": device,
-    "x-konae-execution-generation": "1",
+    "x-konae-execution-conversation": conversation,
+    "x-konae-execution-id": executor,
+    "x-konae-execution-generation": String(generation),
     "x-konae-execution-call": id ?? crypto.randomUUID(),
     ...(observes ? { "x-konae-execution-observes": observes } : {}),
   });
@@ -99,8 +99,23 @@ try {
   assert.equal(deleted.status, 200, deleted.text);
   const newClaim = await request(`${base}/${standbyId}/claim`, owner, "POST", { expectedGeneration: 1, executorId: "fixture-observer", continueExplicitly: true });
   assert.equal(newClaim.status, 200, newClaim.text);
+  const finalWriteId = "fixture-project-epoch-write";
+  const finalWrite = await callAgent("database_execute", { projectId, operation: "sql", input: { sql: "UPDATE notes SET title = 'for deleted project' WHERE id = 1" } }, { id: finalWriteId, conversation: standbyId, executor: "fixture-observer", generation: newClaim.json.generation });
+  assert.ok(succeeded(finalWrite), finalWrite.text);
+  assert.equal((await request(`${base}/${standbyId}/effects/${finalWriteId}`, owner)).json.state, "unknown");
+  assert.equal((await mcp.call("project_delete", { projectId, name: "Effect observation fixture" })).deleted, true);
+  assert.ok(!(await mcp.call("projects_list")).projects.some(({ project }) => project.id === projectId));
+  assert.equal(database.query("SELECT COUNT(*) AS count FROM conversation_effects WHERE project=?").get(projectId).count, 0);
+  await mcp.call("project_create", { projectId, name: "Recreated effect observation fixture" });
+  assert.equal((await request(`${base}/${standbyId}`, owner)).status, 404);
+  const freshId = crypto.randomUUID();
+  assert.ok([200, 201].includes((await request(base, owner, "POST", { id: freshId, formatVersion: 1, piVersion: "1.5.2", registryVersion: "1" })).status));
+  const freshLease = await request(`${base}/${freshId}/lease`, owner);
+  assert.equal(freshLease.json.unresolvedEffects, false);
+  assert.ok(freshLease.json.generation > newClaim.json.generation);
+  assert.equal((await request(`${base}/${freshId}/claim`, owner, "POST", { expectedGeneration: freshLease.json.generation, executorId: "fixture-recreated-project", continueExplicitly: true })).status, 200);
   database.close();
-  console.log("Loopback HTTP: unresolved effect blocks conversation deletion; documented invitation and bounded SQL read-backs preserve evidence; deletion and a new generation proceed after observation.");
+  console.log("Loopback HTTP: unresolved effect blocks conversation deletion; documented invitation and bounded SQL read-backs preserve evidence; conversation deletion follows observation; deleting and recreating the whole Project clears old receipts and fences the old generation.");
 } finally {
   await fixture.close();
 }

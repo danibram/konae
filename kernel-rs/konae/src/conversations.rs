@@ -2013,6 +2013,10 @@ pub(super) fn delete_project_tx(
         params![owner, project],
     )?;
     tx.execute(
+        "DELETE FROM conversation_effects WHERE owner=?1 AND project=?2",
+        params![owner, project],
+    )?;
+    tx.execute(
         "DELETE FROM conversation_used_ids WHERE owner=?1 AND project=?2",
         params![owner, project],
     )?;
@@ -2166,7 +2170,6 @@ pub(super) fn finish_agent_mcp_call(
     observation_of: Option<&str>,
     tool: &str,
 ) -> Result<(), String> {
-    let db = super::mcp::store(state).map_err(|e| e.to_string())?;
     let now = now_ms();
     if write {
         let status = if definitive_refusal {
@@ -2181,13 +2184,18 @@ pub(super) fn finish_agent_mcp_call(
                 "The platform definitively refused this write before mutation."
             }
         });
-        db.execute("UPDATE conversation_effects SET state=?5,refusal=?6,updated_at=?7 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='running'",params![owner,project,conversation,call_id,status,refusal,now]).map_err(|e|e.to_string())?;
+        let persisted = super::mcp::store(state).and_then(|db| {
+            db.execute("UPDATE conversation_effects SET state=?5,refusal=?6,updated_at=?7 WHERE owner=?1 AND project=?2 AND conversation=?3 AND call_id=?4 AND state='running'",params![owner,project,conversation,call_id,status,refusal,now])?;
+            Ok(())
+        });
         if let Ok(mut active) = active_agent_effects().lock() {
             active.remove(&effect_key(owner, project, call_id));
         }
+        persisted.map_err(|e| e.to_string())?;
     }
     if success {
         if let Some(original) = observation_of {
+            let db = super::mcp::store(state).map_err(|e| e.to_string())?;
             if !readback_matches(state, owner, project, original, tool)? {
                 return Err(
                     "This read is not the documented read-back for the pending effect.".into(),
@@ -2204,6 +2212,16 @@ pub(super) fn finish_agent_mcp_call(
 
 fn effect_key(owner: &str, project: &str, call_id: &str) -> String {
     format!("{owner}\u{1f}{project}\u{1f}{call_id}")
+}
+
+// The caller holds the same project lock used for MCP admission until deletion ends.
+pub(super) fn ensure_no_running_project_effect(owner: &str, project: &str) -> Result<(), String> {
+    let prefix = effect_key(owner, project, "");
+    let active = active_agent_effects().lock().map_err(|_| "Agent effect registry is unavailable.".to_owned())?;
+    if active.iter().any(|key| key.starts_with(&prefix)) {
+        return Err("This project still has a running agent write. Wait for it to finish before deleting the project.".into());
+    }
+    Ok(())
 }
 
 fn read_tool_requires_project(tool: &str) -> bool {
