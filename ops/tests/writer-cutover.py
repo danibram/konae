@@ -32,7 +32,7 @@ def example():
     intervals = range(START, latest, 3_600_000)
     journal = [point(at) for at in [*intervals, latest]]
     prune_at = latest + 1000
-    retained = gate["retained_at"](journal, prune_at)
+    retained = gate["retained_at"](journal, prune_at, NOW)
     repos = {k: "fixture-" + k for k in (*gate["FORMATS"], "vault")}
     drills = []
     prune = {}
@@ -132,16 +132,31 @@ class Receipt(unittest.TestCase):
         r["publicationJournal"]["s3"] = expected[-2:]
         self.assertIn("s3 publication journal has a gap beyond RPO", gate["check_receipt"](r, "retire", NOW))
 
+    def test_publication_during_endpoint_restores(self):
+        r = example()
+        newer = point(NOW - 400)
+        for target, journal in r["publicationJournal"].items():
+            r["publicationJournal"][target] = [*journal, newer]
+        r.update(remoteCopy=newer, remoteCutMs=NOW - 400)
+        self.assertEqual(gate["check_receipt"](r, "retire", NOW), [])
+        roots = r["finalPrune"]["s3"]["points"]
+        r["finalPrune"]["s3"]["points"] = roots[1:]
+        self.assertIn("s3 retained inventory differs from the publication journal",
+                      gate["check_receipt"](r, "retire", NOW))
+        for invalid in (newer, point(NOW + 1)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                gate["retained_at"]([*r["publicationJournal"]["s3"], invalid], NOW - 500, NOW)
+
     def test_utc_day_and_age_boundary(self):
         midnight = 1_700_006_400_000
         self.assertEqual(midnight % DAY, 0)
         cutoff = midnight + 30 * DAY
         recent = [point(cutoff - i) for i in range(24)]
         roots = [point(midnight - 1), point(midnight), *recent]
-        self.assertEqual(gate["retained_at"](roots, cutoff), sorted([point(midnight), *recent]))
-        self.assertEqual(gate["retained_at"](roots, cutoff + 1), sorted(recent))
+        self.assertEqual(gate["retained_at"](roots, cutoff, cutoff), sorted([point(midnight), *recent]))
+        self.assertEqual(gate["retained_at"](roots, cutoff + 1, cutoff + 1), sorted(recent))
         roots.append(point(midnight + 1))
-        self.assertEqual(gate["retained_at"](roots, cutoff), sorted([point(midnight + 1), *recent]))
+        self.assertEqual(gate["retained_at"](roots, cutoff, cutoff), sorted([point(midnight + 1), *recent]))
 
     def test_substituted_reader_format_and_destination(self):
         for kind, field, value, expected in [
