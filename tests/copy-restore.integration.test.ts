@@ -1,40 +1,48 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpClient, type Transfer } from "../src/mcp/client";
 
+import { checkWork, checkReceiver, checkRevocations, checkWorkers, seedWork } from "./recovery-work";
 import type { PackageManifest } from "../src/lib/portable-package";
 
-const binary = "kernel-rs/target/debug/konae";
+const binary = path.resolve(process.env.CARGO_TARGET_DIR ?? "kernel-rs/target", "debug/konae");
 const setupKey = "copy-restore-setup-secret";
 const password = "copy-restore-password-2026";
 const attachment = new TextEncoder().encode("Attachment survives the copy");
-const s3Endpoint = process.env.KONAE_TEST_S3_ENDPOINT ?? "http://127.0.0.1:9000";
-const s3Bucket = process.env.KONAE_TEST_S3_BUCKET ?? "konae";
+const s3Endpoint = process.env.KONAE_TEST_S3_ENDPOINT;
+const s3Bucket = process.env.KONAE_TEST_S3_BUCKET ?? "";
 const s3Env = {
-  KONAE_S3_ENDPOINT: s3Endpoint,
-  KONAE_S3_ACCESS_KEY: process.env.KONAE_TEST_S3_ACCESS_KEY ?? "konae",
-  KONAE_S3_SECRET_KEY: process.env.KONAE_TEST_S3_SECRET_KEY ?? "konae-secret",
+  KONAE_S3_ENDPOINT: s3Endpoint ?? "",
+  KONAE_S3_ACCESS_KEY: process.env.KONAE_TEST_S3_ACCESS_KEY ?? "",
+  KONAE_S3_SECRET_KEY: process.env.KONAE_TEST_S3_SECRET_KEY ?? "",
   KONAE_S3_BUCKET: s3Bucket,
 };
-const minio = await fetch(`${s3Endpoint}/minio/health/live`, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok, () => false);
-if (!minio) console.warn(`MinIO is not reachable at ${s3Endpoint}; the S3 copy target test is skipped.`);
+const minio = Boolean(s3Endpoint);
+if (!minio) console.warn("SKIP S3 restore: no disposable KONAE_TEST_S3_ENDPOINT supplied.");
+else if (new URL(s3Endpoint!).hostname !== "127.0.0.1" || Object.values(s3Env).some(value => !value)) {
+  throw Error("Provide a loopback MinIO endpoint and its disposable bucket and credentials.");
+}
 
 beforeAll(async () => {
-  const build = Bun.spawn(["cargo", "build", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
+  const build = Bun.spawn(["cargo", "build", "--locked", "--offline", "--manifest-path", "kernel-rs/Cargo.toml"], { stdout: "ignore", stderr: "inherit" });
   expect(await build.exited).toBe(0);
 }, 300_000);
 
 function kernelEnv(root: string, extra: Record<string, string> = {}) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KONAE_")));
-  return { ...inherited, KONAE_DATA_DIR: root, KONAE_BIND: "127.0.0.1", KONAE_SETUP_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost", ...extra };
+  return { ...inherited, KONAE_DATA_DIR: root, KONAE_BIND: "127.0.0.1", KONAE_SETUP_KEY: setupKey, KONAE_HOST_SUFFIX: "localhost", KONAE_DOMAIN: "paths.lab.test", ...extra };
 }
 
 async function startKernel(root: string, extra: Record<string, string> = {}) {
   const port = 19500 + Math.floor(Math.random() * 400);
   const url = `http://127.0.0.1:${port}`;
-  const child = Bun.spawn([binary], { env: kernelEnv(root, { KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url, ...extra }), stdout: "ignore", stderr: "inherit" });
+  const endpoint = extra.KONAE_S3_ENDPOINT;
+  const sandbox = '(version 1)(allow default)(deny network-outbound)' +
+    (endpoint ? `(allow network-outbound (remote tcp "localhost:${new URL(endpoint).port}"))` : "");
+  const command = process.platform === "darwin" ? ["/usr/bin/sandbox-exec", "-p", sandbox, binary] : [binary];
+  const child = Bun.spawn(command, { env: kernelEnv(root, { KONAE_KERNEL_PORT: String(port), KONAE_PUBLIC_ORIGIN: url, KONAE_MAIL_TRANSPORT: "development", ...extra }), stdout: "ignore", stderr: "inherit" });
   for (let attempt = 0; attempt < 100; attempt++) {
     try { if ((await fetch(`${url}/_konae/health`)).ok) return { url, child }; } catch {}
     if (child.exitCode !== null) throw Error("The Kernel stopped during startup.");
@@ -72,6 +80,7 @@ async function sign(url: string, route: string, body: object, host?: string) {
 const project = {
   "schema.sql": "CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, title TEXT NOT NULL, user_id TEXT NOT NULL);",
   "actions.json": JSON.stringify({ version: 1, actions: {
+    "notes.tick": { kind: "mutation", access: "anonymous", statement: "INSERT INTO notes(title,user_id) VALUES('scheduled','timer')", bindings: [], schedule: { daily: "10:00" } },
     "notes.list": { kind: "query", access: "authenticated", statement: "SELECT id,title FROM notes WHERE user_id=?1 LIMIT 50", bindings: [{ source: "actor", field: "id" }] },
     "notes.create": { kind: "mutation", access: "authenticated", statement: "INSERT INTO notes(title,user_id) VALUES(?1,?2)", bindings: [{ source: "input", key: "title", type: "string", maxLength: 100 }, { source: "actor", field: "id" }] },
   } }),
@@ -94,6 +103,11 @@ async function snapshotPackage(owner: McpClient) {
   }
   await owner.cancel(exported.folder.transferId);
   return { manifest: exported.manifest, components };
+}
+
+async function moduleStates(owner: McpClient) {
+  const { modules } = await owner.call<{ modules: Record<string, { state: unknown }> }>("modules_read", { projectId });
+  return Object.fromEntries(Object.entries(modules).map(([name, module]) => [name, module.state]));
 }
 
 async function savedSources(owner: McpClient) {
@@ -137,7 +151,7 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     await writer.call("actions_invoke", { name: "notes.create", input: { title: "Before the copy" } });
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toHaveLength(1);
     const upload = await writer.upload(attachment);
-    const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain" });
+    const file = await writer.call<{ id: string }>("files_upload", { transferId: upload.transferId, name: "note.txt", type: "text/plain", visibility: "private" });
     await writer.cancel(upload.transferId);
 
     expect(await writer.download(await writer.call<Transfer>("files_read", { fileId: file.id }))).toEqual(attachment);
@@ -163,38 +177,102 @@ async function publishAndCopy(root: string, copyEnv: Record<string, string>) {
     expect(current.revision).toBeGreaterThan(original.revision);
     expect(current.files["history.txt"]).toBe("second revision");
 
+    const draft = await owner.upload(new TextEncoder().encode(JSON.stringify({
+      ...payload.project, directories: [], updatedAt: Date.now(), files: { ...project, "index.html": "<main>Unpublished draft</main>" },
+    })), projectId);
+    await owner.call("project_sources_save", { projectId, expectedRevision: current.revision, transferId: draft.transferId });
+    const atCut = await savedSources(owner);
+    expect(atCut.files["index.html"]).toContain("Unpublished draft");
+    const issueKey = (name: string) => owner.call<{ key: string; keyId: string }>("api_keys_create", { projectId, name, files: ["private"] });
+    const good = await issueKey("kept");
+    const revoked = await issueKey("retired");
+    await sign(url, "/_konae/auth/signup", { email: "retired@copy.test", password }, hostname);
+    const users = await owner.call<{ users: {email: string; userId: string}[] }>("app_users_list", { projectId });
+    const userId = (email: string) => users.users.find(user => user.email === email)!.userId;
+    const entry = await owner.call<{ url: string }>("app_user_enter", { projectId, userId: userId("writer@copy.test") });
+    await owner.call("path_set", { projectId, enabled: true, name: "copied", acceptSharedOrigin: true });
+    expect(await owner.call("path_read", { projectId })).toMatchObject({ enabled: true, name: "copied" });
+    const modules = await moduleStates(owner);
+    await owner.call("maintenance_set", { projectId, on: true });
+    expect(await owner.call("maintenance_read", { projectId })).toMatchObject({ maintenance: true });
+    const reset = await seedWork(root, id);
+    checkWork(root, id, false);
     const written = Date.now();
-    let copies: { targets: { lastAttemptAt: number | null; lastSuccessAt: number | null; lastError: string | null }[]; alert: string | null } | undefined;
+    let copies: { targets: { kind: string; lastCopyId: string; lastAttemptAt: number | null; lastSuccessAt: number | null; lastError: string | null }[]; alert: string | null } | undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
       copies = (await (await fetch(`${url}/_konae/health`)).json()).copies;
+      expect(copies!.targets.map(target => target.kind).sort()).toEqual(
+        copyEnv.KONAE_COPY_S3 ? ["directory", "s3"] : ["directory"]);
       const done = copies!.targets.every((target) => target.lastAttemptAt !== null && target.lastAttemptAt > written && target.lastSuccessAt !== null && target.lastSuccessAt >= target.lastAttemptAt);
       if (done) break;
       await Bun.sleep(100);
     }
     expect(copies!.alert).toBeNull();
     expect(copies!.targets.every((target) => target.lastAttemptAt! > written && target.lastSuccessAt! >= target.lastAttemptAt!)).toBe(true);
-    return { id, hostname, cookie, fileId: file.id, heldFile: heldFile.id, data: data.backup.id, sources: sources.backup.id, flat: flat.id, original, current };
+    const copy = copies!.targets[0].lastCopyId;
+    expect(copies!.targets.every(target => target.lastCopyId === copy)).toBe(true);
+    const image = path.join(copyEnv.KONAE_COPY_DIR, copy);
+    checkWork(image, id, false, "frozen");
+    checkRevocations(image, id, false, "frozen");
+    expect(await Bun.file(path.join(image, "google.sqlite")).exists()).toBe(false);
+    await owner.call("maintenance_set", { projectId, on: false });
+    await owner.call("app_user_suspend", { projectId, userId: userId("retired@copy.test") });
+    await owner.call("api_keys_revoke", { projectId, keyId: revoked.keyId });
+    expect(await owner.call("api_keys_list", { projectId })).toMatchObject({ keys: expect.arrayContaining([
+      expect.objectContaining({ keyId: revoked.keyId, revokedAt: expect.any(Number) }),
+    ]) });
+    return { copy, reset, id, hostname, cookie, entry: new URL(entry.url).hash.slice(7), good, revoked, atCut, modules, fileId: file.id, heldFile: heldFile.id, data: data.backup.id, sources: sources.backup.id, flat: flat.id, original };
   } finally {
     await stop(child);
   }
 }
 
 async function expectSameApp(root: string, app: Awaited<ReturnType<typeof publishAndCopy>>) {
+  checkWork(root, app.id, true);
+  const paused = await startKernel(root, { KONAE_EXECUTION_MODE: "test" });
+  try {
+    const owner = withHeaders(`${paused.url}/mcp`, { cookie: await sign(paused.url, "/_konae/owner/login", { email: "owner@copy.test", password }) });
+    expect((await fetch(paused.url, { headers: { host: app.hostname } })).status).toBe(503);
+    expect(await owner.call("maintenance_read", { projectId })).toMatchObject({ maintenance: true, installation: null });
+    await owner.call("maintenance_set", { projectId, on: false });
+    expect(await owner.call("maintenance_read", { projectId })).toMatchObject({ maintenance: false });
+  } finally { await stop(paused.child); }
   const { url, child } = await startKernel(root);
   try {
+    await checkWorkers(root, app.id);
+    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_konae/owner/login", { email: "owner@copy.test", password }) });
+    expect(await owner.call("path_read", { projectId })).toMatchObject({ enabled: true, name: "copied" });
+    expect(await moduleStates(owner)).toEqual(app.modules);
     const shell = await fetch(`${url}/`, { headers: { host: app.hostname } });
     expect(shell.status).toBe(200);
     expect(await shell.text()).toContain("<main>Copied app</main>");
+    const alias = await fetch(url, { headers: { host: "alias.lab.test" } });
+    expect(await alias.text()).toContain("<main>Copied app</main>");
+    const moved = await fetch(url, { headers: { host: "old.lab.test" }, redirect: "manual" });
+    expect(moved.status).toBe(308);
+    expect(new URL(moved.headers.get("location")!).hostname).toBe(app.hostname);
+    const byPath = await fetch(url + "/p/copied/", { headers: { host: "paths.lab.test" } });
+    expect(await byPath.text()).toContain("<main>Copied app</main>");
     const stale = await withHeaders(`${url}/_konae/mcp`, { host: app.hostname, cookie: app.cookie }).call<{ role: string }>("auth_session");
     expect(stale.role).toBe("anonymous");
     const cookie = await sign(url, "/_konae/auth/login", { email: "writer@copy.test", password }, app.hostname);
     const writer = withHeaders(`${url}/_konae/mcp`, { host: app.hostname, cookie });
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toEqual([{ id: 1, title: "Before the copy" }]);
     expect(await writer.download(await writer.call<Transfer>("files_read", { fileId: app.fileId }))).toEqual(attachment);
-    const owner = withHeaders(`${url}/mcp`, { cookie: await sign(url, "/_konae/owner/login", { email: "owner@copy.test", password }) });
+    const other = await sign(url, "/_konae/auth/signup", { email: "reader@copy.test", password }, app.hostname);
+    expect(await withHeaders(`${url}/_konae/mcp`, { host: app.hostname, cookie: other }).call("actions_invoke", { name: "notes.list" })).toEqual([]);
+    const asset = (headers: Record<string,string>) => fetch(`${url}/_konae/files/${app.fileId}`, { headers: { host: app.hostname, ...headers } });
+    expect((await asset({ cookie: other })).status).toBe(404);
+    expect(new Uint8Array(await (await asset({ authorization: `Bearer ${app.good.key}` })).arrayBuffer())).toEqual(attachment);
+    expect((await asset({ authorization: `Bearer ${app.revoked.key}` })).status).toBe(401);
+    const post = (route: string, body: object) => fetch(url + route, {method: "POST", headers: {host: app.hostname, origin: `http://${app.hostname}`, "content-type": "application/json"}, body: JSON.stringify(body)});
+    expect((await post("/_konae/auth/login", { email: "retired@copy.test", password })).status).toBe(403);
+    expect((await post("/_konae/enter", { token: app.entry })).status).toBe(410);
+    expect((await post("/_konae/auth/reset", { token: app.reset, password })).status).toBe(410);
+    checkReceiver(root);
     const inspection = await owner.call<{ deployment: { hostname: string } }>("project_inspect", { projectId });
     expect(inspection.deployment.hostname).toBe(app.hostname);
-    expect(await savedSources(owner)).toEqual(app.current);
+    expect(await savedSources(owner)).toEqual(app.atCut);
     const restorePoint = async (backupId: string) => {
       const before = await backups(owner);
       expect(before.map(b => b.id)).toContain(backupId);
@@ -209,12 +287,32 @@ async function expectSameApp(root: string, app: Awaited<ReturnType<typeof publis
     const stranger = withHeaders(`${url}/_konae/mcp`, { host: app.hostname, cookie: await sign(url, "/_konae/auth/signup", { email: "other@copy.test", password }, app.hostname) });
     await expect(stranger.call("files_read", { fileId: app.heldFile })).rejects.toThrow("File not found");
     await restorePoint(app.sources);
-    expect(await savedSources(owner)).toEqual({ files: app.original.files, revision: app.current.revision + 1 });
+    expect(await savedSources(owner)).toEqual({ files: app.original.files, revision: app.atCut.revision + 1 });
     await restorePoint(app.flat);
     expect(await writer.call("actions_invoke", { name: "notes.list" })).toEqual([]);
   } finally {
     await stop(child);
   }
+}
+
+async function checkHeld(root: string, host: string) {
+  checkWork(root, projectId, true);
+  checkRevocations(root, projectId, false);
+  const { child, url } = await startKernel(root, { KONAE_EXECUTION_MODE: "test" });
+  try {
+    expect((await fetch(url, { headers: { host } })).status).toBe(503);
+    expect((await fetch(url + "/_konae/owner/login", { method: "POST" })).status).toBe(503);
+    checkWork(root, projectId, true);
+  } finally { await stop(child); }
+}
+
+async function reconcile(source: string, root: string, extra: Record<string,string> = {}) {
+  const child = Bun.spawn([binary, "reconcile", "--from", source], { env: kernelEnv(root, extra), stdout: "pipe", stderr: "inherit" });
+  const message = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(message).toContain("2 rows changed");
+  checkRevocations(root, projectId, true);
+  checkWork(root, projectId, true);
 }
 
 describe("copies off the volume", () => {
@@ -223,21 +321,30 @@ describe("copies off the volume", () => {
     try {
       const copies = path.join(scratch, "second-disk");
       const app = await publishAndCopy(path.join(scratch, "source"), { KONAE_COPY_DIR: copies });
-      const copy = (await readdir(copies)).filter((name) => /^\d{4}-\d\d-\d\dT/.test(name)).sort().at(-1)!;
+      const copy = app.copy;
       await rm(path.join(scratch, "source"), { recursive: true });
       await verifyHistory(copies, copy);
       const restored = path.join(scratch, "restored");
-      const first = await restore(copies, restored);
+      const marker = path.join(copies, "revocations/started.json");
+      await rename(marker, marker + ".away");
+      const first = await restore(copies, restored, {}, copy);
+      expect(first.output).toContain("starts in maintenance");
+      await checkHeld(restored, app.hostname);
+      await rename(marker + ".away", marker);
+      await reconcile(copies, restored);
       expect(first.output).toContain("checksums verified");
       expect(first.status).toBe(0);
+      const sentinel = path.join(restored, "occupied.txt");
+      await Bun.write(sentinel, "existing bytes");
       const again = await restore(copies, restored);
       expect(again.status).not.toBe(0);
       expect(again.output).toContain("not empty");
+      expect(await Bun.file(sentinel).text()).toBe("existing bytes");
       await expectSameApp(restored, app);
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 240_000);
 
   test.skipIf(!minio)("an S3 copy restores into an empty data directory and serves the same app", async () => {
     const scratch = await mkdtemp(path.join(tmpdir(), "konae-copy-s3-"));
@@ -263,17 +370,37 @@ describe("copies off the volume", () => {
     let deployment: string | undefined;
     try {
       const sealedEnv = { ...s3Env, KONAE_COPY_SECRET: "a disposable encryption key for nested restore" };
-      const app = await publishAndCopy(path.join(scratch, "source"), { ...sealedEnv, KONAE_COPY_S3: "1" });
+      expect(await keys("")).toHaveLength(0);
+      const mirror = path.join(scratch, "cut");
+      const app = await publishAndCopy(path.join(scratch, "source"), { ...sealedEnv, KONAE_COPY_S3: "1", KONAE_COPY_DIR: mirror });
       deployment = app.id;
-      const copy = (await copiesOf(deployment)).at(-1);
-      expect(copy).toBeDefined();
+      const copy = app.copy;
+      const local = await Bun.file(path.join(mirror, copy, "manifest.json")).json();
+      const sealed = await bucket.file(`copies/${copy}/manifest.json`).json();
+      const contents = (manifest: typeof local) => manifest.files.map(({path, size, sha256}: {path:string;size:number;sha256:string}) => [path,size,sha256]);
+      expect(contents(sealed)).toEqual(contents(local));
+      await rm(mirror, { recursive: true });
       const liveObjects = await keys(`files/${deployment}/`);
       expect(liveObjects.length).toBeGreaterThan(0);
       await rm(path.join(scratch, "source"), { recursive: true });
       await Promise.all(liveObjects.map(key => bucket.delete(key)));
       const restored = path.join(scratch, "restored");
       await verifyHistory(`s3://${s3Bucket}/copies/`, copy!, sealedEnv);
-      const first = await restore(`s3://${s3Bucket}/copies/`, restored, sealedEnv, copy);
+      const source = `s3://${s3Bucket}/copies/`;
+      const ledger = (await keys("copies/revocations/")).find(k => !k.endsWith("started.json"))!;
+      const signed = await bucket.file(ledger).json();
+      const { mac, ...unsigned } = signed;
+      expect(typeof mac).toBe("string");
+      await bucket.write(ledger, JSON.stringify(unsigned));
+      const first = await restore(source, restored, sealedEnv, copy);
+      expect(first.output).toContain("no MAC");
+      await checkHeld(restored, app.hostname);
+      const missingKey = Bun.spawn([binary, "reconcile", "--from", source], { env: kernelEnv(restored, s3Env), stdout: "ignore", stderr: "pipe" });
+      expect(await new Response(missingKey.stderr).text()).toContain("stays in maintenance");
+      expect(await missingKey.exited).not.toBe(0);
+      checkRevocations(restored, projectId, false);
+      await bucket.write(ledger, JSON.stringify(signed));
+      await reconcile(source, restored, sealedEnv);
       expect(first.output).toContain("checksums verified");
       expect(first.status).toBe(0);
       await expectSameApp(restored, app);
@@ -285,5 +412,5 @@ describe("copies off the volume", () => {
         await Promise.all(added.map((key) => bucket.delete(key)));
       }
     }
-  }, 120_000);
+  }, 240_000);
 });
