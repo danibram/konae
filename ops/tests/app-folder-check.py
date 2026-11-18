@@ -54,6 +54,7 @@ def check(folder, binary, expected_sha, report):
             shutil.copyfile(source, target)
         require(paths == members(folder) and all(drill["digest"](p) == drill["digest"](app / p.relative_to(folder))
                                                 for p in paths), "source-changed")
+        total = sum((app / p.relative_to(folder)).stat().st_size for p in paths)
         dbs = sorted((app / "data").glob("*.sqlite"))
         for db in dbs:
             with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as connection:
@@ -64,7 +65,8 @@ def check(folder, binary, expected_sha, report):
             require(re.fullmatch(r"[0-9a-fA-F-]{36}", item["id"]), "invalid-file-id")
             blob = index_path.parent / (item["id"] + ".blob")
             require(blob.is_file() and blob.stat().st_size == item["size"], "file-index-mismatch")
-        report.update(verifiedFiles=len(paths), checkedDatabases=len(dbs), indexedAssets=len(index))
+        report.update(verifiedFiles=len(paths), verifiedBytes=total,
+                      checkedDatabases=len(dbs), indexedAssets=len(index))
         env = {"KONAE_DATA_DIR": str(root), "KONAE_EXECUTION_MODE": "test", "TMPDIR": str(root),
                "SQLITE_TMPDIR": str(root)}
         result = drill["restricted"](binary, root, ["drill-check"], env)

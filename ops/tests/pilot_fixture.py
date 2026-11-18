@@ -159,21 +159,31 @@ def sqlite_hash(path):
         return schema, db.execute("PRAGMA user_version").fetchone(), tables
 
 
-def excluded(path):
-    parts = path.parts
-    return (path.name.endswith((".sqlite-wal", ".sqlite-shm", ".sqlite-journal"))
-            or parts[0] in {"kernel.lock", "mail-key", "files-store.json", "transfers", ".copy-health", ".copy-state.json",
-                            ".copy-staging", ".copy-operations", "google.sqlite"})
+def exclusion(rel, root):
+    root_files = {
+        "kernel.lock": "installation lock", "mail-key": "operator custody", "files-store.json": "live backend",
+        "transfers": "transfer scratch", ".copy-health": "copy health", ".copy-state.json": "copy cache",
+        ".copy-staging": "staging", ".copy-operations": "completed operation scratch", "google.sqlite": "OAuth flows",
+    }
+    if rel.parts[0] in root_files:
+        return root_files[rel.parts[0]]
+    if rel.name.endswith((".sqlite-wal", ".sqlite-shm", ".sqlite-journal")):
+        database = rel.with_name(rel.name.rsplit("-", 1)[0])
+        if (root / database).is_file():
+            return "SQLite journal or shared memory"
 
 
-def inventory(root, source=False):
+def inventory(root, source=False, omitted=None):
     files = {}
+    # A read-only SQLite connection can create a WAL companion after enumeration.
     for p in sorted(root.rglob("*")):
-        rel = p.relative_to(root)
-        if not p.is_file() or (source and excluded(rel)):
+        if not p.is_file():
             continue
-        if p.name.endswith((".sqlite-wal", ".sqlite-shm", ".sqlite-journal")):
-            # These sidecars can appear when the offline observer opens a WAL database.
+        rel = p.relative_to(root)
+        reason = exclusion(rel, root) if source else None
+        if reason:
+            if omitted is not None:
+                omitted[reason] += 1
             continue
         if p.suffix == ".sqlite":
             files[rel] = sqlite_hash(p)

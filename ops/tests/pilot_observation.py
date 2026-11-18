@@ -41,7 +41,7 @@ def fd_counter():
 
 
 @contextmanager
-def observed_server(binary, env, request, result):
+def observed_server(binary, env, request, result, ready_event=None):
     root = Path(env["KONAE_DATA_DIR"])
     wals = [db.with_suffix(".sqlite-wal") for db in root.rglob("*.sqlite")]
     fds = fd_counter()
@@ -75,6 +75,10 @@ def observed_server(binary, env, request, result):
                 if process.poll() is not None:
                     log.seek(0)
                     raise RuntimeError(log.read().decode()[-1200:])
+                if ready_event is not None:
+                    if ready_event.wait(.025):
+                        break
+                    continue
                 try:
                     if request(port, "/_konae/health")[0]["ok"]:
                         break

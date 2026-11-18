@@ -1,5 +1,6 @@
 """Compare installation writers on one cut. Run one case per empty MinIO bucket."""
 import argparse
+from collections import Counter
 from contextlib import ExitStack
 import json
 import os
@@ -62,10 +63,16 @@ def run(args, root, report):
             pass
     else:
         model = small_profile(binary, live, base)
+    if args.delay_file_get:
+        assert args.profile == "standalone" and live_s3
+        with cut["server"](binary, base) as (port, _):
+            _, probe_cookie = year["account"](port, year["MEMBERS"][0], "login")
     report["liveBytes"] = tree_bytes(live)
     if not args.historical:
         report["sourceCatalogue"] = catalogue(binary, base, live)
-    oracle = inventory(live, source=True)
+    omitted_files = Counter()
+    oracle = inventory(live, source=True, omitted=omitted_files)
+    report["excludedSourceFiles"] = omitted_files
     report["inventory"] = compare(oracle, oracle)
     indexes = historical_indexes(live) if args.historical else {}
     if args.profile == "six":
@@ -115,13 +122,23 @@ def run(args, root, report):
         writer = env if live_s3 else {k: v for k, v in env.items() if not k.startswith("KONAE_S3_")}
         if args.second_cut:
             config["KONAE_COPY_INTERVAL_SECONDS"] = str(args.second_cut)
-        with observed_server(binary, dict(writer, **config), cut["request"], observation) as port:
+        ready = hits if args.delay_file_get else None
+        with observed_server(binary, dict(writer, **config), cut["request"], observation, ready_event=ready) as port:
             def finished():
                 status = cut["targets"](port)
                 kinds = {s["kind"] for s in status}
                 assert kinds == online, f"Missing targets {online - kinds}; unexpected {kinds - online}"
                 if all(s["lastAttemptAt"] and not s.get("inProgress") and (s["lastCopyId"] or s["lastError"]) for s in status):
                     return status
+            if args.delay_file_get:
+                started = time.monotonic()
+                year["action"](port, probe_cookie, "notes.add", {"title": "during-refusal"})
+                report["writeDuringDelayMs"] = round((time.monotonic() - started) * 1000, 3)
+                completed = time.time_ns() // 1_000_000
+                target, = cut["targets"](port)
+                report["attemptToWriteCompleteMs"] = completed - target["lastAttemptAt"]
+                model.rows["during-refusal"] = year["MEMBERS"][0]
+                year["check_rows"](port, probe_cookie, year["MEMBERS"][0], model)
             statuses = cut["wait"](finished, "pilot capture did not finish", 900)
             if args.second_cut:
                 assert all(s["lastCopyId"] for s in statuses)
@@ -271,6 +288,8 @@ def main():
     args = parser.parse_args()
     if args.profile == "six" and not args.six:
         parser.error("six needs --six")
+    if args.delay_file_get and not (args.profile == "standalone" and args.legacy_s3_only):
+        parser.error("--delay-file-get needs the standalone profile with --legacy-s3-only")
     if args.second_cut and (args.second_cut < 2 or args.historical or args.store == "replay"):
         parser.error("choose an integrated live writer and an interval of at least two seconds")
     if args.historical and not args.legacy_s3_only:
