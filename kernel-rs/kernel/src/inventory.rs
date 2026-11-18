@@ -236,7 +236,7 @@ pub fn command(profile: &str, installation: &Installation) -> Result<bool> {
     }
     let rows = policies(profile)?;
     check_registry(&rows, installation)?;
-    let mut report = json!({"catalogVersion": 1, "binary": profile, "version": env!("CARGO_PKG_VERSION")});
+    let mut report = json!({"catalogVersion": 2, "binary": profile, "version": env!("CARGO_PKG_VERSION")});
     match (args.next().as_deref(), args.next()) {
         (Some("--policy"), None) => {
             report["policies"] = serde_json::to_value(rows)?;

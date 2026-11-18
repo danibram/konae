@@ -155,7 +155,7 @@ The `<id>` is the project's ID, and it names the Deployment too. An export hands
 ├── transfers.sqlite        the Kernel: unfinished MCP transfers and upload receipts
 ├── transfers/              the Kernel: their bytes
 ├── files-store.json        the Kernel: which file store holds the bytes
-├── mail-key                the Kernel: the key that seals queued email links, unless KONAE_MAIL_SECRET is set
+├── mail-key                private mail fallback key, created by kernel startup or app commands on either volume
 ├── mailbox.jsonl           the Kernel: the development mailbox, with KONAE_MAIL_TRANSPORT=development
 ├── recovery-hold.json      the Kernel: only after a restore that could not read the revocation record
 ├── owners.sqlite           Konae: owner accounts, sessions, challenges and invitation codes
