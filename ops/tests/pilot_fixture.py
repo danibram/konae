@@ -129,7 +129,7 @@ def sqlite_hash(path):
 def excluded(path):
     parts = path.parts
     return (path.name.endswith((".sqlite-wal", ".sqlite-shm", ".sqlite-journal"))
-            or parts[0] in {"kernel.lock", "files-store.json", "transfers", ".copy-health", ".copy-state.json",
+            or parts[0] in {"kernel.lock", "mail-key", "files-store.json", "transfers", ".copy-health", ".copy-state.json",
                             ".copy-staging", ".copy-operations", "google.sqlite"})
 
 

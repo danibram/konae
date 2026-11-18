@@ -1,6 +1,6 @@
 """Compare installation writers on one cut. Run one case per empty MinIO bucket."""
 import argparse
-from contextlib import nullcontext
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,8 @@ import tempfile
 import time
 import uuid
 
-from pilot_fixture import check_access, compare, cut, inventory, small_profile, year
+from pilot_delay import delayed_reads
+from pilot_fixture import check_access, compare, cut, inventory, invoke, session, small_profile, year
 from pilot_observation import observed_server, Traffic, tree_bytes
 
 
@@ -34,7 +35,13 @@ def run(args, root, report):
         settings = {}
         print("SKIP s3 and s3-v3: local file store selected; this runtime shares its S3 setting with copies.",
               flush=True)
-    report["omitted"] = [] if remote else ["s3", "s3-v3"]
+    omitted = [] if remote else ["s3", "s3-v3"]
+    if args.legacy_s3_only:
+        if not live_s3:
+            raise ValueError("--legacy-s3-only requires a live S3 file store")
+        omitted = ["directory", "directory-v3", "s3-v3"]
+        print("SKIP directory, directory-v3 and s3-v3: only the legacy S3 writer was requested", flush=True)
+    report["omitted"] = omitted
     live = root / "live"
     base = dict(cut["setting"](live), PATH=os.defpath, AWS_EC2_METADATA_DISABLED="true", TOKIO_WORKER_THREADS="2")
     env = dict(base, **settings, KONAE_COPY_SECRET=secrets.token_hex(32))
@@ -65,10 +72,19 @@ def run(args, root, report):
             config.update(KONAE_COPY_S3="1", KONAE_COPY_V3_S3=rid)
         targets.update({"s3": "s3://konae-test/copies/", "s3-v3": "s3://konae-test/copies-v3/" + rid})
 
+    if args.legacy_s3_only:
+        targets = {"s3": targets["s3"]}
+        config = {"KONAE_COPY_S3": "1", "KONAE_COPY_STAGE_BYTES": str(1024**3), "KONAE_COPY_READERS": "512"}
+
     def mc(*args_, **kwargs):
         return subprocess.run([args.mc, *args_], check=True, capture_output=True, timeout=120, **kwargs).stdout
 
-    with Traffic(args.mc) if remote else nullcontext() as traffic:
+    with ExitStack() as stack:
+        traffic = stack.enter_context(Traffic(args.mc)) if remote else None
+        if args.delay_file_get:
+            assert args.profile == "standalone" and live_s3
+            endpoint, slow, hits = stack.enter_context(delayed_reads(env["KONAE_S3_ENDPOINT"]))
+            env["KONAE_S3_ENDPOINT"] = endpoint
         def phase(name):
             report["phase"] = name
             save(report, args.report)
@@ -80,6 +96,8 @@ def run(args, root, report):
             phase("migration")
             subprocess.run([binary, "files-migrate", "--to", "s3"], env=env, check=True, capture_output=True)
         phase("publish")
+        if args.delay_file_get:
+            slow.set()
         observation = report["resources"] = {}
         online = set(targets) if live_s3 else {"directory", "directory-v3"}
         writer = env if live_s3 else {k: v for k, v in env.items() if not k.startswith("KONAE_S3_")}
@@ -88,19 +106,56 @@ def run(args, root, report):
                 status = cut["targets"](port)
                 kinds = {s["kind"] for s in status}
                 assert kinds == online, f"Missing targets {online - kinds}; unexpected {kinds - online}"
-                if all(s["lastAttemptAt"] and not s["inProgress"] for s in status):
+                if all(s["lastAttemptAt"] and not s.get("inProgress") and (s["lastCopyId"] or s["lastError"]) for s in status):
                     return status
             statuses = cut["wait"](finished, "pilot capture did not finish", 900)
-        phase("storage")
+            phase("post-capture")
+            if any(s["lastError"] for s in statuses):
+                if model is None:
+                    app = json.loads((args.six / "apps.json").read_bytes())[0]
+                    user = session(port, app, "writer")
+                    invoke(port, user, "notes.create", {"title": "after-refusal"})
+                    assert any(r["title"] == "after-refusal" for r in invoke(port, user, "notes.list", {}))
+                else:
+                    email = year["MEMBERS"][0]
+                    _, cookie = year["account"](port, email, "login")
+                    year["action"](port, cookie, "notes.add", {"title": "after-refusal"})
+                    model.rows["after-refusal"] = email
+                    year["check_rows"](port, cookie, email, model)
+                report["writeAfterRefusal"] = True
+        if args.delay_file_get:
+            report["delayedFileGet"] = hits.is_set()
+            assert hits.is_set(), "The injected delay missed the live GET"
+        for s in statuses:
+            if "lastCutAt" not in s:
+                # The historical writer names the copy for the start of the attempt.
+                s["lastCutAt"] = s["lastAttemptAt"] if s["lastCopyId"] else None
+                report["historicalAttemptTime"] = True
+        phase("published")
         report["publication"] = {s["kind"]: dict(error=s["lastError"], point=s["lastCopyId"],
             cutMs=s["lastCutAt"], lagMs=s["lastSuccessAt"] - s["lastCutAt"] if s["lastCutAt"] else None)
             for s in statuses}
         if traffic:
             report["traffic"] = traffic.stats
-        if any(s["lastError"] for s in statuses):
-            raise AssertionError("A destination refused the capture; see publication in the report")
-        point, = {s["lastCopyId"] for s in statuses}
-        at, = {s["lastCutAt"] for s in statuses}
+            report["serverCounters"] = traffic.counters
+        failures = [(s["kind"], "publish", s["lastError"]) for s in statuses if s["lastError"]]
+        for s in statuses:
+            if s["lastCopyId"] is None:
+                target = s["kind"]
+                source = targets.pop(target)
+                if isinstance(source, Path):
+                    points = list((source / "points").glob("*")) if target.endswith("v3") else list(source.glob("*/manifest.json"))
+                else:
+                    prefix = source.removeprefix("s3://konae-test/").rstrip("/")
+                    entries = mc("ls", "--recursive", "--json", "lab/konae-test/" + prefix + "/")
+                    points = [key for line in entries.splitlines() if (key := json.loads(line)["key"]).startswith("points/")
+                              or key.endswith("/manifest.json")]
+                assert not points, "A refused capture left a published point"
+        complete = [s for s in statuses if s["lastCopyId"]]
+        if not complete:
+            raise AssertionError("No destination published a restorable point")
+        point, = {s["lastCopyId"] for s in complete}
+        at, = {s["lastCutAt"] for s in complete}
         assert point and at
         if args.store == "replay":
             for target in ["s3", "s3-v3"]:
@@ -129,7 +184,6 @@ def run(args, root, report):
             mc("rm", "--force", "--recursive", *args_, "lab/konae-test/files/")
             assert not mc("ls", "--recursive", "--versions", "--json", "lab/konae-test/files/").strip()
         report["restores"] = {}
-        failures = []
         for target, source in targets.items():
             result = report["restores"][target] = {}
             with tempfile.TemporaryDirectory(dir=root) as tmp:
@@ -171,6 +225,8 @@ def main():
     parser.add_argument("--profile", choices=["draft", "standalone", "six"], required=True)
     parser.add_argument("--six", type=Path, help="synthetic six-apps fixture and external oracle")
     parser.add_argument("--store", choices=["local", "unversioned", "versioned", "replay"], required=True)
+    parser.add_argument("--delay-file-get", action="store_true", help="hold the standalone fixture's live GET for 2.2 s")
+    parser.add_argument("--legacy-s3-only", action="store_true", help="isolate the v2 writer on a live S3 file store")
     parser.add_argument("--mc", default="mc")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
