@@ -433,7 +433,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (publishing) return;
     const timeout = window.setTimeout(() => {
       for (const item of projects) {
-        if (sources.hasSources(item.id) && !sources.isLoaded(item.id)) continue;
+        // A queued callback can still hold the project-list stub after the
+        // source loader marks this project ready.
+        if (sources.hasSources(item.id) && (!sources.isLoaded(item.id) || Object.keys(item.files).length === 0)) continue;
         const snapshot = JSON.stringify(item);
         if (synchronized.current.get(item.id) === snapshot) continue;
         synchronized.current.set(item.id, snapshot);

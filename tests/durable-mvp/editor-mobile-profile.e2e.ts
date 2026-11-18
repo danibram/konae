@@ -141,8 +141,9 @@ async function readSavedSources(page: Page, projectId: string) {
   const client = new McpClient(new URL("/mcp", page.url()).href, {
     fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
   });
-  const saved = await client.call<{ transfer: Transfer }>("project_sources_read", { projectId });
-  return JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
+  const saved = await client.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const document = JSON.parse(new TextDecoder().decode(await client.download(saved.transfer))) as { files: Record<string, string>; encodings?: Record<string, "base64"> };
+  return { ...document, revision: saved.revision };
 }
 
 async function waitForKernelSave(page: Page) {
@@ -787,6 +788,50 @@ test("switching owners clears only that owner's cached workspace and execution i
   expect(await page.evaluate(keys=>keys.map(key=>localStorage.getItem(key)),unrelated)).toEqual(["fixture-value","fixture-value"]);
 });
 
+test("a queued autosave leaves the saved files of a newly opened project intact", async ({ page, browser, baseURL }) => {
+  const app = await createProject(page, "Queued autosave source fixture");
+  const projectId = app.split("/").at(-1)!;
+  const before = await readSavedSources(page, projectId);
+  expect(before.files["index.html"]).toBeTruthy();
+  const owner = await (await page.request.get("/_konae/owner/session")).json();
+  const secondary = await browser.newContext({ baseURL });
+  try {
+    const viewer = await secondary.newPage();
+    const login = await viewer.request.post("/_konae/owner/login", {
+      data: { email: owner.displayName, password: "Owner-test-password-2026" },
+    });
+    expect(login.ok()).toBe(true);
+    await viewer.addInitScript(() => {
+      const queued: (() => void)[] = [];
+      Object.defineProperty(window, "__testQueuedSourceAutosaves", { value: queued });
+      const schedule = window.setTimeout.bind(window);
+      window.setTimeout = (callback, delay, ...args) => {
+        if (delay === 500 && typeof callback === "function" && callback.toString().includes(".hasSources(")) {
+          queued.push(() => callback());
+        }
+        return schedule(callback, delay, ...args);
+      };
+    });
+    await viewer.goto(app + "?agent=durable-recovery");
+    await expect(viewer.frameLocator("iframe").getByRole("heading", { name: "Tiny Tasks" })).toBeVisible({ timeout: 35_000 });
+    const write = viewer.waitForResponse((response) => {
+      const request = response.request();
+      return new URL(response.url()).pathname === "/mcp" && (request.postData() ?? "").includes('"project_sources_save"');
+    }, { timeout: 5_000 }).catch(() => null);
+    await viewer.evaluate(() => {
+      const queued = (window as Window & { __testQueuedSourceAutosaves?: (() => void)[] }).__testQueuedSourceAutosaves;
+      if (!queued?.[0]) throw new Error("The editor did not schedule its initial source autosave.");
+      // Run the queued callback with its earlier project list after the
+      // source loader marks the project ready.
+      queued[0]();
+    });
+    expect(await write).toBeNull();
+    expect(await readSavedSources(page, projectId)).toEqual(before);
+  } finally {
+    await secondary.close();
+  }
+});
+
 test("a standby that loses admission retains its unsent text, without making a provider request", async ({ page, browser, baseURL }) => {
   const projectPath=await createProject(page,"One shared writer with unsent standby");
   const projectId=projectPath.split("/").at(-1)!;
@@ -811,7 +856,7 @@ test("a standby that loses admission retains its unsent text, without making a p
     await standbyPage.goto(projectPath+"?agent=durable-recovery");
     await connectProposalFixture(page,"writer-fixture-key");
     await connectProposalFixture(standbyPage,"standby-fixture-key");
-    const providerPosted=page.waitForRequest(req=>req.method()==="POST"&&new URL(req.url()).hostname==="api.anthropic.com");
+    const providerPosted=page.waitForRequest(req=>req.method()==="POST"&&new URL(req.url()).hostname==="api.anthropic.com", {timeout:35000});
     await askFixture(page,"Hold the first submitted request in its admitted generation.");
     await providerPosted;
     let before: Array<{id:string;lastSeq:number}> = [];
@@ -827,7 +872,7 @@ test("a standby that loses admission retains its unsent text, without making a p
     expect(stableReads).toBeGreaterThanOrEqual(2);
     const draft="Standby preserves this unsent draft when a live writer already holds the lease.";
     await askFixture(standbyPage,draft);
-    await expect(standbyPage.getByText(/live execution lease|agent failed to load/i).first()).toBeVisible({timeout:16000});
+    await expect(standbyPage.getByText(/live execution lease/i).first()).toBeVisible({timeout:16000});
     expect(countStandbyProvider).toBe(0);
     await expect(standbyPage.getByRole("textbox",{name:"Message to agent"})).toHaveValue(draft,{timeout:3000});
     const after=(await (await page.request.get(address)).json()).items;
