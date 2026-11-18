@@ -44,7 +44,7 @@ export type DurableEngineOptions = {
   releaseFacts?: CapsuleToolHooks["releaseFacts"];
   sourceFiles?: CapsuleToolHooks["sourceFiles"];
   onModelEvent?: (event: any) => void;
-  onValidation?: (result: ValidationResult) => void;
+  onValidation?: (result: ValidationResult, files: CapsuleFiles) => void;
   onCheckpointStatus?: (status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) => void;
   onSavedSourceReadback?: (revision: number, project: MiniAppProject) => void;
   restoredModelContext?: { messages: unknown[] };
@@ -106,12 +106,12 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       || candidateEncodings[path as keyof typeof candidateEncodings] === "base64")
       .filter((path) => currentProject.files[path] !== binaryCandidate[path] || currentEncodings[path as keyof typeof currentEncodings] !== candidateEncodings[path as keyof typeof candidateEncodings]);
   };
-  const candidateSnapshot = () => {
-    const text = workspace.serialize().files;
+  const withCandidateBinaries = (text: CapsuleFiles) => {
     const merged = { ...text };
     for (const [path, value] of Object.entries(binaryCandidate)) if (!Object.hasOwn(text, path)) merged[path] = value;
     return merged;
   };
+  const candidateSnapshot = () => withCandidateBinaries(workspace.serialize().files);
   const candidateChangedFiles = () => [...new Set([...workspace.changedFiles(), ...restoredBinaryChanges()])];
   const validator = createCapsuleValidator(options.loadSql);
   workspace.onMutation(() => options.onMutation?.(candidateSnapshot()));
@@ -121,7 +121,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     liveDatabase: options.liveDatabase,
     previewErrors: options.previewErrors,
     releaseFacts: options.releaseFacts,
-      onValidated: (_files, result) => options.onValidation?.(result),
+      onValidated: (files, result) => options.onValidation?.(result, withCandidateBinaries(files)),
   });
   const projectId = currentProject.id;
   if (options.platform) {
@@ -187,12 +187,13 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   }
   let pendingConfiguration = Promise.resolve();
   if (options.recoveredFiles) {
+    const candidate = candidateSnapshot();
     const result = await validator.validate(
-      candidateSnapshot(),
+      candidate,
       await readLiveDatabase({ liveDatabase: options.liveDatabase }),
       await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
     );
-    options.onValidation?.(result);
+    options.onValidation?.(result, candidate);
   }
   return {
     conversation,
@@ -204,12 +205,13 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       const settled = await submitted.wait(BACKGROUND_CONTEXT);
       const changedFiles = candidateChangedFiles();
       if (changedFiles.length) {
+        const candidate = candidateSnapshot();
         const result = await validator.validate(
-          candidateSnapshot(),
+          candidate,
           await readLiveDatabase({ liveDatabase: options.liveDatabase }),
           await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
         );
-        options.onValidation?.(result);
+        options.onValidation?.(result, candidate);
       }
       if (options.storage || options.openStorage) await appendDurableEntry(conversation, { kind: "konae.checkpoint" });
       return settled;
@@ -232,7 +234,7 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       if (status === "discarded") {
         workspace.reset();
         options.onMutation?.(workspace.serialize().files);
-        options.onValidation?.({ ok: false, errors: [], checked: [] });
+        options.onValidation?.({ ok: false, errors: [], checked: [] }, candidateSnapshot());
       }
     },
     adoptSavedBaseline(project: MiniAppProject, revision: number) {
@@ -293,10 +295,10 @@ export function createDurableKonaeAgent(project: MiniAppProject, sessionConfig: 
           }
           if (event.type === "error") emit({ type: "error", message: safeString(event.error) });
         },
-        onValidation: (result) => {
+        onValidation: (result, files) => {
           validation = result;
-          validationSignature = signature(engine?.proposal().files ?? options.recoveredFiles ?? textFiles(currentProject));
-          options.onValidation?.(result);
+          validationSignature = signature(files);
+          options.onValidation?.(result, files);
           emit({ type: "validation", result });
         },
         onMutation: (files) => options.onMutation?.(files),
