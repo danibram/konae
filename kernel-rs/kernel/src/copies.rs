@@ -1021,7 +1021,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 
 
 fn restore_usage() -> String {
-    format!("Usage: {} restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>]", crate::program())
+    format!("Usage: {} restore --from <copy directory | s3://bucket/prefix> [--copy <copy ID>] [--require-revocation <entry SHA-256>]", crate::program())
 }
 
 /// Handles the `restore` command. Returns false for any other command.
@@ -1032,19 +1032,27 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
     }
     let mut from = None;
     let mut copy = None;
+    let mut witness = None;
     let mut rest = args[1..].iter();
     while let Some(flag) = rest.next() {
         match flag.as_str() {
             "--from" => from = rest.next().cloned(),
-            "--copy" => copy = rest.next().cloned(),
+            "--copy" => copy = Some(rest.next().with_context(restore_usage)?.clone()),
+            "--require-revocation" => {
+                let hash = rest.next().with_context(restore_usage)?;
+                ensure!(hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()), "Pass the SHA-256 of the revocation entry.");
+                witness = Some(hash.to_ascii_lowercase());
+            }
             _ => bail!("{}", restore_usage()),
         }
     }
     let from = from.with_context(restore_usage)?;
     let destination = PathBuf::from(std::env::var("KONAE_DATA_DIR").unwrap_or_else(|_| "/data".into()));
     let source = source_for(&from).await?;
-    let summary = restore_with_receipt(&source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(),
-        installation, &status_directory(&destination)).await?;
+    let summary = restore_with_receipt(
+        &source, copy.as_deref(), &destination, CopyKey::from_env()?.as_ref(),
+        installation, &status_directory(&destination), witness.as_deref(),
+    ).await?;
     println!(
         "Restored copy {} into {}: {} Deployments, {} files, checksums verified. Signed out {} sessions and credentials and ended every open email link; owners, agents and app users sign in again.",
         summary.copy_id,
@@ -1063,8 +1071,8 @@ pub async fn operator_command(installation: &Installation) -> Result<bool> {
 }
 
 async fn restore_with_receipt(source: &Source, copy: Option<&str>, destination: &Path, key: Option<&CopyKey>,
-    installation: &Installation, reports: &Path) -> Result<RestoreSummary> {
-    let summary = restore(source, copy, destination, key, installation).await?;
+    installation: &Installation, reports: &Path, witness: Option<&str>) -> Result<RestoreSummary> {
+    let summary = restore_with_witness(source, copy, destination, key, installation, witness).await?;
     if summary.reconciled.is_ok() {
         health::record_restore(source, reports, &summary.copy_id).await?;
     }
@@ -1326,12 +1334,24 @@ async fn verified_bytes(source: &Source, copy: &str, manifest: &Manifest, file: 
     Ok(bytes)
 }
 
+#[cfg(test)]
 async fn restore(
     source: &Source,
     copy: Option<&str>,
     destination: &Path,
     key: Option<&CopyKey>,
     installation: &Installation,
+) -> Result<RestoreSummary> {
+    restore_with_witness(source, copy, destination, key, installation, None).await
+}
+
+async fn restore_with_witness(
+    source: &Source,
+    copy: Option<&str>,
+    destination: &Path,
+    key: Option<&CopyKey>,
+    installation: &Installation,
+    witness: Option<&str>,
 ) -> Result<RestoreSummary> {
     ensure_empty(destination)?;
     let direct;
@@ -1385,9 +1405,14 @@ async fn restore(
         })
         .await??;
         let record = source.record(key).await;
+        let witness = witness.map(str::to_owned);
+        let cut = manifest.created_at;
         let root = staging.clone();
         let stores = installation.clone();
-        let reconciled = tokio::task::spawn_blocking(move || recovery::apply_or_hold(&root, &stores, record)).await??;
+        let reconciled = tokio::task::spawn_blocking(move || match witness {
+            Some(hash) => recovery::prove_revocation(&root, &stores, record, &hash, cut).map(Ok),
+            None => recovery::apply_or_hold(&root, &stores, record),
+        }).await??;
         Ok((removed, reconciled))
     }
     .await;

@@ -223,6 +223,40 @@ pub fn check_signed(key: &CopyKey, name: &str, bytes: &[u8]) -> Result<()> {
     }
 }
 
+fn identity_path(root: &Path, installation: &Installation, entry: &Entry) -> Option<PathBuf> {
+    if let Some(account) = installation.account_for_kind(&entry.kind) {
+        return Some(root.join(account.file));
+    }
+    let app = entry.deployment_id.as_deref()?;
+    (!app.is_empty() && !app.contains(['/', '\\', '.'])).then(|| layout::identity(root, app))
+}
+
+/// The custodian supplies the hash of one entry recorded after the cut.
+/// Read the same subject before and after applying the verified record.
+pub(crate) fn prove_revocation(
+    root: &Path, installation: &Installation, record: Result<Option<Vec<Vec<u8>>>>, hash: &str, cut: u64,
+) -> Result<usize> {
+    use sha2::{Digest, Sha256};
+    let files = record?.context("The required revocation record could not be read.")?;
+    let bytes = files.iter().find(|entry| hex::encode(Sha256::digest(entry)) == hash)
+        .context("The required revocation entry is absent from the verified record.")?;
+    let entry: Entry = serde_json::from_slice(bytes)?;
+    ensure!(entry.at > cut, "The required revocation must follow the selected cut.");
+    let path = identity_path(root, installation, &entry).context("The required revocation has no identity store.")?;
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let query = match (entry.kind.as_str(), entry.state.as_str()) {
+        ("api-key", "revoked") => "SELECT revoked_at IS NOT NULL FROM api_keys WHERE id=?1",
+        (kind, "suspended") if kind == "app-user" || installation.account_for_kind(kind).is_some() =>
+            "SELECT state='suspended' FROM app_users WHERE id=?1",
+        _ => bail!("The required entry must suspend an account or revoke an API key."),
+    };
+    let applied = || db.query_row(query, [&entry.subject], |row| row.get::<_, bool>(0));
+    ensure!(!applied()?, "The required revocation already holds at the cut.");
+    let changed = reconcile(root, installation, &parse(&files)?)?;
+    ensure!(applied()?, "The required revocation did not take effect.");
+    Ok(changed)
+}
+
 /// Applies the record to a data directory that is not serving. Only the
 /// newest entry for each account or key counts, and only a suspension or a
 /// revocation changes anything: a restore never lifts a suspension.
@@ -238,13 +272,7 @@ pub fn reconcile(root: &Path, installation: &Installation, entries: &[Entry]) ->
     }
     let mut changed = 0;
     for entry in latest.values() {
-        let identity = match (entry.kind.as_str(), entry.deployment_id.as_deref()) {
-            (kind, _) if installation.account_for_kind(kind).is_some() => root.join(installation.account_for_kind(kind).unwrap().file),
-            (_, Some(deployment)) if !deployment.is_empty() && !deployment.contains(['/', '\\', '.']) => {
-                crate::layout::identity(&root, &deployment)
-            }
-            _ => continue,
-        };
+        let Some(identity) = identity_path(root, installation, entry) else { continue };
         if !identity.is_file() {
             continue;
         }
@@ -281,6 +309,28 @@ pub fn apply_or_hold(root: &Path, installation: &Installation, record: Result<Op
     };
     set_hold(root, &reason)?;
     Ok(Err(reason))
+}
+
+/// Load a restored installation and exercise its health route in process.
+pub async fn drill_check(installation: &Installation) -> Result<bool> {
+    if std::env::args().nth(1).as_deref() != Some("drill-check") {
+        return Ok(false);
+    }
+    let startup = Startup::from_env()?;
+    ensure!(startup.execution_mode.is_test(), "drill-check requires KONAE_EXECUTION_MODE=test.");
+    ensure!(startup.data_root.is_dir(), "The restored directory is missing.");
+    ensure!(hold(&startup.data_root).is_none(), "The revocation record needs reconciliation.");
+    let denied = |error: Option<std::io::Error>| error.is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+    ensure!(denied(std::net::TcpListener::bind(("127.0.0.1", 0)).err()), "The drill must deny listeners before loading the Kernel.");
+    let outbound = std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], 9).into(), std::time::Duration::from_secs(1));
+    ensure!(denied(outbound.err()), "The drill must deny outbound connections before loading the Kernel.");
+    let (state, _) = state_from_env(&startup, installation.clone(), "recovery-drill-local-mail-key-only", Vec::new(), None).await?;
+    let deployments = state.deployments.read().await.len();
+    let request = Request::builder().uri("/_konae/health").body(Body::empty())?;
+    let response = tower::ServiceExt::oneshot(stack(state, Router::new()), request).await?;
+    ensure!(response.status().is_success(), "The restored Kernel failed its health check.");
+    println!("{}", json!({"version": env!("CARGO_PKG_VERSION"), "loadedDeployments": deployments}));
+    Ok(true)
 }
 
 /// The `reconcile` command. Returns false for any other command.
@@ -409,6 +459,27 @@ mod tests {
         };
         assert!(revoked[0].1.is_some() && revoked[1].1.is_none());
         assert_eq!(reconcile(&root, &crate::installation::Installation::for_test(), &entries).unwrap(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_witness_must_change_its_subject_after_the_cut() {
+        use sha2::{Digest, Sha256};
+        let root = scratch();
+        let folder = layout::data(&root, "one");
+        std::fs::create_dir_all(&folder).unwrap();
+        let db = Connection::open(folder.join("identity.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE api_keys(id TEXT PRIMARY KEY, revoked_at INTEGER);
+                          INSERT INTO api_keys VALUES('retired', NULL), ('other', NULL)").unwrap();
+        let entry = Entry::new("api-key", Some("one"), "retired", "revoked");
+        let bytes = serde_json::to_vec(&entry).unwrap();
+        let hash = hex::encode(Sha256::digest(&bytes));
+        let prove = |cut| prove_revocation(&root, &Installation::kernel(), Ok(Some(vec![bytes.clone()])), &hash, cut);
+        assert!(prove(entry.at).unwrap_err().to_string().contains("must follow"));
+        assert_eq!(prove(entry.at - 1).unwrap(), 1);
+        assert!(prove(entry.at - 1).unwrap_err().to_string().contains("already holds"));
+        assert!(db.query_row("SELECT revoked_at IS NULL FROM api_keys WHERE id='other'", [], |r| r.get::<_, bool>(0)).unwrap());
+        drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
 

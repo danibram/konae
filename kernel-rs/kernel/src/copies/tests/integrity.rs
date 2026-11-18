@@ -98,7 +98,7 @@ async fn s3_failure_is_local_to_the_target_and_survives_restart() {
     let blob = manifest.files.iter().find(|file| file.path.ends_with(".blob")).unwrap();
     let object = format!("{prefix}{first}/{}", blob.path);
     let original = source.read(&first, &blob.path).await.unwrap();
-    restore_with_receipt(&source, Some(&first), &root.join("trial"), state.copies.key(), &state.installation, &reports).await.unwrap();
+    restore_with_receipt(&source, Some(&first), &root.join("trial"), state.copies.key(), &state.installation, &reports, None).await.unwrap();
     let verified = state.copies.health()["targets"][1]["lastVerifiedRestoreAt"].as_u64().unwrap();
 
     for damaged in [None, Some(vec![0; original.len() - 1]), Some(vec![0; original.len()])] {
@@ -109,7 +109,7 @@ async fn s3_failure_is_local_to_the_target_and_survives_restart() {
         let error = run_copy(&state, &config.targets).await.unwrap_err().to_string();
         assert!(error.contains("s3") && error.contains(&blob.path), "{error}");
         assert_eq!(source.complete_copies().await.unwrap(), [first.clone()]);
-        assert!(restore_with_receipt(&source, Some(&first), &root.join("failed-trial"), state.copies.key(), &state.installation, &reports).await.is_err());
+        assert!(restore_with_receipt(&source, Some(&first), &root.join("failed-trial"), state.copies.key(), &state.installation, &reports, None).await.is_err());
         state.copies = open();
         let health = state.copies.health();
         assert_ne!(health["targets"][0]["lastCopyId"], first);
@@ -129,10 +129,10 @@ async fn s3_failure_is_local_to_the_target_and_survives_restart() {
     assert_ne!(recovered, first);
     assert!(state.copies.health()["alert"].is_null());
     let restored = root.join("recovered");
-    restore_with_receipt(&source, Some(&recovered), &restored, state.copies.key(), &state.installation, &reports).await.unwrap();
+    restore_with_receipt(&source, Some(&recovered), &restored, state.copies.key(), &state.installation, &reports, None).await.unwrap();
     assert_eq!(std::fs::read(restored.join(&blob.path)).unwrap(), b"attachment");
     let direct = Source::Directory(copies.join(&recovered));
-    restore_with_receipt(&direct, None, &root.join("local-trial"), None, &state.installation, &reports).await.unwrap();
+    restore_with_receipt(&direct, None, &root.join("local-trial"), None, &state.installation, &reports, None).await.unwrap();
     for target in state.copies.health()["targets"].as_array().unwrap() {
         assert_eq!(target["lastCopyId"], recovered);
         assert_eq!(target["lastVerifiedRestoreCopyId"], recovered);

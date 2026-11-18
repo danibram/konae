@@ -696,7 +696,8 @@ pub async fn operator_command(installation: &installation::Installation) -> Resu
     Ok(copies::history::operator_command().await?
         || copies::operator_command(installation).await?
         || file_store::operator_command().await?
-        || recovery::operator_command(installation).await?)
+        || recovery::operator_command(installation).await?
+        || recovery::drill_check(installation).await?)
 }
 
 /// What a Kernel process reads from its environment before it serves.
