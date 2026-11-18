@@ -1,0 +1,218 @@
+[
+  {
+    "browser": "Chromium desktop",
+    "version": "151.0.7922.34",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "result": {
+      "providerIds": [
+        "anthropic",
+        "openai",
+        "openrouter"
+      ],
+      "catalogs": [
+        {
+          "provider": "anthropic",
+          "modelCount": 18
+        },
+        {
+          "provider": "openai",
+          "modelCount": 44
+        },
+        {
+          "provider": "openrouter",
+          "modelCount": 403
+        }
+      ],
+      "localKeys": [
+        {
+          "provider": "anthropic",
+          "stored": true
+        },
+        {
+          "provider": "openai",
+          "stored": true
+        },
+        {
+          "provider": "openrouter",
+          "stored": true
+        }
+      ],
+      "outputs": {
+        "anthropic": {
+          "model": "fixture/anthropic-custom",
+          "started": true,
+          "text": "fixture-ok"
+        },
+        "openai": {
+          "model": "fixture/openai-custom",
+          "started": true,
+          "text": "fixture-ok"
+        },
+        "openrouter": {
+          "model": "fixture/openrouter-custom",
+          "started": true,
+          "text": "fixture-ok"
+        }
+      },
+      "interruption": {
+        "started": true,
+        "terminatedBySignal": true
+      },
+      "durableHarness": {
+        "settled": "done",
+        "contextMessages": 2,
+        "latestPage": 2,
+        "readonly": true
+      },
+      "indexedDb": true
+    },
+    "requests": [
+      {
+        "url": "https://api.anthropic.com/v1/messages?beta=true",
+        "model": "fixture/anthropic-custom",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://api.openai.com/v1/responses",
+        "model": "fixture/openai-custom",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://openrouter.ai/api/v1/messages?beta=true",
+        "model": "fixture/openrouter-custom",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://api.openai.com/v1/responses",
+        "model": "fixture/openai-interrupt",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://api.openai.com/v1/responses",
+        "model": "chat-latest",
+        "authorization": true,
+        "keyInjected": true
+      }
+    ],
+    "initialRequests": [
+      "http://127.0.0.1:62785/",
+      "http://127.0.0.1:62785/entry.js"
+    ],
+    "lazyBeforeClick": true
+  },
+  {
+    "browser": "WebKit iPhone 13 emulation",
+    "version": "26.5",
+    "viewport": {
+      "width": 390,
+      "height": 664
+    },
+    "result": {
+      "providerIds": [
+        "anthropic",
+        "openai",
+        "openrouter"
+      ],
+      "catalogs": [
+        {
+          "provider": "anthropic",
+          "modelCount": 18
+        },
+        {
+          "provider": "openai",
+          "modelCount": 44
+        },
+        {
+          "provider": "openrouter",
+          "modelCount": 403
+        }
+      ],
+      "localKeys": [
+        {
+          "provider": "anthropic",
+          "stored": true
+        },
+        {
+          "provider": "openai",
+          "stored": true
+        },
+        {
+          "provider": "openrouter",
+          "stored": true
+        }
+      ],
+      "outputs": {
+        "anthropic": {
+          "model": "fixture/anthropic-custom",
+          "started": true,
+          "text": "fixture-ok"
+        },
+        "openai": {
+          "model": "fixture/openai-custom",
+          "started": true,
+          "text": "fixture-ok"
+        },
+        "openrouter": {
+          "model": "fixture/openrouter-custom",
+          "started": true,
+          "text": "fixture-ok"
+        }
+      },
+      "interruption": {
+        "started": true,
+        "terminatedBySignal": true
+      },
+      "durableHarness": {
+        "settled": "done",
+        "contextMessages": 2,
+        "latestPage": 2,
+        "readonly": true
+      },
+      "indexedDb": true
+    },
+    "requests": [
+      {
+        "url": "https://api.anthropic.com/v1/messages?beta=true",
+        "model": "fixture/anthropic-custom",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://api.openai.com/v1/responses",
+        "model": "fixture/openai-custom",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://openrouter.ai/api/v1/messages?beta=true",
+        "model": "fixture/openrouter-custom",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://api.openai.com/v1/responses",
+        "model": "fixture/openai-interrupt",
+        "authorization": true,
+        "keyInjected": true
+      },
+      {
+        "url": "https://api.openai.com/v1/responses",
+        "model": "chat-latest",
+        "authorization": true,
+        "keyInjected": true
+      }
+    ],
+    "initialRequests": [
+      "http://127.0.0.1:62785/",
+      "http://127.0.0.1:62785/entry.js"
+    ],
+    "lazyBeforeClick": true
+  }
+]

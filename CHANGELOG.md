@@ -12,6 +12,9 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - Public apps can opt in to indexing with the `seo` module. Konae generates canonical URLs, robots rules, sitemaps and social previews from the pages the app serves. The home and docs include page titles and share images.
 - A page action can serve a URL such as `/posts/:slug` and use a row for its title and description. Apps can supply a bounded query that lists their published URLs for the sitemap.
 - Owners can read and change the contact email per app. Settings writes can check the value the owner last read, so an older form cannot overwrite a later edit.
+- The editor has a browser-local path at `/local`. Describe, check, preview and apply changes with a provider key saved in that browser. A signed-in owner can explicitly attach a copy of a local conversation to a saved Project.
+- The staged Pi Durable agent saves owner-only conversation history, declared objectives, tool evidence and coherent proposals on the Konae installation. An owner can read or download history without a model key and deliberately continue from a second browser with its own key. History stays outside app exports. The legacy agent remains the default.
+- In staged Durable, an owner can restore an earlier checkpoint as a new proposal against current saved sources. Apply requires a fresh Validation Gate, Build and Preview. Earlier conversations and the effects recorded in them remain available for inspection.
 
 ### Changed
 

@@ -6,6 +6,8 @@ export type PreviewSource = {
   fileAccess?: "app-users";
 };
 
+export const RECOVERED_PREVIEW_RESET_NOTICE = "Preview was recreated. Test rows, uploaded test files, and actor sessions were reset; saved Project sources and rows were not changed.";
+
 export class ProposalHostLifecycle {
   readonly appliedHost: MiniAppRuntimeHost;
   private proposal: { id: string; host: MiniAppRuntimeHost } | null = null;
@@ -34,6 +36,29 @@ export class ProposalHostLifecycle {
     let host: MiniAppRuntimeHost | null = null;
     try {
       host = await this.appliedHost.cloneForProposal(id, source.schema, source.actions, source.fileAccess);
+      if (this.disposed || generation !== this.generation) {
+        await host.dispose(true);
+        return null;
+      }
+      this.proposal = { id, host };
+      return host;
+    } catch (error) {
+      if (host) await host.dispose(true);
+      throw error;
+    } finally {
+      if (generation === this.generation) this.pendingId = null;
+    }
+  }
+
+  /** Recovered candidates must start with fresh local rows, uploaded test files and actor state. */
+  async prepareRecoveredProposal(id: string, source: PreviewSource): Promise<MiniAppRuntimeHost | null> {
+    if (this.disposed) return null;
+    await this.discardProposal();
+    const generation = ++this.generation;
+    this.pendingId = id;
+    let host: MiniAppRuntimeHost | null = null;
+    try {
+      host = new MiniAppRuntimeHost(id, source.schema, source.actions, { fileAccess: source.fileAccess });
       if (this.disposed || generation !== this.generation) {
         await host.dispose(true);
         return null;

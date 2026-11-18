@@ -33,10 +33,11 @@ import {
   Wifi,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PROVIDERS, defaultSessionConfig } from "./agent/catalog";
 import { applyProposal } from "./agent/apply";
 import type { AgentProposal, AgentSessionConfig } from "./agent/contracts";
-import type { KonaeAgentHandle, PlatformConfirmation, PublishOutcome } from "./agent/harness";
+import type { KonaeAgentHandle, KonaeAgentOptions, PlatformConfirmation, PublishOutcome } from "./agent/harness";
 import { createAgentKeyStore } from "./agent/key-store";
 import { Alert, Button, Dialog, IconButton, LoadingBlock, Menu, TabBar, ToastRegion, type MenuItem, type TabBarItem, type ToastItem } from "./components/ui";
 import { AppStatus, UndeployedMarker } from "./components/AppStatus";
@@ -72,6 +73,7 @@ import { ProjectDashboard } from "./components/ProjectDashboard";
 import { NotFound } from "./components/NotFound";
 import { deployProject, HostedDatabaseClient, type DeploymentReceipt, type SignupMode } from "./deployments/client";
 import { McpError, platformMcp } from "./mcp/client";
+import type { DurableEffectReceipt } from "./agent/durable-storage";
 import { readReleaseFacts } from "./deployments/release-facts";
 import type { DeploymentVisibility, RuntimeActionAccess } from "./deployments/manifest";
 import { parseServerActionSource } from "./kernel/actions";
@@ -79,7 +81,7 @@ import { parseRoute, pushRoute } from "./lib/routing";
 import { applyTemplate, defaultTemplate, type TemplateId } from "./lib/templates";
 import { cloneStarter, plainListProject } from "./lib/starter";
 import type { MiniAppProject, ProjectFile } from "./lib/types";
-import { isEncoded, sourceBytes } from "./lib/source-files";
+import { isEncoded, sourceBytes, textFiles } from "./lib/source-files";
 import { formatBytes } from "./lib/usage";
 import { createDirectory, createFile, normalizeProjectPath, protectedProjectPaths, removePath } from "./lib/project-files";
 import { actionReadout, emptyActionProgram, refusedSpot } from "./components/action-readiness";
@@ -88,13 +90,26 @@ import { ProjectSources, SaveSupersededError, type ProjectMetadata } from "./lib
 import { createPreviewDocument } from "./runtime/preview";
 import { buildProjectInBrowser, compileProjectInBrowser } from "./runtime/browser-build";
 import { useRuntimeBridge } from "./runtime/useRuntimeBridge";
-import { ProposalHostLifecycle } from "./runtime/proposal-host";
+import { ProposalHostLifecycle, RECOVERED_PREVIEW_RESET_NOTICE } from "./runtime/proposal-host";
 
 const WhatHappenedView = heldLazy(() => import("./components/WhatHappenedView").then((module) => module.WhatHappenedView));
 const CapabilityWorkspace = heldLazy(() => import("./components/CapabilityWorkspace").then((module) => module.CapabilityWorkspace));
 const AppSettingsDialog = heldLazy(() => import("./components/AppSettingsDialog").then((module) => module.AppSettingsDialog));
+const LocalFirstRun = lazy(() => import("./components/LocalFirstRun").then((module) => ({ default: module.LocalFirstRun })));
+const DurableHistoryDialog = lazy(() => import("./components/DurableHistoryDialog").then((module) => ({ default: module.DurableHistoryDialog })));
+const LocalHistoryAttachmentDialog = lazy(() => import("./components/LocalHistoryAttachmentDialog").then((module) => ({ default: module.LocalHistoryAttachmentDialog })));
 
 type EditorFile = string;
+type StagedRecoveryReview = { checkpointId: string; reason: string; files: Array<{ path: string; base?: string; candidate?: string }> };
+
+function stagedCheckpointDiff(base: { files: Record<string, string>; encodings?: Record<string, "base64"> }, scratch: { files: Record<string, string>; encodings?: Record<string, "base64"> }) {
+  const paths = new Set([...Object.keys(base.files), ...Object.keys(scratch.files)]);
+  return [...paths].sort().filter((path) => base.files[path] !== scratch.files[path] || base.encodings?.[path as never] !== scratch.encodings?.[path as never]).map((path) => ({
+    path,
+    ...(Object.hasOwn(base.files, path) ? { base: base.files[path] } : {}),
+    ...(Object.hasOwn(scratch.files, path) ? { candidate: scratch.files[path] } : {}),
+  }));
+}
 
 const knownFileMeta: Record<string, { label: string; icon: typeof FileText; language: string }> = {
   "index.html": { label: "index.html", icon: FileCode2, language: "HTML" },
@@ -111,6 +126,7 @@ const DesignSystem = lazy(() => import("./components/DesignSystem").then((module
 const modKey = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
 
 export function App() {
+  if (window.location.pathname === "/local") return <Suspense fallback={<main className="local-first-run" aria-busy="true">Opening local app…</main>}><LocalFirstRun /></Suspense>;
   if (window.location.pathname === "/platform-access") return <PlatformAccess />;
   if (window.location.pathname === "/design-system") return <PublicDesignSystem />;
   return <PlatformGate />;
@@ -203,6 +219,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [saveError, setSaveError] = useState("");
   const [sourceConflict, setSourceConflict] = useState(false);
   const [operationError, setOperationError] = useState("");
+  const [staleRecoveryReview, setStaleRecoveryReview] = useState<StagedRecoveryReview | null>(null);
+  const [restoredProposalReview, setRestoredProposalReview] = useState<{ sourceRevision: number; files: Array<{ path: string; base?: string; candidate?: string }>; provenance: { parentConversationId: string; parentCheckpointId: string; parentSequence: number } } | null>(null);
+  const [durableApplyBlocked, setDurableApplyBlocked] = useState(false);
+  const [durableHistoryOpen, setDurableHistoryOpen] = useState(false);
+  const [localAttachment, setLocalAttachment] = useState<unknown>(null);
+  const [pendingDurableContinue, setPendingDurableContinue] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [appSettingsSection, setAppSettingsSection] = useState<AppSettingsSection>("addresses");
@@ -210,6 +232,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const [platformConfirmation, setPlatformConfirmation] = useState<PlatformConfirmation | null>(null);
   const resolvePlatformConfirmation = useRef<((approved: boolean) => void) | null>(null);
   const resolveAgentPublish = useRef<((outcome: PublishOutcome) => void) | null>(null);
+  const agentPublishRequest = useRef<{ callId: string; shared: boolean } | null>(null);
   const deploymentsRef = useRef(deployments);
   deploymentsRef.current = deployments;
   const [agent, setAgent] = useState<KonaeAgentHandle | null>(null);
@@ -219,7 +242,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const codeTabEscape = useRef(false);
   const agentRef = useRef<KonaeAgentHandle | null>(null);
   const agentLoad = useRef<Promise<KonaeAgentHandle | null> | null>(null);
+  const durableRecoveryRef = useRef(false);
+  const recoveredProposalRef = useRef(false);
+  const durableSourceRevisionRef = useRef<number | null>(null);
+  const stagedParentCheckpointRef = useRef<string | null>(null);
+  const stagedParentConversationRef = useRef<string | null>(null);
+  const stagedRestoreSeedRef = useRef<{ messages: unknown[]; candidate: Record<string, string>; encodings?: Record<string, "base64">; sourceRevision: number; provenance: { parentConversationId: string; parentCheckpointId: string; parentSequence: number } } | null>(null);
+  const restoreInFlightRef = useRef(false);
   const projectRef = useRef(project);
+  const ownerSessionRef = useRef(ownerSession);
+  ownerSessionRef.current = ownerSession;
   const hostLifecycleRef = useRef<{ projectId: string; lifecycle: ProposalHostLifecycle } | null>(null);
   if (hostLifecycleRef.current?.projectId !== project.id) {
     hostLifecycleRef.current = {
@@ -280,6 +312,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   const gutterRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const keyStore = useMemo(() => createAgentKeyStore(localStorage, ownerSession.ownerId), [ownerSession.ownerId]);
+  const durableKeyReady = Boolean(keyStore.getKey(agentSession.provider));
   const [explorerOpen, setExplorerOpen] = useState(false);
   const compact = useMediaQuery("(max-width: 900px)");
   const wide = useMediaQuery("(min-width: 1200px)");
@@ -304,6 +337,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   useEffect(() => {
+    try {
+      const pending = sessionStorage.getItem("konae:local-history-attachment:v1");
+      if (pending) setLocalAttachment(JSON.parse(pending));
+    } catch { setOperationError("The local attachment handoff could not be read. Nothing was uploaded; return to /local and prepare it again."); }
+  }, [ownerSession.ownerId]);
+
+  useEffect(() => {
     setAppSettingsOpen(false);
     setPlatformConfirmation(null);
     setExportAhead(false);
@@ -312,6 +352,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       resolvePlatformConfirmation.current = null;
       resolveAgentPublish.current?.({ status: "declined" });
       resolveAgentPublish.current = null;
+      agentPublishRequest.current = null;
     };
   }, [project.id]);
 
@@ -399,7 +440,9 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (publishing) return;
     const timeout = window.setTimeout(() => {
       for (const item of projects) {
-        if (sources.hasSources(item.id) && !sources.isLoaded(item.id)) continue;
+        // A queued callback can still hold the project-list stub after the
+        // source loader marks this project ready.
+        if (sources.hasSources(item.id) && (!sources.isLoaded(item.id) || Object.keys(item.files).length === 0)) continue;
         const snapshot = JSON.stringify(item);
         if (synchronized.current.get(item.id) === snapshot) continue;
         synchronized.current.set(item.id, snapshot);
@@ -777,12 +820,339 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     return () => window.clearTimeout(timer);
   }, []);
 
+  const durableRecoveryStaging = (import.meta.env.DEV || import.meta.env.VITE_KONAE_DURABLE_STAGING === "true")
+    && new URLSearchParams(window.location.search).get("agent") === "durable-recovery";
+
   const ensureAgent = () => {
     if (agentRef.current) return Promise.resolve<KonaeAgentHandle | null>(agentRef.current);
     if (!agentLoad.current) {
+      const agentMode = new URLSearchParams(window.location.search).get("agent");
+      const stagingDurable = (import.meta.env.DEV || import.meta.env.VITE_KONAE_DURABLE_STAGING === "true") && agentMode === "durable-local";
+      const stagingRecovery = durableRecoveryStaging;
       agentLoad.current = import("./agent/harness")
-        .then(({ createKonaeAgent }) => {
-          const handle = createKonaeAgent(projectRef.current, agentSession, keyStore, {
+        .then(async ({ createKonaeAgent, createDurableKonaeAgent }) => {
+          let selectedProject = projectRef.current;
+          const projectId = selectedProject.id;
+          const selectedConfig = agentSession;
+          let leaseLost = false;
+          let activeLeaseCheck: (() => Promise<void>) | null = null;
+          const current = () => projectRef.current.id === projectId && !leaseLost;
+          let durableRecoveryOptions: Record<string, unknown> = {};
+          let activeGeneration: number | null = null;
+          let activeExecutorId: string | null = null;
+          let activeConversationId: string | null = null;
+          let recoveredFiles: Record<string, string> | undefined;
+          let recoveredBinaryFiles: Record<string, string> | undefined;
+          let recoveredEncodings: Record<string, "base64"> | undefined;
+          const restoreSeed = stagedRestoreSeedRef.current;
+          let dispositionAfterInitialize: import("./agent/durable-checkpoints").CheckpointStatus | null = null;
+          let recoveredSavedReadback: { revision: number; project: MiniAppProject } | undefined;
+          let lateApplyCandidate: any = null;
+          if (stagingRecovery) {
+            const [{ createDurableConversation, readDurableConversation, readLatestDurableCheckpoint, listDurableConversations, readDurableLease, openDurableStorage, readDurableBlob }, { openDurableHistory }, { createCheckpointDraft, recoverCheckpoint, reconcileInterruptedApply }, { ToolResultEntry }] = await Promise.all([
+              import("./agent/durable-storage"), import("./agent/durable-engine"), import("./agent/durable-checkpoints"), import("@earendil-works/pi-durable"),
+            ]);
+            const key = `konae:durable-recovery:${ownerSession.ownerId}:${projectId}`;
+            const executorKey = `konae:durable-executor:${ownerSession.ownerId}:${projectId}`;
+            const executorId = localStorage.getItem(executorKey) ?? crypto.randomUUID();
+            localStorage.setItem(executorKey, executorId);
+            activeExecutorId = executorId;
+            const params = new URLSearchParams(window.location.search);
+            let conversationId = params.get("conversation") ?? localStorage.getItem(key) ?? "";
+            let info = conversationId ? await readDurableConversation(projectId, conversationId, ownerSession.ownerId).catch(() => null) : null;
+            let parentCheckpointId: string | undefined = stagedParentCheckpointRef.current ?? undefined;
+            let parentConversationId: string | undefined = stagedParentConversationRef.current ?? undefined;
+            let restoreProvenance = restoreSeed?.provenance;
+            let requiresLinkedAttempt = false;
+            let checkpointStatus: import("./agent/durable-checkpoints").CheckpointStatus = "working";
+            let historicalGate: import("./agent/contracts").ValidationResult | undefined;
+            let candidateId: string | undefined;
+            const observedAtOpen = await sources.observeSaved(projectId);
+            if (!observedAtOpen.project) throw new Error("Saved sources could not be read for proposal recovery.");
+            const savedRevision = observedAtOpen.revision;
+            const restoreSeedAtOpen = stagedRestoreSeedRef.current;
+            if (restoreSeedAtOpen && restoreSeedAtOpen.sourceRevision !== savedRevision) throw new Error("Saved sources changed while restoring this checkpoint. Its candidate remains in the parent history; restore again against the current source base.");
+            recoveredSavedReadback = { revision: observedAtOpen.revision, project: observedAtOpen.project };
+            sources.markPublished(projectId, savedRevision, observedAtOpen.project);
+            setProject(observedAtOpen.project);
+            projectRef.current = observedAtOpen.project;
+            selectedProject = observedAtOpen.project;
+            let base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
+            let committedScratch: Record<string, string> = textFiles(observedAtOpen.project);
+            let committedEncodings: Record<string, "base64"> | undefined = observedAtOpen.project.encodings;
+            let preserveBaseBinary = true;
+            let pendingScratch: Record<string, string> = { ...committedScratch };
+            let inspectedNativeSnapshot: import("./agent/durable-storage").NativeBatchSnapshot | undefined;
+            const readNativePrefix = async (id: string, throughSequence: number) => {
+              const history = await openDurableHistory(projectId, id, ownerSession.ownerId);
+              try {
+                if (history.info.lastSeq !== throughSequence) throw new Error("The native conversation advanced beyond this checkpoint.");
+                if (!history.conversation) throw new Error("The native conversation context is unavailable.");
+                inspectedNativeSnapshot = history.nativeSnapshot;
+                const contextView = await history.conversation.context(BACKGROUND_CONTEXT);
+                return { ...contextView, sequence: throughSequence };
+              } finally { await history.close(); }
+            };
+            if (info) {
+              const latest = await readLatestDurableCheckpoint({ projectId, conversationId, ownerId: ownerSession.ownerId });
+              if (latest) {
+                if ((latest.payload as any)?.lifecycle?.origin === "local-attachment" && (latest.payload as any)?.lifecycle?.inspectionOnly === true) {
+                  throw new Error("This local attachment is preserved for reading only: its native pending work or pre-attachment tool details were not preserved, so it cannot be continued. The attached files remain an inspection-only proposal checkpoint.");
+                }
+                const recovered = await recoverCheckpoint(latest, (digest) => readDurableBlob({ projectId, conversationId, ownerId: ownerSession.ownerId }, digest), { revision: savedRevision, files: base }, (sequence) => readNativePrefix(conversationId, sequence));
+                parentConversationId = recovered.parentConversationId ?? parentConversationId;
+                parentCheckpointId = recovered.parentCheckpointId ?? parentCheckpointId;
+                restoreProvenance = recovered.restoreProvenance ?? restoreProvenance;
+                if (restoreProvenance) {
+                  stagedParentConversationRef.current = restoreProvenance.parentConversationId;
+                  stagedParentCheckpointRef.current = restoreProvenance.parentCheckpointId;
+                  if (recovered.readable) setRestoredProposalReview({
+                    sourceRevision: recovered.sourcesRevision,
+                    files: stagedCheckpointDiff(recovered.base, recovered.scratch),
+                    provenance: restoreProvenance,
+                  });
+                }
+                historicalGate = recovered.historicalGate as import("./agent/contracts").ValidationResult | undefined;
+                candidateId = recovered.candidateId;
+                if (recovered.readable && latest.sequence === info.lastSeq) {
+                  if (recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") lateApplyCandidate = recovered;
+                  let acceptedSavedApply = false;
+                  if ((recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") && recovered.stale) {
+                    const outcome = await reconcileInterruptedApply(recovered, { revision: observedAtOpen.revision, files: observedAtOpen.project });
+                    if (outcome === "saved") {
+                      checkpointStatus = "saved";
+                      dispositionAfterInitialize = "saved";
+                      lateApplyCandidate = recovered;
+                      acceptedSavedApply = true;
+                      durableSourceRevisionRef.current = observedAtOpen.revision;
+                      base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
+                      committedScratch = textFiles(observedAtOpen.project);
+                      pendingScratch = { ...committedScratch };
+                    } else {
+                      parentCheckpointId = latest.checkpointId;
+                      const reason = "The interrupted Apply conflicts with current saved sources. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                      setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                      setOperationError(reason);
+                      setDurableApplyBlocked(true);
+                      requiresLinkedAttempt = true;
+                      conversationId = "";
+                      info = null;
+                    }
+                  } else if (recovered.stale) {
+                    parentCheckpointId = latest.checkpointId;
+                    const reason = "Saved sources advanced. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                    setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                    setOperationError(reason);
+                    setDurableApplyBlocked(true);
+                    requiresLinkedAttempt = true;
+                    conversationId = "";
+                    info = null;
+                  }
+                  if (info && !acceptedSavedApply) {
+                    if (["working", "proposal", "applied-unsaved", "apply-unknown"].includes(recovered.status)) {
+                      recoveredEncodings = recovered.scratch.encodings;
+                      recoveredBinaryFiles = Object.fromEntries(Object.entries(recovered.scratch.files).filter(([path]) => recovered.scratch.encodings?.[path as never] === "base64"));
+                      recoveredFiles = Object.fromEntries(Object.entries(recovered.scratch.files).filter(([path]) => recovered.scratch.encodings?.[path as never] !== "base64"));
+                      committedScratch = restoreProvenance ? { ...recovered.scratch.files } : { ...recoveredFiles };
+                      pendingScratch = { ...committedScratch };
+                      committedEncodings = restoreProvenance ? recovered.scratch.encodings : undefined;
+                      if (restoreProvenance) preserveBaseBinary = false;
+                      checkpointStatus = recovered.status;
+                      durableSourceRevisionRef.current = recovered.sourcesRevision;
+                    }
+                    const sourceText = textFiles(observedAtOpen.project);
+                    if (recovered.status === "proposal" || recovered.status === "applied-unsaved" || recovered.status === "apply-unknown" || JSON.stringify(recovered.scratch.files) !== JSON.stringify(sourceText)) {
+                      recoveredProposalRef.current = true;
+                      setOperationError(RECOVERED_PREVIEW_RESET_NOTICE);
+                    }
+                    if (recovered.status === "applied-unsaved" || recovered.status === "apply-unknown") {
+                      const result = await reconcileInterruptedApply(recovered, { revision: observedAtOpen.revision, files: observedAtOpen.project });
+                      if (result === "saved") { checkpointStatus = "saved"; dispositionAfterInitialize = "saved"; lateApplyCandidate = recovered; }
+                      else if (result === "unchanged") { checkpointStatus = "proposal"; dispositionAfterInitialize = "proposal"; }
+                      else {
+                        parentCheckpointId = latest.checkpointId;
+                        const reason = "The interrupted Apply conflicts with current saved sources. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                        setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                        setOperationError(reason);
+                        setDurableApplyBlocked(true);
+                        requiresLinkedAttempt = true;
+                        conversationId = "";
+                        info = null;
+                      }
+                    }
+                  }
+                } else {
+                  parentCheckpointId = latest.checkpointId;
+                  const reason = recovered.error ?? "Saved sources or conversation history advanced. This immutable candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+                  setStaleRecoveryReview({ checkpointId: latest.checkpointId, reason, files: stagedCheckpointDiff(recovered.base, recovered.scratch) });
+                  setOperationError(reason);
+                  setDurableApplyBlocked(true);
+                  requiresLinkedAttempt = true;
+                  conversationId = "";
+                  info = null;
+                }
+              } else if (info.lastSeq === 0) {
+                parentCheckpointId = stagedParentCheckpointRef.current ?? undefined;
+                parentConversationId = stagedParentConversationRef.current ?? undefined;
+                if (restoreSeed) {
+                  recoveredFiles = Object.fromEntries(Object.entries(restoreSeed.candidate).filter(([path]) => restoreSeed.encodings?.[path] !== "base64"));
+                  recoveredBinaryFiles = Object.fromEntries(Object.entries(restoreSeed.candidate).filter(([path]) => restoreSeed.encodings?.[path] === "base64"));
+                  recoveredEncodings = restoreSeed.encodings;
+                  committedScratch = { ...restoreSeed.candidate };
+                  committedEncodings = restoreSeed.encodings;
+                  pendingScratch = { ...restoreSeed.candidate };
+                  preserveBaseBinary = false;
+                }
+                durableSourceRevisionRef.current = savedRevision;
+                checkpointStatus = "working";
+              } else {
+                setOperationError("This conversation has no readable checkpoint. Its history is preserved and a new attempt starts from current saved sources.");
+                setStaleRecoveryReview({ checkpointId: stagedParentCheckpointRef.current ?? "", reason: "This conversation has no readable checkpoint. Its history is preserved; start a linked attempt from current saved sources.", files: [] });
+                conversationId = "";
+                info = null;
+                requiresLinkedAttempt = true;
+              }
+            }
+            if (requiresLinkedAttempt) return null;
+            if (!info) {
+              // A project lease spans conversations. Check it before creating
+              // a fresh history envelope so a known standby refusal does not
+              // leave an empty conversation that looks like an admitted send.
+              const prior = await listDurableConversations(projectId, ownerSession.ownerId);
+              const previousConversation = prior.items[0];
+              if (previousConversation) {
+                const lease = await readDurableLease(projectId, previousConversation.id, ownerSession.ownerId);
+                if (lease.live) throw new Error("Another device still holds this project's live execution lease. Ask it to stop and release before continuing.");
+                if (lease.unresolvedEffects) throw new Error("An admitted or ambiguous write needs read-back and reconciliation before this project can continue.");
+              }
+              const created = await createDurableConversation(projectId, ownerSession.ownerId);
+              conversationId = created.id;
+              info = created;
+              inspectedNativeSnapshot = undefined;
+              recoveredFiles = undefined;
+              recoveredProposalRef.current = false;
+              setStaleRecoveryReview(null);
+              setDurableApplyBlocked(false);
+              durableSourceRevisionRef.current = savedRevision;
+              base = { files: { ...observedAtOpen.project.files }, encodings: observedAtOpen.project.encodings };
+              committedScratch = textFiles(observedAtOpen.project);
+              pendingScratch = { ...committedScratch };
+              checkpointStatus = "working";
+              if (parentCheckpointId) {
+                const updated = new URL(window.location.href);
+                updated.searchParams.set("conversation", conversationId);
+                history.replaceState(null, "", updated);
+              }
+            }
+            localStorage.setItem(key, conversationId);
+            activeConversationId = conversationId;
+            durableRecoveryRef.current = true;
+            let acknowledgedSequence = info?.lastSeq ?? 0;
+            const openStorage = async () => {
+              const currentInfo = await readDurableConversation(projectId, conversationId, ownerSession.ownerId);
+              const expectedSequence = acknowledgedSequence;
+              if (currentInfo.lastSeq !== expectedSequence) throw new Error("Conversation history advanced beyond the inspected checkpoint. Reload recovery before continuing.");
+              const durableStorage = await import("./agent/durable-storage");
+              let lease = await durableStorage.readDurableLease(projectId, conversationId, ownerSession.ownerId);
+              if (lease.live) throw new Error("Another device still holds this project's live execution lease. Ask it to stop and release before continuing.");
+              if (lease.unresolvedEffects) {
+                const pending = (await durableStorage.readDurableEffects(projectId, conversationId, ownerSession.ownerId)).find((effect) => effect.state === "unknown" && effect.tool === "project_sources_save");
+                if (!pending || !lateApplyCandidate) throw new Error("An admitted or ambiguous write needs its documented read-back and reconciliation before this project can continue.");
+                const observed = await sources.observeSaved(projectId, {
+                  projectId, conversationId, executorId: pending.executorId, generation: pending.generation,
+                  callId: crypto.randomUUID(), observesCallId: pending.callId,
+                });
+                if (!observed.project) throw new Error("The authorized source read-back did not return the saved project. Its outcome remains unknown; no save was replayed.");
+                const { reconcileInterruptedApply } = await import("./agent/durable-checkpoints");
+                const applyOutcome = await reconcileInterruptedApply(lateApplyCandidate, { revision: observed.revision, files: observed.project });
+                if (applyOutcome === "conflict" || applyOutcome === "unknown") throw new Error("The authorized source read-back found a changed or incomplete source state. The candidate remains preserved; no save was replayed.");
+                checkpointStatus = applyOutcome === "saved" ? "saved" : "proposal";
+                dispositionAfterInitialize = checkpointStatus;
+                durableSourceRevisionRef.current = observed.revision;
+                recoveredSavedReadback = { revision: observed.revision, project: observed.project };
+                base = { files: { ...observed.project.files }, encodings: observed.project.encodings };
+                committedScratch = textFiles(observed.project);
+                pendingScratch = { ...committedScratch };
+                lease = await durableStorage.readDurableLease(projectId, conversationId, ownerSession.ownerId);
+              }
+              if (lease.unresolvedEffects) throw new Error("An admitted or ambiguous write needs read-back and reconciliation before this project can continue.");
+              const storage = await openDurableStorage({
+                projectId, conversationId, ownerId: ownerSession.ownerId, executorId,
+                nativeSnapshot: inspectedNativeSnapshot,
+                onLeaseLost: (error) => {
+                  leaseLost = true;
+                  setOperationError(`Shared execution is stopping. ${error instanceof Error ? error.message : String(error)}`);
+                  agentRef.current?.interrupt();
+                },
+                onAcknowledged(sequence) { acknowledgedSequence = sequence; },
+                checkpoint: async (writes, sequence) => {
+                  const currentRevision = await sources.inspectRevision(projectId);
+                  if (currentRevision !== (durableSourceRevisionRef.current ?? savedRevision)) throw new Error("Saved sources changed during this conversation. Start a linked attempt from the current revision before continuing.");
+                  if (writes.some((write: any) => write.type === "entry" && write.value?.kind === ToolResultEntry.kind)) committedScratch = { ...pendingScratch };
+                  const mergedScratch: Record<string, string> = Object.create(null);
+                  for (const [path, value] of Object.entries(committedScratch)) mergedScratch[path] = value;
+                  if (preserveBaseBinary) for (const [path, value] of Object.entries(base.files)) if (base.encodings?.[path as never] === "base64" && !Object.hasOwn(committedScratch, path)) mergedScratch[path] = value;
+                  const mergedEncodings = preserveBaseBinary
+                    ? Object.fromEntries(Object.entries(base.encodings ?? {}).filter(([path]) => !Object.hasOwn(committedScratch, path) && Object.hasOwn(mergedScratch, path)))
+                    : Object.fromEntries(Object.entries(committedEncodings ?? {}).filter(([path]) => Object.hasOwn(mergedScratch, path)));
+                  const committedFiles = { files: mergedScratch, ...(Object.keys(mergedEncodings).length ? { encodings: mergedEncodings } : {}) };
+                  const input = await createCheckpointDraft({
+                    projectId, sourcesRevision: durableSourceRevisionRef.current ?? savedRevision,
+                    base, scratch: committedFiles,
+                    modelView: committedFiles, modelContext: { sequence }, nativeSequence: sequence,
+                    validationSettings: { modules: selectedProject.modules ?? {} },
+                    historicalGate, ...(candidateId ? { candidateId } : {}),
+                    status: checkpointStatus, ...(parentCheckpointId ? { parentCheckpointId } : {}),
+                    ...(parentConversationId ? { parentConversationId } : {}),
+                    ...(restoreProvenance ? { restoreProvenance } : {}),
+                  });
+                  return input;
+                },
+              });
+              const replayedSequence = (storage as any).hydratedSequence as number;
+              const nativeSequence = await (storage as any).lastSequence();
+              if (replayedSequence !== expectedSequence || nativeSequence !== expectedSequence) throw new Error("Conversation history changed while opening its checkpoint. Reload recovery before continuing.");
+              activeGeneration = await (storage as any).claimWriter(lease.generation, executorId, true);
+              activeLeaseCheck = () => (storage as any).assertLease();
+              return storage;
+            };
+            durableRecoveryOptions = {
+              ownerId: ownerSession.ownerId, conversationId, sourceRevision: savedRevision, recoveredFiles, recoveredBinaryFiles, recoveredEncodings,
+              ...(restoreSeed ? { restoredModelContext: { messages: restoreSeed.messages }, restoreProvenance: restoreSeed.provenance } : {}),
+              openStorage,
+              assertExecution: async () => {
+                if (!current() || activeGeneration === null || !activeLeaseCheck) throw new Error("Shared execution has stopped. Continue again from the current saved conversation.");
+                await activeLeaseCheck();
+              },
+              executionIdentity: () => activeGeneration !== null && activeExecutorId && activeConversationId
+                ? { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration }
+                : null,
+              onMutation(files: Record<string, string>) { pendingScratch = { ...files }; },
+              onValidation(result: import("./agent/contracts").ValidationResult) {
+                historicalGate = result;
+                checkpointStatus = result.ok ? "proposal" : "working";
+                if (result.ok) candidateId ??= crypto.randomUUID();
+              },
+              onCheckpointStatus(status: import("./agent/durable-checkpoints").CheckpointStatus, files: Record<string, string>, saved?: { revision: number; project: MiniAppProject }) {
+                checkpointStatus = status;
+                if (status === "saved" && saved) {
+                  durableSourceRevisionRef.current = saved.revision;
+                  base = { files: { ...saved.project.files }, encodings: saved.project.encodings };
+                  committedScratch = textFiles(saved.project);
+                  committedEncodings = undefined;
+                  preserveBaseBinary = true;
+                } else committedScratch = { ...files };
+                pendingScratch = { ...committedScratch };
+              },
+              onSavedSourceReadback(revision: number, saved: MiniAppProject) {
+                durableSourceRevisionRef.current = revision;
+                base = { files: { ...saved.files }, encodings: saved.encodings };
+                committedScratch = { ...pendingScratch };
+              },
+            };
+          }
+          const options: KonaeAgentOptions & { isCurrent: () => boolean } = {
+            isCurrent: current,
             liveDatabase: () => hostLifecycleRef.current!.lifecycle.appliedHost.exportDatabase(),
             sourceFiles: () => projectRef.current,
             previewErrors: () => hostLifecycleRef.current!.lifecycle.appliedHost.previewErrors(),
@@ -797,6 +1167,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
             platform: {
               listTools: (signal) => platformMcp.listTools(signal),
               call: (name, args, signal) => platformMcp.call(name, args, signal),
+              ...(stagingRecovery ? { callAgent: (name: string, args: Record<string, unknown>, callId: string, signal?: AbortSignal, observesCallId?: string) => {
+                if (!current() || activeGeneration === null || !activeExecutorId) throw new Error("Shared execution is not active. Choose Continue from the current project's saved conversation.");
+                if (!activeConversationId) throw new Error("Shared conversation identity is unavailable.");
+                return platformMcp.callForAgent(name, args, { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration, callId, ...(observesCallId ? { observesCallId } : {}) }, signal);
+              } } : {}),
               deploymentForProject: (projectId) => deploymentsRef.current[projectId]?.id ?? null,
               confirm: (request) => new Promise<boolean>((resolve) => {
                 if (request.projectId !== projectRef.current.id) { resolve(false); return; }
@@ -807,10 +1182,23 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                 setAppSettingsOpen(false);
                 setPlatformConfirmation(request);
               }),
-              publish: (projectId) => new Promise<PublishOutcome>((resolve) => {
-                if (projectId !== projectRef.current.id) { resolve({ status: "declined" }); return; }
+              publish: async (projectId, callId) => {
+                if (projectId !== projectRef.current.id) return { status: "declined" };
+                const execution = activeGeneration !== null && activeExecutorId && activeConversationId
+                  ? { projectId, conversationId: activeConversationId, executorId: activeExecutorId, generation: activeGeneration, callId: `${callId ?? crypto.randomUUID()}-permissions` }
+                  : null;
+                if (stagingRecovery && !execution) return { status: "failed", error: "Shared execution is not active. Continue from the current saved conversation." };
+                try {
+                  const inspect = execution
+                    ? await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, execution)
+                    : await platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect");
+                  if (inspect.can?.publish !== true) return { status: "failed", error: "session_inspect.can.publish is no longer granted. The Deploy dialog was not opened." };
+                } catch (error) { return { status: "failed", error: error instanceof Error ? error.message : String(error) }; }
+                if (!current()) return { status: "declined" };
+                return new Promise<PublishOutcome>((resolve) => {
                 resolveAgentPublish.current?.({ status: "declined" });
                 resolveAgentPublish.current = resolve;
+                agentPublishRequest.current = { callId: callId ?? crypto.randomUUID(), shared: stagingRecovery };
                 resolvePlatformConfirmation.current?.(false);
                 resolvePlatformConfirmation.current = null;
                 setPlatformConfirmation(null);
@@ -818,20 +1206,132 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
                 setDeployError("");
                 setDeployOpen(true);
                 refreshOwnerSession();
-              }),
+                });
+              },
               onChanged: () => setDomainVersion((version) => version + 1),
             },
-          });
+          };
+          const handle = stagingRecovery
+            ? createDurableKonaeAgent(selectedProject, selectedConfig, keyStore, { ...options, ...durableRecoveryOptions, isCurrent: current })
+            : stagingDurable
+            ? createDurableKonaeAgent(selectedProject, selectedConfig, keyStore, {
+              isCurrent: current,
+              liveDatabase: options.liveDatabase,
+              previewErrors: options.previewErrors,
+              sourceFiles: options.sourceFiles,
+            })
+            : createKonaeAgent(selectedProject, selectedConfig, keyStore, options);
+          if (stagingRecovery) await handle.initialize?.();
+          if (stagingRecovery && dispositionAfterInitialize && recoveredSavedReadback) await handle.recordDisposition?.(dispositionAfterInitialize, recoveredFiles ?? textFiles(projectRef.current), recoveredSavedReadback);
           agentRef.current = handle;
           setAgent(handle);
+          if (restoreSeed) {
+            stagedRestoreSeedRef.current = null;
+            stagedParentConversationRef.current = null;
+            stagedParentCheckpointRef.current = null;
+          }
           return handle;
         })
-        .catch(() => {
+        .catch((error) => {
           agentLoad.current = null;
+          if (stagingRecovery) setOperationError(error instanceof Error ? error.message : String(error));
           return null;
         });
     }
     return agentLoad.current;
+  };
+
+  useEffect(() => {
+    if (!pendingDurableContinue || !durableRecoveryStaging) return;
+    let active = true;
+    void ensureAgent().then((handle) => {
+      if (!active) return;
+      if (!handle) setOperationError("Continue could not be started. The saved conversation remains readable.");
+      else { setDurableHistoryOpen(false); setOperationError(RECOVERED_PREVIEW_RESET_NOTICE); }
+    }).finally(() => { if (active) setPendingDurableContinue(""); });
+    return () => { active = false; };
+  }, [pendingDurableContinue, durableRecoveryStaging]);
+
+  const beginDurableContinue = (conversationId: string) => {
+    if (!durableRecoveryStaging) return;
+    if (!durableKeyReady) {
+      setOperationError("Add a provider key saved in this browser before continuing. Reading shared history does not need a key.");
+      setSettingsOpen(true);
+      return;
+    }
+    void platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect", {}).then((session) => {
+      if (session.can?.read !== true) throw new Error("Current session_inspect.can.read permission is not granted. History remains readable; continuation did not start.");
+      const updated = new URL(window.location.href);
+      updated.searchParams.set("agent", "durable-recovery");
+      updated.searchParams.set("conversation", conversationId);
+      history.replaceState(null, "", updated);
+      const executorKey = `konae:durable-executor:${ownerSession.ownerId}:${project.id}`;
+      if (!localStorage.getItem(executorKey)) localStorage.setItem(executorKey, crypto.randomUUID());
+      agentRef.current?.dispose();
+      agentRef.current = null;
+      agentLoad.current = null;
+      setAgent(null);
+      setThreadResetToken((token) => token + 1);
+      setOperationError("");
+      setDurableApplyBlocked(false);
+      setPendingDurableContinue(conversationId);
+    }).catch((error) => setOperationError(error instanceof Error ? error.message : String(error)));
+  };
+
+  const prepareDurableEffectRead = async (conversationId: string, effect: DurableEffectReceipt, sql: string | undefined, isCurrent: () => boolean) => {
+    const current = () => isCurrent() && projectRef.current.id === project.id && ownerSessionRef.current.ownerId === ownerSession.ownerId;
+    if (!current()) throw new Error("The selected owner, project or conversation changed. Choose the effect again before reading it.");
+    if (effect.state !== "unknown") throw new Error("The effect is still running or has already been resolved. Refresh history before continuing.");
+    const session = await platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect", {});
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No read-back was sent.");
+    if (session.can?.read !== true) throw new Error("Current session_inspect.can.read permission is not granted. No read-back was sent.");
+    const guide = await platformMcp.call<{ readBack?: { map?: Record<string, unknown> } }>("platform_guide", { topic: "rules" });
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No read-back was sent.");
+    const expectedRead = guide.readBack?.map?.[effect.tool];
+    if (typeof expectedRead !== "string") throw new Error("platform_guide rules does not document a read-back for this effect. Its outcome remains unresolved.");
+    if (expectedRead === "project_sources_read") throw new Error("Source Apply keeps its existing source-based reconciliation flow. Use Check saved source outcome for that effect.");
+    const supported = new Set(["app_invitations_list", "database_execute", "project_inspect", "modules_read", "path_read", "domain_read"]);
+    if (!supported.has(expectedRead)) throw new Error(`The documented ${expectedRead} read-back is not available in this owner action. Its outcome remains unresolved.`);
+    if (expectedRead === "app_invitations_list" && session.can?.manage_users !== true) throw new Error("Current session_inspect.can.manage_users permission is not granted for app_invitations_list. No read-back was sent.");
+    let args: Record<string, unknown>;
+    if (expectedRead === "database_execute") {
+      if (session.can?.write !== true) throw new Error("Current session_inspect.can.write permission is not granted for database_execute SQL. No read-back was sent.");
+      const { isBoundedReadOnlySelect } = await import("./agent/platform-tools");
+      if (!current()) throw new Error("The selected owner, project or conversation changed. No read-back was sent.");
+      if (typeof sql !== "string" || !isBoundedReadOnlySelect(sql)) throw new Error("Enter one read-only SELECT with a numeric LIMIT from 1 to 1000 that inspects the affected rows.");
+      args = { projectId: project.id, operation: "sql", input: { sql } };
+    } else {
+      args = { projectId: project.id };
+    }
+    const evidence = await platformMcp.call(expectedRead, args);
+    if (!current()) throw new Error("The selected owner, project or conversation changed while the read was in progress. Its evidence is not attached to the new selection.");
+    return { tool: expectedRead, args, evidence };
+  };
+
+  const confirmDurableEffectRead = async (conversationId: string, effect: DurableEffectReceipt, read: { tool: string; args: Record<string, unknown> }, isCurrent: () => boolean) => {
+    const current = () => isCurrent() && projectRef.current.id === project.id && ownerSessionRef.current.ownerId === ownerSession.ownerId;
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No observation was recorded.");
+    if (effect.state !== "unknown") throw new Error("The receipt is no longer awaiting observation. Refresh history before confirming.");
+    const session = await platformMcp.call<{ can?: Record<string, unknown> }>("session_inspect", {});
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No observation was recorded.");
+    if (session.can?.read !== true) throw new Error("Current session_inspect.can.read permission is not granted. No observation was recorded.");
+    if (read.tool === "database_execute" && session.can?.write !== true) throw new Error("Current session_inspect.can.write permission is not granted for database_execute SQL. No observation was recorded.");
+    const guide = await platformMcp.call<{ readBack?: { map?: Record<string, unknown> } }>("platform_guide", { topic: "rules" });
+    if (!current()) throw new Error("The selected owner, project or conversation changed. No observation was recorded.");
+    if (guide.readBack?.map?.[effect.tool] !== read.tool) throw new Error("platform_guide rules changed. Refresh the evidence before confirming this observation.");
+    if (read.tool === "app_invitations_list" && session.can?.manage_users !== true) throw new Error("Current session_inspect.can.manage_users permission is not granted. No observation was recorded.");
+    const expectedProjectId = project.id;
+    if (read.args.projectId !== expectedProjectId) throw new Error("The read-back arguments no longer target the open project.");
+    const result = await platformMcp.callForAgent(read.tool, read.args, {
+      projectId: project.id,
+      conversationId,
+      executorId: effect.executorId,
+      generation: effect.generation,
+      callId: crypto.randomUUID(),
+      observesCallId: effect.callId,
+    });
+    if (!current()) throw new Error("The selected owner, project or conversation changed while recording the observation. Reopen its history to inspect the receipt.");
+    return result;
   };
 
   useEffect(() => {
@@ -899,12 +1399,223 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     if (compact && target === "agent") requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("agent-start")?.focus()));
   }, [route]);
 
-  const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean> => {
+  const startLinkedRecoveryAttempt = async () => {
+    const review = staleRecoveryReview;
+    if (!review || !review.checkpointId || !durableRecoveryStaging) return;
+    try {
+      const observed = await sources.observeSaved(project.id);
+      if (!observed.project) throw new Error("Current saved sources could not be read for the linked attempt.");
+      const { createDurableConversation } = await import("./agent/durable-storage");
+      sources.markPublished(project.id, observed.revision, observed.project);
+      projectRef.current = observed.project;
+      setProject(observed.project);
+      const created = await createDurableConversation(project.id, ownerSession.ownerId);
+      stagedParentCheckpointRef.current = review.checkpointId;
+      const key = `konae:durable-recovery:${ownerSession.ownerId}:${project.id}`;
+      localStorage.setItem(key, created.id);
+      const updated = new URL(window.location.href);
+      updated.searchParams.set("conversation", created.id);
+      history.replaceState(null, "", updated);
+      agentRef.current?.dispose();
+      agentRef.current = null;
+      agentLoad.current = null;
+      setAgent(null);
+      setThreadResetToken((token) => token + 1);
+      setOperationError("");
+      const handle = await ensureAgent();
+      if (!handle) throw new Error("The linked attempt could not be initialized.");
+      setStaleRecoveryReview(null);
+      setDurableApplyBlocked(false);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const restoreDurableCheckpoint = async (parentConversationId: string, checkpointId: string, sequence: number) => {
+    if (restoreInFlightRef.current || !durableRecoveryStaging || !ownerSession.ownerId) return;
+    restoreInFlightRef.current = true;
+    const expectedProjectId = project.id;
+    const expectedOwnerId = ownerSession.ownerId;
+    const expectedSelectionVersion = projectSelectionVersion.current;
+    const expectedRoute = { screen: routeRef.current.screen, projectId: "projectId" in routeRef.current ? routeRef.current.projectId : undefined };
+    const expectedWorkspaceGeneration = workspaceGeneration.current;
+    let createdConversationId: string | null = null;
+    const selectionIsCurrent = () => projectRef.current.id === expectedProjectId
+      && ownerSession.ownerId === expectedOwnerId
+      && projectSelectionVersion.current === expectedSelectionVersion
+      && workspaceGeneration.current === expectedWorkspaceGeneration
+      && routeRef.current.screen === expectedRoute.screen
+      && ("projectId" in routeRef.current ? routeRef.current.projectId : undefined) === expectedRoute.projectId;
+    try {
+      const [{ readDurableCheckpoint, readDurableBlob, readDurableLease, createDurableConversation }, { openDurableHistory }, { recoverCheckpoint }] = await Promise.all([
+        import("./agent/durable-storage"), import("./agent/durable-engine"), import("./agent/durable-checkpoints"),
+      ]);
+      if (!selectionIsCurrent()) throw new Error("The owner or project changed before restoration. Nothing was restored.");
+      const observed = await sources.observeSaved(expectedProjectId);
+      if (!observed.project) throw new Error("Current saved sources could not be read. No restored conversation was created.");
+      const lease = await readDurableLease(expectedProjectId, parentConversationId, expectedOwnerId);
+      if (lease.live) throw new Error("This project still has a live writer. Ask it to stop and release before restoring a checkpoint.");
+      if (lease.unresolvedEffects) throw new Error("A project write has an unresolved outcome. Observe it through its documented read-back before restoring a branch.");
+      const selected = await readDurableCheckpoint({ projectId: expectedProjectId, conversationId: parentConversationId, ownerId: expectedOwnerId }, checkpointId);
+      if (!selected || selected.sequence !== sequence) throw new Error("The selected checkpoint changed or is no longer available. Nothing was restored.");
+      const historical = await openDurableHistory(expectedProjectId, parentConversationId, expectedOwnerId, sequence);
+      let modelContext: any;
+      try {
+        if (historical.prefixSequence !== sequence) throw new Error("The selected checkpoint has no exact native context boundary.");
+        if (!historical.conversation) throw new Error("The selected checkpoint's native conversation context is unavailable.");
+        modelContext = await historical.conversation.context((await import("@earendil-works/chord/context")).BACKGROUND_CONTEXT);
+      } finally { await historical.close(); }
+      const recovered = await recoverCheckpoint(selected, (digest: string) => readDurableBlob({ projectId: expectedProjectId, conversationId: parentConversationId, ownerId: expectedOwnerId }, digest), { revision: observed.revision, files: { files: observed.project.files, encodings: observed.project.encodings } }, async (through: number) => through === sequence ? { ...modelContext, sequence } : null);
+      if (!recovered.readable || !recovered.modelContext || !Array.isArray((recovered.modelContext as any).messages)) throw new Error(recovered.error ?? "The exact model context for this checkpoint could not be reconstructed.");
+      if (!recovered.scratch || !recovered.scratch.files) throw new Error("The selected checkpoint's candidate files could not be verified.");
+      const rechecked = await sources.observeSaved(expectedProjectId);
+      if (!rechecked.project || rechecked.revision !== observed.revision) throw new Error("Saved sources changed while the checkpoint was being restored. Reload the current project and choose again.");
+      const freshLease = await readDurableLease(expectedProjectId, parentConversationId, expectedOwnerId);
+      if (freshLease.live || freshLease.unresolvedEffects) throw new Error("Project execution state changed while restoring. No branch was created; resolve the current lease or write first.");
+      if (!selectionIsCurrent()) throw new Error("The owner or project changed while the checkpoint was being restored. No branch was created.");
+      sources.markPublished(expectedProjectId, rechecked.revision, rechecked.project);
+      projectRef.current = rechecked.project;
+      setProject(rechecked.project);
+      const created = await createDurableConversation(expectedProjectId, expectedOwnerId, fetch, `Restore from ${parentConversationId.slice(0, 8)}`);
+      createdConversationId = created.id;
+      if (!selectionIsCurrent()) throw new Error("The owner or project changed before the restored branch could be opened.");
+      stagedParentConversationRef.current = parentConversationId;
+      stagedParentCheckpointRef.current = checkpointId;
+      stagedRestoreSeedRef.current = {
+        messages: (recovered.modelContext as any).messages,
+        candidate: { ...recovered.scratch.files },
+        encodings: recovered.scratch.encodings,
+        sourceRevision: rechecked.revision,
+        provenance: { parentConversationId, parentCheckpointId: checkpointId, parentSequence: sequence },
+      };
+      const key = `konae:durable-recovery:${expectedOwnerId}:${expectedProjectId}`;
+      localStorage.setItem(key, created.id);
+      const updated = new URL(window.location.href);
+      updated.searchParams.set("conversation", created.id);
+      history.replaceState(null, "", updated);
+      setDurableHistoryOpen(false);
+      agentRef.current?.dispose(); agentRef.current = null; agentLoad.current = null; setAgent(null); setThreadResetToken((token) => token + 1);
+      if (!selectionIsCurrent()) throw new Error("The owner or project changed before the restored branch could be activated.");
+      const handle = await ensureAgent();
+      if (!handle) throw new Error("The restored proposal branch could not be initialized.");
+      if (!selectionIsCurrent()) throw new Error("The owner or project changed while opening the restored branch.");
+      setRestoredProposalReview({ sourceRevision: rechecked.revision, files: stagedCheckpointDiff({ files: rechecked.project.files, encodings: rechecked.project.encodings }, recovered.scratch), provenance: { parentConversationId, parentCheckpointId: checkpointId, parentSequence: sequence } });
+      setOperationError(`Restored as a new proposal from checkpoint ${checkpointId}. Its files are compared with current saved revision ${rechecked.revision}; only candidate files changed. External outcomes and records remain in the parent conversation.`);
+    } catch (error) {
+      if (createdConversationId) {
+        try {
+          const { readDurableConversation, deleteDurableConversation } = await import("./agent/durable-storage");
+          const created = await readDurableConversation(expectedProjectId, createdConversationId, expectedOwnerId);
+          if (created.lastSeq === 0) await deleteDurableConversation(expectedProjectId, createdConversationId, expectedOwnerId);
+        } catch { /* preserve a branch when its creation or cleanup outcome is unknown */ }
+      }
+      setOperationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      restoreInFlightRef.current = false;
+    }
+  };
+
+  const redoRestoredProposal = async () => {
+    const provenance = restoredProposalReview?.provenance;
+    if (!provenance) return;
+    const { readDurableLease } = await import("./agent/durable-storage");
+    try {
+      const lease = await readDurableLease(project.id, provenance.parentConversationId, ownerSession.ownerId);
+      if (lease.live) {
+        setDurableHistoryOpen(true);
+        throw new Error("A browser still holds the project writer lease. Use Conversation history → Ask it to stop and release, then choose Redo again.");
+      }
+      await restoreDurableCheckpoint(provenance.parentConversationId, provenance.parentCheckpointId, provenance.parentSequence);
+    } catch (error) { setOperationError(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const applyAgentProposal = async (proposal: AgentProposal): Promise<boolean | { applied: false; message: string; preserveProposal: true }> => {
     const applied = applyProposal(project, proposal);
     if (!applied) return false;
     const approvedPreview = proposalPreview?.proposal === proposal ? proposalPreview : null;
     if (!approvedPreview || !hostLifecycle.isProposalReady(approvedPreview.id)) return false;
-    const next = applied.project;
+    let next = applied.project;
+    if (durableRecoveryRef.current && agentRef.current?.recordDisposition) {
+      const expectedRevision = durableSourceRevisionRef.current ?? sources.revision(project.id);
+      if (expectedRevision === undefined) return false;
+      const applyCallId = crypto.randomUUID();
+      const applyExecution = agentRef.current.execution?.(applyCallId) ?? undefined;
+      try {
+        await agentRef.current.assertExecution?.();
+        if (!applyExecution) throw new Error("Shared execution identity is unavailable.");
+        const session = await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, { ...applyExecution, callId: `${applyCallId}-permissions` });
+        if (session.can?.write !== true) throw new Error("session_inspect.can.write is no longer granted. Apply was not sent.");
+      } catch (error) { return { applied: false, preserveProposal: true, message: error instanceof Error ? error.message : "Shared execution is no longer active." }; }
+      try { await agentRef.current.recordDisposition("applied-unsaved", proposal.files); }
+      catch (error) {
+        setDurableApplyBlocked(true);
+        const message = `Apply was not sent because its checkpoint was not acknowledged. The saved sources are unchanged. ${error instanceof Error ? error.message : String(error)}`;
+        setOperationError(message);
+        return { applied: false, preserveProposal: true, message };
+      }
+      let saveError: unknown;
+      let revision: number | null = null;
+      try {
+        await agentRef.current.assertExecution?.();
+        revision = await sources.saveExpected(next, expectedRevision, applyExecution);
+      } catch (error) { saveError = error; }
+      let observed: Awaited<ReturnType<typeof sources.observeSaved>> | null = null;
+      try { observed = await sources.observeSaved(project.id, applyExecution ? agentRef.current.execution?.(crypto.randomUUID(), applyCallId) ?? undefined : undefined); }
+      catch (error) { saveError ??= error; }
+      const { reconcileInterruptedApply } = await import("./agent/durable-checkpoints");
+      const reconciled = await reconcileInterruptedApply(
+        { sourcesRevision: expectedRevision, base: { files: project.files, encodings: project.encodings }, scratch: { files: next.files, encodings: next.encodings } },
+        observed?.project ? { revision: observed.revision, files: observed.project } : null,
+      );
+      if (reconciled !== "saved" || !observed?.project || (revision !== null && observed.revision !== revision)) {
+        const disposition = reconciled === "unchanged" ? "proposal" : reconciled === "conflict" ? "stale" : "apply-unknown";
+        let dispositionError: unknown;
+        try { await agentRef.current.recordDisposition(disposition, proposal.files); }
+        catch (error) { dispositionError = error; }
+        let message: string;
+        if (reconciled === "conflict" && observed?.project) {
+          let checkpointId = stagedParentCheckpointRef.current ?? "";
+          try {
+            const conversationId = new URLSearchParams(window.location.search).get("conversation") ?? localStorage.getItem(`konae:durable-recovery:${ownerSession.ownerId}:${project.id}`) ?? "";
+            if (conversationId) {
+              const { readLatestDurableCheckpoint } = await import("./agent/durable-storage");
+              checkpointId = (await readLatestDurableCheckpoint({ projectId: project.id, conversationId, ownerId: ownerSession.ownerId }))?.checkpointId ?? checkpointId;
+            }
+          } catch { /* Keep the prior immutable parent when the latest receipt cannot be read. */ }
+          const reason = "Saved sources changed while Apply was in flight. The old candidate remains inspectable; start a linked attempt from current saved sources without merging it.";
+          setStaleRecoveryReview({ checkpointId, reason, files: stagedCheckpointDiff({ files: project.files, encodings: project.encodings }, { files: next.files, encodings: next.encodings }) });
+          setDurableApplyBlocked(true);
+          sources.markPublished(project.id, observed.revision, observed.project);
+          projectRef.current = observed.project;
+          setProject(observed.project);
+          setPreviewProject(observed.project);
+          const observedSnapshot = JSON.stringify(observed.project);
+          synchronized.current.set(project.id, observedSnapshot);
+          serverSnapshots.current.set(project.id, observedSnapshot);
+          setOperationError(reason);
+          message = reason;
+        } else if (reconciled === "unknown" || dispositionError) {
+          setDurableApplyBlocked(true);
+          message = `Apply outcome is unobserved. Do not retry until current saved sources have been read back and the conversation checkpoint is reconciled. ${saveError instanceof Error ? saveError.message : saveError ? String(saveError) : ""}${dispositionError instanceof Error ? ` ${dispositionError.message}` : ""}`;
+          setOperationError(message);
+        } else {
+          setDurableApplyBlocked(false);
+          message = `Apply was not saved; read-back confirms the base revision is still current, so the proposal remains ready for review. ${saveError instanceof Error ? saveError.message : saveError ? String(saveError) : ""}`;
+          setOperationError(message);
+        }
+        return { applied: false, preserveProposal: true, message };
+      }
+      next = observed.project;
+      durableSourceRevisionRef.current = observed.revision;
+      sources.markPublished(project.id, observed.revision, observed.project);
+      setDurableApplyBlocked(false);
+      setStaleRecoveryReview(null);
+      try { await agentRef.current.recordDisposition("saved", proposal.files, { revision: observed.revision, project: observed.project }); }
+      catch (error) { setOperationError(`Saved sources were read back at revision ${observed.revision}, but the saved lifecycle checkpoint did not receive acknowledgement. Recovery will reconcile it on reopen. ${error instanceof Error ? error.message : String(error)}`); }
+      const snapshot = JSON.stringify(next);
+      synchronized.current.set(project.id, snapshot);
+      serverSnapshots.current.set(project.id, snapshot);
+    }
     const hostApplied = await hostLifecycle.applyProposal(approvedPreview.id, {
       schema: next.files["schema.sql"],
       actions: next.files["actions.json"],
@@ -930,11 +1641,19 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     threadResetToken,
     keyVersion,
     onApply: applyAgentProposal,
-    onDiscard: () => {
-      void hostLifecycle.discardProposal(proposalPreview?.id);
+    onDiscard: async () => {
+      const proposal = agentRef.current?.proposal();
+      try {
+        if (proposal && agentRef.current?.recordDisposition) await agentRef.current.recordDisposition("discarded", proposal.files);
+        else agentRef.current?.discard();
+      } catch (error) {
+        const message = `Discard could not be saved to conversation history. The proposal and Preview remain available. ${error instanceof Error ? error.message : String(error)}`;
+        setOperationError(message);
+        throw new Error(message);
+      }
+      await hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
       setProposalPreparation(null);
-      agentRef.current?.discard();
     },
     providers: PROVIDERS,
     draftKey: project.id,
@@ -943,6 +1662,12 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
   useEffect(() => {
     const proposal = agentThread.state.proposal;
+    if (staleRecoveryReview) {
+      void hostLifecycle.discardProposal(proposalPreview?.id);
+      setProposalPreview(null);
+      setProposalPreparation(null);
+      return;
+    }
     if (agentThread.footer.kind !== "validated" || !proposal) {
       void hostLifecycle.discardProposal(proposalPreview?.id);
       setProposalPreview(null);
@@ -962,11 +1687,13 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     setProposalPreparation({ proposal });
     setOperationError("");
     const id = `proposal:${project.id}:${crypto.randomUUID()}`;
+    const recoveredCandidate = recoveredProposalRef.current;
     void (async () => {
       try {
         const compiled = await compileProjectInBrowser(candidate);
         if (!current) return;
-        const host = await hostLifecycle.prepareProposal(id, {
+        const prepareHost = recoveredCandidate ? hostLifecycle.prepareRecoveredProposal.bind(hostLifecycle) : hostLifecycle.prepareProposal.bind(hostLifecycle);
+        const host = await prepareHost(id, {
           schema: candidate.files["schema.sql"],
           actions: candidate.files["actions.json"],
           fileAccess: candidate.modules?.files?.fileAccess as "app-users" | undefined,
@@ -984,6 +1711,10 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
           },
         });
         setProposalPreparation(null);
+        if (recoveredCandidate) {
+          recoveredProposalRef.current = false;
+          setOperationError(RECOVERED_PREVIEW_RESET_NOTICE);
+        }
         setStage("preview");
       } catch (error) {
         if (current) setProposalPreparation({ proposal, error: error instanceof Error ? error.message : String(error) });
@@ -994,7 +1725,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       current = false;
       void hostLifecycle.discardProposal(id);
     };
-  }, [agentThread.footer.kind, agentThread.state.proposal, project, hostLifecycle]);
+  }, [agentThread.footer.kind, agentThread.state.proposal, project, hostLifecycle, staleRecoveryReview]);
 
   const activeProposalPreview = proposalPreview?.project.id === project.id
     && proposalPreview.proposal === agentThread.state.proposal
@@ -1049,11 +1780,34 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   };
 
   const deploy = async (visibility: DeploymentVisibility, signupMode?: SignupMode) => {
+    const requestedByAgent = resolveAgentPublish.current !== null;
+    const sharedAgent = durableRecoveryStaging && durableRecoveryRef.current ? agentRef.current : null;
+    const sharedBaseRevision = durableSourceRevisionRef.current;
+    const agentPublish = requestedByAgent && agentPublishRequest.current?.shared === true;
+    const publishCallId = agentPublishRequest.current?.callId ?? crypto.randomUUID();
+    const sourceSaveExecution = agentPublish ? agentRef.current?.execution?.(`${publishCallId}-sources`) ?? undefined : undefined;
+    let confirmedDeployment: DeploymentReceipt | null = null;
     setPublishing(true);
     setDeployError("");
     try {
       synchronized.current.set(project.id, JSON.stringify(project));
-      const observedSourcesRevision = await sources.save(project);
+      let observedSourcesRevision: number;
+      if (agentPublish) {
+        await agentRef.current?.assertExecution?.();
+        const permissionIdentity = agentRef.current?.execution?.(`${publishCallId}-permissions`);
+        if (!permissionIdentity) throw new Error("Shared execution identity is unavailable for publication.");
+        const session = await platformMcp.callForAgent<{ can?: Record<string, unknown> }>("session_inspect", {}, permissionIdentity);
+        if (session.can?.publish !== true || session.can?.write !== true) throw new Error("session_inspect.can.publish or session_inspect.can.write changed while Deploy was open. Nothing was published.");
+        const expected = sources.revision(project.id);
+        if (expected === undefined || !sourceSaveExecution) throw new Error("Shared execution identity is unavailable for the source save.");
+        observedSourcesRevision = await sources.saveExpected(project, expected, sourceSaveExecution);
+        if (observedSourcesRevision > expected) {
+          const saveReadback = agentRef.current?.execution?.(`${publishCallId}-sources-save-readback`, `${publishCallId}-sources`);
+          if (!saveReadback) throw new Error("The source save advanced but its documented project_sources_read read-back is unavailable. Publishing is stopped until the saved Project is observed.");
+          const observed = await sources.observeSaved(project.id, saveReadback);
+          if (!observed.project || observed.revision !== observedSourcesRevision || !sameProjectSourceFiles(project, observed.project)) throw new Error("The source save advanced, but project_sources_read did not confirm its exact files and revision. Publishing is stopped; keep the current proposal and reconcile saved sources.");
+        }
+      } else observedSourcesRevision = await sources.save(project);
       serverSnapshots.current.set(project.id, JSON.stringify(project));
       const deployment = deploymentsRef.current[project.id];
       const buildProject = deployment
@@ -1062,8 +1816,52 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       const artifact = await buildProjectInBrowser(buildProject);
       const initialSignupPolicy = !activeDeployment && signupMode ? { mode: signupMode, allowlist: [] } : undefined;
       const confirmSchema = (change: SchemaChange) => new Promise<boolean>((resolve) => setSchemaChange({ change, resolve }));
-      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules);
+      const fencedClient = agentPublish ? {
+        call: async <T,>(name: string, args: object = {}, signal?: AbortSignal): Promise<T> => {
+          if (name === "release_apply") {
+            await agentRef.current?.assertExecution?.();
+            const execution = agentRef.current?.execution?.(publishCallId);
+            if (!execution) throw new Error("Shared execution identity is unavailable for publication.");
+            const receipt = await platformMcp.callForAgent<T>(name, args, execution, signal);
+            try {
+              await agentRef.current?.assertExecution?.();
+              const observed = await platformMcp.callForAgent<{ deployment?: { id?: string } | null }>("project_inspect", { projectId: project.id }, { ...execution, callId: `${publishCallId}-readback`, observesCallId: publishCallId }, signal);
+              const receiptId = (receipt as { id?: string } | null)?.id;
+              if (!observed.deployment || (receiptId && observed.deployment.id !== receiptId)) throw new Error("Published deployment did not match the release receipt.");
+            } catch (error) {
+              throw new Error(`Deploy outcome is unknown because the authorized project_inspect read-back did not verify the release: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            return receipt;
+          }
+          return platformMcp.call<T>(name, args, signal);
+        },
+        upload: platformMcp.upload.bind(platformMcp),
+        cancel: platformMcp.cancel.bind(platformMcp),
+      } : undefined;
+      const published = await deployProject(project, visibility, artifact, confirmSchema, initialSignupPolicy, observedSourcesRevision, deploymentsRef.current[project.id] ? undefined : project.modules, fencedClient);
       const record = published.receipt;
+      const sameSharedBase = () => sharedAgent !== null && agentRef.current === sharedAgent
+        && projectRef.current.id === project.id && sharedBaseRevision === observedSourcesRevision
+        && durableSourceRevisionRef.current === sharedBaseRevision;
+      if (!agentPublish && (requestedByAgent || sameSharedBase())) {
+        const inspected = await platformMcp.call<{ deployment?: { id: string } }>("project_inspect", { projectId: project.id });
+        if (inspected.deployment?.id !== record.id) throw new Error("The Deploy outcome is unobserved. Inspect the current Deployment before trying again.");
+      }
+      confirmedDeployment = record;
+      // Once release_apply and project_inspect agree, remove the Deploy action
+      // immediately. Later baseline read-back must never invite a second release.
+      setDeployment(record);
+      setDeployments((current) => ({ ...current, [project.id]: record }));
+      if (agentPublish || sameSharedBase()) {
+        // The source baseline is a fresh read after project_inspect observed the release.
+        const sourceReadback = agentPublish ? sharedAgent?.execution?.(`${publishCallId}-released-sources-readback`) : undefined;
+        if (agentPublish && !sourceReadback) throw new Error("The Deployment was confirmed, but its saved source baseline could not be read back. Do not repeat release; reconcile the Project sources first.");
+        const observed = await sources.observeSaved(project.id, sourceReadback ?? undefined);
+        if (!observed.project || observed.revision !== published.sourcesRevision || !sameProjectSourceFiles(project, observed.project)) {
+          throw new Error(`The Deployment was confirmed, but source read-back did not match the exact published files and revision ${published.sourcesRevision}. Do not repeat release; inspect current Project sources before continuing.`);
+        }
+        if (sameSharedBase() || (agentPublish && agentRef.current === sharedAgent)) sharedAgent?.adoptSavedBaseline?.(observed.project, observed.revision);
+      }
       const releasedProject = { ...project, manifest: record.manifest };
       const releasedSnapshot = JSON.stringify(releasedProject);
       sources.markPublished(project.id, published.sourcesRevision, releasedProject);
@@ -1072,15 +1870,16 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
       setProject((current) => current.id === project.id && JSON.stringify(current) === JSON.stringify(project) ? releasedProject : current);
       setProjects((current) => current.map((item) => item.id === project.id && JSON.stringify(item) === JSON.stringify(project) ? releasedProject : item));
       setExportAhead(false);
-      setDeployment(record);
-      setDeployments((current) => ({ ...current, [project.id]: record }));
       resolveAgentPublish.current?.({ status: "published", url: record.url, visibility: record.manifest.visibility });
       resolveAgentPublish.current = null;
+      agentPublishRequest.current = null;
     } catch (error) {
       if (error instanceof SchemaChangeDeclined) return;
       if (isSignedOutError(error)) refreshOwnerSession();
-      setDeployError(error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      setDeployError(detail);
       setDeployErrorCode(error instanceof McpError ? error.refusal?.code : undefined);
+      if (confirmedDeployment) setOperationError(`Deployment ${confirmedDeployment.url} was confirmed and read back. Do not repeat release. The project source baseline still needs reconciliation: ${detail}`);
     } finally {
       setPublishing(false);
     }
@@ -1209,7 +2008,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
   if (route.screen === "not-found") return <NotFound what={route.what} path={route.path} />;
 
   if (screen === "projects") {
-    return <ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />;
+    return <><ProjectDashboard projects={projects} deployments={deployments} ownerSession={ownerSession} missing={missing} onDeleteMissing={deleteMissingProject} onDeleteProject={deleteEditableProject} onOpenProject={openProject} onCreateProject={createProject} modelConnected={agentThread.live} returnFocusTo={leftProject.current} />
+      {localAttachment !== null && <Suspense fallback={null}><LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
+        sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
+      }} /></Suspense>}
+    </>;
   }
 
   if (screen === "editor" && missing.some((item) => item.id === route.projectId)) return <main className="platform-page"><div className="platform-main"><section className="platform-card" aria-live="polite"><h1>Could not open this app</h1><p role="alert">This app has no readable app/ source folder. The editor did not replace its files.</p><Button onClick={() => window.location.reload()}>Try again</Button><Button variant="secondary" onClick={goToProjects}>Projects</Button></section></div></main>;
@@ -1529,7 +2332,8 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
     ),
   };
 
-  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} />;
+  const durableHistoryAvailable = Boolean(ownerSession.ownerId && project.id);
+  const agentBody = <AgentPanel thread={agentThread} sessionConfig={agentSession} onOpenSettings={() => setSettingsOpen(true)} suggestions={suggestedChanges(project)} proposalReady={proposalReady} proposalError={proposalError} recoverAvailable={durableRecoveryStaging && durableKeyReady} historyAvailable={durableHistoryAvailable} staleRecovery={staleRecoveryReview} restoredProposal={restoredProposalReview} onRedoRestore={() => void redoRestoredProposal()} applyBlocked={durableApplyBlocked} onStartLinkedAttempt={() => void startLinkedRecoveryAttempt()} onOpenHistory={() => setDurableHistoryOpen(true)} />;
   const agentPanel: PanelRender = {
     id: "agent",
     title: "Describe",
@@ -1647,6 +2451,11 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))} />
 
+      {durableHistoryAvailable && durableHistoryOpen && <Suspense fallback={null}><DurableHistoryDialog projectId={project.id} ownerId={ownerSession.ownerId} open={durableHistoryOpen} onClose={() => setDurableHistoryOpen(false)} onContinue={beginDurableContinue} onReadEffect={prepareDurableEffectRead} onConfirmEffectRead={confirmDurableEffectRead} onRestore={durableRecoveryStaging ? restoreDurableCheckpoint : undefined} canContinue={durableRecoveryStaging} /></Suspense>}
+      {localAttachment !== null && <Suspense fallback={null}><LocalHistoryAttachmentDialog attachment={localAttachment} projects={projects} sources={sources} ownerId={ownerSession.ownerId} onClose={() => setLocalAttachment(null)} onAttached={(conversationId) => {
+        sessionStorage.removeItem("konae:local-history-attachment:v1"); setLocalAttachment(null); toast(`Local history attached as conversation ${conversationId}. Its files remain a proposal checkpoint; saved sources were not changed.`);
+      }} /></Suspense>}
+
       <AgentSettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1664,7 +2473,7 @@ function WorkspaceApp({ ownerSession, refreshOwnerSession, sources, loaded }: { 
         <Button variant="primary" onClick={() => { resolvePlatformConfirmation.current?.(true); resolvePlatformConfirmation.current = null; setPlatformConfirmation(null); }}>Allow</Button>
       </>}><div className="ui-dialog-body"><p style={{ overflowWrap: "anywhere" }}>{platformConfirmation.summary}</p><p>It runs as you, on this app only, through <code>{platformConfirmation.tool}</code>.</p></div></Dialog>}
 
-      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
+      {deployOpen && <DeployDialog project={project} deployment={deployment} unchanged={sameAsLive} ownerEmail={ownerSession.email} publishing={publishing} error={deployError} errorCode={deployErrorCode} session={ownerSession} signInHref={signInHref} onClose={() => { resolveAgentPublish.current?.(deployError ? { status: "failed", error: deployError } : { status: "declined" }); resolveAgentPublish.current = null; agentPublishRequest.current = null; setDeployOpen(false); }} current={activeDeployment} onOpenAppSettings={() => { setDeployOpen(false); setAppSettingsSection("addresses"); setAppSettingsOpen(true); }} onDeploy={(visibility, signupMode) => void deploy(visibility, signupMode)} onEditAuth={() => { setDeployOpen(false); setAuthView("rules"); reveal("auth"); }} onOpenActions={() => { setDeployOpen(false); openRefusal(); }} onOpenUsers={() => { setDeployOpen(false); setAuthView("users"); setInviteFocus((count) => count + 1); reveal("auth"); }} onOpenIntegrations={() => { setDeployOpen(false); setAuthView("integrations"); reveal("auth"); }} />}
       {/* After the Deploy dialog, so it paints over it. */}
       {schemaChange && <SchemaChangeDialog change={schemaChange.change} onAnswer={(confirmed) => { schemaChange.resolve(confirmed); setSchemaChange(null); }} />}
 
@@ -1809,6 +2618,16 @@ function downloadBlob(blob: Blob, filename: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function sameProjectSourceFiles(expected: MiniAppProject, observed: MiniAppProject) {
+  const sorted = (value: Record<string, unknown> | undefined) => JSON.stringify(Object.entries(value ?? {}).sort(([left], [right]) => left.localeCompare(right)));
+  return expected.id === observed.id
+    && expected.name === observed.name
+    && expected.slug === observed.slug
+    && sorted(expected.files) === sorted(observed.files)
+    && sorted(expected.encodings) === sorted(observed.encodings)
+    && JSON.stringify([...(expected.directories ?? [])].sort()) === JSON.stringify([...(observed.directories ?? [])].sort());
 }
 
 function fileMetaFor(file: string): { label: string; icon: typeof FileText; language: string } {

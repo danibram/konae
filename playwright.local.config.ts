@@ -22,7 +22,7 @@ export default defineConfig({
     launchOptions: { args: ["--host-resolver-rules=MAP apps.example.org 127.0.0.1", `--unsafely-treat-insecure-origin-as-secure=http://apps.example.org:${kernelPort}`] },
   },
   webServer: {
-    command: `KONAE_TRUSTED_PROXIES=127.0.0.1 KONAE_MAIL_TRANSPORT=development KONAE_DOMAIN=apps.example.org KONAE_DATA_DIR='${dataRoot}' KONAE_EDITOR_PORT=${editorPort} KONAE_KERNEL_PORT=${kernelPort} bun run dev:local`,
+    command: `VITE_KONAE_DURABLE_STAGING=true KONAE_TRUSTED_PROXIES=127.0.0.1 KONAE_MAIL_TRANSPORT=development KONAE_DOMAIN=apps.example.org KONAE_DATA_DIR='${dataRoot}' KONAE_EDITOR_PORT=${editorPort} KONAE_KERNEL_PORT=${kernelPort} bun run dev:local`,
     url: `${baseURL}/_konae/health`,
     reuseExistingServer: Boolean(process.env.KONAE_EDITOR_URL) && !process.env.CI,
     timeout: 120_000,

@@ -125,7 +125,7 @@ export function DeployDialog({ project, deployment, publishing, error, errorCode
       </>}
     >
       {deployment ? (
-        <PublishedState deployment={deployment} ownerEmail={ownerEmail} onClose={onClose} onOpenUsers={onOpenUsers} onOpenAppSettings={onOpenAppSettings} />
+        <PublishedState deployment={deployment} ownerEmail={ownerEmail} busy={publishing} onClose={onClose} onOpenUsers={onOpenUsers} onOpenAppSettings={onOpenAppSettings} />
       ) : (
         <div className="ui-dialog-body publish-body">
           {refusal ? (
@@ -215,7 +215,7 @@ function useSelfInvite(deploymentId: string, isPrivate: boolean, ownerEmail: str
 
 type SelfInvite = { status: "idle" } | { status: "sending"; key: string } | { status: "sent"; text: string } | { status: "failed"; key: string; text: string };
 
-function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAppSettings }: { deployment: DeploymentReceipt; ownerEmail?: string | null; onClose: () => void; onOpenUsers?: () => void; onOpenAppSettings?: () => void }) {
+function PublishedState({ deployment, ownerEmail, busy, onClose, onOpenUsers, onOpenAppSettings }: { deployment: DeploymentReceipt; ownerEmail?: string | null; busy: boolean; onClose: () => void; onOpenUsers?: () => void; onOpenAppSettings?: () => void }) {
   const isPrivate = deployment.manifest.visibility === "private";
   const policy = usePublishedPolicy(deployment.id);
   const [contact, setContact] = useState<ContactEmailState | null>(null);
@@ -271,7 +271,7 @@ function PublishedState({ deployment, ownerEmail, onClose, onOpenUsers, onOpenAp
       {offerSelfInvite && <Button ref={inviteRef} variant="primary" disabled={!mail.ready} aria-busy={invite.status === "sending" || undefined} aria-describedby={mail.ready ? undefined : mailReasonId} onClick={() => void inviteSelf()}>{invite.status === "sending" ? <><Loader2 className="spin" size={14} aria-hidden="true" /> Inviting…</> : <><Send size={14} aria-hidden="true" /> Invite yourself</>}</Button>}
       <a ref={openRef} className={`ui-button ui-button-md ${offerSelfInvite ? "ui-button-secondary" : "ui-button-primary"} published-open`} href={deployment.url} target="_blank" rel="noreferrer"><ExternalLink size={14} aria-hidden="true" /> Open the app</a>
       {policy.status === "ready" && policy.mode === "invitation" && onOpenUsers && <Button onClick={onOpenUsers}>Invite people</Button>}
-      <Button onClick={onClose}>Done</Button>
+      <Button onClick={onClose} disabled={busy} aria-busy={busy || undefined}>Done</Button>
     </div>
   </div>;
 }

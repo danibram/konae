@@ -1,0 +1,27 @@
+{
+  "name": "konae-pi-durable-1-5-2-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun run test:all",
+    "browser": "tsx browser/run.ts",
+    "bundle": "tsx browser/bundle.ts",
+    "test:unsafe": "bun test ./tests/unsafe-recovery.fixture.ts",
+    "bench:raw": "bun run bench/mobile-raw-replay.ts",
+    "bench:refs": "bun run bench/mobile-details-pointers.ts",
+    "test:all": "bun test --timeout 30000 ./tests/indexeddb-storage.fixture.ts ./tests/native-storage.fixture.ts ./tests/unsafe-recovery.fixture.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "esbuild": "0.27.3",
+    "fake-indexeddb": "6.2.6",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  }
+}

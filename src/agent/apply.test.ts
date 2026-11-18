@@ -72,6 +72,39 @@ describe("Apply over a project that holds a file that is not text", () => {
     expect(applied?.project.encodings).toBeUndefined();
   });
 
+  test("restores an encoded candidate by replacement or removal while retaining its bytes and encoding", () => {
+    const candidatePng = "AQIDBA==";
+    const replaced = applyProposal(project, {
+      ...proposalFor({ ...textFiles(project), "public/logo.png": candidatePng }, ["public/logo.png"]),
+      encodings: { "public/logo.png": "base64" },
+    });
+    expect(replaced?.project.files["public/logo.png"]).toBe(candidatePng);
+    expect(replaced?.project.encodings).toEqual({ "public/logo.png": "base64" });
+
+    const removed = applyProposal(project, {
+      ...proposalFor(textFiles(project), ["public/logo.png"]),
+      encodings: {},
+    });
+    expect(removed?.project.files["public/logo.png"]).toBeUndefined();
+    expect(removed?.project.encodings).toBeUndefined();
+  });
+
+  test("compares a restored full source set with unchanged retained binaries", () => {
+    const current: MiniAppProject = {
+      ...project,
+      files: { ...project.files, "public/current-only.bin": "AQIDBA==" },
+      encodings: { "public/logo.png": "base64", "public/current-only.bin": "base64" },
+    };
+    const candidate = { ...textFiles(project), "public/logo.png": png };
+    const applied = applyProposal(current, {
+      ...proposalFor(candidate, ["public/current-only.bin"]),
+      encodings: { "public/logo.png": "base64" },
+    });
+    expect(applied?.project.files["public/logo.png"]).toBe(png);
+    expect(applied?.project.files["public/current-only.bin"]).toBeUndefined();
+    expect(applied?.project.encodings).toEqual({ "public/logo.png": "base64" });
+  });
+
   test("answers null when the merge refuses", () => {
     expect(applyProposal(project, proposalFor(textFiles(project), []))).toBeNull();
   });

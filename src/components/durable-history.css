@@ -1,0 +1,34 @@
+.durable-history-dialog { width: min(1100px, calc(100vw - 32px)); max-height: min(88vh, 900px); }
+.durable-history-layout { display: grid; grid-template-columns: minmax(210px, 30%) minmax(0, 1fr); min-height: 420px; max-height: 68vh; }
+.durable-history-list { display: flex; flex-direction: column; gap: 8px; overflow: auto; padding: 12px; border-right: 1px solid var(--line, #ddd); }
+.durable-conversation-choice { display: grid; gap: 5px; width: 100%; text-align: left; padding: 10px; border: 1px solid var(--line, #ddd); border-radius: 9px; color: inherit; background: transparent; cursor: pointer; overflow-wrap: anywhere; }
+.durable-conversation-choice.selected { border-color: var(--accent, #6b5cff); background: color-mix(in srgb, var(--accent, #6b5cff) 9%, transparent); }
+.durable-conversation-choice span, .durable-conversation-choice small, .durable-reader-head p, .durable-muted { color: var(--muted, #666); font-size: 12px; }
+.durable-history-reader { min-width: 0; overflow: auto; padding: 16px; }
+.durable-reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--line, #ddd); padding-bottom: 10px; }
+.durable-reader-head h3 { margin: 0; overflow-wrap: anywhere; }
+.durable-reader-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.durable-status { margin: 12px 0; padding: 10px; border-radius: 8px; background: color-mix(in srgb, var(--accent, #6b5cff) 8%, transparent); font-size: 13px; overflow-wrap: anywhere; }
+.durable-timeline { display: grid; gap: 10px; list-style: none; padding: 12px 0; margin: 0; }
+.durable-timeline-entry { min-width: 0; border: 1px solid var(--line, #ddd); border-radius: 9px; padding: 10px; overflow-wrap: anywhere; }
+.durable-timeline-entry > small, .durable-message > small { color: var(--muted, #666); }
+.durable-message { margin: 8px 0; padding-left: 10px; border-left: 2px solid var(--line, #ddd); }
+.durable-message p { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.durable-message em { color: var(--muted, #666); font-size: 12px; }
+.durable-call-link, .durable-effect { font-family: var(--font-mono, monospace); font-size: 12px; }
+.durable-intent, .durable-effect { margin: 8px 0; padding: 8px; background: color-mix(in srgb, var(--accent, #6b5cff) 7%, transparent); border-radius: 7px; }
+.durable-history-dialog details { margin-top: 8px; }
+.durable-history-dialog summary { cursor: pointer; padding: 5px 0; }
+.durable-entry-details { display: grid; gap: 6px; }
+.durable-entry-details pre, .durable-intent pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 9px; border-radius: 7px; background: var(--surface-raised, #f3f3f3); font: 11px/1.45 var(--font-mono, monospace); }
+.durable-history-error, .durable-delete-confirm { margin: 10px 16px; padding: 10px; border: 1px solid var(--danger, #b32); border-radius: 8px; overflow-wrap: anywhere; }
+.durable-delete-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.durable-delete-confirm p { flex-basis: 100%; }
+@media (max-width: 680px) {
+  .durable-history-dialog { width: calc(100vw - 16px); max-height: 94vh; }
+  .durable-history-layout { grid-template-columns: 1fr; max-height: 74vh; }
+  .durable-history-list { max-height: 150px; border-right: 0; border-bottom: 1px solid var(--line, #ddd); }
+  .durable-history-reader { padding: 12px; }
+  .durable-reader-head { display: block; }
+  .durable-reader-actions { margin: 8px 0; }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createPlatformTools, databaseCallWrites, platformToolPolicy, type AgentPlatformBinding, type McpToolDefinition, type PlatformConfirmation } from "./platform-tools";
+import { createPlatformTools, databaseCallWrites, isBoundedReadOnlySelect, platformToolPolicy, type AgentPlatformBinding, type McpToolDefinition, type PlatformConfirmation } from "./platform-tools";
 
 const text = { type: "string", minLength: 1 };
 const listed: McpToolDefinition[] = [
@@ -40,6 +40,22 @@ async function toolsFor(platform: AgentPlatformBinding, isCurrent = () => true) 
 const run = (tool: { execute: (...args: any[]) => Promise<any> } | undefined, params: Record<string, unknown> = {}) => tool!.execute("call", params, undefined);
 
 describe("the build agent's tools from the owner's MCP", () => {
+  test("classifies a single SELECT with an optional trailing semicolon as a read", () => {
+    expect(databaseCallWrites({ operation: "sql", input: { sql: " SELECT id FROM tasks LIMIT 5;  " } })).toBe(false);
+    expect(databaseCallWrites({ operation: "sql", input: { sql: "SELECT id FROM tasks LIMIT 5; DELETE FROM tasks" } })).toBe(true);
+    expect(databaseCallWrites({ operation: "sql", input: { sql: "WITH rows AS (SELECT 1) SELECT * FROM rows LIMIT 1" } })).toBe(true);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 50; ")).toBe(true);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1001")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks -- LIMIT 10")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks /* LIMIT 10 */")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks WHERE title = 'a LIMIT 10 string'")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM (SELECT id FROM tasks LIMIT 10)")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1+1000")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 1, 1001")).toBe(false);
+    expect(isBoundedReadOnlySelect("SELECT id FROM tasks LIMIT 10 OFFSET 40")).toBe(true);
+  });
+
   test("only the allowlisted tools reach the model, never source saves, credentials, secrets or transfers", async () => {
     const tools = await toolsFor(binding().value);
     expect(Object.keys(tools).sort()).toEqual(["database_execute", "domain_read", "domain_set", "module_set", "modules_read", "path_clear", "path_read", "path_set", "platform_guide", "project_inspect"]);
@@ -123,6 +139,19 @@ describe("the build agent's tools from the owner's MCP", () => {
     expect(decline.calls).toEqual([]);
   });
 
+  test("rechecks the operation's current permission after the owner confirmation", async () => {
+    const dispatches: string[] = [];
+    let canWrite = true;
+    const platform = binding({
+      confirm: async () => { canWrite = false; return true; },
+      callAgent: async (name) => { dispatches.push(name); return { can: { read: true, write: canWrite, publish: false }, projectIds: ["p1"] }; },
+    });
+    const tools = await toolsFor(platform.value);
+    await expect(run(tools.module_set, { module: "seo", on: true, expected: { on: false } })).rejects.toThrow("session_inspect.can.publish is not granted");
+    expect(dispatches).toEqual(["session_inspect"]);
+    expect(platform.calls).toEqual([]);
+  });
+
   test("auth policy changes ask the owner and name the policy in the confirmation", async () => {
     const { value, confirmations } = binding();
     const tools = await toolsFor(value);
@@ -149,7 +178,8 @@ describe("the build agent's tools from the owner's MCP", () => {
     } });
     const tools = await toolsFor(value);
     const result = await run(tools.module_set, { module: "seo", on: true, expected: { on: false } });
-    expect(result.content[0]?.text).toContain("module_set succeeded; modules_read failed");
+    expect(result.content[0]?.text).toContain('"outcome": "unknown"');
+    expect(result.content[0]?.text).toContain("has not been verified");
     expect(calls.map(({ name }) => name)).toEqual(["module_set", "modules_read"]);
   });
 
