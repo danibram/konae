@@ -155,6 +155,20 @@ def exercise(args, root, remote):
     subprocess.run([binary,"owner-account-suspend",email],env=env,check=True,stdout=subprocess.DEVNULL)
     second = capture()
     assert first < second
+    journal = live / ".copy-operations"
+    journal.mkdir(exist_ok=True)
+    (journal/"fixture.json").write_text(json.dumps({"subject":"probe","phase":"unfinished fixture write"}))
+    with server(binary, env) as (port, _):
+        def refused():
+            reports = cut["targets"](port)
+            return reports if all("Unfinished operation" in (r["lastError"] or "") for r in reports) else None
+        reports = wait(refused, "a destination accepted an incomplete operation", 30)
+        assert {r["kind"] for r in reports} == expected_targets
+        assert all(r["lastCopyId"] == second for r in reports)
+    assert {p.name for p in (directory/"points").iterdir()} == {first,second}
+    if remote:
+        assert set(remote.list("points")) == {first,second}
+    print(f"PASS unfinished operation refused on {len(reports)} targets with previous cut retained",flush=True)
     shutil.rmtree(live)
     sources = [("directory-v3",directory),("directory",legacy)]
     if remote:

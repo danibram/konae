@@ -134,3 +134,47 @@ async fn signed_geometry_order_length_and_independent_points() -> Result<()> {
     fs::remove_dir_all(scratch)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn a_partial_directory_upload_retries_without_replacing_a_block() -> Result<()> {
+    let scratch = std::env::temp_dir().join(format!("block-retry-{}", uuid::Uuid::new_v4()));
+    let stage = scratch.join("stage");
+    fs::create_dir_all(&stage)?;
+    fs::write(stage.join("a"), b"first")?;
+    fs::write(stage.join("b"), b"second")?;
+    let source = Source::Directory(scratch.join("copies"));
+    let master = CopyKey::derive(SECRET);
+    let repo = Repository::new(&source, REPO, &master)?;
+    let scope = |_: &str| true;
+    let inventory = Manifest::capture(&stage, 1)?;
+    fs::remove_file(stage.join("b"))?;
+    assert!(repo
+        .publish(&stage, &inventory, &scope, 16, &HashMap::new())
+        .await
+        .is_err());
+    assert!(repo.points().await?.is_empty());
+    let paths: Vec<_> =
+        fs::read_dir(scratch.join("copies/objects"))?.collect::<std::io::Result<_>>()?;
+    assert_eq!(paths.len(), 1);
+    let object = paths[0].path();
+    let modified = object.metadata()?.modified()?;
+    fs::write(stage.join("b"), b"second")?;
+    let stats = repo
+        .publish(&stage, &inventory, &scope, 16, &HashMap::new())
+        .await?;
+    assert_eq!((stats.new_objects, stats.reused_objects), (1, 1));
+    assert_eq!(object.metadata()?.modified()?, modified);
+
+    fs::write(stage.join("b"), b"third")?;
+    let next = Manifest::capture(&stage, 2)?;
+    repo.publish(&stage, &next, &scope, 16, &HashMap::new())
+        .await?;
+    fs::remove_dir_all(stage)?;
+    fs::remove_file(scratch.join("copies/points").join(inventory.copy_id))?;
+    let point = repo.open(&next.copy_id, &scope).await?;
+    repo.restore(&point, &scratch.join("recovered")).await?;
+    assert_eq!(fs::read(scratch.join("recovered/a"))?, b"first");
+    assert_eq!(fs::read(scratch.join("recovered/b"))?, b"third");
+    fs::remove_dir_all(scratch)?;
+    Ok(())
+}
