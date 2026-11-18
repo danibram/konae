@@ -54,6 +54,12 @@ Keep this path short. If it grows, fix the path before adding docs.
 2. Credential, to publish or to operate: `konae login` then `publish`, or MCP `platform_guide` topics `rules`, `pieces`, `credentials`.
 3. Proof: open the Deployment URL, call one Server Action, then `project_inspect` (and `conform` when checking a contract).
 
+## Release Konae
+
+1. Read [Releasing](./docs/releasing.md). Check open PRs and pending local work, integrate the release scope into `main` and review the diff from the last release tag. Run the editor build and the checks that exercise the changed Kernel and editor paths.
+2. Put the user-facing features, upgrade changes and fixes in the version's `CHANGELOG.md` section. Commit that section and the matching JS and Rust versions, tag the release commit and push `main` and the tag. Watch the Release workflow and confirm the GitHub release body matches the changelog, with the binaries and checksums attached.
+3. Use the installation's private runbook for any rollout. Confirm the running service uses the published image digest and passes its health check.
+
 ## Named divergences
 
 These are not bugs to paper over. Say them when they matter.

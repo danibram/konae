@@ -56,11 +56,11 @@ After the first release, set each package's visibility to Public under the repos
    ```
 
    Leave an empty `## [Unreleased]` above it.
-3. Set both version fields to `X.Y.Z`.
+3. Set both version fields to `X.Y.Z` and refresh the Cargo workspace entries in `kernel-rs/Cargo.lock` with `cargo update --workspace --manifest-path kernel-rs/Cargo.toml`.
 4. Commit on `main`:
 
    ```sh
-   git add CHANGELOG.md package.json kernel-rs/Cargo.toml
+   git add CHANGELOG.md package.json kernel-rs/Cargo.toml kernel-rs/Cargo.lock
    git commit -m "chore: release vX.Y.Z"
    ```
 
