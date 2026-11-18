@@ -257,6 +257,8 @@ def exercise(args, root, report, traffic, remote):
         d.update(emergencyCredentials=True, elapsedMs=mirror_ms + d["elapsedMs"])
 
     phase("select-compatible")
+    assert not traffic.stats.get("offline"), "offline recovery contacted MinIO"
+    report["offlineS3Requests"] = 0
     legacy_ids = sorted(p.name for p in legacy.iterdir() if (p / "manifest.json").exists())
     s3_ids = sorted(p.split("/")[0] for p in store.files("copies/") if p.endswith("/manifest.json"))
     assert legacy_ids == s3_ids == [first, shadow]

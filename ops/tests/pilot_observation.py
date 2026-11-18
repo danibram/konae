@@ -2,6 +2,7 @@
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 import ctypes
+import http.client
 import json
 import os
 from pathlib import Path
@@ -11,9 +12,7 @@ import subprocess
 import tempfile
 from threading import Condition, Event, Thread
 import time
-from urllib.error import HTTPError
-from urllib.parse import parse_qs
-from urllib.request import urlopen
+from urllib.parse import parse_qs, urlsplit
 import uuid
 
 
@@ -104,6 +103,10 @@ class Traffic:
     """Count MinIO trace records at the server, grouped by phase and object prefix."""
     def __init__(self, mc):
         self.mc = mc
+        endpoint = urlsplit(os.environ["KONAE_TEST_S3_ENDPOINT"])
+        if endpoint.scheme != "http" or endpoint.hostname != "127.0.0.1" or not endpoint.port:
+            raise ValueError("Traffic observation requires disposable loopback MinIO")
+        self.port = endpoint.port
         self.phase = "setup"
         self.counters = {}
         self.before = None
@@ -152,15 +155,19 @@ class Traffic:
             self.counters[self.phase] = {k: v - self.before.get(k, 0) for k, v in after.items()
                                          if v != self.before.get(k, 0)}
         deadline = time.monotonic() + 20
-        url = os.environ["KONAE_TEST_S3_ENDPOINT"] + "/konae-test/" + self.marker
         while time.monotonic() < deadline:
             with self.condition:
                 previous = self.seen
+            # Keep the observer's requests separate from the operations under test.
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
             try:
-                with urlopen(url, timeout=3):
-                    raise AssertionError("Unexpected public marker object")
-            except HTTPError as e:
-                assert e.code in (403, 404)
+                conn.request("HEAD", "/konae-test/" + self.marker)
+                response = conn.getresponse()
+                response.read()
+                if response.status not in (403, 404):
+                    raise RuntimeError("Unexpected response to the MinIO trace marker")
+            finally:
+                conn.close()
             with self.condition:
                 if self.condition.wait_for(lambda: self.seen > previous, .4):
                     self.phase = phase
