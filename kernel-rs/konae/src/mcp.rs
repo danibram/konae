@@ -1858,7 +1858,7 @@ async fn admin_call(
             drop(db);
             Ok(receipt)
         }).await,
-        "project_import" => crate::copies::Pending::through_catalogue(project_import(state, owner, principal, &a)).await,
+        "project_import" => crate::copies::Pending::through_catalogue(project_import(state, owner, principal, &a)).await?,
         "app_user_enter" => {
             anyhow::ensure!(owner.session, "app_user_enter signs a browser in to the app, so it takes the owner's own browser session. A delegated token cannot call it.");
             let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "manage_users").await?;
@@ -1907,7 +1907,9 @@ const IMPORT_REPLACE: &str = "replace must be sources, data or both.";
 
 
 
-async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Value> {
+// A refused release can leave a complete app after its import is reversed.
+// The outer result tells the copy journal whether the catalogue is consistent.
+async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value) -> Result<Result<Value>> {
     use super::import::{Outcome, Target};
     let deployment = owned_deployment(state, owner, a["projectId"].as_str().unwrap_or_default(), "publish").await?;
     let replace = a["replace"].as_str().unwrap_or_default();
@@ -1954,7 +1956,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 "An import into an existing app keeps its Signup Policy and sign-in methods, and takes its data as package."
             );
             if change.confirmation().is_some_and(|expected| confirmation != Some(expected.as_str())) {
-                return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}));
+                return Ok(Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()})));
             }
             Some((payload, change))
         }
@@ -1972,7 +1974,7 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
                 None => Target::live(state, &deployment)?,
             };
             match super::import::import_data(state, &deployment, package, &target, confirmation, sources).await? {
-                Outcome::NeedsConfirmation(change) => return Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()})),
+                Outcome::NeedsConfirmation(change) => return Ok(Ok(json!({"imported": false, "replace": replace, "schema": change.to_json()}))),
                 Outcome::Imported { backup, change } => (backup, change),
             }
         }
@@ -1997,20 +1999,21 @@ async fn project_import(state: &Konae, owner: &Owner, principal: &str, a: &Value
         )?;
         answer["deployment"] = receipt;
     }
-    Ok(answer)
+    Ok(Ok(answer))
 }
 
 
-async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Value> {
-    if has_package {
-        let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
-        let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
-        let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
-        let _data = database_lock(state, &deployment.id).await;
-        super::import::restore_held(&state.kernel, deployment, &record).await
-            .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
+async fn restore_import_after_release_failure(state: &Konae, deployment: &Deployment, has_package: bool, backup: &Value, error: anyhow::Error) -> Result<Result<Value>> {
+    if !has_package {
+        return Err(error);
     }
-    Err(error)
+    let id = backup["id"].as_str().ok_or_else(|| anyhow::anyhow!("The import backup has no id."))?;
+    let path = crate::layout::backups(&state.data_root, &deployment.id).join(format!("{id}.json"));
+    let record: super::DatabaseBackup = serde_json::from_slice(&tokio::fs::read(path).await?)?;
+    let _data = database_lock(state, &deployment.id).await;
+    super::import::restore_held(&state.kernel, deployment, &record).await
+        .map_err(|restore| anyhow::anyhow!("Import failed: {error:#}. Restoring its backup failed: {restore:#}"))?;
+    Ok(Err(error))
 }
 
 
@@ -2437,7 +2440,11 @@ mod tests {
         let imported_source = json!({"id":id,"name":"Import failure","slug":"import-failure","files":{"index.html":"imported source"},"directories":[],"manifest":old_source["manifest"],"updatedAt":2});
         super::super::sources::write(&state.data_root, id, &imported_source).await.unwrap();
         let backup = record.view();
-        let error = restore_import_after_release_failure(&state, &deployment, true, &backup, anyhow::anyhow!("Injected release failure")).await.unwrap_err();
+        let result = crate::copies::Pending::through_catalogue(restore_import_after_release_failure(
+            &state, &deployment, true, &backup, anyhow::anyhow!("Injected release failure"),
+        )).await.unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(std::fs::read_dir(root.join(".copy-operations")).unwrap().count(), 0);
         assert!(error.to_string().contains("Injected release failure"));
         let row: String = rusqlite::Connection::open(&database).unwrap().query_row("SELECT body FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(row, "old row");
