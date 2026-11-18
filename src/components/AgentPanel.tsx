@@ -32,11 +32,13 @@ type Props = {
   historyAvailable?: boolean;
   applyBlocked?: boolean;
   staleRecovery?: { reason: string; checkpointId: string; files: Array<{ path: string; base?: string; candidate?: string }> } | null;
+  restoredProposal?: { sourceRevision: number; files: Array<{ path: string; base?: string; candidate?: string }>; provenance: { parentConversationId: string; parentCheckpointId: string; parentSequence: number } } | null;
+  onRedoRestore?: () => void;
   onStartLinkedAttempt?: () => void;
   onOpenHistory?: () => void;
 };
 
-export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError, recoverAvailable = false, historyAvailable = false, applyBlocked = false, staleRecovery, onStartLinkedAttempt, onOpenHistory }: Props) {
+export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions = [], proposalReady = true, proposalError, recoverAvailable = false, historyAvailable = false, applyBlocked = false, staleRecovery, restoredProposal, onRedoRestore, onStartLinkedAttempt, onOpenHistory }: Props) {
   const { state, provider, live, blocker, footer, running } = thread;
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -92,6 +94,21 @@ export function AgentPanel({ thread, sessionConfig, onOpenSettings, suggestions 
               </section>)}
             </details>
             <Button variant="secondary" onClick={onStartLinkedAttempt} disabled={!staleRecovery.checkpointId}>Start linked attempt from current saved sources</Button>
+          </section>
+        )}
+        {restoredProposal && (
+          <section className="agent-recovery-review" aria-label="Restored proposal diff">
+            <h2>Restored as a new proposal</h2>
+            <p>Candidate files are compared with the owner's current saved source base at revision {restoredProposal.sourceRevision}. The parent conversation and its records remain unchanged. Only candidate files were restored; real outcomes after the checkpoint remain.</p>
+            <details open>
+              <summary>Inspect current source and candidate ({restoredProposal.files.length} changed files)</summary>
+              {restoredProposal.files.map((file) => <section key={file.path}>
+                <h3>{file.path}</h3>
+                <strong>Current saved source</strong><pre>{file.base ?? "(file did not exist)"}</pre>
+                <strong>Restored candidate</strong><pre>{file.candidate ?? "(file removed)"}</pre>
+              </section>)}
+            </details>
+            <Button variant="secondary" onClick={onRedoRestore}>Redo from checkpoint {restoredProposal.provenance.parentCheckpointId}</Button>
           </section>
         )}
         {state.messages.length === 0 && (

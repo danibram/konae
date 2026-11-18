@@ -5,6 +5,7 @@ import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { CompactionEntry } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
 import { openDurableStorage, readDurableBlob, requestDurableStop } from "./durable-storage";
+import { nativePrefixThrough } from "./durable-engine";
 
 function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterClaim?: boolean } = {}) {
   const batches: Array<{ sequence: number; writes: StorageWrite[] }> = [];
@@ -80,6 +81,14 @@ function nativeApi(options: { loseAck?: boolean; refuse?: string; changeAfterCla
 const initialConversation = [{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }] as unknown as StorageWrite[];
 
 describe("authenticated native Durable Storage bridge", () => {
+  test("materializes only complete historical checkpoint sequences while retaining batch order", () => {
+    const snapshot = [1, 2, 3].map((sequence) => ({ sequence, writes: [{ type: "entry", value: { id: sequence } } as StorageWrite] }));
+    expect(nativePrefixThrough(snapshot, 2).map((batch) => batch.sequence)).toEqual([1, 2]);
+    expect(() => nativePrefixThrough(snapshot, 2.5)).toThrow("sequence is invalid");
+    expect(() => nativePrefixThrough(snapshot, 4)).toThrow("complete native commit boundary");
+    expect(nativePrefixThrough(snapshot, 0)).toEqual([]);
+  });
+
   test("requires explicit Continue, renews with the stable executor, and cooperatively releases", async () => {
     const api = nativeApi();
     const storage = await openDurableStorage({ projectId: "lease-project", conversationId: "lease-conversation", executorId: "stable-device", fetch: api.fetcher });

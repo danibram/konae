@@ -131,6 +131,7 @@ export type AgentUiEvent =
 export type AgentProposal = {
   files: CapsuleFiles;
   changedFiles: ProjectFile[];
+  encodings?: Record<ProjectFile, "base64">;
   validation: ValidationResult | null;
 };
 

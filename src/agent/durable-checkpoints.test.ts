@@ -18,6 +18,8 @@ describe("Durable recovery checkpoints", () => {
       modelContext: [{ role: "user", content: "keep the exact boundary" }, { role: "assistant", content: "I will edit the page." }],
       nativeSequence: 19,
       validationSettings: { actions: true, fileAccess: "app-users" }, historicalGate: { ok: true, checked: ["sources"] }, status: "proposal", candidateId: "candidate-1",
+      parentConversationId: "parent-conversation", parentCheckpointId: "chosen-checkpoint",
+      restoreProvenance: { parentConversationId: "parent-conversation", parentCheckpointId: "chosen-checkpoint", parentSequence: 19 },
     });
     const stored = new Map<string, Uint8Array>();
     for (const item of draft.blobs ?? []) stored.set(item.key, item.bytes);
@@ -33,6 +35,7 @@ describe("Durable recovery checkpoints", () => {
     expect(recovered.scratch.encodings).toEqual({ "public/mark.bin": "base64" });
     expect(recovered.applyAllowed).toBe(false);
     expect(recovered.historicalGate).toEqual({ ok: true, checked: ["sources"] });
+    expect(recovered.restoreProvenance).toEqual({ parentConversationId: "parent-conversation", parentCheckpointId: "chosen-checkpoint", parentSequence: 19 });
     const inspected = await inspectCheckpointCandidate({ checkpointId: "cp-7", sequence: 19, createdAt: 1, payload }, async (digest) => byDigest.get(digest)!);
     expect(inspected.base.files["index.html"]).toBe("<p>base</p>");
     expect(inspected.scratch.files["index.html"]).toBe("<p>candidate</p>");

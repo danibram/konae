@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory";
 import { defineExtension, defineTool, hook, Harness, createRegistry, GenerationTask, ToolTask, ToolResultEntry, ROOT_CONVERSATION_ID, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { MiniAppProject } from "../lib/types";
 import type { AgentExecution } from "../mcp/client";
@@ -24,6 +25,8 @@ export type DurableEngineOptions = {
   expectedGeneration?: number;
   sourceRevision?: number;
   recoveredFiles?: CapsuleFiles;
+  /** Binary candidate bytes stay out of the text tool workspace. */
+  recoveredBinaryFiles?: CapsuleFiles;
   storage?: import("@earendil-works/pi-durable").Storage;
   openStorage?: () => Promise<import("@earendil-works/pi-durable").Storage>;
   fetch?: typeof fetch;
@@ -44,22 +47,46 @@ export type DurableEngineOptions = {
   onValidation?: (result: ValidationResult) => void;
   onCheckpointStatus?: (status: import("./durable-checkpoints").CheckpointStatus, files: CapsuleFiles, saved?: { revision: number; project: MiniAppProject }) => void;
   onSavedSourceReadback?: (revision: number, project: MiniAppProject) => void;
+  restoredModelContext?: { messages: unknown[] };
+  recoveredEncodings?: Record<string, "base64">;
+  restoreProvenance?: { parentConversationId: string; parentCheckpointId: string; parentSequence: number };
 };
 
 /** Opens a reader with scheduler recovery disabled; history inspection never starts provider work. */
-export async function openDurableHistory(projectId: string, conversationId: string, ownerId?: string) {
+export async function openDurableHistory(projectId: string, conversationId: string, ownerId?: string, throughSequence?: number) {
   const info = await readDurableConversation(projectId, conversationId, ownerId);
-  const storage = await openDurableStorage({ projectId, conversationId, ownerId });
-  const nativeBoundary = (storage as any).hydratedSequence as number;
-  const reportedBoundary = await (storage as any).lastSequence() as number;
-  if (nativeBoundary !== info.lastSeq || reportedBoundary !== info.lastSeq) {
-    await storage.close(BACKGROUND_CONTEXT);
+  const sourceStorage = await openDurableStorage({ projectId, conversationId, ownerId });
+  const nativeBoundary = (sourceStorage as any).hydratedSequence as number;
+  const reportedBoundary = await (sourceStorage as any).lastSequence() as number;
+  if (nativeBoundary !== info.lastSeq || reportedBoundary !== info.lastSeq || (throughSequence !== undefined && (!Number.isSafeInteger(throughSequence) || throughSequence < 0 || throughSequence > info.lastSeq))) {
+    await sourceStorage.close(BACKGROUND_CONTEXT);
     throw new Error("Native conversation replay does not match its reported high-water sequence.");
   }
+  const fullSnapshot = (sourceStorage as any).nativeSnapshot as import("./durable-storage").NativeBatchSnapshot;
+  const prefix = throughSequence === undefined ? fullSnapshot : nativePrefixThrough(fullSnapshot, throughSequence);
+  if (throughSequence !== undefined && throughSequence !== 0 && prefix.at(-1)?.sequence !== throughSequence) {
+    await sourceStorage.close(BACKGROUND_CONTEXT);
+    throw new Error("The selected checkpoint does not end at a complete native commit boundary.");
+  }
+  let storage: import("@earendil-works/pi-durable").Storage = sourceStorage;
+  if (throughSequence !== undefined) {
+    await sourceStorage.close(BACKGROUND_CONTEXT);
+    const projection = new MemoryStorage();
+    for (const batch of prefix) projection.prepareCommit(batch.writes, batch.sequence as never).apply();
+    storage = projection;
+  }
+  const prefixSequence = prefix.at(-1)?.sequence ?? 0;
   const registry = createRegistry();
   const models = createDurableModels(emptyKeyStore());
   const harness = await Harness.open(storage, { models, registry, readOnly: true }, BACKGROUND_CONTEXT);
-  return { info, harness, conversation: await harness.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT), nativeSnapshot: (storage as any).nativeSnapshot as import("./durable-storage").NativeBatchSnapshot, close: () => harness.close(BACKGROUND_CONTEXT) };
+  return { info, harness, conversation: await harness.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT), nativeSnapshot: prefix, prefixSequence, close: () => harness.close(BACKGROUND_CONTEXT) };
+}
+
+export function nativePrefixThrough(snapshot: import("./durable-storage").NativeBatchSnapshot, throughSequence: number) {
+  if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) throw new Error("The selected checkpoint sequence is invalid.");
+  const prefix = snapshot.filter((batch) => batch.sequence <= throughSequence);
+  if (throughSequence > 0 && prefix.at(-1)?.sequence !== throughSequence) throw new Error("The selected checkpoint does not end at a complete native commit boundary.");
+  return prefix;
 }
 
 /** Browser-owned local engine candidate. The editor still selects the legacy adapter until #29/#30 validation. */
@@ -68,8 +95,26 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
   let currentProject = options.project;
   const files = textFiles(currentProject);
   const workspace = createCapsuleWorkspace(files, options.recoveredFiles ?? files);
+  let binaryCandidate = { ...(options.recoveredBinaryFiles ?? {}) };
+  let binaryCandidateEncodings = { ...(options.recoveredEncodings ?? {}) };
+  const restoredBinaryChanges = () => {
+    if (!options.restoreProvenance) return [];
+    const currentEncodings = currentProject.encodings ?? {};
+    const candidateEncodings = binaryCandidateEncodings;
+    const paths = new Set([...Object.keys(currentEncodings), ...Object.keys(candidateEncodings)]);
+    return [...paths].filter((path) => currentEncodings[path as keyof typeof currentEncodings] === "base64"
+      || candidateEncodings[path as keyof typeof candidateEncodings] === "base64")
+      .filter((path) => currentProject.files[path] !== binaryCandidate[path] || currentEncodings[path as keyof typeof currentEncodings] !== candidateEncodings[path as keyof typeof candidateEncodings]);
+  };
+  const candidateSnapshot = () => {
+    const text = workspace.serialize().files;
+    const merged = { ...text };
+    for (const [path, value] of Object.entries(binaryCandidate)) if (!Object.hasOwn(text, path)) merged[path] = value;
+    return merged;
+  };
+  const candidateChangedFiles = () => [...new Set([...workspace.changedFiles(), ...restoredBinaryChanges()])];
   const validator = createCapsuleValidator(options.loadSql);
-  workspace.onMutation(() => options.onMutation?.(workspace.serialize().files));
+  workspace.onMutation(() => options.onMutation?.(candidateSnapshot()));
   const platformBoundaries = new Map<string, unknown>();
   const tools = createCapsuleTools(workspace, validator, {
     sourceFiles: options.sourceFiles ?? (() => currentProject),
@@ -132,10 +177,18 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       instructions: `${buildSystemPrompt(options.project)}${options.sessionConfig.systemAppend ? `\n\n${options.sessionConfig.systemAppend}` : ""}`,
     },
   });
+  if (options.restoredModelContext) {
+    const messages = options.restoredModelContext.messages;
+    if (!Array.isArray(messages)) throw new Error("The selected checkpoint has no complete model-visible context.");
+    await appendDurableModelEntry(conversation, "konae.restore-context", messages);
+    const provenance = options.restoreProvenance;
+    const notice = `This is a new proposal restored from conversation ${provenance?.parentConversationId ?? "unknown"}, checkpoint ${provenance?.parentCheckpointId ?? "unknown"} (sequence ${provenance?.parentSequence ?? "unknown"}). The restored candidate files are compared with the owner's current saved source base at revision ${options.sourceRevision ?? "unknown"}. Only candidate files are restored. External effects and their records after that point remain real and unchanged; inspect them in the parent history before deciding on any separate authorized action.`;
+    await appendDurableEntry(conversation, { kind: "konae.restore-proposal", content: notice });
+  }
   let pendingConfiguration = Promise.resolve();
   if (options.recoveredFiles) {
     const result = await validator.validate(
-      workspace.serialize().files,
+      candidateSnapshot(),
       await readLiveDatabase({ liveDatabase: options.liveDatabase }),
       await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
     );
@@ -149,10 +202,10 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
       const admission = durableOwnerMessage(text, Date.now(), currentCredentials(options));
       const submitted = await conversation.submit({ requestId, type: "input", ...admission }, BACKGROUND_CONTEXT);
       const settled = await submitted.wait(BACKGROUND_CONTEXT);
-      const changedFiles = workspace.changedFiles();
+      const changedFiles = candidateChangedFiles();
       if (changedFiles.length) {
         const result = await validator.validate(
-          workspace.serialize().files,
+          candidateSnapshot(),
           await readLiveDatabase({ liveDatabase: options.liveDatabase }),
           await readValidationFacts({ releaseFacts: options.releaseFacts, sourceFiles: options.sourceFiles ?? (() => currentProject) }),
         );
@@ -185,16 +238,24 @@ export async function openLocalDurableEngine(options: DurableEngineOptions) {
     adoptSavedBaseline(project: MiniAppProject, revision: number) {
       currentProject = project;
       workspace.adoptBaseline(textFiles(project));
+      binaryCandidate = Object.fromEntries(Object.entries(project.files).filter(([path]) => project.encodings?.[path] === "base64"));
+      binaryCandidateEncodings = { ...(project.encodings ?? {}) };
       options.onSavedSourceReadback?.(revision, project);
     },
     reseed(project: MiniAppProject, config: AgentSessionConfig = options.sessionConfig) {
       currentProject = project;
       workspace.reseed(textFiles(project));
+      binaryCandidate = Object.fromEntries(Object.entries(project.files).filter(([path]) => project.encodings?.[path] === "base64"));
+      binaryCandidateEncodings = { ...(project.encodings ?? {}) };
       const configured = modelsWithConfiguredModel(durableModels, config, options.keyStore);
       const configuredModel = durableModelFor(config, configured);
       pendingConfiguration = conversation.configure({ model: { provider: config.provider, modelId: configuredModel.id }, thinkingLevel: "off", instructions: `${buildSystemPrompt(project)}${config.systemAppend ? `\n\n${config.systemAppend}` : ""}` }, BACKGROUND_CONTEXT).catch((error) => { options.onModelEvent?.({ type: "error", error }); });
     },
-    proposal: () => ({ files: workspace.serialize().files, changedFiles: workspace.changedFiles() }),
+    proposal: () => {
+      const snapshot = candidateSnapshot();
+      const encodings = Object.fromEntries(Object.entries(binaryCandidateEncodings).filter(([path]) => Object.hasOwn(snapshot, path) && snapshot[path] === binaryCandidate[path]));
+      return { files: snapshot, changedFiles: candidateChangedFiles(), ...(options.restoreProvenance ? { encodings } : Object.keys(encodings).length ? { encodings } : {}) };
+    },
   };
 }
 
@@ -420,6 +481,11 @@ async function appendDurableEntry(conversation: any, input: { kind: string; cont
   const submission = await conversation.submit({ type: "write", entry: { kind: input.kind, ...(input.content ? { model: [{ role: "user", content: input.content, timestamp: Date.now() }] } : {}) } }, BACKGROUND_CONTEXT);
   const settled = await submission.wait(BACKGROUND_CONTEXT);
   if (settled.status !== "done") throw new Error(`Conversation lifecycle write was not stored: ${"reason" in settled ? String(settled.reason) : settled.status}.`);
+}
+async function appendDurableModelEntry(conversation: any, kind: string, model: unknown[]) {
+  const submission = await conversation.submit({ type: "write", entry: { kind, model } }, BACKGROUND_CONTEXT);
+  const settled = await submission.wait(BACKGROUND_CONTEXT);
+  if (settled.status !== "done") throw new Error(`Restored model context was not stored: ${"reason" in settled ? String(settled.reason) : settled.status}.`);
 }
 function safeString(value: unknown) {
   return typeof value === "string" ? value : JSON.stringify(redactDurableValue(value)) ?? String(value);

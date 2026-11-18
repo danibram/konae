@@ -18,7 +18,9 @@ export type CheckpointInput = {
   validationSettings: Record<string, unknown>;
   historicalGate?: unknown;
   status: CheckpointStatus;
+  parentConversationId?: string;
   parentCheckpointId?: string;
+  restoreProvenance?: { parentConversationId: string; parentCheckpointId: string; parentSequence: number };
   candidateId?: string;
   lifecycle?: Record<string, unknown>;
 };
@@ -35,6 +37,8 @@ export type CheckpointRead = {
   historicalGate?: unknown;
   validationSettings: Record<string, unknown>;
   parentCheckpointId?: string;
+  parentConversationId?: string;
+  restoreProvenance?: { parentConversationId: string; parentCheckpointId: string; parentSequence: number };
   candidateId?: string;
   lifecycle?: Record<string, unknown>;
   stale: boolean;
@@ -80,7 +84,9 @@ export async function createCheckpointDraft(input: CheckpointInput): Promise<Dur
     validationSettings: input.validationSettings,
     ...(input.historicalGate === undefined ? {} : { historicalGate: input.historicalGate }),
     status: input.status,
+    ...(input.parentConversationId ? { parentConversationId: input.parentConversationId } : {}),
     ...(input.parentCheckpointId ? { parentCheckpointId: input.parentCheckpointId } : {}),
+    ...(input.restoreProvenance ? { restoreProvenance: input.restoreProvenance } : {}),
     ...(input.candidateId ? { candidateId: input.candidateId } : {}),
     ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
     blobs: [] as string[],
@@ -107,7 +113,7 @@ export async function recoverCheckpoint(
 ): Promise<CheckpointRead> {
   const p = checkpoint.payload as any;
   const revision = typeof p?.sourcesRevision === "number" ? p.sourcesRevision : -1;
-  const basic = { id: checkpoint.checkpointId, sequence: checkpoint.sequence, sourcesRevision: revision, status: p?.status as CheckpointStatus, historicalGate: p?.historicalGate, validationSettings: p?.validationSettings ?? {}, parentCheckpointId: p?.parentCheckpointId, candidateId: p?.candidateId, lifecycle: p?.lifecycle, stale: revision !== currentSources.revision, applyAllowed: false as const };
+  const basic = { id: checkpoint.checkpointId, sequence: checkpoint.sequence, sourcesRevision: revision, status: p?.status as CheckpointStatus, historicalGate: p?.historicalGate, validationSettings: p?.validationSettings ?? {}, parentCheckpointId: p?.parentCheckpointId, parentConversationId: p?.parentConversationId, restoreProvenance: validRestoreProvenance(p?.restoreProvenance), candidateId: p?.candidateId, lifecycle: p?.lifecycle, stale: revision !== currentSources.revision, applyAllowed: false as const };
   if (!p || typeof p !== "object" || p.formatVersion !== DURABLE_CHECKPOINT_FORMAT) return { ...basic, base: { files: {} }, scratch: { files: {} }, modelView: { files: {} }, modelContext: null, readable: false, error: `Checkpoint format ${String(p?.formatVersion)} is unsupported or malformed; this history is preserved for export.` };
   try {
     const refs = p.blobFiles as Record<string, string>;
@@ -134,6 +140,13 @@ export async function recoverCheckpoint(
   } catch (error) {
     return { ...basic, base: { files: {} }, scratch: { files: {} }, modelView: { files: {} }, modelContext: null, readable: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function validRestoreProvenance(value: unknown): CheckpointRead["restoreProvenance"] {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Record<string, unknown>;
+  if (typeof item.parentConversationId !== "string" || !item.parentConversationId || typeof item.parentCheckpointId !== "string" || !item.parentCheckpointId || !Number.isSafeInteger(item.parentSequence) || Number(item.parentSequence) <= 0) return undefined;
+  return { parentConversationId: item.parentConversationId, parentCheckpointId: item.parentCheckpointId, parentSequence: Number(item.parentSequence) };
 }
 
 export async function reconcileInterruptedApply(

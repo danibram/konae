@@ -146,6 +146,16 @@ async function readSavedSources(page: Page, projectId: string) {
   return { ...document, revision: saved.revision };
 }
 
+async function saveFixtureSources(page: Page, projectId: string, revision: number, source: { files: Record<string, string>; encodings?: Record<string, "base64"> }) {
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const client = new McpClient(new URL("/mcp", page.url()).href, {
+    fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }),
+  });
+  const transfer = await client.upload(new TextEncoder().encode(JSON.stringify(source)), projectId);
+  await client.call("project_sources_save", { projectId, transferId: transfer.transferId, expectedRevision: revision });
+}
+
 async function waitForKernelSave(page: Page) {
   await page.waitForTimeout(1_000);
   await expect(page.getByRole("banner").getByText("Saving")).toHaveCount(0, { timeout: 30_000 });
@@ -192,8 +202,9 @@ function providerReply(tool?: { name: string; input: Record<string, unknown> }, 
 }
 
 async function installProposalFixture(page: Page) {
-  let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "drift" | "build-fail" | "preview-behind" | "long-read" = "discard";
+  let scenario: "discard" | "apply" | "asset-discard" | "asset-discard-applied" | "asset-apply" | "blocked" | "drift" | "schema" | "invite" | "context" | "build-fail" | "preview-behind" | "long-read" = "discard";
   let step = 0;
+  let inviteEmail = "guest@example.test";
   const html = "<main><h1>PROPOSAL PREVIEW</h1><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>";
   const assetHtml = (useApplied: boolean) => `<link rel='stylesheet' href='/theme.css'><link rel='stylesheet' href='/print.css' media='print'><link rel='stylesheet' href='/disabled.css' media='screen' disabled><main><h1>PROPOSAL PREVIEW</h1><p id='stylesheet-probe' class='asset-stylesheet-probe'>Stylesheet proof</p><p id='media-default-probe'>Default screen style</p><p class='media-print-probe'>Print only</p><p class='media-disabled-probe'>Initially disabled</p><img id='asset-image' alt='Candidate public asset' width='48' height='48' src='/${useApplied ? "applied.png?version=alternate" : "candidate.png?version=candidate"}#proposal'><p id='proposal-actor'></p><p id='proposal-rows'></p><p id='proposal-files'></p></main>`;
   const proposalScript = (mutate: boolean) => `
@@ -215,7 +226,10 @@ ${mutate ? "await miniapp.actions.call('tasks.create', { title: 'Scratch row' })
       return;
     }
     let tool: { name: string; input: Record<string, unknown> } | undefined;
-    if (scenario === "long-read") {
+    if (scenario === "invite") {
+      if (step === 0) tool = { name: "app_invitations_create", input: { emails: [inviteEmail], idempotencyKey: `fixture-invite-${inviteEmail}` } };
+      else if (step === 1) tool = { name: "app_invitations_list", input: {} };
+    } else if (scenario === "long-read") {
       if (step === 0) tool = { name: "write", input: { path: "/workspace/app.js", content: longScratchFile } };
       if (step === 1) tool = { name: "read", input: { path: "/workspace/app.js" } };
       if (step === 2) tool = { name: "write", input: { path: "/workspace/index.html", content: html } };
@@ -223,8 +237,10 @@ ${mutate ? "await miniapp.actions.call('tasks.create', { title: 'Scratch row' })
     } else if (scenario === "blocked") {
       if (step === 0) tool = { name: "write", input: { path: "/workspace/actions.json", content: invalidActions } };
       else if (step === 1) tool = { name: "validate_capsule", input: {} };
+    } else if (scenario === "context") {
+      // A plain answer lets the test inspect the actual restored provider wire without another mutation.
     } else if (step === 0) {
-      const path = scenario === "preview-behind" ? "/workspace/schema.sql" : "/workspace/index.html";
+      const path = scenario === "preview-behind" || scenario === "schema" ? "/workspace/schema.sql" : "/workspace/index.html";
       const content = scenario === "preview-behind" ? `
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,7 +249,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at INTEGER NOT NULL,
   due_at INTEGER
 );
-` : scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? assetHtml(scenario === "asset-discard-applied") : html;
+      ` : scenario === "schema" ? `CREATE TABLE IF NOT EXISTS notes (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  owner_id TEXT NOT NULL,\n  title TEXT NOT NULL,\n  created_at INTEGER NOT NULL\n);\nCREATE INDEX IF NOT EXISTS notes_owner_created_at ON notes(owner_id, created_at);\n` : scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? assetHtml(scenario === "asset-discard-applied") : html;
       tool = { name: "write", input: { path, content } };
     } else if (step === 1) {
       tool = { name: "write", input: { path: "/workspace/app.js", content: scenario === "discard" || scenario === "apply" || scenario === "asset-discard" || scenario === "asset-discard-applied" || scenario === "asset-apply" ? proposalScript(scenario === "discard" || scenario === "asset-discard" || scenario === "asset-discard-applied") : scenario === "build-fail" ? "const = ;" : "document.documentElement.dataset.proposal = 'ready';" } };
@@ -250,7 +266,7 @@ CREATE TABLE IF NOT EXISTS tasks (
       body: providerReply(tool),
     });
   });
-  return { setScenario(value: typeof scenario) { scenario = value; } };
+  return { setScenario(value: typeof scenario) { scenario = value; }, setInviteEmail(value: string) { inviteEmail = value; } };
 }
 
 async function installModuleSetFixture(page: Page, input: object = { module: "seo", on: true, options: { canonical: "path" }, expected: { on: false, canonical: null, image: null } }) {
@@ -1505,4 +1521,289 @@ test("Durable staged stale proposal stays inspectable and only a deliberate new 
   expect(await conversations()).toHaveLength(2);
   expect((await readCheckpoint(oldPath)).checkpointId).toBe(preserved.checkpointId);
   expect((await readSavedSources(page, projectId)).files["index.html"]).toContain("Concurrent owner source save");
+});
+
+test("restoring a selected Durable checkpoint creates a linked candidate from exact context and fences stale Apply", async ({ page }) => {
+  const projectPath = await createProject(page, "Durable checkpoint restore fixture", "tasks");
+  const projectId = projectPath.split("/").at(-1)!;
+  const fixture = await installProposalFixture(page);
+  fixture.setScenario("drift");
+  const originalPrompt = "Prepare the original checkpoint restore proposal.";
+  await page.goto(projectPath + "?agent=durable-recovery");
+  await connectProposalFixture(page, "checkpoint-restore-browser-key");
+  let providerRequests: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin === "https://api.anthropic.com" && request.method() === "POST") {
+      try { providerRequests.push(request.postDataJSON()); } catch { /* only JSON provider calls are relevant */ }
+    }
+  });
+  await askFixture(page, originalPrompt);
+  await expect(page.frameLocator('iframe[title="Mini-app preview"]').getByRole("heading", { name: "PROPOSAL PREVIEW" })).toBeVisible({ timeout: 45000 });
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+  const list = `/_konae/projects/${projectId}/conversations`;
+  const conversations = async () => (await (await page.request.get(list)).json()).items;
+  let parent = (await conversations())[0];
+  const parentPath = `${list}/${parent.id}`;
+  const parentCheckpoints = (await (await page.request.get(`${parentPath}/checkpoints`)).json()).items;
+  const selected = parentCheckpoints.find((item: any) => item.payload.status === "proposal");
+  expect(selected).toBeTruthy();
+  const dialogOpen = page.getByRole("button", { name: /Read saved conversations|Conversation history|^History$/i });
+  await dialogOpen.click();
+  const history = page.getByRole("dialog", { name: "Conversation history" });
+  let fullCheckpointListReads = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === `${parentPath}/checkpoints` && !url.search) fullCheckpointListReads++;
+  });
+  await history.locator(".durable-conversation-choice").filter({ hasText: parent.title }).click();
+  await expect(history.getByText(originalPrompt, { exact: true })).toBeVisible();
+  const stop = history.getByRole("button", { name: "Ask it to stop and release", exact: true });
+  if (await stop.count()) {
+    await stop.click();
+    await expect.poll(async () => (await (await page.request.get(`${parentPath}/lease`)).json()).live).toBe(false);
+    parent = await (await page.request.get(parentPath)).json();
+  }
+  expect(fullCheckpointListReads).toBe(0);
+  await history.getByRole("button", { name: "Browse earlier checkpoints", exact: true }).click();
+  await expect.poll(() => fullCheckpointListReads).toBe(1);
+  await history.getByRole("button", { name: new RegExp(`proposal · sequence ${selected.sequence}`) }).click();
+  let finishDelayedCheckpoint!: () => void;
+  let delayedCheckpointRequested!: () => void;
+  const checkpointRequested = new Promise<void>((resolve) => { delayedCheckpointRequested = resolve; });
+  const delayCheckpoint = new Promise<void>((resolve) => { finishDelayedCheckpoint = resolve; });
+  const selectedCheckpointUrl = new RegExp(`/_konae/projects/${projectId}/conversations/${parent.id}/checkpoints\\?checkpoint_id=${selected.checkpointId}`);
+  await page.route(selectedCheckpointUrl, async (route) => {
+    const response = await route.fetch();
+    delayedCheckpointRequested();
+    await delayCheckpoint;
+    await route.fulfill({ response });
+  });
+  await history.getByRole("button", { name: "Inspect candidate files", exact: true }).click();
+  await checkpointRequested;
+  const otherCheckpoint = parentCheckpoints.find((item: any) => item.sequence !== selected.sequence);
+  expect(otherCheckpoint).toBeTruthy();
+  await history.getByRole("button", { name: new RegExp(`${otherCheckpoint.payload.status} · sequence ${otherCheckpoint.sequence}`) }).click();
+  finishDelayedCheckpoint();
+  await page.unroute(selectedCheckpointUrl);
+  await expect(history.getByRole("region", { name: "Read-only candidate comparison" })).toHaveCount(0);
+  await expect(history.getByRole("button", { name: "Restore as a new proposal from this checkpoint", exact: true })).toHaveCount(0);
+  await history.getByRole("button", { name: new RegExp(`proposal · sequence ${selected.sequence}`) }).click();
+  await history.getByRole("button", { name: "Inspect candidate files", exact: true }).click();
+  await expect(history.getByRole("region", { name: "Read-only candidate comparison" })).toBeVisible();
+  const providerCountBeforeRestore = providerRequests.length;
+  await history.getByRole("button", { name: "Restore as a new proposal from this checkpoint", exact: true }).click();
+  await expect(history).toHaveCount(0);
+  const originalSources = await readSavedSources(page, projectId);
+  expect(originalSources.files["index.html"]).not.toContain("PROPOSAL PREVIEW");
+  await expect(page.getByRole("region", { name: "Restored proposal diff" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Restored proposal diff" })).toContainText(`current saved source base at revision ${originalSources.revision}`);
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled();
+  expect(providerRequests).toHaveLength(providerCountBeforeRestore);
+
+  const created = (await conversations()).find((item: any) => item.id !== parent.id);
+  expect(created).toBeTruthy();
+  const branchPath = `${list}/${created.id}`;
+  await expect.poll(async () => (await (await page.request.get(`${branchPath}/checkpoints`)).json()).items[0]?.payload.parentCheckpointId).toBe(selected.checkpointId);
+  const branchCheckpoints = (await (await page.request.get(`${branchPath}/checkpoints`)).json()).items;
+  expect(branchCheckpoints[0].payload.parentConversationId).toBe(parent.id);
+  expect(branchCheckpoints[0].payload.restoreProvenance).toEqual({ parentConversationId: parent.id, parentCheckpointId: selected.checkpointId, parentSequence: selected.sequence });
+  expect((await (await page.request.get(parentPath)).json()).lastSeq).toBe(parent.lastSeq);
+
+  fixture.setScenario("context");
+  await askFixture(page, "Continue from the restored proposal and explain the current candidate.");
+  await expect.poll(() => providerRequests.length).toBeGreaterThan(providerCountBeforeRestore);
+  const wire = JSON.stringify(providerRequests.at(-1));
+  expect(wire).toContain(originalPrompt);
+  expect(wire).toContain("PROPOSAL PREVIEW");
+
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const mcp = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+  const saved = await mcp.call<{ revision: number; transfer: Transfer }>("project_sources_read", { projectId });
+  const incoming = JSON.parse(new TextDecoder().decode(await mcp.download(saved.transfer)));
+  incoming.files["index.html"] += "\n<!-- owner changed source after restore -->";
+  const transfer = await mcp.upload(new TextEncoder().encode(JSON.stringify(incoming)), projectId);
+  await mcp.call("project_sources_save", { projectId, transferId: transfer.transferId, expectedRevision: saved.revision });
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.getByText(/source.*changed|stale|current saved sources/i).last()).toBeVisible({ timeout: 30000 });
+  const current = await readSavedSources(page, projectId);
+  expect(current.files["index.html"]).toContain("owner changed source after restore");
+  expect((await (await page.request.get(parentPath)).json()).id).toBe(parent.id);
+});
+
+test("restore before schema proposal keeps deployed rows and invitation, exposes provenance, and Redo forks the same checkpoint", async ({ page }) => {
+  const projectPath = await createProject(page, "Restore before schema and invite", "notes");
+  const projectId = projectPath.split("/").at(-1)!;
+  const fixture = await installProposalFixture(page);
+  // Establish the local fixture deployment before durable conversation work.
+  await page.getByRole("banner").getByRole("button", { name: /^Deploy/ }).click();
+  const deploy = page.getByRole("dialog");
+  await expect(deploy).toBeVisible();
+  await deploy.getByRole("button", { name: "Deploy private", exact: true }).click();
+  await expect(page.locator("a.published-url")).toBeVisible({ timeout: 35000 });
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  const originalAsset = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]).toString("base64");
+  const retainedAsset = Buffer.from([0x00, 0xfe, 0x01, 0x80]).toString("base64");
+  const currentReplacement = Buffer.from([0xff, 0x52, 0x45, 0x50, 0x4c]).toString("base64");
+  const seededSources = await readSavedSources(page, projectId);
+  seededSources.files["public/restored.bin"] = originalAsset;
+  seededSources.files["public/retained.bin"] = retainedAsset;
+  seededSources.encodings = { ...seededSources.encodings, "public/restored.bin": "base64", "public/retained.bin": "base64" };
+  await saveFixtureSources(page, projectId, seededSources.revision, seededSources);
+  const cookies = await page.context().cookies();
+  const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+  const mcp = new McpClient(new URL("/mcp", page.url()).href, { fetch: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie } }) });
+  const session = await mcp.call<{ can?: Record<string, boolean> }>("session_inspect", {});
+  expect(session.can?.manage_users).toBe(true);
+  expect((await mcp.listTools()).some((tool) => tool.name === "app_invitations_list")).toBe(true);
+  fixture.setScenario("schema");
+  const beforeSchemaPrompt = "Add the small indexed schema improvement requested for this app.";
+  await page.goto(projectPath + "?agent=durable-recovery");
+  await connectProposalFixture(page, "schema-invitation-restore-key");
+  let modelPostCount = 0;
+  page.on("request", (request) => { if (new URL(request.url()).origin === "https://api.anthropic.com" && request.method() === "POST") modelPostCount++; });
+  await askFixture(page, beforeSchemaPrompt);
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeEnabled({ timeout: 45000 });
+  const inviteEmail = `restore-${crypto.randomUUID()}@example.test`;
+  fixture.setScenario("invite"); fixture.setInviteEmail(inviteEmail);
+  await askFixture(page, `Invite ${inviteEmail} to this app and read the invitation back.`);
+  const allow = page.getByRole("dialog", { name: "Allow the agent to do this?" });
+  await expect(allow).toBeVisible({ timeout: 25000 });
+  await allow.getByRole("button", { name: "Allow", exact: true }).click();
+  const conversationListPath = `/_konae/projects/${projectId}/conversations`;
+  const parentForInvite = (await (await page.request.get(conversationListPath)).json()).items[0];
+  const effectsPath = `${conversationListPath}/${parentForInvite.id}/effects`;
+  await expect.poll(async () => {
+    const items = (await (await page.request.get(effectsPath)).json()).items;
+    const inviteEffect = items.find((item: any) => item.tool === "app_invitations_create");
+    return inviteEffect?.state ?? null;
+  }, { timeout: 35000 }).toBe("observed");
+  const inviteReceipt = (await (await page.request.get(effectsPath)).json()).items.find((item: any) => item.tool === "app_invitations_create");
+  expect(inviteReceipt.state).toBe("observed");
+  expect(inviteReceipt.observationCallId).toBeTruthy();
+  const invitationBefore = await mcp.call<{ invitations: Array<{ invitationId: string; email: string; status: string }> }>("app_invitations_list", { projectId });
+  const invitation = invitationBefore.invitations.find((item) => item.email === inviteEmail);
+  expect(invitation?.invitationId).toBeTruthy();
+  expect(invitation?.status).toBe("pending");
+  await mcp.call("database_execute", { projectId, operation: "sql", input: { sql: "INSERT INTO notes(owner_id,title,created_at) VALUES ('fixture-actor','live row before restore',1)" } });
+  const rowsBefore = await mcp.call<{ rows: unknown[] }>("database_execute", { projectId, operation: "sql", input: { sql: "SELECT id,owner_id,title,created_at FROM notes WHERE title = 'live row before restore' LIMIT 10" } });
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.getByText(/Applied .* to the project/)).toBeVisible({ timeout: 25000 });
+  const currentSchema = await readSavedSources(page, projectId);
+  expect(currentSchema.files["schema.sql"]).toContain("notes_owner_created_at");
+  const changedSources = await readSavedSources(page, projectId);
+  changedSources.files["public/restored.bin"] = currentReplacement;
+  changedSources.files["public/current-only.bin"] = Buffer.from([0x41, 0xff, 0x42]).toString("base64");
+  changedSources.encodings = { ...changedSources.encodings, "public/restored.bin": "base64", "public/retained.bin": "base64", "public/current-only.bin": "base64" };
+  await saveFixtureSources(page, projectId, changedSources.revision, changedSources);
+
+  await showSection(page, "Describe");
+  await page.getByRole("button", { name: /Read saved conversations/ }).click();
+  const history = page.getByRole("dialog", { name: "Conversation history" });
+  await history.locator(".durable-conversation-choice").first().click();
+  await expect(history.getByText(beforeSchemaPrompt, { exact: true })).toBeVisible();
+  const parent = (await (await page.request.get(`/_konae/projects/${projectId}/conversations`)).json()).items[0];
+  const parentPath = `/_konae/projects/${projectId}/conversations/${parent.id}`;
+  const stop = history.getByRole("button", { name: "Ask it to stop and release", exact: true });
+  if (await stop.count()) {
+    await stop.click();
+  }
+  await expect.poll(async () => (await (await page.request.get(`${parentPath}/lease`)).json()).live).toBe(false);
+  const parentFinal = await (await page.request.get(parentPath)).json();
+  const parentCheckpoints = (await (await page.request.get(`${parentPath}/checkpoints`)).json()).items;
+  const beforeSchema = parentCheckpoints.filter((item: any) => item.payload.status === "working").sort((a: any, b: any) => a.sequence - b.sequence)[0];
+  expect(beforeSchema).toBeTruthy();
+  expect(parentFinal.lastSeq).toBeGreaterThan(beforeSchema.sequence);
+  await history.getByRole("button", { name: "Browse earlier checkpoints", exact: true }).click();
+  await history.getByRole("button", { name: new RegExp(`working · sequence ${beforeSchema.sequence}`) }).click();
+  await history.getByRole("button", { name: "Inspect candidate files", exact: true }).click();
+  await expect(history.getByRole("region", { name: "Read-only candidate comparison" }).getByText("notes_owner_created_at", { exact: false })).toHaveCount(0);
+  await expect(history.getByRole("region", { name: "External effects after checkpoint" })).toContainText("app_invitations_create");
+  await expect(history.getByRole("region", { name: "External effects after checkpoint" })).toContainText("read-back call");
+  const providerRequestCount = modelPostCount;
+  await history.getByRole("button", { name: "Restore as a new proposal from this checkpoint", exact: true }).click();
+  await expect(history).toHaveCount(0);
+  expect(modelPostCount).toBe(providerRequestCount);
+  await expect(page.getByRole("region", { name: "Restored proposal diff" })).toContainText("schema.sql");
+  await expect(page.getByRole("region", { name: "Restored proposal diff" })).toContainText("notes_owner_created_at");
+  const rowsAfterRestore = await mcp.call<{ rows: unknown[] }>("database_execute", { projectId, operation: "sql", input: { sql: "SELECT id,owner_id,title,created_at FROM notes WHERE title = 'live row before restore' LIMIT 10" } });
+  const invitationAfterRestore = await mcp.call<{ invitations: Array<{ invitationId: string; email: string; status: string }> }>("app_invitations_list", { projectId });
+  expect(rowsAfterRestore.rows).toEqual(rowsBefore.rows);
+  expect(invitationAfterRestore.invitations.find((item) => item.email === inviteEmail)).toMatchObject({ invitationId: invitation!.invitationId, status: "pending" });
+
+  const list = `/_konae/projects/${projectId}/conversations`;
+  const conversations = async () => (await (await page.request.get(list)).json()).items;
+  const firstBranch = (await conversations()).find((item: any) => item.id !== parent.id);
+  expect(firstBranch).toBeTruthy();
+  const readLatestBranchCheckpoint = async (id: string) => (await (await page.request.get(`${list}/${id}/checkpoints`)).json()).items[0];
+  await expect.poll(async () => (await readLatestBranchCheckpoint(firstBranch.id))?.payload.parentCheckpointId).toBe(beforeSchema.checkpointId);
+  expect((await readLatestBranchCheckpoint(firstBranch.id)).payload.parentConversationId).toBe(parent.id);
+
+  let providerRequests: Array<Record<string, any>> = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin === "https://api.anthropic.com" && request.method() === "POST") {
+      try { providerRequests.push(request.postDataJSON()); } catch { /* only the model wire matters */ }
+    }
+  });
+  fixture.setScenario("context");
+  const readyCountBeforeContinue = await page.getByText("The checked change is ready.", { exact: true }).count();
+  await askFixture(page, "Describe the restored schema candidate in one sentence.");
+  await expect.poll(() => providerRequests.length).toBeGreaterThan(0);
+  await expect.poll(() => page.getByText("The checked change is ready.", { exact: true }).count()).toBe(readyCountBeforeContinue + 1);
+  const firstWire = providerRequests.at(-1)!;
+  expect(JSON.stringify(firstWire.messages)).toContain(beforeSchemaPrompt);
+  expect(JSON.stringify(firstWire.messages)).not.toContain(inviteEmail);
+  expect(JSON.stringify(firstWire.messages)).not.toContain("app_invitations_create");
+  await page.getByRole("button", { name: /Read saved conversations/ }).click();
+  const beforeReloadHistory = page.getByRole("dialog", { name: "Conversation history" });
+  await beforeReloadHistory.locator(".durable-conversation-choice").filter({ hasText: firstBranch.title }).click();
+  await expect(beforeReloadHistory.getByText("Describe the restored schema candidate in one sentence.", { exact: true })).toBeVisible();
+  const beforeReloadStop = beforeReloadHistory.getByRole("button", { name: "Ask it to stop and release", exact: true });
+  if (await beforeReloadStop.count()) await beforeReloadStop.click();
+  await expect.poll(async () => (await (await page.request.get(`${list}/${firstBranch.id}/lease`)).json()).live).toBe(false);
+  await beforeReloadHistory.getByRole("button", { name: "Close Conversation history" }).click();
+  const providerCountBeforeReload = providerRequests.length;
+  await page.reload();
+  await page.getByRole("button", { name: "Continue from saved conversation", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Redo from checkpoint/ })).toBeVisible({ timeout: 30000 });
+  expect(providerRequests).toHaveLength(providerCountBeforeReload);
+  await page.getByRole("button", { name: /Redo from checkpoint/ }).click();
+  const redoHistory = page.getByRole("dialog", { name: "Conversation history" });
+  await expect(redoHistory).toBeVisible();
+  await redoHistory.locator(".durable-conversation-choice").filter({ hasText: firstBranch.title }).click();
+  await expect(redoHistory.getByText("Describe the restored schema candidate in one sentence.", { exact: true })).toBeVisible();
+  await expect(redoHistory.getByText(/Another browser holds the active writer lease/)).toBeVisible();
+  const redoStop = redoHistory.getByRole("button", { name: "Ask it to stop and release", exact: true });
+  if (await redoStop.count()) {
+    await redoStop.click();
+    await expect.poll(async () => (await (await page.request.get(`${parentPath}/lease`)).json()).live).toBe(false);
+  }
+  await redoHistory.getByRole("button", { name: "Close Conversation history" }).click();
+  await page.getByRole("button", { name: /Redo from checkpoint/ }).click();
+  await expect.poll(async () => (await conversations()).length).toBe(3);
+  await expect(page.getByRole("region", { name: "Restored proposal diff" })).toBeVisible();
+  const redoBranch = (await conversations()).find((item: any) => item.id !== parent.id && item.id !== firstBranch.id);
+  expect(redoBranch).toBeTruthy();
+  await expect.poll(async () => (await readLatestBranchCheckpoint(redoBranch.id))?.payload.parentCheckpointId).toBe(beforeSchema.checkpointId);
+  expect((await readLatestBranchCheckpoint(redoBranch.id)).payload.parentConversationId).toBe(parent.id);
+  expect((await readLatestBranchCheckpoint(redoBranch.id)).payload.restoreProvenance).toEqual({ parentConversationId: parent.id, parentCheckpointId: beforeSchema.checkpointId, parentSequence: beforeSchema.sequence });
+  await askFixture(page, "Describe the restored schema candidate in one sentence.");
+  await expect.poll(() => providerRequests.length).toBeGreaterThan(1);
+  const redoWire = providerRequests.at(-1)!;
+  expect(JSON.stringify(redoWire.messages)).toContain(beforeSchemaPrompt);
+  expect(JSON.stringify(redoWire.messages)).not.toContain(inviteEmail);
+  expect(JSON.stringify(redoWire.messages)).not.toContain("app_invitations_create");
+
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.getByText(/Applied .* to the project/)).toBeVisible({ timeout: 25000 });
+  const finalSources = await readSavedSources(page, projectId);
+  expect(finalSources.files["schema.sql"]).not.toContain("notes_owner_created_at");
+  expect(finalSources.files["public/restored.bin"]).toBe(originalAsset);
+  expect(finalSources.files["public/retained.bin"]).toBe(retainedAsset);
+  expect(finalSources.encodings?.["public/restored.bin"]).toBe("base64");
+  expect(finalSources.encodings?.["public/retained.bin"]).toBe("base64");
+  expect(finalSources.files["public/current-only.bin"]).toBeUndefined();
+  expect((await mcp.call<{ invitations: Array<{ invitationId: string; email: string }> }>("app_invitations_list", { projectId })).invitations.find((item) => item.email === inviteEmail)?.invitationId).toBe(invitation!.invitationId);
+  const rowsAfterApply = await mcp.call<{ rows: unknown[] }>("database_execute", { projectId, operation: "sql", input: { sql: "SELECT id,owner_id,title,created_at FROM notes WHERE title = 'live row before restore' LIMIT 10" } });
+  expect(rowsAfterApply.rows).toEqual(rowsBefore.rows);
 });
