@@ -70,3 +70,17 @@ For a separately authorized **local app folder**, stop its local writers or use 
 python3 ops/tests/app-folder-check.py --folder "$AUTHORIZED_FOLDER" \
   --binary "$KERNEL_BINARY" --binary-sha256 "$KERNEL_SHA256"
 ```
+
+## Pruning v3 copies
+
+Each installation copy worker prunes its v3 destination after publishing a point. It authenticates the listed manifests with the current and historical data keys. It keeps the latest 24 points, the latest point on each UTC day within 30 days of the pruning clock, and the point just published. Before deleting anything it checks the name and stored length of every block reachable from those roots. Restore authenticates the block contents. The collector removes expired manifests first. It gives unreachable blocks 24 hours from their storage timestamp before collecting them. Loss of the installation's copy cache does not change these decisions.
+
+All processes sharing an active v3 repository must use the reservation protocol. Upgrade or stop earlier v3 clients before enabling pruning. A directory must support shared and exclusive file locks on the repository directory across all clients. Writers and readers take shared locks. The collector takes an exclusive lock. Process exit releases the lock.
+
+An active S3 destination must support conditional create, strong read-after-write and complete, strongly consistent LIST results across all clients. Pagination must enumerate every key present throughout the scan. A writer or reader creates a unique key under `users/` and checks `collectors/` before using blocks. A collector creates its own key under `collectors/`, checks for other collectors and checks `users/`. An incompatible reservation returns an error. The next attempt registers again. The worker reports a pruning error separately from a completed publication. A reader needs permission to create and delete its reservation and list collector reservations.
+
+A missing continuation, repeated token, inconsistent key count, or failed page stops pruning. A known publication or referenced block missing from a purportedly complete listing also stops it. A compatible service that silently omits an unknown root or another client's reservation breaks the exclusion contract. The collector cannot discover that omission from this listing alone.
+
+S3 reservations have no timeout. After process loss or an unconfirmed manifest write or delete, fence all clients of the affected prefix and confirm that pending storage requests have finished. Inspect the remaining entries in `users/` and `collectors/` and remove only reservations known to be abandoned. Start a fresh cycle with all retained data keys. Never resume an old deletion list. Keep lifecycle rules off the active objects, manifests and reservations. In a versioned bucket a DELETE removes the current key from the listing. The storage operator accounts separately for historical object versions.
+
+To recover from an independent read-only S3 replica, have its custodian present a stationary prefix at the verified recovery time, including revocations. Mirror that prefix with the read-only credential into a private empty directory ending in `copies-v3/<repository-id>`. Check it against the custodian's recorded inventory and restore from the local directory with the required historical keys. This path needs no write permission on the replica. Mirroring a prefix while another client prunes it does not provide a snapshot.

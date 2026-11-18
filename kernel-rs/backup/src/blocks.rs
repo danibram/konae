@@ -1,5 +1,8 @@
 //! Encrypted v3 points name immutable objects directly within one repository.
 mod keys;
+mod prune;
+mod reservation;
+use reservation::{Reader, Reservation};
 mod store;
 
 use crate::{
@@ -74,18 +77,36 @@ fn block_size(page: Option<u32>, pages: u32) -> usize {
     page.map_or(ASSET_BLOCK, |size| (size * pages) as usize)
 }
 
-pub struct VerifiedPoint {
+pub struct VerifiedPoint<'a> {
+    source: &'a Source,
+    reader: Reader,
     point: Point,
     keys: Keys,
 }
 
-impl VerifiedPoint {
+impl VerifiedPoint<'_> {
     /// The collector must retain each address while this point is reachable.
     pub fn objects(&self) -> impl Iterator<Item = &str> {
         self.point
             .files
             .iter()
             .flat_map(|f| f.objects.iter().map(String::as_str))
+    }
+
+    fn object_sizes(&self) -> impl Iterator<Item = (&str, u64)> {
+        let sizes = self.point.files.iter().flat_map(|file| {
+            let stride = block_size(file.page_size, self.point.pages_per_object) as u64;
+            (0..file.objects.len() as u64).map(move |i| (file.size - i * stride).min(stride) + 16)
+        });
+        self.objects().zip(sizes)
+    }
+
+    /// Wait for the backend to release this reader before closing its runtime.
+    pub async fn close(mut self) -> Result<()> {
+        if let Some(guard) = self.reader.0.take() {
+            guard.release().await?;
+        }
+        Ok(())
     }
 
     pub fn inventory(&self) -> Manifest {
@@ -183,6 +204,14 @@ pub struct Publication {
     pub reused_objects: usize,
 }
 
+#[derive(Debug)]
+struct UnconfirmedWrite;
+impl std::fmt::Display for UnconfirmedWrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The destination did not confirm the v3 point write.")
+    }
+}
+
 pub struct Repository<'a> {
     source: &'a Source,
     identity: &'a str,
@@ -213,16 +242,53 @@ impl<'a> Repository<'a> {
     }
 
     pub async fn points(&self) -> Result<Vec<String>> {
-        store::points(self.source).await
+        Ok(store::roots(self.source).await?.points)
     }
 
-    pub async fn open(&self, id: &str, scope: &dyn PathScope) -> Result<VerifiedPoint> {
+    pub async fn open(&self, id: &str, scope: &dyn PathScope) -> Result<VerifiedPoint<'a>> {
+        self.open_selected(Some(id), scope).await
+    }
+
+    pub async fn open_selected(
+        &self,
+        id: Option<&str>,
+        scope: &dyn PathScope,
+    ) -> Result<VerifiedPoint<'a>> {
+        let guard = Reservation::acquire(self.source, false).await?;
+        let read = async {
+            match id {
+                Some(id) => self.read_point(id, scope).await,
+                None => {
+                    let id = self
+                        .points()
+                        .await?
+                        .pop()
+                        .context("No complete v3 point.")?;
+                    self.read_point(&id, scope).await
+                }
+            }
+        }
+        .await;
+        match read {
+            Ok(mut point) => {
+                point.reader = Reader(Some(guard));
+                Ok(point)
+            }
+            Err(e) => {
+                guard.release().await?;
+                Err(e)
+            }
+        }
+    }
+
+    /// The caller supplies an immutable snapshot or holds a repository reservation.
+    async fn read_point(&self, id: &str, scope: &dyn PathScope) -> Result<VerifiedPoint<'a>> {
         ensure!(crate::parse_copy_id(id).is_some(), "Invalid point ID.");
         let bytes = store::read(self.source, "points", id, MAX_MANIFEST_BYTES as usize).await?;
         self.decode(id, &bytes, scope)
     }
 
-    fn decode(&self, id: &str, bytes: &[u8], scope: &dyn PathScope) -> Result<VerifiedPoint> {
+    fn decode(&self, id: &str, bytes: &[u8], scope: &dyn PathScope) -> Result<VerifiedPoint<'a>> {
         ensure!(
             bytes.len() as u64 <= MAX_MANIFEST_BYTES,
             "Sealed v3 manifest exceeds 4 MiB."
@@ -237,10 +303,44 @@ impl<'a> Repository<'a> {
             .context("No supplied v3 key authenticates this manifest.")?;
         let point: Point = serde_json::from_slice(&plain)?;
         point.validate(self.identity, id, scope)?;
-        Ok(VerifiedPoint { point, keys })
+        Ok(VerifiedPoint {
+            source: self.source,
+            point,
+            keys,
+            reader: Reader(None),
+        })
     }
 
     pub async fn publish(
+        &self,
+        staging: &Path,
+        manifest: &Manifest,
+        scope: &dyn PathScope,
+        pages: u32,
+        legacy_blobs: &HashMap<String, String>,
+    ) -> Result<Publication> {
+        match self.source {
+            Source::Directory(root) => fs::create_dir_all(root)?,
+            #[cfg(feature = "s3")]
+            Source::S3 { .. } => {}
+        }
+        let guard = Reservation::acquire(self.source, false).await?;
+        let result = self
+            .write_point(staging, manifest, scope, pages, legacy_blobs)
+            .await;
+        // A timed-out manifest PUT can still commit after the client returns.
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.is::<UnconfirmedWrite>())
+        {
+            return result;
+        }
+        guard.release().await?;
+        result
+    }
+
+    async fn write_point(
         &self,
         staging: &Path,
         manifest: &Manifest,
@@ -258,7 +358,7 @@ impl<'a> Repository<'a> {
         if !legacy_blobs.is_empty()
             && let Some(previous) = self.points().await?.last()
         {
-            let point = self.open(previous, scope).await?;
+            let point = self.read_point(previous, scope).await?;
             crate::writer::check_legacy_blobs(&point.inventory(), legacy_blobs)?;
         }
         let mut point = Point {
@@ -347,15 +447,20 @@ impl<'a> Repository<'a> {
             );
             point.files.push(entry);
         }
+        #[cfg(test)]
+        tests::checkpoint("publish");
         let bytes = self.keys.seal_point(id, serde_json::to_vec(&point)?)?;
         self.decode(id, &bytes, scope)?;
-        if store::put(self.source, "points", id, &bytes).await? {
+        if store::put(self.source, "points", id, &bytes)
+            .await
+            .context(UnconfirmedWrite)?
+        {
             if directory {
                 stats.directory_bytes_written += bytes.len() as u64;
             }
         } else {
             ensure!(
-                self.open(id, scope).await?.point == point,
+                self.read_point(id, scope).await?.point == point,
                 "A different complete point already owns {id}."
             );
             if directory {
@@ -366,15 +471,17 @@ impl<'a> Repository<'a> {
     }
 
     /// Creates a private staging tree. The caller controls activation.
-    pub async fn restore(&self, point: &VerifiedPoint, staging: &Path) -> Result<()> {
+    pub async fn restore(&self, point: &VerifiedPoint<'_>, staging: &Path) -> Result<()> {
         ensure!(
-            point.point.repository == self.identity,
+            point.point.repository == self.identity && std::ptr::eq(point.source, self.source),
             "Point belongs to another repository."
         );
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         builder.create(staging)?;
+        #[cfg(test)]
+        tests::checkpoint("restore");
         let result = self.write_files(&point.point, &point.keys, staging).await;
         if result.is_err() {
             fs::remove_dir_all(staging)?;
@@ -431,7 +538,7 @@ pub async fn append_record(
         );
     }
     ensure!(
-        collection != "objects" && collection != "points",
+        !matches!(collection, "objects" | "points" | "collectors" | "users"),
         "Reserved v3 collection name."
     );
     if !store::put(source, collection, name, bytes).await? {

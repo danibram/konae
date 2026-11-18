@@ -168,24 +168,36 @@ pub async fn prune_s3_cached(s3: &S3Client, bucket: &str, prefix: &str, current:
 }
 
 pub async fn list_s3_keys(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<String>> {
-    let mut keys = Vec::new();
-    let mut continuation: Option<String> = None;
+    let objects = list_s3_objects(s3, bucket, prefix).await?;
+    Ok(objects.into_iter().map(|o| o.key.unwrap()).collect())
+}
+
+pub(crate) async fn list_s3_objects(s3: &S3Client, bucket: &str, prefix: &str) -> Result<Vec<aws_sdk_s3::types::Object>> {
+    let mut objects = Vec::new();
+    let mut tokens = HashSet::new();
+    let mut names = HashSet::new();
+    let mut continuation = None;
     loop {
-        let page = s3
-            .list_objects_v2()
-            .bucket(bucket)
-            .prefix(prefix)
-            .set_continuation_token(continuation.take())
-            .send()
-            .await
+        let page = s3.list_objects_v2().bucket(bucket).prefix(prefix)
+            .set_continuation_token(continuation.take()).send().await
             .with_context(|| format!("Listing s3://{bucket}/{prefix} failed"))?;
-        keys.extend(page.contents().iter().filter_map(|object| object.key().map(str::to_owned)));
-        match page.next_continuation_token() {
-            Some(token) if page.is_truncated() == Some(true) => continuation = Some(token.to_owned()),
-            _ => break,
+        ensure!(page.key_count() == Some(i32::try_from(page.contents().len())?),
+            "Incomplete S3 list page for {prefix}.");
+        for object in page.contents() {
+            let name = object.key().context("S3 listed an object without a key.")?;
+            ensure!(name.starts_with(prefix) && names.insert(name.to_owned()),
+                "S3 listed a duplicate key or a key outside {prefix}.");
         }
+        match (page.is_truncated(), page.next_continuation_token()) {
+            (Some(false), None) => continuation = None,
+            (Some(true), Some(token)) if !token.is_empty() && tokens.insert(token.to_owned()) => {
+                continuation = Some(token.to_owned())
+            }
+            _ => anyhow::bail!("Incomplete S3 pagination for {prefix}."),
+        }
+        objects.extend(page.contents.unwrap_or_default());
+        if continuation.is_none() { return Ok(objects); }
     }
-    Ok(keys)
 }
 
 pub async fn read_s3_bytes(s3: &S3Client, bucket: &str, key: &str) -> Result<Vec<u8>> {

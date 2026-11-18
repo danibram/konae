@@ -175,6 +175,48 @@ async fn a_partial_directory_upload_retries_without_replacing_a_block() -> Resul
     repo.restore(&point, &scratch.join("recovered")).await?;
     assert_eq!(fs::read(scratch.join("recovered/a"))?, b"first");
     assert_eq!(fs::read(scratch.join("recovered/b"))?, b"third");
+    point.close().await?;
+    fs::remove_dir_all(scratch)?;
+    Ok(())
+}
+
+pub(super) fn checkpoint(step: &str) {
+    if std::env::var("KONAE_LAB_PAUSE").as_deref() == Ok(step) {
+        let ready = std::path::PathBuf::from(std::env::var_os("KONAE_LAB_READY").unwrap());
+        fs::write(&ready, []).unwrap();
+        while !ready.with_extension("resume").exists() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+#[cfg(feature = "s3")]
+mod retention;
+
+#[tokio::test]
+async fn a_reader_holds_the_expiring_point_until_it_closes() -> Result<()> {
+    let scratch = std::env::temp_dir().join(format!("block-prune-{}", uuid::Uuid::new_v4()));
+    let source = Source::Directory(scratch.join("new-repository"));
+    let key = CopyKey::derive(SECRET);
+    let repository = Repository::new(&source, REPO, &key)?;
+    let scope = |p: &str| p == "asset";
+    let stage = scratch.join("stage");
+    fs::create_dir_all(&stage)?;
+    fs::write(stage.join("asset"), b"shared across all 25 points")?;
+    for i in 0..25 {
+        let m = Manifest::capture(&stage, i)?;
+        repository
+            .publish(&stage, &m, &scope, 16, &HashMap::new())
+            .await?;
+    }
+    let reader = repository.open(&copy_id(0), &scope).await?;
+    let now = 31 * crate::DAY_MS;
+    assert!(repository.prune(&scope, now, &copy_id(24)).await.is_err());
+    repository.restore(&reader, &scratch.join("cold")).await?;
+    reader.close().await?;
+    assert_eq!(repository.prune(&scope, now, &copy_id(24)).await?, 1);
+    assert_eq!(repository.points().await?.first(), Some(&copy_id(1)));
+    assert_eq!(store::list(&source, "objects").await?.len(), 1);
     fs::remove_dir_all(scratch)?;
     Ok(())
 }
