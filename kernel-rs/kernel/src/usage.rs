@@ -248,7 +248,16 @@ struct Batch {
     accounts: HashMap<(String, String, AccountKind), (i64, u64)>,
 }
 
+/// Usage connections the writer keeps open between batches, at most this many.
+const KEPT_CONNECTIONS: usize = 64;
+
+/// The writer keeps each folder's connection open, because opening one and
+/// closing the last one cost more than the batch. A flush closes them all, so
+/// whoever flushes before replacing `usage.sqlite` leaves no handle on it.
+type Kept = HashMap<PathBuf, (Connection, crate::app_db::FileId)>;
+
 fn writer(receiver: Receiver<Message>) {
+    let mut kept = Kept::new();
     while let Ok(first) = receiver.recv() {
         let mut batches: HashMap<PathBuf, Batch> = HashMap::new();
         let mut flushes = Vec::new();
@@ -280,7 +289,7 @@ fn writer(receiver: Receiver<Message>) {
             }
         }
         for (folder, batch) in batches {
-            let result = write(&folder, &batch, super::now_ms());
+            let result = write(&folder, &batch, super::now_ms(), &mut kept);
             for receipt in batch.commits {
                 let _ = receipt.send(result.is_ok());
             }
@@ -288,6 +297,9 @@ fn writer(receiver: Receiver<Message>) {
                 WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
                 eprintln!("Usage write failed for {}: {error}", folder.display());
             }
+        }
+        if !flushes.is_empty() {
+            kept.clear();
         }
         for done in flushes {
             let _ = done.try_send(());
@@ -397,11 +409,30 @@ pub fn record_run(folder: &Path, run: &Run) -> Result<()> {
     Ok(())
 }
 
-fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
+fn write(folder: &Path, batch: &Batch, now: u64, kept: &mut Kept) -> Result<()> {
+    let path = folder.join(USAGE_DATABASE);
     if !folder.is_dir() {
+        kept.remove(&path);
         return Ok(());
     }
-    let mut connection = open(&folder.join(USAGE_DATABASE))?;
+    let current = crate::app_db::file_id(&path);
+    let mut connection = match kept.remove(&path) {
+        Some((connection, file)) if current == Some(file) => connection,
+        _ => open(&path)?,
+    };
+    write_batch(&mut connection, batch, now)?;
+    if let Some(file) = crate::app_db::file_id(&path) {
+        if kept.len() >= KEPT_CONNECTIONS {
+            if let Some(other) = kept.keys().next().cloned() {
+                kept.remove(&other);
+            }
+        }
+        kept.insert(path, (connection, file));
+    }
+    Ok(())
+}
+
+fn write_batch(connection: &mut Connection, batch: &Batch, now: u64) -> Result<()> {
     let transaction = connection.transaction()?;
     for ((day, kind, name), count) in &batch.counts {
         transaction.execute(
@@ -991,6 +1022,40 @@ mod tests {
         assert!(kept.len() <= MAX_PROPERTY_BYTES && kept.chars().all(|c| c == 'é'), "cut at a character boundary");
         assert!(!crate::layout::folder(&root, "deployment-gone").exists());
         assert_eq!(read_signals(&path, Some("other.name"), None).unwrap()["signals"], json!([]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_writer_writes_to_the_file_that_replaced_usage() {
+        let root = scratch("replaced");
+        let id = "deployment-replaced";
+        std::fs::create_dir_all(crate::layout::data(&root, id)).unwrap();
+        let path = crate::layout::usage(&root, id);
+        let today = day(super::super::now_ms());
+        let logins = |path: &Path| read_usage(path, &today, &today).unwrap()["totals"]
+            .as_array().unwrap().iter().find(|total| total["kind"] == "login").map(|total| total["count"].clone());
+        count(&root, id, Operation::Login);
+        flush();
+        assert_eq!(logins(&path), Some(json!(1)));
+        for (label, flushed) in [("after a flush", true), ("with a kept connection", false)] {
+            let staged = root.join("staged-usage.sqlite");
+            drop(open(&staged).unwrap());
+            if flushed {
+                flush();
+            } else {
+                count(&root, id, Operation::Login);
+                let written = std::time::Instant::now() + Duration::from_secs(5);
+                while logins(&path) != Some(json!(3)) {
+                    assert!(std::time::Instant::now() < written, "the writer wrote the third login");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            crate::replace_database_file(&staged, &path).unwrap();
+            count(&root, id, Operation::Login);
+            count(&root, id, Operation::Login);
+            flush();
+            assert_eq!(logins(&path), Some(json!(2)), "{label}: the new file holds the new counts alone");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -2746,9 +2746,11 @@ pub async fn named_lock(state: &AppState, name: &str, alone: bool) -> NamedLockG
 /// no one else holds the name, until the guard drops.
 pub async fn database_lock(state: &AppState, id: &str) -> NamedLockGuard {
     let held = named_lock(state, id, true).await;
-
-
-    app_db::forget(&database_path(state, id));
+    let path = match id.strip_prefix("identity:") {
+        Some(deployment) => crate::layout::identity(&state.data_root, deployment),
+        None => database_path(state, id),
+    };
+    app_db::forget(&path);
     held
 }
 
@@ -3986,10 +3988,13 @@ pub fn authenticate_deployment(
     deployment: &Deployment,
     headers: &HeaderMap,
 ) -> std::result::Result<Option<AuthUser>, Response> {
-    let auth = open_auth(state, deployment)
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer ")).map(str::to_owned)
         .or_else(|| cookie_value(headers, &app_cookie_name(state, &deployment.id, headers)));
+    if token.is_none() {
+        return Ok(None);
+    }
+    let auth = open_auth(state, deployment)
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     auth.authenticate(token.as_deref())
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
 }

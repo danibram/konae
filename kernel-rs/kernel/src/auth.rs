@@ -9,6 +9,7 @@ use ring::{
     pbkdf2,
     rand::{SecureRandom, SystemRandom},
 };
+use crate::app_db::AppConnection;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -114,6 +115,10 @@ pub struct AuthService {
     path: PathBuf,
     scope: String,
     verification: Verification,
+    /// A live store keeps its connections between calls. Opening one parses
+    /// the schema, and closing the last one checkpoints and deletes the WAL,
+    /// which cost more than the request that asked.
+    kept: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,32 +252,12 @@ impl AuthService {
             path: path.as_ref().to_path_buf(),
             scope: scope.to_owned(),
             verification,
+            kept: apply_mode,
         };
         let mut connection = service.connection()?;
-        connection
-            .execute_batch(
-                "PRAGMA journal_mode = WAL;
-             CREATE TABLE IF NOT EXISTS app_users (
-               id TEXT PRIMARY KEY,
-               email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-               password_hash TEXT NOT NULL,
-               created_at INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS app_sessions (
-               token_hash TEXT PRIMARY KEY,
-               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-               expires_at INTEGER NOT NULL,
-               entered_by TEXT
-             );
-             CREATE INDEX IF NOT EXISTS app_sessions_expiry ON app_sessions(expires_at);
-             CREATE TABLE IF NOT EXISTS entry_links (
-               token_hash TEXT PRIMARY KEY,
-               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-               entered_by TEXT NOT NULL,
-               expires_at INTEGER NOT NULL
-             );",
-            )
-            .map_err(AuthError::Storage)?;
+        if !service.kept {
+            install_schema(&connection)?;
+        }
         migrate(&mut connection, apply_mode.then_some(verification))?;
         Ok(service)
     }
@@ -877,7 +862,7 @@ impl AuthService {
 
     /// Reads this store outside any transaction.
     pub fn read<T>(&self, work: impl FnOnce(&Connection) -> Result<T, AuthError>) -> Result<T, AuthError> {
-        work(&self.connection()?)
+        work(&*self.connection()?)
     }
 
     /// Stores a new challenge and invalidates the account's earlier open
@@ -923,8 +908,9 @@ impl AuthService {
         })
     }
 
-    fn connection_with(&self, outbox: Option<&dyn ChallengeOutbox>) -> Result<Connection, AuthError> {
-        let connection = self.connection()?;
+    /// Attached databases stay on the connection, so this one is never kept.
+    fn connection_with(&self, outbox: Option<&dyn ChallengeOutbox>) -> Result<AppConnection, AuthError> {
+        let connection = self.unkept_connection()?;
         if let Some(outbox) = outbox {
             connection
                 .execute("ATTACH DATABASE ?1 AS outbox", [outbox.database().to_string_lossy()])
@@ -933,23 +919,65 @@ impl AuthService {
         Ok(connection)
     }
 
-    fn connection(&self) -> Result<Connection, AuthError> {
-        let connection = Connection::open(&self.path).map_err(AuthError::Storage)?;
-        connection
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(AuthError::Storage)?;
-        connection
-            .execute_batch("PRAGMA foreign_keys = ON;")
-            .map_err(AuthError::Storage)?;
-        let page_size: u64 = connection
-            .query_row("PRAGMA page_size", [], |row| row.get(0))
-            .map_err(AuthError::Storage)?;
-        let pages = (MAX_IDENTITY_DATABASE_BYTES / page_size.max(1)).max(1);
-        connection
-            .query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))
-            .map_err(AuthError::Storage)?;
-        Ok(connection)
+    fn connection(&self) -> Result<AppConnection, AuthError> {
+        if self.kept {
+            return crate::app_db::open_kept(&self.path, |connection| {
+                configure(connection)?;
+                install_schema(connection)
+            });
+        }
+        self.unkept_connection()
     }
+
+    fn unkept_connection(&self) -> Result<AppConnection, AuthError> {
+        let connection = Connection::open(&self.path).map_err(AuthError::Storage)?;
+        configure(&connection)?;
+        Ok(crate::app_db::unkept(connection, &self.path))
+    }
+}
+
+fn configure(connection: &Connection) -> Result<(), AuthError> {
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(AuthError::Storage)?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(AuthError::Storage)?;
+    let page_size: u64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(AuthError::Storage)?;
+    let pages = (MAX_IDENTITY_DATABASE_BYTES / page_size.max(1)).max(1);
+    connection
+        .query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))
+        .map_err(AuthError::Storage)?;
+    Ok(())
+}
+
+fn install_schema(connection: &Connection) -> Result<(), AuthError> {
+    connection
+        .execute_batch(
+                "PRAGMA journal_mode = WAL;
+             CREATE TABLE IF NOT EXISTS app_users (
+               id TEXT PRIMARY KEY,
+               email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+               password_hash TEXT NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS app_sessions (
+               token_hash TEXT PRIMARY KEY,
+               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+               expires_at INTEGER NOT NULL,
+               entered_by TEXT
+             );
+             CREATE INDEX IF NOT EXISTS app_sessions_expiry ON app_sessions(expires_at);
+             CREATE TABLE IF NOT EXISTS entry_links (
+               token_hash TEXT PRIMARY KEY,
+               user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+               entered_by TEXT NOT NULL,
+               expires_at INTEGER NOT NULL
+             );",
+        )
+        .map_err(AuthError::Storage)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1419,6 +1447,27 @@ mod tests {
             auth.signup("PERSON@example.test", "another correct password"),
             Err(AuthError::EmailTaken)
         ));
+    }
+
+    #[test]
+    fn a_live_store_reads_the_file_that_replaced_its_own() {
+        let live = TempDb::new();
+        let store = || AuthService::open_in(&live.0, &deployment_scope("app-replaced"), Verification::Local).unwrap();
+        let mut sessions = vec![store().signup("first@example.test", "correct horse battery").unwrap()];
+        assert!(store().authenticate(Some(&sessions[0].token)).unwrap().is_some());
+        for (email, forget) in [("second@example.test", true), ("third@example.test", false)] {
+            let incoming = TempDb::new();
+            sessions.push(incoming.service().signup(email, "correct horse battery").unwrap());
+            if forget {
+                crate::app_db::forget(&live.0);
+            }
+            crate::replace_database_file(&incoming.0, &live.0).unwrap();
+            let (replaced, current) = sessions.split_at(sessions.len() - 1);
+            for session in replaced {
+                assert!(store().authenticate(Some(&session.token)).unwrap().is_none(), "{email}: an old file's session is gone");
+            }
+            assert!(store().authenticate(Some(&current[0].token)).unwrap().is_some(), "{email}: the new file's session signs in");
+        }
     }
 
     #[test]
