@@ -42,3 +42,6 @@ a:hover{color:var(--orange)}
 form>a{justify-self:start;font-size:14px}
 form+p{margin-top:16px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.google svg{flex:none}
+.or{display:flex;align-items:center;gap:12px;margin:20px 0 -6px;color:var(--muted);font:500 11px var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.or::before,.or::after{content:"";flex:1;border-top:1px solid var(--border)}

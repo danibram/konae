@@ -13,7 +13,7 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ### Changed
 
-- The pages the Kernel answers on an app's address (sign-in, password recovery, invitation, Google sign-in, entry, maintenance and not found) use the design system: its colors in light and dark, its two fonts and its card, field, button and alert styles. The sign-in page names the app above the form instead of saying "Sign in to this app". The Kernel serves the fonts at `/_konae/fonts/` on every app's address.
+- The pages the Kernel answers on an app's address (sign-in, password recovery, invitation, Google sign-in, entry, maintenance and not found) use the design system: its colors in light and dark, its two fonts and its card, field, button and alert styles. The sign-in page names the app above the form instead of saying "Sign in to this app". Its Google button carries Google's logo and sits above the form, apart from it. The Kernel serves the fonts at `/_konae/fonts/` on every app's address.
 
 ## [0.11.0] - 2026-11-18
 
