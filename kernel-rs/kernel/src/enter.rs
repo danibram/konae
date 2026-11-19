@@ -142,12 +142,12 @@ async fn entry_page(State(state): State<AppState>, headers: HeaderMap) -> Respon
             (header::CACHE_CONTROL, "no-store"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],
-        ENTRY_PAGE,
+        crate::own_page::style(ENTRY_PAGE),
     )
         .into_response()
 }
 
-const ENTRY_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Opening the app</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font:16px system-ui,sans-serif;color:#20232a;background:#f4f5f7}main{max-width:380px}#error{color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}#error{color:#ff8a8a}}</style><link rel="icon" href="data:,">
+const ENTRY_PAGE: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Opening the app</title><style>/*KERNEL_PAGE_CSS*/</style><link rel="icon" href="data:,">
 <main><h1>Opening the app</h1><p id="error" role="alert"></p></main>
 <script>
 const match=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);const prefix=match?'/p/'+match[1]:'';const token=new URLSearchParams(location.hash.slice(1)).get('entry');history.replaceState(null,'',location.pathname);const fail=(text)=>{document.querySelector('#error').textContent=text+' Ask for a new link.'};if(!token){fail('This link has no entry token.')}else{fetch(prefix+'/_konae/enter',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})}).then(async(response)=>{if(response.ok){location.replace(prefix+'/');return}const body=await response.json().catch(()=>({}));fail(body.error||'The app did not open.')},()=>fail('The app did not answer.'))}

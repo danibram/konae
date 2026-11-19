@@ -288,7 +288,7 @@ test("a legacy export starts on a fresh Kernel without its record, and distingui
         expect(await runtime(app, hostname, session).call("actions_invoke", { name: "applied.read" })).toEqual([{ title: "portable row" }]);
         await expect(runtime(app, hostname, session).call("actions_invoke", { name: "draft.read" })).rejects.toThrow();
       } else {
-        expect(await rootResponse.text()).toContain("Sign in to this app");
+        expect(await rootResponse.text()).toContain("<h1>Sign in</h1>");
         const app = { url: bare.url, data: destination } as Kernel;
         const session = await account(app, hostname, "login", "writer@legacy.test");
         expect(await runtime(app, hostname, session).call("actions_invoke", { name: "draft.read" })).toEqual([{ title: "portable row" }]);

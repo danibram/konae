@@ -116,10 +116,9 @@ fn escape(value: &str) -> String {
 fn maintenance_page(name: &str, message: &str) -> Response {
     let html = format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{title} is in maintenance</title><style>body{{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#1f2328}}\
-h1{{font-size:1.4rem}}\
-@media (prefers-color-scheme: dark){{body{{background:#0d1117;color:#e6edf3}}}}</style></head>\
+<title>{title} is in maintenance</title><style>{css}</style></head>\
 <body><main><h1>{title} is in maintenance</h1><p>{message}</p></main></body></html>",
+        css = crate::own_page::CSS,
         title = escape(name),
         message = escape(message),
     );

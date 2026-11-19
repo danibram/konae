@@ -57,7 +57,7 @@ test("page paths follow the app's auth module", async () => {
   expect(privateModules.modules.auth.state.on).toBe(true);
   const privatePage = await appFetch(kernel, privateDeployment.hostname, "/posts/hello");
   expect(privatePage.status).toBe(200);
-  expect(await privatePage.text()).toContain("Sign in to this app");
+  expect(await privatePage.text()).toContain("<h1>Sign in</h1>");
 });
 
 test("page paths answer rows, refresh their validator and feed the sitemap", async () => {

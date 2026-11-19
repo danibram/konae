@@ -30,12 +30,6 @@ pub(super) static LOGIN: LazyLock<String> = LazyLock::new(|| {
         .replace("<!--OWNER_ICON-->", ICON)
 });
 
-const FONTS: [(&str, &[u8]); 3] = [
-    ("bricolage-latin.woff2", include_bytes!("owner-page/bricolage-latin.woff2")),
-    ("bricolage-latin-ext.woff2", include_bytes!("owner-page/bricolage-latin-ext.woff2")),
-    ("jetbrains-mono-latin.woff2", include_bytes!("owner-page/jetbrains-mono-latin.woff2")),
-];
-
 pub fn routes() -> Router<Konae> {
     Router::new().route("/_konae/owner/fonts/{name}", get(font))
 }
@@ -44,13 +38,13 @@ async fn font(State(state): State<Konae>, headers: HeaderMap, Path(name): Path<S
     if !super::oauth::valid_owner_host(&state, &headers).await {
         return StatusCode::FORBIDDEN.into_response();
     }
-    match FONTS.iter().find(|(file, _)| *file == name) {
-        Some((_, bytes)) => (
+    match kernel::own_page::font_bytes(&name) {
+        Some(bytes) => (
             [
                 (header::CONTENT_TYPE, "font/woff2"),
                 (header::CACHE_CONTROL, "public, max-age=604800"),
             ],
-            *bytes,
+            bytes,
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -66,7 +60,7 @@ mod tests {
         use base64::Engine;
         let digest = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(CSS.as_bytes()));
         assert_eq!(*STYLE_HASH, format!("'sha256-{digest}'"));
-        for (file, _) in FONTS {
+        for (file, _) in kernel::own_page::FONTS {
             assert!(CSS.contains(&format!("/_konae/owner/fonts/{file}")), "{file} is served but unused");
         }
     }

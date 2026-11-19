@@ -53,6 +53,7 @@ pub mod maintenance;
 pub mod modules;
 pub mod notify;
 pub mod operator;
+pub mod own_page;
 pub mod package;
 pub mod page;
 pub mod path;
@@ -909,6 +910,7 @@ pub fn stack(state: AppState, extra: Router<AppState>) -> tower::util::BoxCloneS
         .route("/_konae/auth/signup", post(signup))
         .route("/_konae/auth/login", post(login))
         .route("/_konae/login", get(login_page))
+        .route("/_konae/fonts/{name}", get(own_page::font))
         .merge(runtime::routes())
         .merge(extra)
         .merge(google::routes())
@@ -2308,7 +2310,7 @@ pub async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Re
     }
     match authenticate_deployment(&state, &deployment, &headers) {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
-        Ok(None) => private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
+        Ok(None) => private_login_page(&deployment.project_name, &deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
         Err(response) => response,
     }
 }
@@ -2350,7 +2352,7 @@ pub(crate) async fn serve_key_with_routes(
     if is_private(&deployment) {
         match authenticate_deployment(&state, &deployment, &headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
+            Ok(None) => return private_login_page(&deployment.project_name, &deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
             Err(response) => return response,
         }
     }
@@ -2461,9 +2463,7 @@ pub async fn read_artifact(state: &AppState, deployment: &Deployment, path: &str
     Ok(tokio::fs::read(local).await?)
 }
 
-pub fn private_login_page(policy: &SignupPolicy, verification: auth::Verification, google: bool) -> Response {
-
-
+pub fn private_login_page(app: &str, policy: &SignupPolicy, verification: auth::Verification, google: bool) -> Response {
     let verified = verification == auth::Verification::Required;
     let (note, create) = match policy.mode {
         SignupMode::Open if verified => (
@@ -2487,10 +2487,15 @@ pub fn private_login_page(policy: &SignupPolicy, verification: auth::Verificatio
             false,
         ),
     };
+    let app = own_page::escape(app);
     let body = [
-        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}form,label{display:grid;gap:8px}form{gap:16px;margin-top:24px}input,button{font:inherit;border-radius:8px;padding:11px 12px}input{width:100%;border:1px solid #c9ced6}button{border:0;background:#273449;color:white;cursor:pointer}button+button{background:#edf0f4;color:#252a33}#error{min-height:1.5em;margin:0;color:#a32727}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}input{background:#14161a;color:#e8eaed;border-color:#3a404a}input[readonly]{background:#23272e;color:#e8eaed}button{background:#e8eaed;color:#14161a}button+button{background:#2a2f37;color:#e8eaed}#error{color:#ff8a8a}a{color:#8ab4ff}}"#,
-        if google { google::BUTTON_STYLE } else { "" },
-        r#"</style><link rel="icon" href="data:,"><main><h1>Sign in to this app</h1><p>"#,
+        r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · "#,
+        &app,
+        r#"</title><style>"#,
+        own_page::CSS,
+        r#"</style><link rel="icon" href="data:,"><main><p class="kicker">"#,
+        &app,
+        r#"</p><h1>Sign in</h1><p>"#,
         note,
         "</p>",
         if google { google::BUTTON } else { "" },
@@ -4702,7 +4707,7 @@ pub mod tests {
                 .await
                 .unwrap();
             let html = String::from_utf8(bytes.to_vec()).unwrap();
-            assert!(html.contains("Sign in to this app"));
+            assert!(html.contains("<h1>Sign in</h1>") && html.contains(r#"<p class="kicker">"#));
             assert!(html.contains("/_konae/auth/signup"));
             assert!(!html.contains("Account creation is open"));
             let _ = tokio::fs::remove_dir_all(root).await;

@@ -738,7 +738,7 @@ fn escape(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-const PAGE_HEAD: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Sign in with Google</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f5f7;color:#20232a;font:16px system-ui,sans-serif}main{width:min(100%,380px);padding:32px;background:white;border:1px solid #e1e4e8;border-radius:12px;box-shadow:0 12px 36px #1f293714}h1{margin:0 0 8px;font-size:24px}p{color:#586174;line-height:1.5}@media (prefers-color-scheme:dark){body{background:#14161a;color:#e8eaed}main{background:#1d2026;border-color:#2e333b;box-shadow:none}p{color:#a9b0bc}a{color:#8ab4ff}}</style><link rel="icon" href="data:,"><main><h1>Sign in with Google</h1><p role="alert">"#;
+const PAGE_HEAD: &str = r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Sign in with Google</title><style>/*KERNEL_PAGE_CSS*/</style><link rel="icon" href="data:,"><main><h1>Sign in with Google</h1><p role="alert">"#;
 
 fn html(status: StatusCode, body: String) -> Response {
     let mut response = (status, body).into_response();
@@ -749,7 +749,7 @@ fn html(status: StatusCode, body: String) -> Response {
 }
 
 fn page_with_link(status: StatusCode, message: &str, link: &str) -> Response {
-    html(status, format!("{PAGE_HEAD}{}</p><p><a href=\"{}\">Back to sign in</a></p></main></html>", escape(message), escape(link)))
+    html(status, crate::own_page::style(&format!("{PAGE_HEAD}{}</p><p><a href=\"{}\">Back to sign in</a></p></main></html>", escape(message), escape(link))))
 }
 
 fn login_link_page(status: StatusCode, message: &str) -> Response {
@@ -760,7 +760,6 @@ fn login_link_page(status: StatusCode, message: &str) -> Response {
 /// the page's form-action or connect-src. On a path address it keeps the
 /// page's `/p/<segment>` prefix, as the Kernel's other pages do.
 pub const BUTTON: &str = r#"<a class="google" href="/_konae/auth/google/start">Continue with Google</a><script>{const m=/^\/p\/([^\/]+)(\/|$)/.exec(location.pathname);if(m)document.querySelector('a.google').href='/p/'+m[1]+'/_konae/auth/google/start'}</script>"#;
-pub const BUTTON_STYLE: &str = ".google{display:block;text-align:center;text-decoration:none;font:inherit;border-radius:8px;padding:11px 12px;border:1px solid #c9ced6;color:#20232a;margin-top:16px}@media (prefers-color-scheme:dark){.google{color:#e8eaed;border-color:#3a404a}}";
 
 #[cfg(test)]
 mod tests {

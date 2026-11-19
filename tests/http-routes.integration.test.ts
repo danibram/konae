@@ -186,8 +186,8 @@ describe("HTTP routes", () => {
   });
 
   test("an unsigned route on a private Deployment needs a key or a session, as its shell needs sign-in", async () => {
-    expect(await (await route("/")).text()).toContain("Sign in to this app");
-    expect(await (await route("/elsewhere")).text()).toContain("Sign in to this app");
+    expect(await (await route("/")).text()).toContain("<h1>Sign in</h1>");
+    expect(await (await route("/elsewhere")).text()).toContain("<h1>Sign in</h1>");
     const listed = await json(await route("/api/orders"));
     expect(listed).toEqual({ status: 401, body: { error: "authentication-required" } });
     const unknown = await route("/hooks/unknown", { method: "POST", body: "{}" });

@@ -11,6 +11,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 - The build agent can run `preview_test` against its current scratch files. It fills fields, clicks buttons, checks text and calls named actions as a preview actor on copied test rows. Results identify the source revision, action inputs and outputs, handled failures and viewport overflow. The test discards its writes and does not replace checks on a Kernel.
 - The agent's `edit_json` tool changes JSON Pointer paths together. It requires matching prior values for replacements and removals, and writes nothing when a change fails.
 
+### Changed
+
+- The pages the Kernel answers on an app's address (sign-in, password recovery, invitation, Google sign-in, entry, maintenance and not found) use the design system: its colors in light and dark, its two fonts and its card, field, button and alert styles. The sign-in page names the app above the form instead of saying "Sign in to this app". The Kernel serves the fonts at `/_konae/fonts/` on every app's address.
+
 ## [0.11.0] - 2026-11-18
 
 This release adds per-app modules, shareable pages backed by app data, and a browser-local editor. It also adds staged Pi Durable conversations and a new optional installation backup format.

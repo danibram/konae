@@ -885,7 +885,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     if is_private(deployment) {
         match authenticate_deployment(state, deployment, headers) {
             Ok(Some(_)) => {}
-            Ok(None) => return Some(private_login_page(&deployment.signup_policy, state.accounts.verification, google::offered_here(state, deployment, headers))),
+            Ok(None) => return Some(private_login_page(&deployment.project_name, &deployment.signup_policy, state.accounts.verification, google::offered_here(state, deployment, headers))),
             Err(response) => return Some(response),
         }
     }

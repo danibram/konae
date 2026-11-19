@@ -201,7 +201,7 @@ describe("isolation of hosted code", () => {
     const host = await publish("csp_private", "private", { "index.html": "<!doctype html><main>Private shell</main>" });
     const page = await fetch(url, { headers: { host } });
     const html = await page.text();
-    expect(html).toContain("Sign in to this app");
+    expect(html).toContain("<h1>Sign in</h1>");
     const policy = directives(page.headers.get("content-security-policy"));
     expect(policy.get("script-src")).toEqual(["'self'", ...inlineScriptHashes(html)]);
     expect(policy.get("frame-ancestors")).toEqual(["'none'"]);

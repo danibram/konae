@@ -69,7 +69,7 @@ test("platform pages require an owner session and return to the requested page a
 });
 
 async function signInApp(page: Page) {
-  await expect(page.getByRole("heading", { name: "Sign in to this app" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await page.getByLabel("Email").fill(`app-${crypto.randomUUID()}@example.test`);
   await page.getByLabel("Password").fill("App-test-password-2026");
   await page.getByRole("button", { name: "Create account", exact: true }).click();
