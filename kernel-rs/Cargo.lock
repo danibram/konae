@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "kernel"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "aws-credential-types",
@@ -1361,7 +1361,7 @@ dependencies = [
 
 [[package]]
 name = "konae"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "aws-credential-types",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "konae-backup"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "aws-sdk-s3",

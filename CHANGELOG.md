@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-19
+
+This release lets the build agent test its preview and edit JSON in one checked step, and gives the pages the Kernel answers on an app's address the design system.
+
 ### Added
 
 - The build agent can run `preview_test` against its current scratch files. It fills fields, clicks buttons, checks text and calls named actions as a preview actor on copied test rows. Results identify the source revision, action inputs and outputs, handled failures and viewport overflow. The test discards its writes and does not replace checks on a Kernel.
