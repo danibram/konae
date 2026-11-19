@@ -6,6 +6,10 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-19
+
+This release brings the Konae site into the repository: the home, the docs, `llms.txt` and the legal pages as one app.
+
 ### Changed
 
 - The home, the docs, `llms.txt` and the privacy and terms pages are one app, `examples/site`, which answers konae.es as its custom domain: the docs at `/docs/`, `llms.txt` at the root and the legal pages at `/politica-de-privacidad` and `/terminos-y-condiciones`. `examples/home`, `examples/docs-site` and the two legal apps are gone. The operator docs describe an installation whose apps live on a domain of their own, as konae.app does beside konae.es.
