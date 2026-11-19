@@ -97,8 +97,8 @@ describe("what the prompt leaves to the Validation Gate", () => {
     expect(prompt).toContain("through textContent or the template's escapeHtml, in attributes too");
   });
 
-  test("stays well under the 66,000 characters it had before declaration refusals left it", () => {
-    expect(prompt.length).toBeLessThan(27_000);
+  test("stays under 30,000 characters, less than half the 66,000 it had before SDK references moved behind read", () => {
+    expect(prompt.length).toBeLessThan(30_000);
   });
 });
 

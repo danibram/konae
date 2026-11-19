@@ -34,7 +34,7 @@ export async function runPreviewTest(project: MiniAppProject, applied: MiniAppRu
   const revision = await previewRevision(project);
   const compiled = await compileProjectInBrowser(project);
   signal?.throwIfAborted();
-  const host = await applied.cloneForProposal(`test:${crypto.randomUUID()}`, project.files["schema.sql"], project.files["actions.json"], project.manifest.fileAccess);
+  const host = await applied.cloneForProposal(`test:${crypto.randomUUID()}`, project.files["schema.sql"], project.files["actions.json"], project.modules?.files?.fileAccess as "app-users" | undefined);
   const actor = test.actor ?? "alice";
   host.setPreviewActor(actor);
   const frame = document.createElement("iframe");
