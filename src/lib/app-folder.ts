@@ -1,3 +1,4 @@
+import { functionsBuildSupport } from "../kernel/functions";
 
 
 
@@ -36,11 +37,13 @@ export type AppSettings = {
   kernel: string;
 
   manifest: Record<string, unknown>;
+  released?: Record<string, unknown>;
 };
 
 export const SETTINGS_FILE = "konae.json";
 export const SOURCES_FOLDER = "app";
 export const DIST_FOLDER = "dist";
+export const SERVER_FOLDER = "server";
 export const DATA_FOLDER = "data";
 
 export const KERNEL_VERSION: string = version;
@@ -203,12 +206,15 @@ This folder is one Konae app. The Kernel serves the pages in \`dist/\` and runs 
 
 - \`konae.json\`: the app's name, visibility (${settings.visibility}), module state, contact email and the Kernel version.
 - \`app/\`: the editable sources. It may also hold binary assets. Konae checks the same path, count and decoded-size limits before saving and publishing them.
+- \`server/\`: function bundles and their manifest with SHA-256 hashes. The Kernel never serves these files as static assets. The editable declarations and entries stay in \`app/functions.json\` and \`app/functions/\`.
 - \`dist/\`: the built files. \`npm run build\` writes it from \`app/\`. Edit \`app/\`, never \`dist/\`.
 - \`data/\`: \`database.sqlite\`, the app accounts in \`identity.sqlite\`, Usage in \`usage.sqlite\` and uploads in \`files/\`. It holds people's accounts, so it never goes into Git.
 - \`action-contract.md\`: every Server Action with its inputs and the columns it returns.
 - \`actions.d.ts\`: the types of \`miniapp.actions.call\` for each action a page may call. When \`app/src/\` holds TypeScript, \`npm run build\` checks it, and what it imports, against them with \`tsconfig.json\` and stops on an error.
 
 ## Rules the Kernel checks
+
+A function exports \`handle(request, context)\` and returns a \`Response\`. Use \`await context.actions.call(name, input)\` for a query or mutation in its declared action allowlist. Functions start off; enable \`functions\` in \`konae.json\`. Authenticated functions need \`auth\`, and a nonempty action allowlist needs \`actions\`. The editor preview does not execute server functions. Try \`konae dev\` or a published Deployment with the experimental function runner configured by the operator.
 
 An optional \`schema-transforms.json\` records ordered data changes between schema fingerprints. The Kernel stores applied history in \`data/database.sqlite\`; the definition travels with app sources and never ships in \`dist/\`. The Validation Gate checks its shape, order, bounds and SQL subset. It cannot prove a transition against a real database.
 
@@ -230,7 +236,7 @@ An optional \`schema-transforms.json\` records ordered data changes between sche
 
 ## Run it
 
-1. To write \`dist/\`, if \`package.json\` lists an npm package, run \`npm install\` once, then \`npm run build\`. The shared local builder builds a template without an install. \`dev\` writes it without \`npm install\` when no imported package needs one. If \`package.json\` has a build script but \`node_modules/\` is absent, it uses the built-in builder. Once that directory exists, the builder runs \`npm run build\`. An exported folder already carries its built \`dist/\`.
+1. To write \`dist/\`, if \`package.json\` lists an npm package, run \`npm install\` once, then \`npm run build\`. The shared local builder builds a template without an install. \`dev\` writes it without \`npm install\` when no imported package needs one. If \`package.json\` has a build script but \`node_modules/\` is absent, it uses the built-in builder. Once that directory exists, the builder runs \`npm run build\`. An exported folder already carries its built \`dist/\` and \`server/\`. If \`app/package.json\` declares dependencies, install them with \`npm ci --prefix app\` when \`app/package-lock.json\` is present, or \`npm install --prefix app\` otherwise. Keep the package manifest and lockfile in \`app/\` so they travel with the sources.
 2. Run \`konae dev --dir <this folder>\`. It serves the app with \`data/\` and starts again when a file in \`app/\` changes. From a repository checkout, it uses that checkout's Kernel and builds it with Cargo if absent. The compiled CLI downloads the matching Kernel binary and verifies its checksum unless \`KONAE_KERNEL_BIN\` names a local one.
 3. On a server: copy \`.env.example\` to \`.env\`, fill it in, and run \`docker compose up -d\`. The Kernel prints the app's address, \`http://${settings.slug || "app"}.localhost:8787\` with the example settings.
 4. To publish on a Konae installation: \`konae login --browser --dir <this folder> --url <installation>\`, which signs the owner in through the browser, then \`konae publish --dir <this folder>\`. \`konae push --dir <this folder>\` prints what replacing the published app's data with \`data/\` would change, and with \`--yes\` it does so after a backup. A pending pull blocks push until you import the pulled data with \`dev --reset\`.
@@ -267,9 +273,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appEntries, appEntry, assembleStaticArtifact } from './static-artifact.mjs';
-import { bundleModule } from './local-builder.mjs';
+import { bundleModule, bundleFunctions } from './local-builder.mjs';
+import { createHash } from 'node:crypto';
 
 const sdkRequired = ${sdkRequired.toString()};
+${functionsBuildSupport()}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
@@ -282,6 +290,10 @@ const sources = await Promise.all(paths.map(async (file) => [file, await readFil
 const actionsSource = await readFile(path.join(app, 'actions.json'), 'utf8').catch(() => '');
 const schemaSource = await readFile(path.join(app, 'schema.sql'), 'utf8').catch(() => '');
 const sdk = sdkRequired(settings.modules, Object.fromEntries(sources), settings.visibility);
+const functionSource = Object.fromEntries(sources)['functions.json'];
+const functions = functionSource === undefined ? undefined : parseFunctions(functionSource);
+const functionContext = { files: paths, modules: settings.modules, actions: JSON.parse(actionsSource || '{"actions":{}}').actions ?? {} };
+if (functions) validateFunctions(functions, functionContext);
 if (paths.some((file) => file.startsWith('src/') && /\\.(?:ts|tsx|mts|cts)$/.test(file) && !/\\.d\\.[mc]?ts$/.test(file))) typecheck();
 const artifact = await assembleStaticArtifact({
   paths,
@@ -302,6 +314,23 @@ const artifact = await assembleStaticArtifact({
   routing: settings.manifest?.routing,
   warn: (message) => console.warn('Warning: ' + message),
 });
+let serverArtifact;
+if (functions && Object.keys(functions.functions).length) {
+  validateFunctions(functions, { ...functionContext, staticPaths: Object.keys(artifact.files) });
+  serverArtifact = await bundleFunctions(app, functions, development);
+  validateServerArtifact(functions, serverArtifact);
+}
+const server = path.join(root, 'server');
+await rm(server, { recursive: true, force: true });
+if (serverArtifact) {
+  await mkdir(server, { recursive: true });
+  const hashes = {};
+  for (const [name, bundle] of Object.entries(serverArtifact.bundles)) {
+    hashes[name] = createHash('sha256').update(bundle).digest('hex');
+    await writeFile(path.join(server, name + '.mjs'), bundle);
+  }
+  await writeFile(path.join(server, 'manifest.json'), JSON.stringify({ version: 1, abi: 'konae-functions/1', manifest: functions, hashes }, null, 2));
+}
 await rm(dist, { recursive: true, force: true });
 for (const [file, contents] of Object.entries(artifact.files)) {
   const target = path.join(dist, file);

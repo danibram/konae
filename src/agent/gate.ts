@@ -1,3 +1,5 @@
+import { parseFunctions, validateFunctions, validateServerArtifact } from "../kernel/functions";
+import { servedPath } from "../lib/static-artifact.js";
 import type { Database, SqlJsStatic } from "sql.js";
 import { notifyColumnRefusal, notifyReturning, notifyReturningStatement, parseServerActionSource, resolveServerAction, type ServerActionDefinition, type ServerActionProgram } from "../kernel/actions";
 import { sqlStatementTokens, sqlWordsOf, type SqlToken } from "../lib/sql-tokens";
@@ -59,6 +61,22 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
         ...(refused ? { code: refused.code, hint: hintOf(refused.code) } : {}),
       });
     }
+    const functionsSource = files["functions.json"];
+    let hasFunctions = false;
+    if (functionsSource !== undefined || facts.serverArtifact !== undefined) {
+      try {
+        const manifest = functionsSource === undefined ? undefined : parseFunctions(functionsSource);
+        if (manifest) {
+          const actions = JSON.parse(files["actions.json"] ?? '{"actions":{}}');
+          validateFunctions(manifest, { files: Object.keys(files), modules: facts.modules, actions: actions?.actions ?? {}, staticPaths: facts.staticPaths ?? Object.keys(files).flatMap((path) => { const served = servedPath(path); return served ? [served] : []; }) });
+          hasFunctions = Object.keys(manifest.functions).length > 0;
+        }
+        if (facts.serverArtifact !== undefined) validateServerArtifact(manifest, facts.serverArtifact);
+      } catch (error) {
+        const refused = refusalOf(error);
+        return failure({ stage: "actions", message: describe(error), ...(refused ? { code: refused.code, hint: refused.hint } : {}) }, ["sources"]);
+      }
+    }
     const SQL = await this.loadSql();
     const schemaSource = files["schema.sql"] ?? "";
     const actionsSource = files["actions.json"] ?? `{"version":1,"actions":{}}`;
@@ -94,7 +112,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
     }
     const errors: ValidationError[] = [];
     const checked: ValidationStage[] = ["sources"];
-    const warnings: ValidationWarning[] = [];
+    const warnings: ValidationWarning[] = hasFunctions ? [{ stage: "actions", message: "The editor preview does not execute server functions. Validation checks declarations, not server JavaScript behavior. Try konae dev or a published Deployment with the experimental function runner configured by the operator." }] : [];
     let fresh: Database | undefined;
     let clone: Database | undefined;
 
@@ -145,7 +163,7 @@ export class SqlJsCapsuleValidator implements CapsuleValidator {
           detail: `${describe(error)}. The preview runs schema.sql again on every open, so use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.`,
         }, checked);
       }
-      const reserved = fresh.exec("SELECT name FROM sqlite_master WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history') ORDER BY lower(name), name LIMIT 1")[0]?.values[0]?.[0];
+      const reserved = fresh.exec("SELECT name FROM sqlite_master WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY lower(name), name LIMIT 1")[0]?.values[0]?.[0];
       if (typeof reserved === "string") return failure({
         stage: "schema", code: "schema.statement-refused", hint: hintOf("schema.statement-refused"),
         message: `schema.sql cannot create the reserved name ${reserved}.`,

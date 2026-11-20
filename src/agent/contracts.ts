@@ -61,6 +61,8 @@ export type ValidationStage = "sources" | "schema" | "preview-rows" | "actions";
 
 export type ValidationFacts = ReleaseFacts & {
   sourceFiles?: SourceFiles;
+  serverArtifact?: unknown;
+  staticPaths?: string[];
   modules?: Record<string, { on: boolean; [option: string]: unknown }>;
 };
 

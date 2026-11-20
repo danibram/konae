@@ -18,7 +18,7 @@ export const runtimeScriptAttribute = "data-konae-runtime";
 
 export const runtimeFile = "runtime.js";
 
-export const sourceOnlyFiles = ["schema-transforms.json"];
+export const sourceOnlyFiles = ["schema-transforms.json", "functions.json"];
 
 
 export const pathPrefixPattern = /^\/p\/([^\/]+)(\/|$)/;
@@ -41,7 +41,7 @@ export function runtimeLoaderScript() {
 export const routingModes = ["pages", "spa"];
 export const routingMessage = 'Routing must be "pages" or "spa".';
 
-const reservedRoots = ["_konae", "oauth", ".well-known", "mcp"];
+const reservedRoots = ["_konae", "oauth", ".well-known", "mcp", "server", "functions"];
 const fetchingRels = ["stylesheet", "icon", "apple-touch-icon", "mask-icon", "manifest", "preload", "modulepreload", "prefetch"];
 const defaultBody = "<main id=app></main>";
 
@@ -177,7 +177,7 @@ export function splitFragmentHead(fragment) {
 export async function assembleStaticArtifact(input) {
   checkRouting(input.routing);
   const sourceOnly = new Set(sourceOnlyFiles);
-  const held = new Set(input.paths.filter((path) => !sourceOnly.has(path)));
+  const held = new Set(input.paths.filter((path) => !sourceOnly.has(path) && !path.startsWith("functions/")));
   /** served path -> Capsule path */
   const sources = new Map();
   const claim = (served, source) => {

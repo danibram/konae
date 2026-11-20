@@ -686,6 +686,22 @@ export const sdkContract = {
       declarations: [],
       notes: [],
     },
+    {
+      name: "functions",
+      title: "Server functions",
+      summary: "Run bundled JavaScript handlers on the Kernel with verified identity and named Server Actions.",
+      switch: true, options: [], permission: "publish", agentRule: "after-owner-confirms", requires: [],
+      uses: ["functions.json"], calls: [],
+      declarations: [{ file: "functions.json", key: "functions", limits: ["32 functions per app", "1 to 1048576 UTF-8 bytes per bundle; 8388608 UTF-8 bytes for all bundles", "262144 UTF-8 bytes for server/manifest.json, including its hashes", "GET and POST methods; mounts own their exact path and descendants", "ESM bundles contain their dependencies and export handle; the request resolves no npm package"], errors: [
+        { message: "Server manifest exceeds 262144 UTF-8 bytes.", when: "the normalized manifest and its hashes exceed the portable folder limit", source: "kernel" },
+        { message: "Declared functions require a Server Artifact.", when: "a release declares functions but supplies no serverArtifact", source: "kernel" },
+        { message: "Server Artifact requires version 1 and ABI konae-functions/1.", when: "the artifact names a different version or ABI", source: "kernel" },
+        { message: "Server Artifact manifest does not match functions.json.", when: "the built declaration differs from the release declaration", source: "kernel" },
+        { message: "Idempotency-Key is required for this function.", when: "a POST function with an action allowlist has no idempotency key", source: "kernel" },
+        { message: "Idempotency-Key was already used with a different request.", when: "the same actor reuses a function key for another request", source: "kernel" },
+      ], summary: "Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. Request.signal reports cancellation." }],
+      notes: ["Functions start off. Authenticated functions require auth; an action allowlist requires actions. The Kernel checks identity and action access on each invocation. The handler receives no session cookie, owner credential or SQL connection.", "The action allowlist accepts queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and targets of outgoing calls.", "For POST functions with allowed actions, send Idempotency-Key with 1 to 128 visible ASCII bytes. Keep the same key when retrying the same request. The Kernel scopes it to the actor and function; a changed request with that key is refused.", "For Hono, export const handle = (request, context) => app.fetch(request, context). A handler without Hono exports handle(request, context) and returns a Response whose body is valid UTF-8. The current ABI refuses binary response bodies and provides no outbound network fetch. context.actions.call returns a Promise; use await and validate request input before calling it.", "The editor preview does not execute server functions. The experimental runtime requires an operator-configured function runner. Try konae dev or a published Deployment only where that runner is configured.", "Server bundles travel in server/, separate from the public dist/.", "An optional shutdown(signal) can release resources. It grants no request operations and may not run after a crash, memory exhaustion or a blocked loop."],
+    },
   ],
 } as const satisfies SdkContract;
 

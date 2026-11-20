@@ -1,7 +1,7 @@
 import hostedRuntime from "../mcp/runtime.js?raw";
 import { renderCapsuleDocument, type StaticArtifact } from "../lib/static-artifact.js";
 
-export type BuildArtifact = StaticArtifact;
+export type BuildArtifact = StaticArtifact & { serverArtifact?: import("../kernel/functions").ServerArtifact };
 
 export { renderCapsuleDocument, runtimeScriptAttribute } from "../lib/static-artifact.js";
 export { hostedRuntime };
