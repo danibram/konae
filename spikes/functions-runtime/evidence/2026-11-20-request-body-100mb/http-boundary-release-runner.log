@@ -28,4 +28,3 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; fini
 
 cargo_exit_code=0
 The cargo test output records one passing boundary test and no failures. The enclosing zsh command then failed to store its exit status because `status` is a read-only zsh variable; this did not change the completed cargo test result.
-

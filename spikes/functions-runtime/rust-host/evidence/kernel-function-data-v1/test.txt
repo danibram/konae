@@ -21,4 +21,3 @@ test function_data::tests::row_budget_and_statement_validation_use_kernel_helper
 test function_data::tests::trusted_receipt_flag_does_not_authorize_trigger_or_view_access ... ok
 
 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.43s
-

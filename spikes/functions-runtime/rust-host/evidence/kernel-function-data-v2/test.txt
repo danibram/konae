@@ -23,4 +23,3 @@ test function_data::tests::trusted_receipt_flag_does_not_authorize_trigger_or_vi
 test function_data::tests::visible_headers_and_query_belong_to_fingerprint_but_order_and_login_do_not ... ok
 
 test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 595 filtered out; finished in 0.44s
-

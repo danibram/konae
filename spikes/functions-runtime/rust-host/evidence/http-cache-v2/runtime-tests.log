@@ -31,4 +31,3 @@ test data::tests::deadline_during_sqlite_commit_completion_reports_unknown_and_r
 test data::tests::sqlite_lock_350ms_does_not_commit_after_100ms_deadline ... ok
 
 test result: ok. 24 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.40s
-

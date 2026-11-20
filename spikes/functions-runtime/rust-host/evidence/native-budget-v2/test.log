@@ -27,4 +27,3 @@ ok
 test data::tests::validates_key_and_native_ranges_before_mutation ... ok
 
 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
-
