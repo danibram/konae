@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Each record states one standing decision as it holds now, with its reason and the options it rejected. When a decision changes, its record changes, and the git history keeps the earlier text. A new decision that fits no record gets the next free number, 0018. A record whose status is proposed states a decision the code does not hold yet.
+Each record states one standing decision as it holds now, with its reason and the options it rejected. When a decision changes, its record changes, and the git history keeps the earlier text. A new decision that fits no record gets the next free number, 0019. A record whose status is proposed states a decision the code does not hold yet.
 
 | ADR | Decides |
 | --- | --- |
@@ -21,6 +21,8 @@ Each record states one standing decision as it holds now, with its reason and th
 | [0015](0015-an-app-turns-on-the-modules-it-uses.md) | Proposed. A module is one capability of an app; `konae.json` holds state for modules whose switch is available; two tools manage it |
 | [0016](0016-an-app-is-listed-in-search-only-when-its-owner-turns-that-on.md) | Proposed. The `seo` module: `noindex` unless the owner turns listing on; the owner chooses the canonical address; the Kernel writes the card, `robots.txt` and the sitemap |
 | [0017](0017-a-query-may-answer-a-page-path.md) | Proposed. An anonymous query may declare a page path with parameters, and the Kernel writes the row's title and card |
+| [0018](0018-typescript-functions-load-on-demand-and-use-kernel-services.md) | Experimental. Funciones TypeScript con carga bajo demanda, Server Actions y traslado entre instalaciones |
+| [0019](0019-functions-stream-request-bodies-with-bounded-ipc.md) | Functions transmiten cuerpos HTTP por chunks binarios, con contabilidad de bytes, backpressure y fingerprints versionados |
 
 ## Which record answers a question
 
@@ -55,3 +57,4 @@ Each record states one standing decision as it holds now, with its reason and th
 | What happens to an app made before a module existed? | 0015 |
 | When does a search engine list an app, and under which address? | 0016 |
 | How does a row get its own address, title and card? | 0017 |
+| ¿Cómo ejecutar funciones TypeScript sin mantener activas las apps que no las usan? | 0018 |

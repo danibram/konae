@@ -2,7 +2,7 @@
 
 Status: accepted.
 
-A payment provider confirms an order with a webhook, a script the owner wrote posts rows, and an app tells another app that a task changed. None of that may run code of the app's own on the server or put a secret in a page anyone can read. Each is a declaration in `actions.json` that the Kernel runs, so it leaves with the app.
+A payment provider confirms an order with a webhook, a script the owner wrote posts rows, and an app tells another app that a task changed. These routes and calls use declarations in `actions.json` that the Kernel runs, so they leave with the app. Experimental TypeScript functions under ADR-0018 are a separate, explicitly enabled path for app code on the server. They do not change these route and call contracts.
 
 ## Decision
 

@@ -31,9 +31,9 @@ The published v0.8.0 release currently has the four Kernel binaries and `SHA256S
 
 ### How the workflow builds it
 
-The workflow has five jobs. `prepare` reads the version and runs the checks below, so a mismatch fails before any build. `binaries` builds both binaries for each configured platform. `images` builds each image once per architecture and pushes it by digest, and `merge` joins the two digests under `X.Y.Z`, `X.Y` and `latest`. `release` runs last, after every binary and both merged images exist, and attaches the eight binaries and `SHA256SUMS` to the Release.
+The workflow builds the functions runner once on a native Linux runner per architecture, uploads each short-lived artifact, and passes it to both image jobs for that architecture as the `functions-runner` BuildKit context. Each image build also passes the artifact SHA-256; the Dockerfile checks the copied executable before exporting the image. The private Kernel-to-runner protocol uses `konae-functions-ipc/2`, while published function bundles keep `konae-functions/1`. Release and local image builds must package a matching Kernel and runner pair. Restart the service when upgrading so the Kernel drains and reaps hot workers before the new pair starts. `prepare` reads the version and runs the checks below. `binaries` builds both binaries for each configured platform. `images` builds each product for each architecture and pushes it by digest, and `merge` joins the two digests under `X.Y.Z`, `X.Y` and `latest`. `release` runs after every binary and both merged images exist, then attaches the eight binaries and `SHA256SUMS` to the Release.
 
-The `linux/arm64` images build on `ubuntu-24.04-arm`, a native runner, not under QEMU. The Rust stage compiles `rusqlite`'s bundled SQLite and `ring` from C, and the first release took longer under emulation than a deploy could wait. The Dockerfiles name no architecture, and their base images (`oven/bun`, `rust`, `debian:bookworm-slim`) are multi-arch. The macOS binaries build on `macos-15` and `macos-15-intel`.
+The `linux/arm64` runner and images build on `ubuntu-24.04-arm`, a native runner, not under QEMU. The image stage compiles `rusqlite`'s bundled SQLite and `ring` from C. The Dockerfiles name no architecture, and their base images (`oven/bun`, `rust`, `debian:bookworm-slim`) are multi-arch. The macOS binaries build on `macos-15` and `macos-15-intel`.
 
 After the first release, set each package's visibility to Public under the repository's Packages settings, or GHCR keeps them private to the account.
 
@@ -75,7 +75,7 @@ After the first release, set each package's visibility to Public under the repos
 
 ## Release from your machine
 
-Use this path when a deploy cannot wait for Actions, for example during a rollout when each fix has to reach the installation within minutes. The script builds the same two images with the same tags and labels as the Release workflow, for `linux/amd64` only. It publishes no binaries and no arm64 image, and it replaces each tag with a single-architecture image. An arm64 machine pulling a tag that a local release wrote gets the amd64 image and runs it under emulation, until the tag push runs Actions and writes the multi-arch images again.
+Use this path when a deploy cannot wait for Actions, for example during a rollout when each fix has to reach the installation within minutes. The script builds one `linux/amd64` runner artifact and passes it to both image builds, matching the workflow's reuse for each architecture. It publishes no binaries and no arm64 image, and it replaces each tag with a single-architecture image. An arm64 machine pulling a tag that a local release wrote gets the amd64 image and runs it under emulation, until the tag push runs Actions and writes the multi-arch images again.
 
 1. Cut the release as above through step 4: Changelog section, both version fields, the commit. The script refuses a working tree with uncommitted changes, because it labels the images with the commit at `HEAD`.
 2. The script needs `jq`. Log Docker in to GHCR once, with a GitHub token that has `write:packages`:

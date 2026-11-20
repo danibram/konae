@@ -119,7 +119,10 @@ It prints `Serving <name> at http://<slug>.localhost:8787` and `Kernel listening
     The export fills `KONAE_KERNEL_IMAGE` with `ghcr.io/danibram/konae-kernel:<the version in konae.json>`. Add a mail transport if the app sends invitations or password resets. The Kernel seals queued email links with a key it writes to `mail-key` in its volume on the first start. To run a checkout's Kernel instead, build it from the Konae checkout, then set `KONAE_KERNEL_IMAGE=konae-kernel:local` in the exported folder's `.env`.
 
     ```sh
-    docker build -f Dockerfile.kernel -t konae-kernel:local .
+    scripts/build-functions-runner.sh <amd64|arm64> .konae/functions-runner
+    docker buildx build --build-context functions-runner=.konae/functions-runner \
+      --build-arg FUNCTIONS_RUNNER_SHA256="$(shasum -a 256 .konae/functions-runner/konae-functions-spike | awk '{print $1}')" \
+      -f Dockerfile.kernel -t konae-kernel:local .
     ```
 
 2. From the exported folder, start it and read the address it prints.

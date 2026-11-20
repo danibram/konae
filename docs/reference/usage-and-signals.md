@@ -84,6 +84,20 @@ Nothing else the Kernel refuses is counted. The Kernel writes Usage off the requ
 
 `usage_overview` summarizes up to 50 projects per page with `nextCursor`, keeping each app's account count and storage but not its daily account series or its list of accounts; an unpublished project has `summary: null`. Neither returns Signal properties or request bodies.
 
+### Function latency
+
+The experimental function runner adds `functionLatency` to `usage_summary`. The app's Usage page shows one row per function, bundle version and time limit. It compares total p95 with that limit and shows p50, p95, p99, maximum, timeouts, cold starts, refusals, uncertain writes and saved-response replays. `usage_overview` omits this detail.
+
+The Kernel measures elapsed time from admission to its response decision with a monotonic clock. Total time includes queueing, initialization and native operations. A warm call has zero initialization time. Stage percentiles describe different sets of values and must not be added to obtain the total percentile. These timings exclude the client's network time.
+
+Each app retains at most 10,000 latency samples and at most 400 days. A summary includes at most the 128 most recently active function/version/limit combinations. `retainedOnly`, `seriesTruncated`, `prunedThrough` and `retainedFrom` describe those limits. Percentiles use the nearest rank among retained samples in the selected period. They do not describe every historical call after samples have been pruned.
+
+Latency records contain no actor, request body, cookie or application error text. They use the existing bounded Usage queue, so `coverage` still reports dropped records and write errors. A timeout and an uncertain write are separate facts. The latter needs a retry with the same idempotency key to resolve the durable result.
+
+This panel does not enable functions. The [function ADR](../adr/0018-typescript-functions-load-on-demand-and-use-kernel-services.md) describes the experimental runner and its adoption conditions.
+
+### Signals
+
 A Signal is a named occurrence a Server Action declares. It is recorded when the action succeeds, and for a mutation only when its statement changed a row, with properties from the input:
 
 ```json
