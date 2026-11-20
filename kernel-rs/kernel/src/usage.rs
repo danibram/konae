@@ -421,7 +421,7 @@ fn write(folder: &Path, batch: &Batch, now: u64, kept: &mut Kept) -> Result<()> 
         _ => open(&path)?,
     };
     write_batch(&mut connection, batch, now)?;
-    if let Some(file) = crate::app_db::file_id(&path) {
+    if let Some(file) = current.filter(|file| crate::app_db::file_id(&path) == Some(*file)) {
         if kept.len() >= KEPT_CONNECTIONS {
             if let Some(other) = kept.keys().next().cloned() {
                 kept.remove(&other);
@@ -1056,6 +1056,38 @@ mod tests {
             flush();
             assert_eq!(logins(&path), Some(json!(2)), "{label}: the new file holds the new counts alone");
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_file_replaced_during_a_batch_is_not_kept_for_the_next() {
+        let root = scratch("replaced-mid-batch");
+        let folder = crate::layout::data(&root, "deployment-mid-batch");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(USAGE_DATABASE);
+        let staged = folder.join("staged-usage.sqlite");
+        drop(open(&path).unwrap());
+        drop(open(&staged).unwrap());
+        let login = |kept: &mut Kept| {
+            let mut batch = Batch::default();
+            batch.counts.insert((day(super::super::now_ms()), "login", String::new()), 1);
+            write(&folder, &batch, super::super::now_ms(), kept).unwrap();
+        };
+        let mut kept = Kept::new();
+        login(&mut kept);
+        let (connection, file) = kept.remove(&path).unwrap();
+        let (from, to) = (staged.clone(), path.clone());
+        connection.commit_hook(Some(move || {
+            crate::replace_database_file(&from, &to).unwrap();
+            false
+        }));
+        kept.insert(path.clone(), (connection, file));
+        login(&mut kept);
+        login(&mut kept);
+        let today = day(super::super::now_ms());
+        let logins = read_usage(&path, &today, &today).unwrap()["totals"].as_array().unwrap().iter()
+            .find(|total| total["kind"] == "login").map(|total| total["count"].clone());
+        assert_eq!(logins, Some(json!(1)), "the batch after the replacement reaches the new file");
         let _ = std::fs::remove_dir_all(root);
     }
 

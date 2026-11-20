@@ -100,9 +100,10 @@ pub fn open(path: &Path) -> anyhow::Result<AppConnection> {
 }
 
 /// Borrows a kept connection to the SQLite file at `path`, or opens one and
-/// runs `configure` on it once. A file replaced since its connections were
-/// kept closes them, so a borrower never reads the old file. Whoever replaces
-/// a file holds its lock alone and calls `forget` first.
+/// runs `configure` on it once. A connection is kept only while its file keeps
+/// the inode it was opened on, so a borrower never reads a replaced file.
+/// Whoever replaces a file calls `forget` first, so no idle connection
+/// outlives it.
 pub fn open_kept<E: From<rusqlite::Error>>(
     path: &Path,
     configure: impl FnOnce(&Connection) -> Result<(), E>,
