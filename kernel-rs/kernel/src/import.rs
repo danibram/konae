@@ -347,10 +347,15 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             }
             None => None,
         };
-        usage::flush();
+        anyhow::ensure!(
+            tokio::task::spawn_blocking(usage::flush_status).await?,
+            "Could not drain Usage before replacing it."
+        );
         let _identity = database_lock(state, &format!("identity:{}", deployment.id)).await;
         if let Some(staged) = &identity {
-            carry_access(staged, &live.join("identity.sqlite"))?;
+            let path = live.join("identity.sqlite");
+            crate::app_db::forget(&path);
+            carry_access(staged, &path)?;
         }
         let pending = crate::copies::Pending::begin(&state.data_root, &deployment.id, "replacing the imported file index, blobs and SQLite stores")?;
         let index = match &incoming.files {
@@ -369,10 +374,7 @@ async fn replace_held(state: &AppState, deployment: &Deployment, incoming: Incom
             replace_database_file(&staged, &live.join("identity.sqlite"))?;
         }
         let live_usage = live.join(usage::USAGE_DATABASE);
-        match usage {
-            Some(staged) => replace_database_file(&staged, &live_usage)?,
-            None => remove_database(&live_usage),
-        }
+        tokio::task::spawn_blocking(move || usage::replace(&live_usage, usage.as_deref())).await??;
         if let Some(index) = index {
             let files = layout::files(&state.data_root, &deployment.id);
             tokio::fs::create_dir_all(&files).await?;
@@ -597,6 +599,35 @@ mod tests {
         let tables: i64 = copy.query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get(0)).unwrap();
         assert_eq!(tables, 4);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_reads_wait_for_identity_replacement_and_recheck_the_live_store() {
+        let root = std::env::temp_dir().join(format!("konae-import-session-{}", Uuid::new_v4()));
+        let (state, mut headers) = crate::tests::login_test_state(&root, "private").await;
+        let deployment = state.deployments.read().await.values().next().unwrap().clone();
+        let auth = crate::open_auth(&state, &deployment).unwrap();
+        let session = auth.signup("old@example.test", "a test password").unwrap();
+        headers.insert(axum::http::header::AUTHORIZATION, format!("Bearer {}", session.token).parse().unwrap());
+
+        let lookup = || crate::authenticate_deployment(&state, &deployment, &headers);
+        assert!(lookup().await.unwrap().is_some());
+
+        let held = database_lock(&state, &format!("identity:{}", deployment.id)).await;
+        let mut lookup_in_flight = std::pin::pin!(lookup());
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20), &mut lookup_in_flight).await.is_err());
+        drop(held);
+        assert!(lookup_in_flight.await.unwrap().is_some());
+
+        let incoming = root.join("incoming.sqlite");
+        AuthService::open(&incoming).unwrap().signup("new@example.test", "another test password").unwrap();
+        let _data = database_lock(&state, &deployment.id).await;
+        replace_held(&state, &deployment, Incoming {
+            database: None, identity: Some(incoming), files: None, usage: None,
+        }, None).await.unwrap();
+        assert!(lookup().await.unwrap().is_none(), "the old account was removed by the import");
+        crate::app_db::forget(&layout::identity(&root, &deployment.id));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

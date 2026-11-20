@@ -1164,6 +1164,42 @@ fn migrate(connection: &mut Connection, verification: Option<Verification>) -> R
     transaction.commit().map_err(AuthError::Storage)
 }
 
+/// Reads the current session under the app's identity lock. A store that
+/// needs initialization or a verification-mode change uses the normal account path.
+pub(crate) fn runtime_session(
+    path: &Path,
+    scope: &str,
+    verification: Verification,
+    token: &str,
+) -> Result<Option<AuthUser>, AuthError> {
+    if let Ok(Some(user)) = current_session(path, verification, token) {
+        return Ok(user);
+    }
+    AuthService::open_in(path, scope, verification)?.authenticate(Some(token))
+}
+
+fn current_session(
+    path: &Path,
+    verification: Verification,
+    token: &str,
+) -> rusqlite::Result<Option<Option<AuthUser>>> {
+    let connection = crate::app_db::identity_reader(path)?;
+    let mut query = connection.prepare_cached(
+        "SELECT u.id, u.email, s.entered_by, s.expires_at
+           FROM account_meta m
+           LEFT JOIN app_sessions s ON s.token_hash = ?1
+           LEFT JOIN app_users u ON u.id = s.user_id AND u.state = 'active'
+          WHERE m.key = 'verification' AND m.value = ?2",
+    )?;
+    query.query_row(params![hash_token(token), verification.as_str()], |row| {
+        let Some(user_id) = row.get::<_, Option<String>>(0)? else { return Ok(None); };
+        if row.get::<_, i64>(3)? <= now_seconds() {
+            return Ok(None);
+        }
+        Ok(Some(AuthUser { user_id, name: row.get(1)?, entered_by: row.get(2)? }))
+    }).optional()
+}
+
 fn immediate(connection: &mut Connection) -> Result<rusqlite::Transaction<'_>, AuthError> {
     connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)

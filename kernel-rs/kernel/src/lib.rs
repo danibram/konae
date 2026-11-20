@@ -1575,7 +1575,7 @@ pub async fn invoke_action(
     if action.schedule.is_some() && action.http.is_none() {
         return error(StatusCode::FORBIDDEN, &format!("Action {name} runs only on its schedule."));
     }
-    let actor = match authenticate_deployment(&state, &deployment, &headers) {
+    let actor = match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
@@ -1665,7 +1665,7 @@ pub async fn session(State(state): State<AppState>, headers: HeaderMap) -> Respo
     if !modules::is_on(&deployment.modules, "auth") {
         return error(StatusCode::NOT_FOUND, "Authentication is not enabled for this app.");
     }
-    match authenticate_deployment(&state, &deployment, &headers) {
+    match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(Some(user)) => Json(json!({"result": user})).into_response(),
         Ok(None) => Json(
             json!({"result": {"userId": "anonymous", "name": "Anonymous", "role": "anonymous"}}),
@@ -1892,7 +1892,7 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Re
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
-    let actor = match authenticate_deployment(&state, &deployment, &headers) {
+    let actor = match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
@@ -1934,7 +1934,7 @@ pub async fn upload_file(
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
-    if let Err(response) = upload_actor(&state, &deployment, &headers) {
+    if let Err(response) = upload_actor(&state, &deployment, &headers).await {
         return response;
     }
     let limits = state.files.limits;
@@ -2000,8 +2000,8 @@ pub struct Upload<'a> {
     pub visibility: Option<&'a str>,
 }
 
-pub fn upload_actor(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> Result<AuthUser, Response> {
-    match authenticate_deployment(state, deployment, headers) {
+pub async fn upload_actor(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> Result<AuthUser, Response> {
+    match authenticate_deployment(state, deployment, headers).await {
         Ok(Some(actor)) => Ok(actor),
         Ok(None) => Err(error(StatusCode::UNAUTHORIZED, "authentication-required")),
         Err(response) => Err(response),
@@ -2042,7 +2042,7 @@ pub async fn upload_from_path(state: &AppState, headers: &HeaderMap, upload: Upl
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
-    let actor = match upload_actor(state, &deployment, headers) {
+    let actor = match upload_actor(state, &deployment, headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
@@ -2154,7 +2154,7 @@ pub async fn serve_file(
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
-    let actor = match authenticate_deployment(&state, &deployment, &headers) {
+    let actor = match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
@@ -2308,7 +2308,7 @@ pub async fn login_page(State(state): State<AppState>, headers: HeaderMap) -> Re
     if !modules::is_on(&deployment.modules, "auth") {
         return error(StatusCode::NOT_FOUND, "Authentication is not enabled for this app.");
     }
-    match authenticate_deployment(&state, &deployment, &headers) {
+    match authenticate_deployment(&state, &deployment, &headers).await {
         Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
         Ok(None) => private_login_page(&deployment.project_name, &deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
         Err(response) => response,
@@ -2350,7 +2350,7 @@ pub(crate) async fn serve_key_with_routes(
         return ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "User-agent: *\nAllow: /\n").into_response();
     }
     if is_private(&deployment) {
-        match authenticate_deployment(&state, &deployment, &headers) {
+        match authenticate_deployment(&state, &deployment, &headers).await {
             Ok(Some(_)) => {}
             Ok(None) => return private_login_page(&deployment.project_name, &deployment.signup_policy, state.accounts.verification, google::offered_here(&state, &deployment, &headers)),
             Err(response) => return response,
@@ -2388,7 +2388,7 @@ pub(crate) async fn serve_key_with_routes(
     }
     for candidate in artifact::candidates(&path, routing) {
         if let Ok(bytes) = read_artifact(&state, &deployment, &candidate).await {
-            count_page_view(&state, &deployment, &headers, &candidate);
+            count_page_view(&state, &deployment, &headers, &candidate).await;
             if seo_on {
                 if let Some(response) = seo::html_response(&deployment, &candidate, &bytes, address.as_ref().unwrap(), &headers, &cache) {
                     return response;
@@ -2412,7 +2412,7 @@ pub(crate) async fn serve_key_with_routes(
     match routing {
         artifact::Routing::Spa => match read_artifact(&state, &deployment, "index.html").await {
             Ok(bytes) => {
-                count_page_view(&state, &deployment, &headers, "index.html");
+                count_page_view(&state, &deployment, &headers, "index.html").await;
                 let mut response = cache.respond(&headers, bytes, "index.html");
                 if seo_on { response.headers_mut().insert("x-robots-tag", HeaderValue::from_static("noindex")); }
                 response
@@ -2437,7 +2437,7 @@ pub(crate) async fn serve_key_with_routes(
 /// for: the artifact bounds the names, so no visitor can grow the store by
 /// inventing paths. A single-page app's client-side navigation is invisible
 /// here, and a view is a load, not a person (ADR-0010, page views).
-pub fn count_page_view(state: &AppState, deployment: &Deployment, headers: &HeaderMap, file: &str) {
+pub async fn count_page_view(state: &AppState, deployment: &Deployment, headers: &HeaderMap, file: &str) {
     let lower = file.to_ascii_lowercase();
     if !(lower.ends_with(".html") || lower.ends_with(".htm")) {
         return;
@@ -2449,7 +2449,7 @@ pub fn count_page_view(state: &AppState, deployment: &Deployment, headers: &Head
     if header("sec-purpose").contains("prefetch") || header("purpose").contains("prefetch") {
         return;
     }
-    if headers.contains_key(header::COOKIE) && enter::entered_request(state, deployment, headers) {
+    if headers.contains_key(header::COOKIE) && enter::entered_request(state, deployment, headers).await {
         return;
     }
     usage::count(&state.data_root, &deployment.id, usage::Operation::PageView(file.to_owned()));
@@ -3981,17 +3981,39 @@ pub fn open_auth(
     accounts::app_store(state, deployment)
 }
 
-pub fn authenticate_deployment(
+pub async fn authenticate_deployment(
     state: &AppState,
     deployment: &Deployment,
     headers: &HeaderMap,
 ) -> std::result::Result<Option<AuthUser>, Response> {
-    let auth = open_auth(state, deployment)
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     let token = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok()).and_then(|value| value.strip_prefix("Bearer ")).map(str::to_owned)
         .or_else(|| cookie_value(headers, &app_cookie_name(state, &deployment.id, headers)));
-    auth.authenticate(token.as_deref())
+    let Some(token) = token.filter(|token| !token.is_empty() && token.len() <= 128) else {
+        return Ok(None);
+    };
+    let path = layout::identity(&state.data_root, &deployment.id);
+    let scope = auth::deployment_scope(&deployment.id);
+    let verification = state.accounts.verification;
+    runtime_identity(state, &deployment.id, move || auth::runtime_session(&path, &scope, verification, &token))
+        .await?
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+}
+
+/// The blocking task owns the lock until SQLite closes or returns its connection.
+async fn runtime_identity<T: Send + 'static>(
+    state: &AppState,
+    deployment: &str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> std::result::Result<T, Response> {
+    let guard = named_lock(state, &format!("identity:{deployment}"), false).await;
+    let permit = state.guards.statement_permit(deployment).await.map_err(http::rate_limited)?;
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
 }
 
 /// The app session cookie's name for a request to a Deployment.
@@ -4093,7 +4115,7 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
 
 
     db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LIKE_PATTERN_LENGTH, MAX_LIKE_PATTERN_BYTES)?;
-    arm_deadline(db);
+    arm_deadline(db)?;
     db.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
         AuthAction::CreateTable { table_name, .. } if schema_transform::is_internal_table(table_name) => Authorization::Deny,
@@ -4112,14 +4134,14 @@ pub fn restrict_database(db: &Connection) -> Result<()> {
         AuthAction::Pragma { pragma_name, .. } if !["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list", "foreign_key_check", "integrity_check", "quick_check"].contains(&pragma_name.to_ascii_lowercase().as_str()) => Authorization::Deny,
         AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
         _ => Authorization::Allow,
-    }));
+    }))?;
     Ok(())
 }
 
 /// Interrupts any statement on `db` that runs past 2 seconds from now.
-pub fn arm_deadline(db: &Connection) {
+pub fn arm_deadline(db: &Connection) -> rusqlite::Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    db.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline))
 }
 
 const QUERY_RESULT_TOO_LARGE: &str = "Query result exceeds 2 MiB or 1000 rows.";
@@ -5860,7 +5882,7 @@ pub mod tests {
         initialize_database(&path).unwrap();
         let db = Connection::open(&path).unwrap();
         restrict_database(&db).unwrap();
-        db.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+        db.authorizer::<fn(AuthContext<'_>) -> Authorization>(None).unwrap();
         let page_size: u64 = db.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
         let pages: u64 = db.query_row("PRAGMA max_page_count", [], |r| r.get(0)).unwrap();
         assert_eq!(pages * page_size, MAX_APP_DATABASE_BYTES);

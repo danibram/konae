@@ -801,7 +801,7 @@ pub mod tests {
         let app = fixture.app(host).await;
         let mut headers = host_headers(host);
         headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
-        authenticate_deployment(&fixture.state, &app, &headers).ok().flatten()
+        authenticate_deployment(&fixture.state, &app, &headers).await.ok().flatten()
     }
 
     #[tokio::test]

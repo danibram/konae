@@ -88,20 +88,36 @@ impl Drop for AppConnection {
 /// Borrows a kept connection to the Database at `path`, or opens one. Each
 /// borrow starts a fresh 2-second deadline.
 pub fn open(path: &Path) -> anyhow::Result<AppConnection> {
-    let file = file_id(path);
-    let kept = file.and_then(|file| take(path, file));
-    let connection = match kept {
-        Some(connection) => connection,
-        None => {
-            let connection = Connection::open(path)?;
-            super::restrict_database(&connection)?;
-            connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
-            connection
-        }
-    };
-    super::arm_deadline(&connection);
-    // A mutation answers SQLite's last inserted rowid, which belongs to the
+    let connection = kept_or_open(path, || {
+        let connection = Connection::open(path)?;
+        super::restrict_database(&connection)?;
+        connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
+        Ok::<_, anyhow::Error>(connection)
+    })?;
+    super::arm_deadline(&connection)?;
+    // Each mutation starts with a fresh last inserted rowid.
     unsafe { rusqlite::ffi::sqlite3_set_last_insert_rowid(connection.handle(), 0) };
+    Ok(connection)
+}
+
+/// Borrows a read-only connection while the caller holds the app's identity lock.
+pub(crate) fn identity_reader(path: &Path) -> rusqlite::Result<AppConnection> {
+    kept_or_open(path, || {
+        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(connection)
+    })
+}
+
+fn kept_or_open<E>(
+    path: &Path,
+    open: impl FnOnce() -> Result<Connection, E>,
+) -> Result<AppConnection, E> {
+    let file = file_id(path);
+    let connection = match file.and_then(|file| take(path, file)) {
+        Some(connection) => connection,
+        None => open()?,
+    };
     let file = file.filter(|file| file_id(path) == Some(*file));
     Ok(AppConnection { connection: Some(connection), path: path.to_owned(), file })
 }

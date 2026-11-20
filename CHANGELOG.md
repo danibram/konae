@@ -6,6 +6,16 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Server Actions and HTTP routes check app sessions on worker threads with read-only SQLite connections. HTTP routes use the same approach for API keys. Requests without a session token skip the session lookup.
+- Usage groups counters for up to 2 ms before writing them in the background. A mutation that declares a Signal still waits for confirmation that the Signal was written.
+
+### Fixed
+
+- Imports wait for runtime credential checks and Usage operations before replacing their SQLite files.
+- The Kernel bundles SQLite 3.51.3, which fixes the WAL reset race.
+
 ## [0.12.1] - 2026-11-19
 
 This release brings the Konae site into the repository: the home, the docs, `llms.txt` and the legal pages as one app.

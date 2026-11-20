@@ -2,14 +2,14 @@
 use super::refusal::{refuse, Refusal};
 use super::{ActionDefinition, Deployment};
 use anyhow::Result;
-use crate::app_db::read_optional as read_only;
+use crate::app_db::read_optional;
 use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 pub const USAGE_DATABASE: &str = "usage.sqlite";
@@ -37,6 +37,7 @@ pub const MAX_PROPERTY_BYTES: usize = 128;
 const SIGNALS_PAGE: i64 = 100;
 const QUEUE: usize = 16_384;
 const BATCH: usize = 1_024;
+const BATCH_WINDOW: Duration = Duration::from_millis(2);
 
 /// An operation of the runtime endpoint that the Kernel authorized.
 pub enum Operation {
@@ -83,6 +84,7 @@ static QUEUE_SENDER: OnceLock<SyncSender<Message>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
+static REPLACEMENT: RwLock<()> = RwLock::new(());
 
 tokio::task_local! {
     static SIGNAL_COMMITS: std::cell::RefCell<Vec<tokio::sync::oneshot::Receiver<bool>>>;
@@ -251,7 +253,9 @@ struct Batch {
 fn writer(receiver: Receiver<Message>) {
     while let Ok(first) = receiver.recv() {
         let mut batches: HashMap<PathBuf, Batch> = HashMap::new();
-        let mut flushes = Vec::new();
+        let mut flush = None;
+        let mut signal_waiting = false;
+        let deadline = std::time::Instant::now() + BATCH_WINDOW;
         let mut next = Some(first);
         let mut taken = 0;
         while let Some(message) = next.take() {
@@ -263,6 +267,7 @@ fn writer(receiver: Receiver<Message>) {
                     let batch = batches.entry(folder).or_default();
                     batch.signals.push((at, name, properties));
                     batch.commits.extend(committed);
+                    signal_waiting = true;
                 }
                 Message::Metric { folder, at, feature, name, origin, outcome } => {
                     batches.entry(folder).or_default().metrics.push((at, feature, name, origin, outcome));
@@ -272,11 +277,18 @@ fn writer(receiver: Receiver<Message>) {
                     entry.0 += 1;
                     entry.1 = entry.1.max(at);
                 }
-                Message::Flush(done) => flushes.push(done),
+                Message::Flush(done) => {
+                    flush = Some(done);
+                    break;
+                }
             }
             taken += 1;
             if taken < BATCH {
-                next = receiver.try_recv().ok();
+                next = if signal_waiting {
+                    receiver.try_recv().ok()
+                } else {
+                    receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()
+                };
             }
         }
         for (folder, batch) in batches {
@@ -289,13 +301,56 @@ fn writer(receiver: Receiver<Message>) {
                 eprintln!("Usage write failed for {}: {error}", folder.display());
             }
         }
-        for done in flushes {
+        if let Some(done) = flush {
             let _ = done.try_send(());
         }
     }
 }
 
-fn open(path: &Path) -> Result<Connection> {
+struct UsageConnection {
+    connection: Connection,
+    _file: RwLockReadGuard<'static, ()>,
+}
+
+impl std::ops::Deref for UsageConnection {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        &self.connection
+    }
+}
+
+impl std::ops::DerefMut for UsageConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+}
+
+fn read_only(path: &Path) -> Result<Option<UsageConnection>> {
+    let file = REPLACEMENT.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(read_optional(path)?.map(|connection| UsageConnection { connection, _file: file }))
+}
+
+/// Replaces the store after every running Usage operation closes its connection.
+pub(crate) fn replace(path: &Path, staged: Option<&Path>) -> Result<()> {
+    let _file = REPLACEMENT.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(staged) = staged {
+        super::replace_database_file(staged, path)?;
+    } else {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut file = path.as_os_str().to_owned();
+            file.push(suffix);
+            match std::fs::remove_file(&file) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn open(path: &Path) -> Result<UsageConnection> {
+    let file = REPLACEMENT.read().unwrap_or_else(|poisoned| poisoned.into_inner());
     let _opening = OPEN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
@@ -326,7 +381,7 @@ fn open(path: &Path) -> Result<Connection> {
     )?;
     connection.execute("INSERT OR IGNORE INTO metric_meta VALUES('started_at', ?1)", [super::now_ms() as i64])?;
     connection.execute("INSERT OR IGNORE INTO metric_meta VALUES('accounts_started_at', ?1)", [super::now_ms() as i64])?;
-    Ok(connection)
+    Ok(UsageConnection { connection, _file: file })
 }
 
 // ---------------------------------------------------------------------------
@@ -725,7 +780,7 @@ fn read_accounts(usage: &Path, identity: &Path, from: &str, to: &str) -> Result<
          ORDER BY actions + opens DESC, MAX(last_at) DESC, account LIMIT ?3")?;
     let rows = q.query_map(params![from, to, ACCOUNTS_PAGE], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let identity = read_only(identity)?;
+    let identity = read_optional(identity)?;
     let email = |account: &str| -> Option<String> {
         identity.as_ref()?.query_row("SELECT email FROM app_users WHERE id = ?1", [account], |r| r.get(0)).ok()
     };
@@ -955,6 +1010,25 @@ mod tests {
         assert_eq!(parse_day("2026-02-29"), None);
         assert_eq!(parse_day("2026-13-01"), None);
         assert_eq!(parse_day("2026-1-01"), None);
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_signal_is_visible_without_flushing_metrics() {
+        let root = scratch("confirmed-signal");
+        let id = "deployment-confirmed";
+        std::fs::create_dir_all(crate::layout::data(&root, id)).unwrap();
+        let program = program(&json!({
+            "orders.place": {"kind": "mutation", "access": "anonymous",
+                "statement": "INSERT INTO orders VALUES (1)", "bindings": [],
+                "signal": {"name": "order.placed", "properties": []}}
+        }));
+        confirmed_signals(async {
+            count(&root, id, Operation::Action("orders.place".into()));
+            signal(&root, id, "orders.place", &program.actions["orders.place"], &json!({}), None);
+        }).await.unwrap();
+        let path = crate::layout::usage(&root, id);
+        assert_eq!(read_signals(&path, Some("order.placed"), None).unwrap()["signals"][0]["name"], "order.placed");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

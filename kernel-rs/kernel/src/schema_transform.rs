@@ -838,9 +838,11 @@ fn user_schema_is_empty(connection: &Connection) -> Result<bool, Refusal> {
 fn apply_initial_schema(transaction: &Transaction<'_>, schema: &str) -> Result<(), Refusal> {
     schema_change::Scratch::connection(schema)
         .map_err(|error| invalid(format!("schema.sql is invalid: {error}")))?;
-    transaction.authorizer(Some(transform_authorizer));
+    transaction.authorizer(Some(transform_authorizer))
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
     let result = transaction.execute_batch(schema);
-    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
     result.map_err(|error| {
         invalid(format!(
             "schema.sql could not initialize the fresh database: {error}"
@@ -924,8 +926,10 @@ pub fn apply_in_transaction(
             ))
         })?;
     let deadline = Instant::now() + Duration::from_secs(30);
-    transaction.progress_handler(10_000, Some(move || Instant::now() > deadline));
-    transaction.authorizer(Some(transform_authorizer));
+    transaction.progress_handler(10_000, Some(move || Instant::now() > deadline))
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
+    transaction.authorizer(Some(transform_authorizer))
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
     let mut applied = Vec::new();
     let result = (|| {
         for planned in &plan.transitions {
@@ -980,7 +984,8 @@ pub fn apply_in_transaction(
                 "The transformed database does not match schema.sql.",
             ));
         }
-        transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+        transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
         let history = load_history(transaction)?;
         if !applied.is_empty() || !history.entries.is_empty() {
             let kind = history.baseline_kind.as_deref().unwrap_or("legacy");
@@ -998,8 +1003,10 @@ pub fn apply_in_transaction(
             transitions: applied,
         })
     })();
-    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
-    transaction.progress_handler(0, None::<fn() -> bool>);
+    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
+    transaction.progress_handler(0, None::<fn() -> bool>)
+        .map_err(|error| refused(format!("Cannot configure the SQLite schema transform: {error}")))?;
     result
 }
 
@@ -1661,10 +1668,10 @@ mod tests {
         let schema = "CREATE TABLE IF NOT EXISTS tasks(label TEXT);";
         let connection = db(schema);
         let tx = connection.unchecked_transaction().unwrap();
-        tx.authorizer(Some(transform_authorizer));
+        tx.authorizer(Some(transform_authorizer)).unwrap();
         let result = tx.query_row("SELECT readfile('/etc/passwd')", [], |_| Ok(()));
         assert!(result.is_err());
-        tx.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+        tx.authorizer::<fn(AuthContext<'_>) -> Authorization>(None).unwrap();
         tx.rollback().unwrap();
         let count: i64 = connection
             .query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
