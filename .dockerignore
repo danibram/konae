@@ -1,4 +1,5 @@
 .git
+.audit/
 .env*
 .konae/
 data/
@@ -13,6 +14,7 @@ spikes/functions-runtime/results/
 spikes/functions-runtime/evidence/
 spikes/functions-runtime/rust-host/evidence/
 spikes/functions-runtime/rust-host/target/
+spikes/functions-runtime/rust-host/src/bin/native-data-tests.rs
 spikes/functions-runtime/app/.konae/
 spikes/functions-runtime/app/data/
 spikes/functions-runtime/app/dist/

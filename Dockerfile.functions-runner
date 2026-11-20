@@ -4,7 +4,8 @@ WORKDIR /src
 COPY kernel-rs/functions-executor/Cargo.toml ./kernel-rs/functions-executor/Cargo.toml
 COPY kernel-rs/functions-executor/src/ ./kernel-rs/functions-executor/src/
 COPY spikes/functions-runtime/rust-host/Cargo.toml spikes/functions-runtime/rust-host/Cargo.lock spikes/functions-runtime/rust-host/build.rs ./spikes/functions-runtime/rust-host/
-COPY spikes/functions-runtime/rust-host/src/ ./spikes/functions-runtime/rust-host/src/
+COPY spikes/functions-runtime/rust-host/src/main.rs spikes/functions-runtime/rust-host/src/budget.rs spikes/functions-runtime/rust-host/src/cache.rs spikes/functions-runtime/rust-host/src/data.rs spikes/functions-runtime/rust-host/src/runtime.rs spikes/functions-runtime/rust-host/src/worker.rs spikes/functions-runtime/rust-host/src/bootstrap.js ./spikes/functions-runtime/rust-host/src/
+COPY spikes/functions-runtime/rust-host/src/bin/oom-probe.rs ./spikes/functions-runtime/rust-host/src/bin/oom-probe.rs
 RUN cargo build --release --locked \
     --manifest-path spikes/functions-runtime/rust-host/Cargo.toml \
     --bin konae-functions-spike \
