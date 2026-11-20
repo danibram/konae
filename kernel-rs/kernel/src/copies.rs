@@ -974,7 +974,7 @@ mod tests {
             sign_in_methods: crate::default_sign_in_methods(),
             contact_email: None,
             modules: crate::modules::auth_enabled_defaults(),
-            released_schema: String::new(),
+            released_schema: String::new(), server: None,
         };
         let folder = crate::layout::folder(&root, &deployment.id);
         std::fs::create_dir_all(folder.join("dist")).unwrap();

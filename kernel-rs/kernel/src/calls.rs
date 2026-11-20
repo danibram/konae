@@ -60,7 +60,7 @@ impl CallKeys {
         .collect()
     }
 
-    fn any(&self) -> bool {
+    pub(crate) fn any(&self) -> bool {
         self.url.is_some()
             || self.method.is_some()
             || self.body.is_some()

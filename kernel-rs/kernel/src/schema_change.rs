@@ -88,7 +88,7 @@ pub enum Mode<'a> {
 }
 
 const NEEDS_CONFIRMATION: &str = "schema.confirmation-required";
-const INTERNAL_TABLES: [&str; 2] = ["__konae_schema_state", "__konae_schema_history"];
+const INTERNAL_TABLES: [&str; 3] = ["__konae_schema_state", "__konae_schema_history", "__konae_function_receipts"];
 
 pub(crate) fn is_internal_table(name: &str) -> bool {
     INTERNAL_TABLES.iter().any(|internal| name.eq_ignore_ascii_case(internal))
@@ -188,7 +188,7 @@ pub fn apply_with_transforms(
     let transaction = connection.transaction()?;
     transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline))?;
     let is_fresh = transaction.query_row(
-        "SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history')",
+        "SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts')",
         [], |row| row.get::<_, i64>(0),
     )? == 0 && super::schema_transform::load_history(&transaction).map_err(anyhow::Error::new)?.entries.is_empty();
     let plan = if is_fresh {
@@ -459,7 +459,7 @@ fn schema_connection(schema: &str) -> Result<Connection> {
             .map_err(|error| anyhow::anyhow!("schema.sql is not idempotent: it fails when it is run a second time. {error}"))?;
         connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
         let reserved: Option<String> = connection.query_row(
-            "SELECT name FROM sqlite_schema WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history') ORDER BY lower(name), name LIMIT 1",
+            "SELECT name FROM sqlite_schema WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY lower(name), name LIMIT 1",
             [], |row| row.get(0),
         ).optional()?;
         if let Some(name) = reserved {
@@ -498,7 +498,7 @@ impl Schema {
     fn read(connection: &Connection) -> Result<Self> {
         let mut schema = Schema::default();
         let mut statement = connection.prepare(
-            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history') ORDER BY rowid",
+            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history','__konae_function_receipts') ORDER BY rowid",
         )?;
         let entries = statement
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?

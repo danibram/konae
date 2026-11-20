@@ -12,6 +12,9 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
+mod function_latency;
+pub use function_latency::{FunctionOutcome, FunctionTiming};
+
 pub const USAGE_DATABASE: &str = "usage.sqlite";
 /// The largest Usage store a package may carry. The row bounds below keep a
 /// store well under it.
@@ -77,6 +80,7 @@ enum Message {
     Signal { folder: PathBuf, at: u64, name: String, properties: String, committed: Option<tokio::sync::oneshot::Sender<bool>> },
     Metric { folder: PathBuf, at: u64, feature: String, name: String, origin: String, outcome: String },
     Account { folder: PathBuf, at: u64, account: String, kind: AccountKind },
+    FunctionLatency { folder: PathBuf, at: u64, timing: FunctionTiming },
     Flush(SyncSender<()>),
 }
 
@@ -200,6 +204,15 @@ pub fn execution(data_root: &Path, deployment_id: &str, name: &str, origin: &str
         feature: "execution".into(), name: name.into(), origin: origin.into(), outcome: outcome.into() });
 }
 
+/// Records host timings without retaining request inputs, accounts or cookies.
+pub fn function_latency(data_root: &Path, deployment_id: &str, timing: FunctionTiming) {
+    if !timing.valid() {
+        DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    enqueue(Message::FunctionLatency { folder: folder(data_root, deployment_id), at: super::now_ms(), timing });
+}
+
 fn truncate(text: &str, bytes: usize) -> &str {
     if text.len() <= bytes {
         return text;
@@ -248,6 +261,7 @@ struct Batch {
     commits: Vec<tokio::sync::oneshot::Sender<bool>>,
     metrics: Vec<(u64, String, String, String, String)>,
     accounts: HashMap<(String, String, AccountKind), (i64, u64)>,
+    function_timings: Vec<(u64, FunctionTiming)>,
 }
 
 fn writer(receiver: Receiver<Message>) {
@@ -276,6 +290,9 @@ fn writer(receiver: Receiver<Message>) {
                     let entry = batches.entry(folder).or_default().accounts.entry((day(at), account, kind)).or_insert((0, 0));
                     entry.0 += 1;
                     entry.1 = entry.1.max(at);
+                }
+                Message::FunctionLatency { folder, at, timing } => {
+                    batches.entry(folder).or_default().function_timings.push((at, timing));
                 }
                 Message::Flush(done) => {
                     flush = Some(done);
@@ -468,6 +485,12 @@ fn write(folder: &Path, batch: &Batch, now: u64) -> Result<()> {
     for (at, feature, name, origin, outcome) in &batch.metrics {
         metric(&transaction, *at, feature, name, origin, outcome, 1)?;
     }
+    if !batch.function_timings.is_empty() {
+        function_latency::initialize(&transaction)?;
+        for (at, timing) in &batch.function_timings {
+            function_latency::write(&transaction, *at, timing)?;
+        }
+    }
     for ((day, account, kind), (count, at)) in &batch.accounts {
         transaction.execute(
             "INSERT INTO account_daily(day, account, kind, count, last_at) VALUES(?1, ?2, ?3, ?4, ?5)
@@ -498,6 +521,7 @@ fn metric(db: &Connection, at: u64, feature: &str, name: &str, origin: &str, out
 }
 
 fn prune(db: &Connection, now: u64) -> Result<()> {
+    function_latency::prune(db, now)?;
     let cutoff = day(now.saturating_sub((USAGE_DAYS as u64 - 1) * 86_400_000));
     prune_daily(db, "usage_daily", MAX_USAGE_ROWS, &cutoff)?;
     prune_daily(db, "metric_daily", MAX_METRIC_ROWS, &cutoff)?;
@@ -747,6 +771,7 @@ pub fn read_summary(data_root: &Path, deployment: &Deployment, from: &str, to: &
     let end = (parse_day(to).unwrap() + 1) * 86_400_000;
     Ok(json!({"deploymentId": deployment.id, "projectId": deployment.project_id, "projectName": deployment.project_name, "url": deployment.url,
         "usage": usage, "metrics": metrics, "actions": actions,
+        "functionLatency": function_latency::read(&path, start, end)?,
         "accounts": read_accounts(&path, &crate::layout::identity(data_root, &deployment.id), from, to)?,
         "storage": storage(data_root, &deployment.id),
         "calls": retained_states(&data_root.join("calls.sqlite"), "calls", "deployment", &deployment.id, start, end)?,
@@ -836,6 +861,9 @@ pub fn storage(data_root: &Path, id: &str) -> Value {
 
 /// Keeps account responses bounded by operation and outcome categories, not event volume.
 pub fn compact_overview(mut summary: Value) -> Value {
+    if let Some(object) = summary.as_object_mut() {
+        object.remove("functionLatency");
+    }
     let latest = summary["usage"]["days"].as_array().and_then(|days| days.last()).cloned();
     summary["usage"]["days"] = json!(latest.into_iter().collect::<Vec<_>>());
     summary["usage"]["scheduled"] = json!([]);

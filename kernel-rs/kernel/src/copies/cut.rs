@@ -173,7 +173,7 @@ impl Cut {
                 Some(layout::SETTINGS_FILE) if kind.is_file() => {
                     self.budget.file(&from, &to)?;
                 }
-                Some("app" | "dist") if kind.is_dir() => self.tree(&from, &to)?,
+                Some("app" | "dist" | "server") if kind.is_dir() => self.tree(&from, &to)?,
                 Some("data") if kind.is_dir() => {
                     fs::create_dir_all(&to)?;
                     for name in DEPLOYMENT_DATABASES {
