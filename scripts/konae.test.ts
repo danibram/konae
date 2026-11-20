@@ -208,7 +208,7 @@ describe("konae CLI", () => {
     try {
       await mkdir(path.join(root, "app"), { recursive: true });
       await mkdir(path.join(root, "scripts"), { recursive: true });
-      await mkdir(path.join(root, "node_modules"));
+      await symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
       await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
       await writeFile(path.join(root, "konae.json"), JSON.stringify({ manifest: { version: 1 } }));
       await writeFile(path.join(root, "app/index.html"), "<!doctype html><html><body>Home<script type=\"module\" src=\"app.js\"></script></body></html>");
@@ -229,7 +229,7 @@ describe("konae CLI", () => {
     try {
       await mkdir(path.join(root, "app"), { recursive: true });
       await mkdir(path.join(root, "scripts"), { recursive: true });
-      await mkdir(path.join(root, "node_modules"));
+      await symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
       await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
       await writeFile(path.join(root, "konae.json"), JSON.stringify({ visibility: "public", modules: { seo: { on: true } }, manifest: { version: 1 } }));
       await writeFile(path.join(root, "app/index.html"), '<!doctype html><html><head><title>Static</title></head><body>Home<script type="module" src="app.js"></script></body></html>');
@@ -263,6 +263,26 @@ describe("konae CLI", () => {
     expect(await stat(path.join(directory, ".konae/published.json")).then(() => true, () => false)).toBe(false);
     expect(plan.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(Date.parse(plan.expiresAt)).toBeGreaterThan(Date.now());
+  });
+
+  test("publish uses the prepared dist without running an exported custom build script", async () => {
+    await writeFile(path.join(directory, "konae.json"), JSON.stringify({ id: "app_test", name: "Test", slug: "test", visibility: "private", manifest: { version: 1 } }));
+    const buildFiles = ["package.json", "package-lock.json", "scripts/build.mjs"];
+    await writeFile(path.join(directory, "app/build.json"), JSON.stringify({ version: 1, files: buildFiles }));
+    await mkdir(path.join(directory, "app/build/scripts"), { recursive: true });
+    await writeFile(path.join(directory, "app/build/package.json"), JSON.stringify({ scripts: { build: "node scripts/build.mjs" } }));
+    await writeFile(path.join(directory, "app/build/package-lock.json"), "{}");
+    await writeFile(path.join(directory, "app/build/scripts/build.mjs"), "await Bun.write('custom-build-ran', 'yes');");
+    await mkdir(path.join(directory, "node_modules"));
+    await mkdir(path.join(directory, "dist"));
+    await writeFile(path.join(directory, "dist/index.html"), "prepared release");
+    const config = { url: origin(), project: { id: "app_test", name: "Test", slug: "test", manifest: {} } };
+
+    await publishLocal(directory, config, "token", undefined, undefined, true);
+
+    expect(await readFile(path.join(directory, "dist/index.html"), "utf8")).toBe("prepared release");
+    expect(await stat(path.join(directory, "custom-build-ran")).then(() => true, () => false)).toBe(false);
+    expect(calls.map((call) => call.name)).toContain("release_plan");
   });
 
   test("publish --plan reports transfer cleanup failure and still returns the plan", async () => {
@@ -617,6 +637,37 @@ describe("konae CLI", () => {
       expect([raised.env.KONAE_FILE_MAX_BYTES, raised.env.KONAE_FILES_QUOTA_BYTES]).toEqual(["5242880", "10485760"]);
     } finally {
       for (const [name, value] of [["KONAE_FILES_QUOTA_BYTES", saved.quota], ["KONAE_FILE_MAX_BYTES", saved.file], ["KONAE_KERNEL_BIN", saved.bin]] as const) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
+  });
+
+  test("a local Kernel passes the explicit functions runner policy and drops other Konae settings", async () => {
+    const names = ["KONAE_FUNCTIONS_RUNNER", "KONAE_FUNCTIONS_DEVELOPMENT", "KONAE_FUNCTIONS_CGROUP", "KONAE_FUNCTIONS_UID", "KONAE_FUNCTIONS_GID", "KONAE_SETUP_KEY", "KONAE_KERNEL_BIN"] as const;
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    const fake = path.join(directory, "kernel");
+    await writeFile(fake, `#!${process.execPath}\nconsole.log(JSON.stringify({executionTest: 1}));\n`);
+    await chmod(fake, 0o700);
+    try {
+      process.env.KONAE_KERNEL_BIN = fake;
+      process.env.KONAE_FUNCTIONS_RUNNER = "/tmp/functions-runner";
+      process.env.KONAE_FUNCTIONS_DEVELOPMENT = "1";
+      process.env.KONAE_FUNCTIONS_CGROUP = "/tmp/functions-cgroup";
+      process.env.KONAE_FUNCTIONS_UID = "20002";
+      process.env.KONAE_FUNCTIONS_GID = "20002";
+      process.env.KONAE_SETUP_KEY = "must-not-pass";
+      const settings = await initLocal(path.join(directory, "functions-app"), { name: "Functions probe" });
+      const local = await localKernel(path.join(directory, "functions-app"), settings);
+      expect(Object.fromEntries(names.slice(0, 5).map((name) => [name, local.env[name]]))).toEqual({
+        KONAE_FUNCTIONS_RUNNER: "/tmp/functions-runner",
+        KONAE_FUNCTIONS_DEVELOPMENT: "1",
+        KONAE_FUNCTIONS_CGROUP: "/tmp/functions-cgroup",
+        KONAE_FUNCTIONS_UID: "20002",
+        KONAE_FUNCTIONS_GID: "20002",
+      });
+      expect("KONAE_SETUP_KEY" in local.env).toBe(false);
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[name]; else process.env[name] = value;
       }
     }

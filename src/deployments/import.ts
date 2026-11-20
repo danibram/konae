@@ -1,3 +1,4 @@
+import { verifyServerFolder } from "../kernel/functions";
 import { platformMcp, type Transfer } from "../mcp/client";
 import { dataManifest, sourcesPayload, type ImportedFolder } from "../lib/import-folder";
 import { checkArtifact, checkRelease } from "../lib/size";
@@ -26,6 +27,7 @@ export async function importFolder(input: {
     const args: Record<string, unknown> = { projectId: input.deploymentId, replace, ...(input.confirmSchema ? { confirmSchema: input.confirmSchema } : {}) };
     if (replace !== "data") {
       checkSourceFiles(folder.sources);
+      await verifyServerFolder(folder.server ?? {});
       const payload = sourcesPayload(folder, project, input.visibility);
       checkArtifact(payload.artifact);
       const bytes = new TextEncoder().encode(JSON.stringify(payload));
