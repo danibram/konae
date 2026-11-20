@@ -8,12 +8,24 @@ export type AccountActivity = { account: string; email: string | null; opens: nu
 export type UsageAccounts = { active: number; opens: number; actions: number; days: { day: string; active: number }[]; top: AccountActivity[]; limit: number; startedAt: number | null };
 export type StoragePart = { part: string; bytes: number; limit: number | null; exported: boolean };
 export type UsageStorage = { total: number; files: number; parts: StoragePart[] };
+export type TimingPercentiles = { p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number };
+export type FunctionLatencySeries = {
+  name: string; version: string; limitMs: number; samples: number; coldStarts: number;
+  timeouts: number; failures: number; uncertain: number; replays: number; lastAt: number;
+  budgetP95Percent: number; total: TimingPercentiles; queue: TimingPercentiles;
+  initialization: TimingPercentiles; execution: TimingPercentiles;
+};
+export type FunctionLatencySummary = {
+  series: FunctionLatencySeries[]; maxSamples: number; seriesLimit: number;
+  seriesTruncated: boolean; retainedOnly: true; prunedThrough: number | null; retainedFrom: number | null;
+};
 export type UsageSummary = {
   deploymentId: string; projectId: string; projectName: string; url: string; updatedAt: number;
   usage: { from: string; to: string; days: DailyCount[]; totals: UsageCount[]; scheduled: { action: string; at: number; outcome: string; changes: number; error?: string }[] };
   metrics: Metric[]; actions: PublishedAction[];
   accounts: UsageAccounts;
   storage: UsageStorage;
+  functionLatency?: FunctionLatencySummary;
   calls: { states: { state: string; count: number }[]; retainedOnly: boolean };
   mail: { states: { state: string; count: number }[]; retainedOnly: boolean };
   coverage: { startedAt: number | null; earliestMetricDay: string | null; prunedThrough: number | null; retentionDays: number; approximate: boolean; previewIncluded: boolean; queueFlushed: boolean; installationDroppedSinceRestart: number; installationWriteErrorsSinceRestart: number };

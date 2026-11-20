@@ -1,4 +1,5 @@
 .usage-main { min-width: 0; overflow-y: auto; padding: 0 var(--workspace-gutter) 60px; color: var(--ds-text); }
+.function-latency-budget progress { display: block; width: 100%; max-width: 160px; margin-top: 8px; accent-color: var(--ds-blue); }
 .usage-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; padding: 32px 0 8px; }
 .usage-heading h1 { margin: 0; color: var(--ds-text); font: 700 28px/1.2 var(--ds-font); letter-spacing: -.03em; }
 .usage-controls { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
