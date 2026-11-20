@@ -1,0 +1,35 @@
+{
+  "capturedAt": "2026-11-20T12:04:17.516414+00:00",
+  "files": {
+    "konae-functions-spike": {
+      "bytes": 82281088,
+      "sha256": "9bd53bb4e988210360f45a33771ef45b55274f9ab36afe0c8e480796f0460b0f"
+    },
+    "runtime-process-tests.log": {
+      "bytes": 776,
+      "sha256": "74b5a93c83d7550db0aa412c1fd087414061d857b421032917963760e923a4f9"
+    },
+    "runtime-tests.log": {
+      "bytes": 2508,
+      "sha256": "8354146ca4fb3ab21f4bdc96aa50c22e74ab194fcd6359555ac2e1b3547d9747"
+    },
+    "runtime-build.log": {
+      "bytes": 286,
+      "sha256": "2de66ab47630f548b232a3cb600e3fb866453b24b76b891c5180974a659afdc8"
+    },
+    "sources/cache.rs": {
+      "bytes": 13176,
+      "sha256": "46695a56eb0bfd94e84fb15bf26df0a4b575efc7ddddebe0e581ecbc1a6bfa96"
+    },
+    "sources/main.rs": {
+      "bytes": 31505,
+      "sha256": "e492d18e53990094d2b4ac748382d83cf2c9275a201c48483487cf7ddf12d7c5"
+    }
+  },
+  "provenance": "Binary copied after the successful tests. Only main.rs and cache.rs are captured here after tests; main.rs gained cfg(test) process cases after the binary build. No full source snapshot was taken before compilation. Current worker/executor sources may already differ. This record does not establish complete source-to-binary correspondence.",
+  "results": {
+    "defaultTests": 24,
+    "processTests": 5,
+    "failed": 0
+  }
+}

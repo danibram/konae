@@ -1,0 +1,23 @@
+{
+  "image": "rust:1.91-bookworm",
+  "imageId": "sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33",
+  "container": {
+    "network": "none",
+    "memoryBytes": 1073741824,
+    "memoryAndSwapBytes": 1073741824,
+    "pids": 128,
+    "capabilities": [],
+    "readOnly": true,
+    "tmpfs": "/tmp:rw,exec,size=768m"
+  },
+  "sourceSha256": {
+    "Cargo.toml": "cecf45a1ff8aa4295773a0a52227de9010cccae7a51e3f40c464c02f8e52c7c4",
+    "src/budget.rs": "57cd46b8591cf5f3ba9eb8a361ea9d9e247be123528f0b12421e17316644a0e1",
+    "src/containment.rs": "476da0a3bd2159e46a80dba0927910c792809c7feb4342ba2c5ab3b707e14669",
+    "src/lib.rs": "03fb875eb2ca6d02551f13ca78fd698054a14bdaa67e1a4889dcd738b8abc20a",
+    "src/protocol.rs": "1a17ff9c724407d1eefbceafe12ff48d755b802cbba1315c441840e24d251794",
+    "src/supervisor.rs": "8ee87e2a3efeccc37797c0cad3725e669acf471683c73f0a9a9a8a91f6488517"
+  },
+  "command": "cargo test --offline --lib -- --test-threads=1",
+  "scope": "Standalone supervisor crate on Linux; no Deno and no writable delegated cgroup"
+}

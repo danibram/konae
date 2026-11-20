@@ -1,0 +1,276 @@
+{
+  "at": "2026-11-20T10:41:20.396367+00:00",
+  "idle": [
+    {
+      "target": "native",
+      "seconds": 5.002658041659743,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 6448,
+      "rss_after_kib": 6448
+    },
+    {
+      "target": "deno",
+      "seconds": 5.002658041659743,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 99728,
+      "rss_after_kib": 99728
+    },
+    {
+      "target": "node",
+      "seconds": 5.002658041659743,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 128784,
+      "rss_after_kib": 128784
+    },
+    {
+      "target": "next",
+      "seconds": 5.002658041659743,
+      "cpu_ms": 0.0,
+      "rss_before_kib": 309792,
+      "rss_after_kib": 309792
+    }
+  ],
+  "cold": [
+    {
+      "run": 1,
+      "latency_ms": 33.939458,
+      "eviction": {
+        "evicted": 1
+      },
+      "stats_before": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 4,
+        "queueCapacity": 64,
+        "runtimesCreated": 4,
+        "runtimesLive": 0,
+        "cacheHits": 94135,
+        "evictions": 4,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": []
+      },
+      "stats_after": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 5,
+        "queueCapacity": 64,
+        "runtimesCreated": 5,
+        "runtimesLive": 1,
+        "cacheHits": 94135,
+        "evictions": 4,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": [
+          {
+            "app": "a",
+            "function": "orders",
+            "version": "v1",
+            "runtimesCreated": 1,
+            "requests": 1,
+            "busy": 0,
+            "idleMs": 0
+          }
+        ]
+      }
+    },
+    {
+      "run": 2,
+      "latency_ms": 26.222375,
+      "eviction": {
+        "evicted": 1
+      },
+      "stats_before": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 5,
+        "queueCapacity": 64,
+        "runtimesCreated": 5,
+        "runtimesLive": 0,
+        "cacheHits": 94135,
+        "evictions": 5,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": []
+      },
+      "stats_after": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 6,
+        "queueCapacity": 64,
+        "runtimesCreated": 6,
+        "runtimesLive": 1,
+        "cacheHits": 94135,
+        "evictions": 5,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": [
+          {
+            "app": "a",
+            "function": "orders",
+            "version": "v1",
+            "runtimesCreated": 1,
+            "requests": 1,
+            "busy": 0,
+            "idleMs": 0
+          }
+        ]
+      }
+    },
+    {
+      "run": 3,
+      "latency_ms": 33.919833,
+      "eviction": {
+        "evicted": 1
+      },
+      "stats_before": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 6,
+        "queueCapacity": 64,
+        "runtimesCreated": 6,
+        "runtimesLive": 0,
+        "cacheHits": 94135,
+        "evictions": 6,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": []
+      },
+      "stats_after": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 7,
+        "queueCapacity": 64,
+        "runtimesCreated": 7,
+        "runtimesLive": 1,
+        "cacheHits": 94135,
+        "evictions": 6,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": [
+          {
+            "app": "a",
+            "function": "orders",
+            "version": "v1",
+            "runtimesCreated": 1,
+            "requests": 1,
+            "busy": 0,
+            "idleMs": 0
+          }
+        ]
+      }
+    },
+    {
+      "run": 4,
+      "latency_ms": 26.083791,
+      "eviction": {
+        "evicted": 1
+      },
+      "stats_before": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 7,
+        "queueCapacity": 64,
+        "runtimesCreated": 7,
+        "runtimesLive": 0,
+        "cacheHits": 94135,
+        "evictions": 7,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": []
+      },
+      "stats_after": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 8,
+        "queueCapacity": 64,
+        "runtimesCreated": 8,
+        "runtimesLive": 1,
+        "cacheHits": 94135,
+        "evictions": 7,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": [
+          {
+            "app": "a",
+            "function": "orders",
+            "version": "v1",
+            "runtimesCreated": 1,
+            "requests": 1,
+            "busy": 0,
+            "idleMs": 0
+          }
+        ]
+      }
+    },
+    {
+      "run": 5,
+      "latency_ms": 27.364625,
+      "eviction": {
+        "evicted": 1
+      },
+      "stats_before": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 8,
+        "queueCapacity": 64,
+        "runtimesCreated": 8,
+        "runtimesLive": 0,
+        "cacheHits": 94135,
+        "evictions": 8,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": []
+      },
+      "stats_after": {
+        "mode": "deno",
+        "functionsEnabled": true,
+        "engineInitialized": true,
+        "initializationAttempts": 9,
+        "queueCapacity": 64,
+        "runtimesCreated": 9,
+        "runtimesLive": 1,
+        "cacheHits": 94135,
+        "evictions": 8,
+        "timeouts": 0,
+        "capacity": 4,
+        "ttlMs": 60000,
+        "instances": [
+          {
+            "app": "a",
+            "function": "orders",
+            "version": "v1",
+            "runtimesCreated": 1,
+            "requests": 1,
+            "busy": 0,
+            "idleMs": 0
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "Idle CPU comes from ps cumulative process-tree time and may round to zero.",
+    "RSS is sampled process-tree RSS; shared pages may be counted more than once.",
+    "Cold means no retained function instance; filesystem caches and V8 process initialization may remain warm.",
+    "Cold requests include HTTP, auth, module loading, function execution and SQLite; no snapshot is assumed."
+  ]
+}

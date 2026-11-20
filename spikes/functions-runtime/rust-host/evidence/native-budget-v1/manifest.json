@@ -1,0 +1,14 @@
+{
+  "recorded_at": "2026-11-20T11:24:11.241693+00:00",
+  "command": "CARGO_TARGET_DIR=/tmp/konae-deno-core-target CARGO_BUILD_JOBS=2 cargo test --release --bin native-data-tests --manifest-path spikes/functions-runtime/rust-host/Cargo.toml -- --test-threads=1 --nocapture",
+  "passed": 18,
+  "failed": 0,
+  "sha256": {
+    "Cargo.toml": "20fce2070fa62591d91d4995add1e86dbea0c6dff62a805e6a7f38276e7c4830",
+    "Cargo.lock": "5edb5e85e539e5f8ff9659fadaffcd2e6572cf3c8ad61c9593ecb089f054d8ac",
+    "src/data.rs": "4bfe95d751b438fa3256a30910f2aba6269129f4497fbacf0bb640a35303e09f",
+    "src/budget.rs": "e8e117ba65f46d91e6821d3d85807e39f0e505df8a9d4789bec2da62a2092f73",
+    "src/data_tests.rs": "7a64dfe2206d9d505c3107e2cd2be4b462583d0c8a43e435242566beb2486e1b",
+    "src/bin/native-data-tests.rs": "2318090628a0d92622ec257adc2a54fa3b1a9a857e265e45caf2fbc3a174b018"
+  }
+}

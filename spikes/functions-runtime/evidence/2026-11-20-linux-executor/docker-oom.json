@@ -1,0 +1,11 @@
+{
+  "scope": "Docker-managed cgroup, not executor delegated subgroup",
+  "allocatedBytes": 134217728,
+  "exitCode": 137,
+  "oomKilled": true,
+  "memoryMax": 67108864,
+  "memorySwap": 67108864,
+  "pidsLimit": 32,
+  "stdout": "",
+  "stderr": ""
+}

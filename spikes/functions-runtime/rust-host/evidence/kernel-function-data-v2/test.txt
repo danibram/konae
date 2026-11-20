@@ -1,0 +1,26 @@
+   Compiling kernel v0.12.1 (/Users/dbr/htdocs/miniapp-builder/kernel-rs/kernel)
+    Finished `test` profile [unoptimized] target(s) in 12.25s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-aafb35ea378e93b2)
+
+running 18 tests
+test function_data::tests::abort_or_drop_after_update_reverts_every_action ... ok
+test function_data::tests::commits_all_named_actions_and_complete_http_receipt_together ... ok
+test function_data::tests::concurrent_identical_post_replays_before_running_second_worker ... ok
+test function_data::tests::deadline_before_commit_rolls_back_and_after_commit_is_unknown ... ok
+test function_data::tests::error_response_rolls_back_but_redirect_commits_and_replays ... ok
+test function_data::tests::expired_budget_refuses_receipt_and_write_lock_wait_is_bounded ... ok
+test function_data::tests::forged_receipt_schema_and_attached_trigger_are_rejected ... ok
+test function_data::tests::get_rejects_mutation_and_uses_read_only_connection ... ok
+test function_data::tests::guard_refusal_and_actor_input_are_the_kernel_rules ... ok
+test function_data::tests::invalid_output_does_not_commit ... ok
+test function_data::tests::native_failure_poisons_transaction_even_when_caller_catches_it ... ok
+test function_data::tests::no_actions_never_opens_database_even_for_post ... ok
+test function_data::tests::receipt_scope_uses_actor_function_and_payload_but_not_version ... ok
+test function_data::tests::reserved_receipts_survive_schema_change_and_never_enter_editable_ddl ... ok
+test function_data::tests::row_budget_and_statement_validation_use_kernel_helpers ... ok
+test function_data::tests::the_same_key_in_another_app_has_an_independent_receipt ... ok
+test function_data::tests::trusted_receipt_flag_does_not_authorize_trigger_or_view_access ... ok
+test function_data::tests::visible_headers_and_query_belong_to_fingerprint_but_order_and_login_do_not ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 595 filtered out; finished in 0.44s
+

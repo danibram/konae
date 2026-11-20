@@ -1,0 +1,73 @@
++zsh:17> cargo test --locked --manifest-path kernel-rs/Cargo.toml -p kernel -p konae -- '--test-threads=1' --skip minio path::tests maintenance copies::cut::tests a_release_that_fails_at_any_step
+   Compiling kernel v0.12.1 (/Users/dbr/htdocs/miniapp-builder/kernel-rs/kernel)
+    Finished `test` profile [unoptimized] target(s) in 1.76s
+     Running unittests src/lib.rs (kernel-rs/target/debug/deps/kernel-ed8a965888c91658)
+
+running 28 tests
+test copies::cut::tests::a_replaced_index_discards_the_remote_preparation_and_retries ... ok
+test copies::cut::tests::abort_while_preparing_remote_files_leaves_admission_open ... ok
+test copies::cut::tests::common_cut_keeps_wal_rollback_journal_and_reused_file_id ... ok
+test copies::cut::tests::common_cut_releases_partial_inventory_on_space_and_reader_limits ... ok
+test copies::cut::tests::common_cut_releases_readers_after_os_descriptor_exhaustion ... 
+running 1 test
+test copies::cut::tests::common_cut_releases_readers_after_os_descriptor_exhaustion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 625 filtered out; finished in 0.02s
+
+ok
+test copies::cut::tests::common_cut_timeout_and_abort_reopen_admission_in_drain ... ok
+test copies::cut::tests::slow_remote_get_leaves_admission_open_and_the_cut_includes_the_write ... ok
+test copies::tests::a_copy_carries_the_custom_domain_with_the_record_and_the_maintenance_state ... ok
+test copies::tests::a_copy_carries_the_maintenance_state ... ok
+test maintenance::tests::an_owner_puts_an_app_in_and_takes_it_out ... ok
+test maintenance::tests::the_mail_worker_holds_a_paused_apps_email_only ... ok
+test maintenance::tests::the_maintenance_page_escapes_what_it_shows ... ok
+test maintenance::tests::the_state_survives_a_restart_and_an_unreadable_one_pauses ... ok
+test path::tests::a_bare_address_redirects_to_its_slash_form_and_keeps_the_query ... ok
+test path::tests::a_generated_hostname_behaves_as_before ... ok
+test path::tests::a_package_keeps_a_free_name_and_says_what_it_dropped ... ok
+test path::tests::a_path_address_gets_the_app_policy ... ok
+test path::tests::a_path_address_serves_the_app_and_its_routes_under_the_prefix ... ok
+test path::tests::a_segment_answers_only_while_its_path_is_on ... ok
+test path::tests::an_app_has_accounts_when_it_is_private_open_or_calls_a_non_anonymous_action ... ok
+test path::tests::an_installation_without_a_domain_reads_the_path_but_does_not_turn_it_on ... ok
+test path::tests::an_unknown_segment_answers_not_found ... ok
+test path::tests::path_set_checks_the_name_the_domain_and_the_shared_origin_before_it_writes ... ok
+test path::tests::refusals_are_given_with_the_words_and_codes_the_case_file_names ... ok
+test path::tests::the_app_named_konae_home_answers_the_root_of_the_path_host ... ok
+test path::tests::the_runtime_refuses_a_referer_from_another_apps_path ... ok
+test path::tests::the_session_cookie_on_a_path_address_names_its_deployment ... ok
+test tests::a_release_that_fails_at_any_step_leaves_the_old_actions_on_the_old_rows ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 598 filtered out; finished in 5.89s
+
+     Running unittests src/main.rs (kernel-rs/target/debug/deps/kernel-f9673b44b7afbb64)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/inventory.rs (kernel-rs/target/debug/deps/inventory-5709b92ec1004f8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (kernel-rs/target/debug/deps/konae-e5423a63d1b3add8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 92 filtered out; finished in 0.00s
+
+     Running tests/inventory.rs (kernel-rs/target/debug/deps/inventory-0d2d397635ec5ef2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+   Doc-tests kernel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,825 @@
+{
+  "server": "hardening-http",
+  "results": [
+    {
+      "criterion": "lazy.no-worker-before-call",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "executionModel": "child-process",
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "discardedJobs": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "requestTimeoutMs": 1000,
+          "workerLimits": {
+            "heapBytes": 67108864,
+            "responseBytes": 2097152,
+            "rssBytes": 268435456,
+            "operationLimit": 64
+          },
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "idempotency.exact-replay",
+      "status": "pass",
+      "detail": {
+        "first": {
+          "status": 200,
+          "body": {
+            "id": 1,
+            "ownerId": "alice",
+            "quantity": 7
+          },
+          "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":7}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "39"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 65.22495904937387
+        },
+        "second": {
+          "status": 200,
+          "body": {
+            "id": 1,
+            "ownerId": "alice",
+            "quantity": 7
+          },
+          "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":7}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "39"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 0.9316247887909412
+        },
+        "database": {
+          "quantity": 7,
+          "audit": 1,
+          "receipts": 1
+        }
+      }
+    },
+    {
+      "criterion": "idempotency.conflict",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 409,
+          "body": {
+            "error": "idempotency_conflict"
+          },
+          "raw": "{\"error\":\"idempotency_conflict\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "32"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 2.3739170283079147
+        },
+        "database": {
+          "quantity": 7,
+          "audit": 1,
+          "receipts": 1
+        }
+      }
+    },
+    {
+      "criterion": "idempotency.key-required",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 400,
+          "body": {
+            "error": "idempotency_key_required"
+          },
+          "raw": "{\"error\":\"idempotency_key_required\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "36"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 0.36854203790426254
+        }
+      }
+    },
+    {
+      "criterion": "idempotency.concurrent-replay",
+      "status": "pass",
+      "detail": {
+        "responses": [
+          {
+            "status": 200,
+            "body": {
+              "id": 1,
+              "ownerId": "alice",
+              "quantity": 8
+            },
+            "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":8}",
+            "headers": [
+              [
+                "content-type",
+                "application/json"
+              ],
+              [
+                "content-length",
+                "39"
+              ],
+              [
+                "date",
+                "Fri, 20 Nov 2026 12:21:01 GMT"
+              ]
+            ],
+            "elapsed_ms": 48.59204217791557
+          },
+          {
+            "status": 200,
+            "body": {
+              "id": 1,
+              "ownerId": "alice",
+              "quantity": 8
+            },
+            "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":8}",
+            "headers": [
+              [
+                "content-type",
+                "application/json"
+              ],
+              [
+                "content-length",
+                "39"
+              ],
+              [
+                "date",
+                "Fri, 20 Nov 2026 12:21:01 GMT"
+              ]
+            ],
+            "elapsed_ms": 48.88229165226221
+          }
+        ],
+        "database": {
+          "quantity": 8,
+          "audit": 2,
+          "receipts": 2
+        }
+      }
+    },
+    {
+      "criterion": "native-lock.warmed",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "id": 1,
+            "ownerId": "alice",
+            "quantity": 2
+          },
+          "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":2}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "39"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 0.395958311855793
+        }
+      }
+    },
+    {
+      "criterion": "native-lock.no-late-commit",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 504,
+          "body": {
+            "error": "deadline_exceeded"
+          },
+          "raw": "{\"error\":\"deadline_exceeded\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "29"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 100.67741572856903
+        },
+        "before": {
+          "quantity": 2,
+          "audit": 0,
+          "receipts": 0
+        },
+        "after": {
+          "quantity": 2,
+          "audit": 0,
+          "receipts": 0
+        },
+        "budget_ms": 100,
+        "lock_ms": 350.0
+      }
+    },
+    {
+      "criterion": "native-lock.retry-once",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "id": 1,
+            "ownerId": "alice",
+            "quantity": 7
+          },
+          "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":7}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "39"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:01 GMT"
+            ]
+          ],
+          "elapsed_ms": 2.874624915421009
+        },
+        "database": {
+          "quantity": 7,
+          "audit": 1,
+          "receipts": 1
+        }
+      }
+    },
+    {
+      "criterion": "deno-lock.warmed",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "id": 1,
+            "ownerId": "alice",
+            "quantity": 2
+          },
+          "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":2}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "39"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:02 GMT"
+            ]
+          ],
+          "elapsed_ms": 82.87641685456038
+        }
+      }
+    },
+    {
+      "criterion": "deno-lock.no-late-commit",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 504,
+          "body": {
+            "error": "deadline_exceeded"
+          },
+          "raw": "{\"error\":\"deadline_exceeded\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "29"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:02 GMT"
+            ]
+          ],
+          "elapsed_ms": 303.12291719019413
+        },
+        "before": {
+          "quantity": 2,
+          "audit": 0,
+          "receipts": 0
+        },
+        "after": {
+          "quantity": 2,
+          "audit": 0,
+          "receipts": 0
+        },
+        "budget_ms": 300,
+        "lock_ms": 550.0
+      }
+    },
+    {
+      "criterion": "deno-lock.retry-once",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "id": 1,
+            "ownerId": "alice",
+            "quantity": 7
+          },
+          "raw": "{\"id\":1,\"ownerId\":\"alice\",\"quantity\":7}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "39"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:02 GMT"
+            ]
+          ],
+          "elapsed_ms": 78.72091699391603
+        },
+        "database": {
+          "quantity": 7,
+          "audit": 1,
+          "receipts": 1
+        }
+      }
+    },
+    {
+      "criterion": "initialization.bounded-and-parent-alive",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 504,
+          "body": {
+            "error": "deadline_exceeded"
+          },
+          "raw": "{\"error\":\"deadline_exceeded\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "29"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:03 GMT"
+            ]
+          ],
+          "elapsed_ms": 402.276124805212
+        },
+        "elapsed_ms": 402.28554187342525,
+        "health": {
+          "status": 200,
+          "body": {
+            "ok": true
+          },
+          "raw": "{\"ok\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "11"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:03 GMT"
+            ]
+          ]
+        },
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "executionModel": "child-process",
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 1,
+          "discardedJobs": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "requestTimeoutMs": 400,
+          "workerLimits": {
+            "heapBytes": 67108864,
+            "responseBytes": 2097152,
+            "rssBytes": 268435456,
+            "operationLimit": 64
+          },
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 0,
+              "requests": 0,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "initialization.recovery",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "signal": true
+          },
+          "raw": "{\"ok\":true,\"signal\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "25"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:03 GMT"
+            ]
+          ],
+          "elapsed_ms": 25.405167136341333
+        }
+      }
+    },
+    {
+      "criterion": "loop.bounded-and-parent-alive",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 504,
+          "body": {
+            "error": "deadline_exceeded"
+          },
+          "raw": "{\"error\":\"deadline_exceeded\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "29"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:03 GMT"
+            ]
+          ],
+          "elapsed_ms": 402.4625001475215
+        },
+        "elapsed_ms": 402.47187530621886,
+        "health": {
+          "status": 200,
+          "body": {
+            "ok": true
+          },
+          "raw": "{\"ok\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "11"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:03 GMT"
+            ]
+          ]
+        },
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "executionModel": "child-process",
+          "runtimesCreated": 1,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 1,
+          "discardedJobs": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "requestTimeoutMs": 400,
+          "workerLimits": {
+            "heapBytes": 67108864,
+            "responseBytes": 2097152,
+            "rssBytes": 268435456,
+            "operationLimit": 64
+          },
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "loop.recovery",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "signal": true
+          },
+          "raw": "{\"ok\":true,\"signal\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "25"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:03 GMT"
+            ]
+          ],
+          "elapsed_ms": 24.840999860316515
+        }
+      }
+    },
+    {
+      "criterion": "pending.bounded-and-parent-alive",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 504,
+          "body": {
+            "error": "deadline_exceeded"
+          },
+          "raw": "{\"error\":\"deadline_exceeded\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "29"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:04 GMT"
+            ]
+          ],
+          "elapsed_ms": 402.5499583221972
+        },
+        "elapsed_ms": 402.5619998574257,
+        "health": {
+          "status": 200,
+          "body": {
+            "ok": true
+          },
+          "raw": "{\"ok\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "11"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:04 GMT"
+            ]
+          ]
+        },
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "executionModel": "child-process",
+          "runtimesCreated": 1,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 1,
+          "discardedJobs": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "requestTimeoutMs": 400,
+          "workerLimits": {
+            "heapBytes": 67108864,
+            "responseBytes": 2097152,
+            "rssBytes": 268435456,
+            "operationLimit": 64
+          },
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "pending.recovery",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "signal": true
+          },
+          "raw": "{\"ok\":true,\"signal\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "25"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:04 GMT"
+            ]
+          ],
+          "elapsed_ms": 43.86741714552045
+        }
+      }
+    },
+    {
+      "criterion": "capability.cannot-rebind-next-actor",
+      "status": "pass",
+      "detail": {
+        "saved": {
+          "status": 200,
+          "body": {
+            "saved": true
+          },
+          "raw": "{\"saved\":true}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "14"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:04 GMT"
+            ]
+          ],
+          "elapsed_ms": 33.94949994981289
+        },
+        "stale": {
+          "status": 403,
+          "body": {
+            "error": "capability_expired"
+          },
+          "raw": "{\"error\":\"capability_expired\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "30"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 12:21:04 GMT"
+            ]
+          ],
+          "elapsed_ms": 2.5069997645914555
+        },
+        "database": {
+          "quantity": 2,
+          "audit": 0,
+          "receipts": 0
+        }
+      }
+    }
+  ],
+  "summary": {
+    "pass": 18,
+    "fail": 0,
+    "skip": 0
+  }
+}

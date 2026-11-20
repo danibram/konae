@@ -1,0 +1,33 @@
+     Locking 18 packages to latest Rust 1.91.1 compatible versions
+      Adding getrandom v0.3.4 (available: v0.4.3)
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling libc v0.2.191
+   Compiling syn v3.0.10
+   Compiling serde_json v1.0.154
+   Compiling anyhow v1.0.104
+   Compiling serde v1.0.229
+   Compiling getrandom v0.3.4
+   Compiling serde_derive v1.0.229
+   Compiling cfg-if v1.0.5
+   Compiling itoa v1.0.19
+   Compiling memchr v2.8.3
+   Compiling konae-functions-executor v0.0.0 (/tmp/check)
+    Finished `test` profile [unoptimized] target(s) in 3.79s
+     Running unittests src/lib.rs (/tmp/target/debug/deps/konae_functions_executor-6819cdf784c1ff60)
+
+running 5 tests
+test containment::tests::ordinary_files_cannot_impersonate_cgroup_controls ... ok
+test containment::tests::strict_policy_refuses_missing_delegation_without_creating_it ... ok
+test protocol::tests::preserves_operation_error_and_capability_on_roundtrip ... ok
+test protocol::tests::rejects_oversized_frame_before_reading_payload ... ok
+test protocol::tests::rejects_truncated_frame_and_unknown_fields ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+0::/
+1073741824
+128

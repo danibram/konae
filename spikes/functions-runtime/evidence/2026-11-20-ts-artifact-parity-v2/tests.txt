@@ -1,0 +1,775 @@
+bun test v1.3.11 (af24e281)
+
+scripts/functions-transport.test.ts:
+(pass) pull stages published server bytes and rehearsal carries the candidate server folder [17.92ms]
+
+scripts/pull.test.ts:
+(pass) data-only pull > refreshes staged data without reading or replacing local sources and base markers [6.54ms]
+
+src/runtime/functions-build.test.ts:
+(pass) editor builds separate ESM bytes and preview never imports server entry [35.11ms]
+(pass) local and generated folder builders do not execute top-level server code [129.74ms]
+✘ [ERROR] Server function sources cannot be imported by a browser entry. [plugin konae-project-files]
+
+    src/runtime/browser-build.ts:115:69:
+      115 │ ...sWith("functions/")) throw new Error("Server function sources ...
+          ╵                                   ^
+
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:115:70)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1267:28)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:628:17)
+    at handleIncomingPacket (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:653:7)
+    at readFromStdout (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:581:7)
+    at emit (node:events:95:22)
+    at addChunk (internal:streams/readable:264:47)
+    at readableAddChunkPushByteMode (internal:streams/readable:242:18)
+    at handleNumberResult (internal:streams/native-readable:69:18)
+    at <anonymous> (internal:streams/native-readable:43:68)
+
+  This error came from the "onLoad" callback registered here:
+
+    src/runtime/browser-build.ts:114:12:
+      114 │       build.onLoad({ filter: /.*/, namespace: "konae" }, (args) => {
+          ╵             ~~~~~~
+
+    at setup (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:114:13)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1141:21)
+    at buildOrContextImpl (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:854:5)
+    at buildOrContext (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:680:5)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2026:15)
+    at new Promise (native:1:11)
+    at build (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2025:29)
+    at bundleInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:65:32)
+    at async compileProjectInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:41:25)
+    at processTicksAndRejections (native:7:39)
+
+  The plugin "konae-project-files" was triggered by this import
+
+    konae:app.js:1:23:
+      1 │ import { handle } from "./functions/orders.ts"; console.log(handle);
+        ╵                        ~~~~~~~~~~~~~~~~~~~~~~~
+
+✘ [ERROR] Server function sources cannot be imported by a browser entry. [plugin server-source-boundary]
+
+    app.js:1:23:
+      1 │ import { handle } from "./functions/orders.ts"; console.log(handle);
+        ╵                        ~~~~~~~~~~~~~~~~~~~~~~~
+
+(pass) browser entries cannot import server sources [16.29ms]
+✘ [ERROR] Server functions cannot import host modules or URLs. [plugin declared-server-packages]
+
+    functions/orders.ts:1:23:
+      1 │ import {readFile} from "node:fs"; export const handle = readFile;
+        ╵                        ~~~~~~~~~
+
+✘ [ERROR] This "import" expression will not be bundled because the argument is not a string literal [unsupported-dynamic-import]
+
+    functions/orders.ts:1:28:
+      1 │ export const handle = () => import(globalThis.location);
+        ╵                             ~~~~~~
+
+✘ [ERROR] This call to "require" will not be bundled because the argument is not a string literal [unsupported-require-call]
+
+    functions/orders.ts:1:28:
+      1 │ export const handle = () => require(globalThis.location);
+        ╵                             ~~~~~~~
+
+(pass) bundler refuses non-self-contained exports and host imports [49.49ms]
+(pass) optional Hono is bundled into one ESM file without evaluation [21.09ms]
+(pass) CLI export keeps a published server bundle when the editable entry was removed [22.56ms]
+✘ [ERROR] Server function sources cannot be imported by a browser entry. [plugin konae-project-files]
+
+    src/runtime/browser-build.ts:102:68:
+      102 │ ...sWith("functions/")) throw new Error("Server function sources ...
+          ╵                                   ^
+
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:102:69)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1217:28)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:628:17)
+    at handleIncomingPacket (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:653:7)
+    at readFromStdout (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:581:7)
+    at emit (node:events:95:22)
+    at addChunk (internal:streams/readable:264:47)
+    at readableAddChunkPushByteMode (internal:streams/readable:242:18)
+    at handleNumberResult (internal:streams/native-readable:69:18)
+    at <anonymous> (internal:streams/native-readable:43:68)
+
+  This error came from the "onResolve" callback registered here:
+
+    src/runtime/browser-build.ts:92:12:
+      92 │       build.onResolve({ filter: /.*/ }, (args) => {
+         ╵             ~~~~~~~~~
+
+    at setup (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:92:13)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1141:21)
+    at buildOrContextImpl (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:854:5)
+    at buildOrContext (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:680:5)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2026:15)
+    at new Promise (native:1:11)
+    at build (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2025:29)
+    at bundleInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:65:32)
+    at async compileProjectInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:41:25)
+    at processTicksAndRejections (native:7:39)
+
+  The plugin "konae-project-files" was triggered by this import
+
+    konae:client.css:1:23:
+      1 │ body { background: url("./functions/orders.ts"); }
+        ╵                        ~~~~~~~~~~~~~~~~~~~~~~~
+
+(pass) a browser stylesheet cannot embed server source as a data URL [1.89ms]
+
+src/runtime/browser-build.test.ts:
+(pass) packages in the editor's build > a bare import is fetched at the version package.json names and linked into the app's bundle [1.68ms]
+(pass) packages in the editor's build > a font a package's stylesheet names goes into the bundle as a data: URL [2.01ms]
+✘ [ERROR] The build could not reach https://esm.sh for https://esm.sh/offline-pkg@3.0.0?target=es2022: Failed to fetch. Check the connection and build again. [plugin konae-packages]
+
+    src/runtime/browser-build.ts:187:16:
+      187 │       throw new Error(`The build could not reach ${packageOrigin}...
+          ╵                 ^
+
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:187:17)
+    at processTicksAndRejections (native:7:39)
+    at toThrow (unknown)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.test.ts:56:16)
+
+  This error came from the "onLoad" callback registered here:
+
+    src/runtime/browser-build.ts:218:12:
+      218 │       build.onLoad({ filter: /.*/, namespace: "package" }, async ...
+          ╵             ~~~~~~
+
+    at setup (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:218:13)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1141:21)
+    at buildOrContextImpl (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:854:5)
+    at buildOrContext (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:680:5)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2026:15)
+    at new Promise (native:1:11)
+    at build (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2025:29)
+    at bundleInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:65:32)
+    at async compileProjectInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:41:25)
+    at processTicksAndRejections (native:7:39)
+
+  The plugin "konae-packages" was triggered by this import
+
+    konae:app.js:1:7:
+      1 │ import "offline-pkg";
+        ╵        ~~~~~~~~~~~~~
+
+(pass) packages in the editor's build > an unreachable CDN names the origin and the module [0.94ms]
+✘ [ERROR] left-pad is not in package.json. Add "left-pad": "<exact version>" to its dependencies. [plugin konae-packages]
+
+    src/runtime/browser-build.ts:171:39:
+      171 │ ...rsion === undefined) throw new Error(`${specifier} is not in p...
+          ╵                                   ^
+
+    at packageUrl (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:171:40)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:216:24)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1217:28)
+    at async <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:628:17)
+    at processTicksAndRejections (native:7:39)
+    at toThrow (unknown)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.test.ts:61:96)
+
+  This error came from the "onResolve" callback registered here:
+
+    src/runtime/browser-build.ts:204:12:
+      204 │       build.onResolve({ filter: /.*/ }, (args) => {
+          ╵             ~~~~~~~~~
+
+    at setup (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:204:13)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1141:21)
+    at buildOrContextImpl (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:854:5)
+    at buildOrContext (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:680:5)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2026:15)
+    at new Promise (native:1:11)
+    at build (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2025:29)
+    at bundleInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:65:32)
+    at async compileProjectInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:41:25)
+    at processTicksAndRejections (native:7:39)
+
+  The plugin "konae-packages" was triggered by this import
+
+    konae:app.js:1:7:
+      1 │ import "left-pad";
+        ╵        ~~~~~~~~~~
+
+(pass) packages in the editor's build > an import package.json does not list is refused with the line to add [0.67ms]
+(pass) packages in the editor's build > a version range is refused, so every build reads the same code [0.03ms]
+(pass) packages in the editor's build > a Node.js module is refused
+✘ [ERROR] https://esm.sh/sneaky@1.0.0?target=es2022 imports https://evil.example/x.js. The build reads packages only from https://esm.sh. [plugin konae-packages]
+
+    src/runtime/browser-build.ts:211:63:
+      211 │ ...n !== packageOrigin) throw new Error(`${args.importer} imports...
+          ╵                                   ^
+
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:211:64)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1217:28)
+    at async <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:628:17)
+    at processTicksAndRejections (native:7:39)
+    at toThrow (unknown)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.test.ts:77:16)
+
+  This error came from the "onResolve" callback registered here:
+
+    src/runtime/browser-build.ts:204:12:
+      204 │       build.onResolve({ filter: /.*/ }, (args) => {
+          ╵             ~~~~~~~~~
+
+    at setup (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:204:13)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1141:21)
+    at buildOrContextImpl (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:854:5)
+    at buildOrContext (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:680:5)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2026:15)
+    at new Promise (native:1:11)
+    at build (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2025:29)
+    at bundleInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:65:32)
+    at async compileProjectInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:41:25)
+    at processTicksAndRejections (native:7:39)
+
+  The plugin "konae-packages" was triggered by this import
+
+    package:https://esm.sh/sneaky@1.0.0?target=es2022:1:7:
+      1 │ import "https://evil.example/x.js";
+        ╵        ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+(pass) packages in the editor's build > a fetched module that imports another origin is refused [0.85ms]
+✘ [ERROR] app.js imports https://esm.sh/x@1.0.0. Import a package by its name and list it in package.json. [plugin konae-packages]
+
+    src/runtime/browser-build.ts:215:66:
+      215 │ ...//i.test(args.path)) throw new Error(`${args.importer} imports...
+          ╵                                   ^
+
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:215:67)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1217:28)
+    at async <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:628:17)
+    at processTicksAndRejections (native:7:39)
+    at toThrow (unknown)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.test.ts:82:110)
+
+  This error came from the "onResolve" callback registered here:
+
+    src/runtime/browser-build.ts:204:12:
+      204 │       build.onResolve({ filter: /.*/ }, (args) => {
+          ╵             ~~~~~~~~~
+
+    at setup (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:204:13)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:1141:21)
+    at buildOrContextImpl (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:854:5)
+    at buildOrContext (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:680:5)
+    at <anonymous> (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2026:15)
+    at new Promise (native:1:11)
+    at build (/Users/dbr/htdocs/miniapp-builder/node_modules/esbuild/lib/main.js:2025:29)
+    at bundleInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:65:32)
+    at async compileProjectInBrowser (/Users/dbr/htdocs/miniapp-builder/src/runtime/browser-build.ts:41:25)
+    at processTicksAndRejections (native:7:39)
+
+  The plugin "konae-packages" was triggered by this import
+
+    konae:app.js:1:7:
+      1 │ import "https://esm.sh/x@1.0.0";
+        ╵        ~~~~~~~~~~~~~~~~~~~~~~~~
+
+(pass) packages in the editor's build > an app file cannot import a URL [1.14ms]
+(pass) a file that is not text in the editor's build > a binary public file is published as its bytes, and esbuild never reads it [0.92ms]
+(pass) a file that is not text in the editor's build > preview compilation reports a missing public asset with its source reference [0.83ms]
+(pass) a file that is not text in the editor's build > an imported CSS file resolves a binary public asset through a URL token [0.94ms]
+(pass) a file that is not text in the editor's build > an imported CSS file keeps an SVG view fragment after its data payload [0.87ms]
+
+src/agent/gate-functions.test.ts:
+(pass) Gate functions parity: invalid JSON [2.25ms]
+(pass) Gate functions parity: wrong version [0.02ms]
+(pass) Gate functions parity: unknown root key [0.05ms]
+(pass) Gate functions parity: unknown function key [0.11ms]
+(pass) Gate functions parity: entry index.ts [0.04ms]
+(pass) Gate functions parity: entry functions/../orders.ts [0.03ms]
+(pass) Gate functions parity: mount /
+(pass) Gate functions parity: mount /_konae/orders
+(pass) Gate functions parity: mount /server/orders [0.06ms]
+(pass) Gate functions parity: methods ['PUT'] [0.03ms]
+(pass) Gate functions parity: methods ['GET', 'GET'] [0.02ms]
+(pass) Gate functions parity: access owner [0.06ms]
+(pass) Gate functions parity: actions ['read', 'read'] [0.05ms]
+(pass) Gate functions parity: missing entry [0.07ms]
+(pass) Gate functions parity: module off
+(pass) Gate functions parity: auth required
+(pass) Gate functions parity: actions required [0.26ms]
+(pass) Gate functions parity: missing action
+(pass) Gate functions parity: effect action
+(pass) Gate functions parity: static conflict
+(pass) Gate functions parity: http conflict
+(pass) Gate functions parity: overlapping functions [0.21ms]
+(pass) Gate reports server preview absence without executing top-level source [4.86ms]
+(pass) Gate reserves function receipts from schema and actions [5.93ms]
+(pass) Gate artifact parity: normalized artifact [1.86ms]
+(pass) Gate artifact parity: no declaration and no artifact [1.16ms]
+(pass) Gate artifact parity: unknown artifact keys use UTF-8 order [0.11ms]
+(pass) Gate artifact parity: unknown manifest keys use UTF-8 order [0.07ms]
+(pass) Gate artifact parity: bundle structure precedes declared manifest mismatch [0.05ms]
+(pass) Gate artifact parity: raw normalization precedes bundle structure [0.05ms]
+(pass) Gate artifact parity: source defaults are normalized in built artifact [0.34ms]
+(pass) Gate artifact parity: object field order is not normalization [0.53ms]
+(pass) Gate artifact parity: empty declaration and absent artifact [0.69ms]
+(pass) Gate artifact parity: declared artifact absent [0.04ms]
+(pass) Gate artifact parity: invalid envelope false [0.03ms]
+(pass) Gate artifact parity: invalid envelope 42
+(pass) Gate artifact parity: invalid envelope "bundle"
+(pass) Gate artifact parity: invalid envelope []
+(pass) Gate artifact parity: invalid envelope {} [0.11ms]
+(pass) Gate artifact parity: invalid envelope {"version": true, "abi": "konae-functions/1"}
+(pass) Gate artifact parity: invalid envelope {"version": 256, "abi": "konae-functions/1"} [0.07ms]
+(pass) Gate artifact parity: invalid envelope {"version": 1, "abi": 12} [0.04ms]
+(pass) Gate artifact parity: unknown artifact key
+(pass) Gate artifact parity: unknown artifact keys sorted [0.10ms]
+(pass) Gate artifact parity: ABI checked before unknown keys [0.02ms]
+(pass) Gate artifact parity: invalid manifest null [0.02ms]
+(pass) Gate artifact parity: invalid manifest []
+(pass) Gate artifact parity: invalid manifest 5 [0.07ms]
+(pass) Gate artifact parity: invalid manifest {} [0.11ms]
+(pass) Gate artifact parity: invalid manifest {"version": 2, "functions": {}} [0.05ms]
+(pass) Gate artifact parity: invalid manifest {"version": 1, "functions": []} [0.05ms]
+(pass) Gate artifact parity: missing manifest
+(pass) Gate artifact parity: unknown manifest key [0.08ms]
+(pass) Gate artifact parity: unknown declaration key [0.05ms]
+(pass) Gate artifact parity: nonobject function
+(pass) Gate artifact parity: malformed entry
+(pass) Gate artifact parity: malformed mount [0.11ms]
+(pass) Gate artifact parity: malformed methods
+(pass) Gate artifact parity: malformed access [0.08ms]
+(pass) Gate artifact parity: malformed actions [0.02ms]
+(pass) Gate artifact parity: artifact omits access default [0.04ms]
+(pass) Gate artifact parity: artifact omits empty actions [0.05ms]
+(pass) Gate artifact parity: artifact methods not normalized [0.04ms]
+(pass) Gate artifact parity: artifact actions not normalized
+(pass) Gate artifact parity: artifact differs from declared mount [0.09ms]
+(pass) Gate artifact parity: artifact without declared manifest [0.03ms]
+(pass) Gate artifact parity: invalid bundles null [0.07ms]
+(pass) Gate artifact parity: invalid bundles [] [0.06ms]
+(pass) Gate artifact parity: invalid bundles 1
+(pass) Gate artifact parity: invalid bundles "js"
+(pass) Gate artifact parity: invalid bundles {}
+(pass) Gate artifact parity: invalid bundles {"orders": "export const handle=()=>null;", "extra": "code"}
+(pass) Gate artifact parity: missing bundles
+(pass) Gate artifact parity: invalid bundle bytes ""
+(pass) Gate artifact parity: invalid bundle bytes null
+(pass) Gate artifact parity: invalid bundle bytes 123
+(pass) Gate artifact parity: invalid bundle bytes false
+(pass) Gate artifact parity: invalid bundle bytes {}
+(pass) Gate artifact parity: invalid bundle bytes []
+(pass) Gate refuses oversized server metadata before checking the allowlist [2.96ms]
+
+src/agent/gate.test.ts:
+(pass) validation gate > uses files on a first release only when no state exists [8.26ms]
+(pass) validation gate > an action declaration needs the actions module [0.18ms]
+(pass) validation gate > HTTP routes and call actions refuse when their modules are off [0.23ms]
+(pass) validation gate > a module that requires actions refuses an invalid first-release state [0.21ms]
+(pass) validation gate > checks files before actions when both modules are off [0.12ms]
+(pass) validation gate > module use refusals follow the shared release check order [0.28ms]
+(pass) validation gate > a static capsule can omit actions.json and schema.sql when actions are off [0.58ms]
+(pass) validation gate > requires auth when actions name an authenticated caller or actor binding [1.50ms]
+(pass) validation gate > file storage requires auth when the app turns it on [0.15ms]
+(pass) validation gate > a private first release refuses an explicitly off auth module [0.12ms]
+(pass) validation gate > passes the starter capsule [1.32ms]
+(pass) validation gate > refuses a proposal whose changed text and retained binary file exceed the source count [6.21ms]
+(pass) validation gate > counts retained binary bytes against the shared decoded source size [4.04ms]
+(pass) validation gate > warns, without failing, when a query returns an expression without a name [2.84ms]
+(pass) validation gate > fails at stage schema when schema.sql cannot run [0.38ms]
+(pass) validation gate > fails at stage actions when an action reads a column the schema does not declare [0.80ms]
+(pass) validation gate > fails at stage actions when actions.json is not a valid program [1.54ms]
+(pass) validation gate > refuses an http binding the Kernel refuses and accepts one it serves [2.68ms]
+(pass) validation gate > passes a signal action without SQL and refuses a signal the Kernel refuses [3.14ms]
+(pass) validation gate > fails when declared bindings and statement placeholders disagree [0.99ms]
+(pass) validation gate > accepts nullable filters and refuses mutation RETURNING [1.24ms]
+(pass) validation gate > accepts a valid schema and action change together [0.62ms]
+(pass) validation gate > stage preview-rows accepts a live database that already matches the schema [1.70ms]
+(pass) validation gate > stage preview-rows warns that the preview is behind a column the Kernel adds at publish, and passes [1.12ms]
+(pass) validation gate > stage schema rejects a schema that cannot be re-run, with or without a live database [0.82ms]
+(pass) validation gate > stage schema refuses a schema.sql that destroys what is already there [0.35ms]
+(pass) validation gate > refuses triggers and views, which the Kernel will not deploy [1.30ms]
+(pass) validation gate > refuses every statement the Kernel's schema authorizer refuses [1.31ms]
+(pass) validation gate > refuses every CREATE TABLE ... AS form and the temp schema [0.68ms]
+(pass) validation gate > allows SQL functions in schema and refuses the dangerous ones [7.56ms]
+(pass) validation gate > the starter and private notes schemas pass [1.74ms]
+(pass) validation gate > a verdict names the stages that actually ran [2.91ms]
+(pass) validation gate > stage preview-rows warns when schema.sql does not run on the preview's older table [1.21ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/notify-column-cases.json [10.59ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/action-cases.json [69.50ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/sql-rule-cases.json [40.67ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/http-binding-cases.json [65.16ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/signal-cases.json [27.39ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/guard-cases.json [15.46ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/notify-cases.json [42.90ms]
+(pass) the gate and the Kernel refuse the same actions.json > every case in kernel-rs/kernel/src/schedule-cases.json [41.63ms]
+
+src/sdk/contract.test.ts:
+(pass) the SDK contract > describes module settings and renders the Kernel reader [1.69ms]
+(pass) the SDK contract > renders owner-facing module titles and enum labels in the generated docs [0.47ms]
+(pass) the SDK contract > the shared module cases keep editor answers aligned with the Kernel [0.21ms]
+(pass) the SDK contract > lists each module and call once, with a signature and an example that name it
+(pass) the SDK contract > names authentication-required on every call a signed-out visitor cannot make
+(pass) runtime.js and the preview client expose exactly the contract > the published SDK puts every contract call on window.miniapp and nothing else [0.50ms]
+(pass) runtime.js and the preview client expose exactly the contract > the editor preview client exposes the same calls [0.50ms]
+(pass) runtime.js and the preview client expose exactly the contract > page.url keeps the path address prefix on both SDK doors [0.01ms]
+(pass) runtime.js and the preview client expose exactly the contract > the published SDK calls exactly the runtime tools the contract lists [0.17ms]
+(pass) runtime.js and the preview client expose exactly the contract > a call the contract does not list, or one it lists that the SDK lacks, is reported [0.30ms]
+(pass) every documented message is one the code returns > Sign in to use Konae MCP. [0.13ms]
+(pass) every documented message is one the code returns > Deployment not found. [0.02ms]
+(pass) every documented message is one the code returns > Cross-origin or unrecognized-host MCP request rejected. [0.02ms]
+(pass) every documented message is one the code returns > MCP request exceeds 200 KB. [0.01ms]
+(pass) every documented message is one the code returns > Invalid MCP response.
+(pass) every documented message is one the code returns > Google sign-in is not turned on for this app.
+(pass) every documented message is one the code returns > This app is not accepting new accounts for this email address.
+(pass) every documented message is one the code returns > This Google account uses an email address Google does not manage, so it cannot sign in here. Sign in with email and password.
+(pass) every documented message is one the code returns > authentication-required
+(pass) every documented message is one the code returns > Server action not declared. [0.36ms]
+(pass) every documented message is one the code returns > authentication-required
+(pass) every documented message is one the code returns > rate-limited
+(pass) every documented message is one the code returns > Arguments must be an object. [0.12ms]
+(pass) every documented message is one the code returns > Expected a string.
+(pass) every documented message is one the code returns > Unexpected action input: <key> [0.19ms]
+(pass) every documented message is one the code returns > This action requires an authenticated actor.
+(pass) every documented message is one the code returns > Action <name> answers only on its HTTP route, <key>. [0.58ms]
+(pass) every documented message is one the code returns > Missing action input: <key> [0.49ms]
+(pass) every documented message is one the code returns > <key> must be a non-empty string.
+(pass) every documented message is one the code returns > <key> is too long. [0.37ms]
+(pass) every documented message is one the code returns > <key> must be a number. [0.46ms]
+(pass) every documented message is one the code returns > <key> must be a boolean. [0.41ms]
+(pass) every documented message is one the code returns > Query result exceeds 2 MiB or 1000 rows. [0.35ms]
+(pass) every documented message is one the code returns > This app reached its limit of calls in the last minute. Try again in a minute. [0.16ms]
+(pass) every documented message is one the code returns > Action <name> runs only after the call <key> answers. [0.45ms]
+(pass) every documented message is one the code returns > Action <name> runs only on its schedule. [0.42ms]
+(pass) every documented message is one the code returns > An app page path must start with one slash.
+(pass) every documented message is one the code returns > authentication-required [0.03ms]
+(pass) every documented message is one the code returns > File visibility must be private or public.
+(pass) every documented message is one the code returns > File visibility is fixed to app-users by this app.
+(pass) every documented message is one the code returns > Files must be between 1 byte and <limit>. [0.44ms]
+(pass) every documented message is one the code returns > This deployment has reached its <limit> file quota. [0.10ms]
+(pass) every documented message is one the code returns > Too many active transfers. Cancel completed transfers before starting another. [0.18ms]
+(pass) every documented message is one the code returns > Transfer not found or expired.
+(pass) every documented message is one the code returns > Upload size or SHA-256 mismatch.
+(pass) every documented message is one the code returns > File upload failed.
+(pass) every documented message is one the code returns > A file ID is required.
+(pass) every documented message is one the code returns > File not found.
+(pass) every documented message is one the code returns > authentication-required
+(pass) every documented message is one the code returns > authentication-required
+(pass) every documented message is one the code returns > A file ID is required.
+(pass) every documented message is one the code returns > File visibility must be private or public. [0.53ms]
+(pass) every documented message is one the code returns > File visibility is fixed to app-users by this app. [0.17ms]
+(pass) every documented message is one the code returns > File not found. [0.03ms]
+(pass) every documented message is one the code returns > Only the person who uploaded this file may change or delete it. [0.22ms]
+(pass) every documented message is one the code returns > authentication-required
+(pass) every documented message is one the code returns > A file ID is required.
+(pass) every documented message is one the code returns > File not found. [0.07ms]
+(pass) every documented message is one the code returns > Only the person who uploaded this file may change or delete it. [0.16ms]
+(pass) every documented message is one the code returns > Action <name> declares a page path, so it must be an anonymous query.
+(pass) every documented message is one the code returns > Action <name> declares page parameters that do not match its input bindings. [0.21ms]
+(pass) every documented message is one the code returns > Actions <name> and <name> both bind page path <key>.
+(pass) every documented message is one the code returns > Action <name> names <key> as its page file, but the Build Artifact does not contain it.
+(pass) every documented message is one the code returns > Action <name> has a page query that does not return a title column.
+(pass) every documented message is one the code returns > Action <name> names <key> as its page list, whose columns must match the page parameters and optional updated. [0.48ms]
+(pass) every documented message is one the code returns > Action <name> has a key <key> that a <kind> action does not take. [1.28ms]
+(pass) every documented message is one the code returns > Action <name> is a query, so it cannot declare a signal. Declare it on a mutation or on a "kind": "signal" action. [0.81ms]
+(pass) every documented message is one the code returns > Action <name> names signal property <key>, which is not one of its input bindings. [1.25ms]
+(pass) every documented message is one the code returns > Action <name> names signal property <key> twice. [0.96ms]
+(pass) every documented message is one the code returns > Action <name> names signal property actor, which records the caller's ID, and also has an input named actor. Rename the input. [1.04ms]
+(pass) every documented message is one the code returns > Action <name> names more than 8 signal properties.
+(pass) every documented message is one the code returns > Action <name> names an invalid signal. Use dot-separated lowercase words, such as "order.placed", up to 64 characters. [2.05ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid signal declaration. [1.07ms]
+(pass) every documented message is one the code returns > Action <name> is a signal action, so it must declare a signal. [1.03ms]
+(pass) every documented message is one the code returns > Action <name> is a signal action, so it runs no SQL and cannot declare a statement. [0.47ms]
+(pass) every documented message is one the code returns > Action <name> is a query, so it cannot declare a guard. Declare it on a mutation. [1.88ms]
+(pass) every documented message is one the code returns > Action <name> is a signal action, so it cannot declare a guard. Declare it on a mutation. [1.46ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid guard. Use a message of 1 to 200 characters on one line. [1.17ms]
+(pass) every documented message is one the code returns > Action <name> is a query, so it cannot declare notify. Declare it on a mutation.
+(pass) every documented message is one the code returns > Action <name> is a signal action, so it cannot declare notify. Declare it on a mutation.
+(pass) every documented message is one the code returns > Action <name> has an invalid notify declaration. Give "to", "subject", "body" and, to list changed rows, "changes", and nothing else.
+(pass) every documented message is one the code returns > Action <name> has an invalid notify recipient. Use "owner", "actor" or {"column": "<name>"} for a column of account IDs. [0.33ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid notify changes list. Name 1 to 8 columns of the changed table, each once, in letters, digits and underscores.
+(pass) every documented message is one the code returns > Action <name> has an invalid notify subject. Use 1 to 120 characters on one line.
+(pass) every documented message is one the code returns > Action <name> has an invalid notify body. Use 1 to 2000 characters, with line breaks and no other control characters.
+(pass) every documented message is one the code returns > Action <name> names an unknown placeholder {<key>} in its notify <field>. Use {input.<key>} for one of its input bindings, {actor.id}, {kernel.now}, {changes} or {changes.count}.
+(pass) every documented message is one the code returns > Action <name> has an unclosed placeholder in its notify <field>. Close it with "}".
+(pass) every documented message is one the code returns > Action <name> puts {changes} in its notify subject. Put {changes} in the body, and {changes.count} in the subject.
+(pass) every documented message is one the code returns > Action <name> uses {changes} in its notify body without a changes list. Name the columns to show in notify "changes".
+(pass) every documented message is one the code returns > Action <name> names a notify column its statement cannot return. Name columns of the table the statement changes.
+(pass) every documented message is one the code returns > Action <name> is a query, so it cannot declare a schedule. Declare it on a mutation. [1.49ms]
+(pass) every documented message is one the code returns > Action <name> is a signal action, so it cannot declare a schedule. Declare it on a mutation. [1.17ms]
+(pass) every documented message is one the code returns > Action <name> declares a schedule, so it cannot take input. A scheduled run has no caller to supply it; bind only actor, kernel and literal values. [1.22ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid schedule. Declare "every" with minutes or hours, such as "15m" or "6h", or "daily" with a UTC time, such as "02:00". [1.27ms]
+(pass) every documented message is one the code returns > Action <name> runs every <key>, more often than every 5 minutes. Use "5m" or longer. [1.17ms]
+(pass) every documented message is one the code returns > Action <name> runs every <key>, less often than once a day. Use "daily" or a period of 24 hours or less. [1.31ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid daily time. Use HH:MM in UTC, from 00:00 to 23:59. [1.34ms]
+(pass) every documented message is one the code returns > Action <name> declares subscribe, but the Kernel pushes no updates to a page. Poll a query that reads rows after a cursor instead. [0.91ms]
+(pass) every documented message is one the code returns > Action <name> is a call, so it runs no SQL and cannot declare a statement, a signal, a guard or an http route. [1.12ms]
+(pass) every documented message is one the code returns > Action <name> is a <key>, so it cannot declare url, method, body, headers, auth or then. Those keys belong to an action of "kind": "call". [0.77ms]
+(pass) every documented message is one the code returns > Action <name> is a call, so its bindings may only be inputs. [1.44ms]
+(pass) every documented message is one the code returns > Action <name> must call with "method": "GET" or "POST". [1.27ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid url. Use an absolute https:// URL without credentials or a fragment, up to 2048 characters. [1.10ms]
+(pass) every documented message is one the code returns > Action <name> calls the IP address <key>. Name a host instead. [1.08ms]
+(pass) every documented message is one the code returns > Action <name> calls <key>, which names this machine or a cloud metadata service. [1.01ms]
+(pass) every documented message is one the code returns > Action <name> calls a path under /_konae, /oauth, /.well-known or /mcp, which belong to the Kernel. [0.22ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid body. Map each body key to one of the call's input keys or to a constant written as an object with "value", at most 32. [1.87ms]
+(pass) every documented message is one the code returns > Action <name> sends body key <key> with a path. Nested body keys belong on POST. [0.47ms]
+(pass) every documented message is one the code returns > Action <name> has body keys <key> and <key>, which overlap. Use one path or the other. [1.23ms]
+(pass) every documented message is one the code returns > Action <name> sends body key <key> from <name>, which is not one of its input bindings. [1.43ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid headers. Map Idempotency-Key to an input or a constant, at most 8. [0.83ms]
+(pass) every documented message is one the code returns > Action <name> sets header <key>, which is not allowed. Only Idempotency-Key is allowed. [0.45ms]
+(pass) every documented message is one the code returns > Action <name> sends header <key> from <name>, which is not one of its input bindings. [1.83ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid auth. Name a secret with "secret" to sign the request, or with "key" to send the API key it holds. [0.21ms]
+(pass) every documented message is one the code returns > Action <name> names an invalid auth secret. Use lowercase letters, digits and "_", starting with a letter. [1.70ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid then. Name a mutation and map its input keys to JSON pointers into the answer. [1.14ms]
+(pass) every documented message is one the code returns > Action <name> reads <key> for then, which is not a JSON pointer into /ok, /status, /error, /body or /input. [0.63ms]
+(pass) every documented message is one the code returns > Action <name> reads <key> for then, but <key> is not one of its input bindings. [1.23ms]
+(pass) every documented message is one the code returns > Action <name> names <name> as its then, which is not declared. [0.96ms]
+(pass) every documented message is one the code returns > Action <name> names <name> as its then, which is not a mutation. [1.30ms]
+(pass) every documented message is one the code returns > Action <name> names <name> as its then, which answers on an HTTP route. A then mutation runs only after its call. [1.09ms]
+(pass) every documented message is one the code returns > Action <name> names <name> as its then, which binds the actor. A then mutation runs with no caller. [1.09ms]
+(pass) every documented message is one the code returns > Action <name> fills <key>, which is not an input of <name>. [0.96ms]
+(pass) every documented message is one the code returns > Action <name> leaves <key> of <name> unfilled. Fill it from the answer or make the input nullable. [1.02ms]
+(pass) every documented message is one the code returns > Action <name> calls http://<key>, which is not an app of this installation. Use https. [1.14ms]
+(pass) every documented message is one the code returns > Action <name> calls <key>, the editor's host. A call reaches an app or an outside service, never the editor. [0.90ms]
+(pass) every documented message is one the code returns > Action <name> calls with the secret <name>, which is not set for this project. Set it with secret_set before publishing. [0.84ms]
+(pass) every documented message is one the code returns > Action <name> signs its route with the secret <name>, which is set for calls only. Set a route secret with a value of its own. [1.67ms]
+(pass) every documented message is one the code returns > connects must be a list of at most 10 origins, such as ["https://api.example.com"]. [0.53ms]
+(pass) every documented message is one the code returns > connects lists <key>, which is not an origin. Write it as https://host or https://host:port, with no path; http only for a host under localhost. [0.34ms]
+(pass) every documented message is one the code returns > connects lists <key> twice.
+(pass) every documented message is one the code returns > Action <name> is a signal action, so it takes no route. To record a signal from an HTTP route, declare the signal on a mutation with a POST route. [2.26ms]
+(pass) every documented message is one the code returns > Action <name> must bind GET for a query and POST for a mutation. [1.27ms]
+(pass) every documented message is one the code returns > Action <name> is authenticated, so it cannot declare http. Only anonymous actions answer on an HTTP route. [2.07ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid http path. Use a leading "/" and segments of letters, digits, ".", "_", "~" or "-", up to 200 characters. [1.54ms]
+(pass) every documented message is one the code returns > Action <name> binds the reserved path <key>. Paths under /_konae, /oauth, /.well-known and /mcp belong to the Kernel. [0.14ms]
+(pass) every documented message is one the code returns > Actions <name> and <name> both bind <key>. [1.60ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid signature header. [0.78ms]
+(pass) every documented message is one the code returns > Action <name> names an invalid signature secret. Use lowercase letters, digits and "_", starting with a letter. [0.72ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid http binding. [0.73ms]
+(pass) every documented message is one the code returns > Action <name> names an unknown signature scheme. Use "konae", "hmac-body", "timestamped" or "svix". [0.74ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid <key> signature. It takes <names>. [0.71ms]
+(pass) every documented message is one the code returns > Action <name> binds GET, so its signature must use the konae scheme. A provider's scheme signs a POST body. [0.69ms]
+(pass) every documented message is one the code returns > Action <name> names an unknown signature provider. Use <names>. [0.62ms]
+(pass) every documented message is one the code returns > Action <name> names the signature provider "<key>", so its signature takes only "provider" and "secret". Remove <names>. [0.46ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid signature algorithm. Use "sha256" or "sha1". [0.97ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid signature encoding. Use "hex" or "base64". [0.74ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid signature prefix. Use 1 to 32 letters, digits, "=", "-", "_", "." or ":", such as "sha256=". [0.73ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid timestamp prefix. Use the field's name and "=", such as "t=". [0.45ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid signature tag. Use the field's name and "=", such as "v1=", other than the timestamp's.
+(pass) every documented message is one the code returns > Action <name> has an invalid signature window. Use a whole number of seconds from 1 to 3600. [1.56ms]
+(pass) every documented message is one the code returns > Action <name> binds GET, so it cannot declare fields. Fields read a POST body. [0.45ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid fields map. Map 1 to 32 input keys to JSON paths, such as "$.data.object.id".
+(pass) every documented message is one the code returns > Action <name> maps <key>, which is not one of its input bindings. [1.54ms]
+(pass) every documented message is one the code returns > Action <name> maps <key> to an invalid JSON path. Use "$" and then ".name" or "[index]" steps, such as "$.data.object.id". [0.68ms]
+(pass) every documented message is one the code returns > Action <name> has an invalid callers list. List one or more of "signature", "key" and "session", each once. [1.31ms]
+(pass) every documented message is one the code returns > Action <name> lists "signature" among its callers but declares no signature. [1.55ms]
+(pass) every documented message is one the code returns > Action <name> declares a signature, so its callers must include "signature". [1.29ms]
+(pass) every documented message is one the code returns > Action <name> signs with the secret <name>, which is not set for this project. Set it with secret_set before publishing. [1.35ms]
+(pass) every documented message is one the code returns > Actions <names> sign with the secret <name>, which is not set for this project. Set it with secret_set before publishing. [1.20ms]
+(pass) every documented message is one the code returns > Actions <names> sign with the secrets <names>, which are not set for this project. Set each with secret_set before publishing. [1.40ms]
+(pass) every documented message is one the code returns > Action <name> verifies svix signatures with the secret <key>, which is not a whsec_ signing secret. Set it to the value the provider shows, starting with whsec_. [1.18ms]
+(pass) every documented message is one the code returns > invalid-signature [0.72ms]
+(pass) every documented message is one the code returns > stale-timestamp [0.37ms]
+(pass) every documented message is one the code returns > authentication-required
+(pass) every documented message is one the code returns > This route does not accept API keys.
+(pass) every documented message is one the code returns > An API key works only on the app's HTTP routes and its file read path. The runtime endpoint takes an app session. [0.46ms]
+(pass) every documented message is one the code returns > replayed-signature [0.30ms]
+(pass) every documented message is one the code returns > invalid-api-key [0.36ms]
+(pass) every documented message is one the code returns > This API key may not call <name>. [1.00ms]
+(pass) every documented message is one the code returns > No route accepts POST on this path. [0.28ms]
+(pass) every documented message is one the code returns > A route does not answer HEAD. Send GET.
+(pass) every documented message is one the code returns > The request body exceeds 64 KiB. [1.23ms]
+(pass) every documented message is one the code returns > The request body must be a JSON object.
+(pass) every documented message is one the code returns > Repeated query parameter: <key> [1.33ms]
+(pass) every documented message is one the code returns > rate-limited
+(pass) every documented message is one the code returns > Server manifest exceeds 262144 UTF-8 bytes. [0.73ms]
+(pass) every documented message is one the code returns > Declared functions require a Server Artifact.
+(pass) every documented message is one the code returns > Server Artifact requires version 1 and ABI konae-functions/1. [0.74ms]
+(pass) every documented message is one the code returns > Server Artifact manifest does not match functions.json. [0.20ms]
+(pass) every documented message is one the code returns > Idempotency-Key is required for this function. [0.11ms]
+(pass) every documented message is one the code returns > Idempotency-Key was already used with a different request. [0.31ms]
+(pass) every documented message is one the code returns > a message the code does not return is caught [2.51ms]
+(pass) the rendered readers > the checked-in prompt section, platform_guide topic and docs/sdk.md are the current rendering [0.70ms]
+(pass) the rendered readers > editing the contract changes every reader [1.95ms]
+(pass) the rendered readers > the build agent's prompt carries the rendered section and names no other call
+(pass) the rendered readers > the prompt, guide and docs carry every module and the agent read-back rule [1.68ms]
+(pass) the rendered readers > platform_guide serves the rendered JSON, and the starter app in mcp.rs uses only contract calls [0.40ms]
+(pass) the published SDK prefixes every Kernel URL with the page's base path > the home and a generated hostname use the root paths [0.37ms]
+(pass) the published SDK prefixes every Kernel URL with the page's base path > a path address uses its /p/<segment> prefix for the endpoint, the file address and sign-in [0.36ms]
+(pass) the published SDK prefixes every Kernel URL with the page's base path > a path that only looks like a prefix keeps the root paths [0.08ms]
+(pass) files.upload sends the file's bytes in one request > one PUT carries the bytes, and upload returns the path files.url gives without reading the file back [0.44ms]
+(pass) files.upload sends the file's bytes in one request > a transfer path that answers 404 fails the upload and cancels the transfer [0.07ms]
+(pass) files.upload sends the file's bytes in one request > a refusal of the bytes fails the upload with the Kernel's words and cancels the transfer [0.10ms]
+(pass) files.list returns metadata without opening file transfers > adds the same-origin URL and calls only files_list [0.02ms]
+
+src/lib/export-project.test.ts:
+(pass) a published app exports its folder even when the editor's draft does not build [0.65ms]
+(pass) a published static app exports without actions.json [0.28ms]
+(pass) a draft is built for its export, and a draft that does not build says why [0.08ms]
+(pass) a draft's export writes a file that is not text as its bytes [0.26ms]
+(pass) a draft export writes only module states the owner or template chose [0.26ms]
+(pass) a draft export carries schema transform definitions in app/ and omits them from dist/ [0.24ms]
+
+src/lib/functions-transport.test.ts:
+(pass) folder import carries published bundles and snapshot alongside edited sources [0.84ms]
+(pass) draft export separates server and static bytes and keeps package lock source [0.43ms]
+(pass) published export keeps server bytes when edited source no longer declares the function [0.48ms]
+(pass) release upload puts serverArtifact beside artifact and preserves portable source files [0.64ms]
+
+src/lib/import-folder.test.ts:
+(pass) reading an exported app folder > gives back the sources, the built files and each data component as the export took it [0.30ms]
+(pass) reading an exported app folder > makes a release that keeps the app's own ID and visibility, and a manifest the Kernel's rules accept [0.37ms]
+(pass) reading an exported app folder > names what is missing [0.14ms]
+
+src/lib/app-folder.test.ts:
+(pass) module defaults preserve only module choices that already exist
+(pass) the app folder's AGENTS.md tells a person or agent to escape text written into the page
+(pass) the folder's .env.example names the image of the Kernel version its konae.json carries [0.15ms]
+(pass) the folder's AGENTS.md says when dist/ needs npm install and when it does not [0.10ms]
+(pass) a generated scripts/build.mjs builds its folder [109.88ms]
+
+src/lib/static-artifact.test.ts:
+(pass) page path assets > a static document does not receive the SDK or runtime.js [0.07ms]
+(pass) page path assets > the builder moves relative URLs up to the app root by the declared page depth [0.88ms]
+(pass) page path assets > the builder rewrites relative URLs in a fragment page named by a page path [0.21ms]
+(pass) page path assets > the builder resolves page assets from the named file's directory [0.04ms]
+(pass) page path assets > the builder rewrites URL attributes and CSS without changing text or other attribute values [0.24ms]
+(pass) which Capsule files become pages > broken actions JSON builds the static artifact without page routes
+(pass) which Capsule files become pages > schema-transforms.json stays in sources and is never served in the Build Artifact
+(pass) which Capsule files become pages > an .html at the root or under pages/ is a page; pages/ is dropped from the served path
+(pass) which Capsule files become pages > a page that starts with a doctype or <html> is a document; anything else is a fragment
+(pass) which Capsule files become pages > a reference resolves against the served path of the page that names it [0.25ms]
+(pass) a bracketed miniapp.files source misses detection while the release runtime contains files [0.19ms]
+(pass) the artifact > a document keeps its UTF-8 byte order mark in dist [0.08ms]
+(pass) the artifact > holds every page with the SDK, the files the pages load, and public/ as is [0.25ms]
+(pass) the artifact > a page that already loads /runtime.js gets the loader in place of its tag, once
+(pass) the artifact > a fragment page runs in the Capsule document with the SDK inline, as before [0.16ms]
+(pass) the artifact > a fragment that opens with a <title> and an icon <link> gets them in the head, and its icon file ships
+(pass) the artifact > a data: SVG icon in a fragment is hoisted and needs no file [0.18ms]
+(pass) the artifact > metadata moves from the fragment lead while a title after body content stays there [0.02ms]
+(pass) the artifact > fragment head split leaves stylesheets and http-equiv metadata in the body
+(pass) the artifact > a fragment moves description metadata and JSON-LD into the document head
+(pass) the artifact > a Capsule without index.html gets the default fragment home page
+(pass) module path comments > drops a line that names a Capsule file, from either builder, and keeps every other comment [0.11ms]
+(pass) refusals > a reference to a file the Capsule does not hold names the page and the path [0.13ms]
+(pass) refusals > two files that would publish at one path
+(pass) refusals > a path the Kernel keeps, and the SDK's name [0.12ms]
+(pass) refusals > a module that is not JavaScript, or that imports CSS [0.07ms]
+(pass) refusals > a whole document that loads no script, when nothing else runs the entry [0.03ms]
+(pass) refusals > a whole document without a browser SDK call publishes without an entry script
+(pass) refusals > a whole document with no script passes while the app runs elsewhere, or when there is no app [0.23ms]
+(pass) refusals > routing other than pages or spa
+(pass) the manifest keeps the routing mode > pages and spa survive normalization; another value is dropped there and refused by the build
+Warning: about.html loads /app.js, which leaves the app's path address. Write app.js instead.
+Warning: index.html loads /styles.css, which leaves the app's path address. Write styles.css instead.
+Warning: index.html links to /about, which leaves the app's path address. Write about instead.
+(pass) the CLI and the editor build the same artifact > the same pages, files and SDK from both doors [21.62ms]
+(pass) the CLI and the editor build the same artifact > the same Capsule built from two folders gives byte-identical files, with no folder named [36.25ms]
+(pass) the CLI and the editor build the same artifact > both refuse a missing reference with the same words [3.50ms]
+Warning: about.html loads /team.png, which leaves the app's path address. Write team.png instead.
+Warning: about.html loads /app.js, which leaves the app's path address. Write app.js instead.
+Warning: index.html loads /styles.css, which leaves the app's path address. Write styles.css instead.
+Warning: index.html links to /about, which leaves the app's path address. Write about instead.
+(pass) the CLI and the editor build the same artifact > the CLI carries a binary file as base64; the editor holds text only and refuses the same reference [20.06ms]
+(pass) the CLI and the editor build the same artifact > both run src/main.tsx in a fragment page, and accept a whole document without browser calls [18.32ms]
+(pass) the CLI and the editor build the same artifact > both refuse a routing value the Kernel would refuse [2.95ms]
+(pass) a path address finds its base path, and the SDK loader writes its tag under it > basePath reads the first segment after /p/ and is empty everywhere else [0.04ms]
+(pass) a path address finds its base path, and the SDK loader writes its tag under it > the loader writes the SDK tag under the base path, and at the root with none [0.11ms]
+(pass) a path address finds its base path, and the SDK loader writes its tag under it > the loader platform_guide gives a client without a shell is the one konae build writes [0.18ms]
+(pass) a path address finds its base path, and the SDK loader writes its tag under it > the SDK and every inline page that builds a Kernel URL carry the same prefix rule [0.19ms]
+(pass) the Validation Gate refuses a page that never runs the app, as the build does > a static whole document passes when no SDK module is on [0.57ms]
+(pass) the Validation Gate refuses a page that never runs the app, as the build does > a whole-document index.html with no script beside app.js fails the Gate with the build's sentence [1.61ms]
+
+src/kernel/functions.test.ts:
+(pass) functions parity: anonymous function [0.70ms]
+(pass) functions parity: defaults are authenticated and empty allowlist
+(pass) functions parity: invalid JSON
+(pass) functions parity: wrong version
+(pass) functions parity: unknown root key
+(pass) functions parity: unknown function key
+(pass) functions parity: entry index.ts
+(pass) functions parity: entry functions/../orders.ts
+(pass) functions parity: mount /
+(pass) functions parity: mount /_konae/orders
+(pass) functions parity: mount /server/orders
+(pass) functions parity: methods ['PUT']
+(pass) functions parity: methods ['GET', 'GET']
+(pass) functions parity: access owner
+(pass) functions parity: actions ['read', 'read']
+(pass) functions parity: missing entry
+(pass) functions parity: module off
+(pass) functions parity: auth required
+(pass) functions parity: actions required
+(pass) functions parity: missing action [0.29ms]
+(pass) functions parity: effect action
+(pass) functions parity: query allowed
+(pass) functions parity: static conflict
+(pass) functions parity: http conflict
+(pass) functions parity: overlapping functions
+(pass) artifact validation checks bytes without evaluating top-level code [1.33ms]
+(pass) server folder verifies hashes and does not accept extra files [0.50ms]
+
+src/kernel/functions-artifact.test.ts:
+(pass) server artifact parity: normalized artifact [0.15ms]
+(pass) server artifact parity: no declaration and no artifact
+(pass) server artifact parity: unknown artifact keys use UTF-8 order
+(pass) server artifact parity: unknown manifest keys use UTF-8 order
+(pass) server artifact parity: bundle structure precedes declared manifest mismatch
+(pass) server artifact parity: raw normalization precedes bundle structure
+(pass) server artifact parity: source defaults are normalized in built artifact
+(pass) server artifact parity: object field order is not normalization [0.35ms]
+(pass) server artifact parity: empty declaration and absent artifact
+(pass) server artifact parity: declared artifact absent [0.08ms]
+(pass) server artifact parity: invalid envelope false [0.01ms]
+(pass) server artifact parity: invalid envelope 42
+(pass) server artifact parity: invalid envelope "bundle"
+(pass) server artifact parity: invalid envelope []
+(pass) server artifact parity: invalid envelope {} [0.02ms]
+(pass) server artifact parity: invalid envelope {"version": true, "abi": "konae-functions/1"}
+(pass) server artifact parity: invalid envelope {"version": 256, "abi": "konae-functions/1"}
+(pass) server artifact parity: invalid envelope {"version": 1, "abi": 12}
+(pass) server artifact parity: unknown artifact key [0.05ms]
+(pass) server artifact parity: unknown artifact keys sorted [0.03ms]
+(pass) server artifact parity: ABI checked before unknown keys
+(pass) server artifact parity: invalid manifest null [0.03ms]
+(pass) server artifact parity: invalid manifest []
+(pass) server artifact parity: invalid manifest 5 [0.03ms]
+(pass) server artifact parity: invalid manifest {}
+(pass) server artifact parity: invalid manifest {"version": 2, "functions": {}}
+(pass) server artifact parity: invalid manifest {"version": 1, "functions": []}
+(pass) server artifact parity: missing manifest [0.07ms]
+(pass) server artifact parity: unknown manifest key
+(pass) server artifact parity: unknown declaration key [0.04ms]
+(pass) server artifact parity: nonobject function
+(pass) server artifact parity: malformed entry [0.03ms]
+(pass) server artifact parity: malformed mount
+(pass) server artifact parity: malformed methods [0.04ms]
+(pass) server artifact parity: malformed access [0.03ms]
+(pass) server artifact parity: malformed actions
+(pass) server artifact parity: artifact omits access default [0.02ms]
+(pass) server artifact parity: artifact omits empty actions [0.09ms]
+(pass) server artifact parity: artifact methods not normalized [0.04ms]
+(pass) server artifact parity: artifact actions not normalized [0.02ms]
+(pass) server artifact parity: artifact differs from declared mount [0.04ms]
+(pass) server artifact parity: artifact without declared manifest [0.02ms]
+(pass) server artifact parity: invalid bundles null [0.12ms]
+(pass) server artifact parity: invalid bundles [] [0.04ms]
+(pass) server artifact parity: invalid bundles 1 [0.04ms]
+(pass) server artifact parity: invalid bundles "js" [0.03ms]
+(pass) server artifact parity: invalid bundles {} [0.02ms]
+(pass) server artifact parity: invalid bundles {"orders": "export const handle=()=>null;", "extra": "code"} [0.02ms]
+(pass) server artifact parity: missing bundles [0.02ms]
+(pass) server artifact parity: invalid bundle bytes "" [0.02ms]
+(pass) server artifact parity: invalid bundle bytes null [0.02ms]
+(pass) server artifact parity: invalid bundle bytes 123
+(pass) server artifact parity: invalid bundle bytes false
+(pass) server artifact parity: invalid bundle bytes {}
+(pass) server artifact parity: invalid bundle bytes []
+(pass) server artifact parity: 32 functions UTF-8 metadata 262143 bytes [23.34ms]
+(pass) server artifact parity: 32 functions UTF-8 metadata 262144 bytes [25.28ms]
+(pass) server artifact parity: 32 functions UTF-8 metadata 262145 bytes [3.30ms]
+(pass) portable reader refuses raw manifest padding beyond 256 KiB [11.48ms]
+
+src/deployments/release.test.ts:
+(pass) schema transformation plans show row counts, limits and SQL without calling data changes losses [0.80ms]
+
+ 485 pass
+ 0 fail
+ 1486 expect() calls
+Ran 485 tests across 15 files. [1364.00ms]

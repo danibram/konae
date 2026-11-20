@@ -1,0 +1,217 @@
+{
+  "strict_linux": {
+    "kernel": "7.0.14-linuxkit",
+    "arch": "aarch64",
+    "rust": "1.91.1",
+    "deno_core": "0.413.0",
+    "v8": "150.4.0",
+    "pressure": {
+      "bytes_requested": 335544320,
+      "charged_before_request_bytes": 134742016,
+      "container_local_after": {
+        "high": 0,
+        "low": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_group_kill": 0,
+        "oom_kill": 0,
+        "sock_throttled": 0
+      },
+      "container_local_before": {
+        "high": 0,
+        "low": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_group_kill": 0,
+        "oom_kill": 0,
+        "sock_throttled": 0
+      },
+      "delegated_events_after": {
+        "high": 0,
+        "low": 0,
+        "max": 161,
+        "oom": 1,
+        "oom_group_kill": 1,
+        "oom_kill": 3,
+        "sock_throttled": 0
+      },
+      "delegated_events_before": {
+        "high": 0,
+        "low": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_group_kill": 0,
+        "oom_kill": 0,
+        "sock_throttled": 0
+      },
+      "delegated_local_after": {
+        "high": 0,
+        "low": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_group_kill": 0,
+        "oom_kill": 0,
+        "sock_throttled": 0
+      },
+      "delegated_local_before": {
+        "high": 0,
+        "low": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_group_kill": 0,
+        "oom_kill": 0,
+        "sock_throttled": 0
+      },
+      "elapsed_ms": 79.24829199999999,
+      "helper_pid": 37,
+      "helper_requested_bytes": 100663296,
+      "helper_signal": 9,
+      "pid": 31,
+      "pid_exists": false,
+      "result": "worker_failed",
+      "subgroup_exists": false
+    },
+    "recovery": {
+      "pid": 38,
+      "reaped": true,
+      "response": {
+        "calls": 1,
+        "deno": "undefined",
+        "fetch": "undefined",
+        "marker": "attached"
+      },
+      "subgroup": "konae-worker-bde1ebe89d3c4dfb6c336eaf8f80037c53eee4eff1e5aca0c091d046557977e1",
+      "subgroup_removed": true
+    },
+    "supervisor_ipc": {
+      "cold_ms": {
+        "samples": 3,
+        "min": 43.182416,
+        "median": 45.441500000000005,
+        "max": 62.557249999999996
+      },
+      "warm_ms": {
+        "samples": 15,
+        "min": 0.14416700000000002,
+        "median": 0.204167,
+        "max": 0.368625
+      }
+    },
+    "cgroup_peak_bytes_without_pressure": {
+      "samples": 3,
+      "min": 33992704,
+      "median": 34144256,
+      "max": 35991552
+    },
+    "worker_only_pressure": {
+      "pid": 31,
+      "bytes_requested": 335544320,
+      "result": "worker_memory_limit",
+      "elapsed_ms": 84.53616699999999,
+      "pid_exists": false,
+      "subgroup_exists": false,
+      "delegated_events_before": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "delegated_events_after": {
+        "low": 0,
+        "high": 0,
+        "max": 57,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "delegated_local_before": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "delegated_local_after": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "container_local_before": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "container_local_after": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "kernel_http_macos": {
+    "arch": "arm64",
+    "rust": "1.91.0",
+    "cold_ms": {
+      "samples": 3,
+      "min": 27.42475,
+      "median": 29.524625,
+      "max": 32.082792
+    },
+    "warm_ms": {
+      "samples": 15,
+      "min": 2.064709,
+      "median": 2.542792,
+      "max": 3.112333
+    },
+    "rounds": [
+      {
+        "cold_ms": 29.524625,
+        "warm_ms": [
+          2.761333,
+          2.9185830000000004,
+          2.542792,
+          2.1267080000000003,
+          2.8441669999999997
+        ]
+      },
+      {
+        "cold_ms": 27.42475,
+        "warm_ms": [
+          2.430334,
+          3.112333,
+          2.4529170000000002,
+          2.064709,
+          2.7715
+        ]
+      },
+      {
+        "cold_ms": 32.082792,
+        "warm_ms": [
+          2.428,
+          2.734125,
+          2.559834,
+          2.157208,
+          2.099208
+        ]
+      }
+    ]
+  }
+}

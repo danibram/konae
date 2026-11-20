@@ -1,0 +1,829 @@
+{
+  "server": "deno-lifecycle",
+  "results": [
+    {
+      "criterion": "reuse-version.no-calls",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "reuse-version.first-call",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 1,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "reuse.same-function",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 1,
+          "cacheHits": 1,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 2,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "independent.preferences",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 2,
+          "queueCapacity": 64,
+          "runtimesCreated": 2,
+          "runtimesLive": 2,
+          "cacheHits": 1,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "preferences",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            },
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 2,
+              "busy": 0,
+              "idleMs": 16
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "independent.app",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 3,
+          "queueCapacity": 64,
+          "runtimesCreated": 3,
+          "runtimesLive": 3,
+          "cacheHits": 1,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "b",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            },
+            {
+              "app": "a",
+              "function": "preferences",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 29
+            },
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 2,
+              "busy": 0,
+              "idleMs": 45
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "version.invalidation",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 3,
+          "queueCapacity": 64,
+          "runtimesCreated": 3,
+          "runtimesLive": 2,
+          "cacheHits": 1,
+          "evictions": 1,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "b",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 2
+            },
+            {
+              "app": "a",
+              "function": "preferences",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 31
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "version.new-instance",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 4,
+          "queueCapacity": 64,
+          "runtimesCreated": 4,
+          "runtimesLive": 3,
+          "cacheHits": 1,
+          "evictions": 1,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "b",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 29
+            },
+            {
+              "app": "a",
+              "function": "preferences",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 58
+            },
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v2",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "manual.eviction",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 4,
+          "queueCapacity": 64,
+          "runtimesCreated": 4,
+          "runtimesLive": 0,
+          "cacheHits": 1,
+          "evictions": 4,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "capacity.no-calls",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "capacity.first-call",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 1,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "capacity.eviction",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 3,
+          "queueCapacity": 64,
+          "runtimesCreated": 3,
+          "runtimesLive": 2,
+          "cacheHits": 0,
+          "evictions": 1,
+          "timeouts": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "preferences",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 28
+            },
+            {
+              "app": "b",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "capacity.recreation",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 4,
+          "queueCapacity": 64,
+          "runtimesCreated": 4,
+          "runtimesLive": 2,
+          "cacheHits": 0,
+          "evictions": 2,
+          "timeouts": 0,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            },
+            {
+              "app": "b",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 29
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "ttl.no-calls",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 200,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "ttl.first-call",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 1,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 200,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "ttl.eviction",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 1,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 200,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "ttl.recreation",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 2,
+          "queueCapacity": 64,
+          "runtimesCreated": 2,
+          "runtimesLive": 1,
+          "cacheHits": 0,
+          "evictions": 1,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 200,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "disabled.no-calls",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": false,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "disabled.refusal./a/orders/1",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 404,
+          "body": {
+            "error": "not_found"
+          },
+          "raw": "{\"error\":\"not_found\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "21"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 10:39:12 GMT"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "disabled.refusal./b/preferences",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 404,
+          "body": {
+            "error": "not_found"
+          },
+          "raw": "{\"error\":\"not_found\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "21"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 10:39:12 GMT"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "disabled.refusal./__control/loop",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 404,
+          "body": {
+            "error": "not_found"
+          },
+          "raw": "{\"error\":\"not_found\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "21"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 10:39:12 GMT"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "disabled.no-runtime",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": false,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "sync-loop.no-calls",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": false,
+          "initializationAttempts": 0,
+          "queueCapacity": 64,
+          "runtimesCreated": 0,
+          "runtimesLive": 0,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": []
+        }
+      }
+    },
+    {
+      "criterion": "sync-loop.first-call",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 1,
+          "cacheHits": 0,
+          "evictions": 0,
+          "timeouts": 0,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 1,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "sync-loop.watchdog",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 500,
+          "body": {
+            "error": "internal_error"
+          },
+          "raw": "{\"error\":\"internal_error\"}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "26"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 10:39:12 GMT"
+            ]
+          ]
+        },
+        "elapsed_ms": 104.15,
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 0,
+          "cacheHits": 1,
+          "evictions": 0,
+          "timeouts": 1,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 2,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "sync-loop.recovery",
+      "status": "pass",
+      "detail": {
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 2,
+          "queueCapacity": 64,
+          "runtimesCreated": 2,
+          "runtimesLive": 1,
+          "cacheHits": 2,
+          "evictions": 0,
+          "timeouts": 1,
+          "capacity": 4,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 2,
+              "requests": 3,
+              "busy": 0,
+              "idleMs": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "criterion": "version.changed-code",
+      "status": "skip",
+      "detail": {
+        "reason": "El control cambia la clave, no aporta otro bundle con comportamiento diferente"
+      }
+    },
+    {
+      "criterion": "capacity.busy-eviction",
+      "status": "skip",
+      "detail": {
+        "reason": "No se ejercita desalojo concurrente de instancias ocupadas"
+      }
+    },
+    {
+      "criterion": "engine.global-initialization",
+      "status": "skip",
+      "detail": {
+        "reason": "Los contadores describen runtimes, no RSS ni inicialización global de V8"
+      }
+    },
+    {
+      "criterion": "snapshot.trust",
+      "status": "skip",
+      "detail": {
+        "reason": "El experimento no carga snapshots externos"
+      }
+    },
+    {
+      "criterion": "native.cancellation",
+      "status": "skip",
+      "detail": {
+        "reason": "El bucle prueba JS síncrono; no interrumpe SQLite"
+      }
+    },
+    {
+      "criterion": "startup.deadline",
+      "status": "skip",
+      "detail": {
+        "reason": "El control loop se ejecuta después de evaluar el módulo"
+      }
+    }
+  ],
+  "summary": {
+    "pass": 25,
+    "fail": 0,
+    "skip": 6
+  }
+}

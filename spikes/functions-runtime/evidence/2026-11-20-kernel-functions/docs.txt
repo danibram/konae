@@ -1,0 +1,19 @@
++zsh:21> bun test --timeout 15000 scripts/docs-site.test.ts
+bun test v1.3.11 (af24e281)
+
+scripts/docs-site.test.ts:
+(pass) the docs site > the pieces page and AGENTS use the same module setup rows [1.05ms]
+(pass) the docs site > the routes reference explains module choices for routes, calls and API keys [0.21ms]
+(pass) the docs site > generated pages ship their body and a description from the first paragraph [2103.44ms]
+(pass) the docs site > each docs app card image exists and stays under the size limit [1.25ms]
+(pass) the docs site > every page in the navigation exists, has a title and its own route [0.14ms]
+(pass) the docs site > every relative link names a file that exists and a heading it holds [7.25ms]
+(pass) the docs site > the repository's own README and the docs app's README link to files that exist [0.53ms]
+(pass) the docs site > the MCP reference names every tool the Kernel registers [4.73ms]
+(pass) the docs site > the search rows open at headings and fit one owner SQL script each [25.13ms]
+(pass) the docs site > a diagram is a mermaid block with a paragraph under it, and search reads the paragraph only [3.69ms]
+
+ 10 pass
+ 0 fail
+ 525 expect() calls
+Ran 10 tests across 1 file. [2.27s]

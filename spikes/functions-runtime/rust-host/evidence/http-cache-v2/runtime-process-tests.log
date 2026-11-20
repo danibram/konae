@@ -1,0 +1,13 @@
+   Compiling konae-functions-spike v0.0.0 (/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host)
+    Finished `release` profile [optimized] target(s) in 6.51s
+     Running unittests src/main.rs (/tmp/konae-deno-core-target/release/deps/konae_functions_spike-a81c44da3489a5f8)
+
+running 5 tests
+test process_tests::a_disconnected_queued_http_mutation_never_executes ... ok
+test process_tests::an_expired_queued_http_mutation_never_executes ... ok
+test process_tests::native_and_disabled_functions_never_spawn_a_worker ... ok
+test process_tests::ttl_removes_the_worker_process ... ok
+test process_tests::version_and_eviction_return_after_the_worker_is_reaped ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 3.85s
+

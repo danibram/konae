@@ -1,0 +1,246 @@
+{
+  "server": "runtime-ops-probe",
+  "results": [
+    {
+      "criterion": "production.raw-network-ops",
+      "status": "pass",
+      "detail": {
+        "response": {
+          "status": 200,
+          "body": {
+            "fetchGlobal": "undefined",
+            "denoCore": false,
+            "bootstrapCore": false,
+            "lexicalCore": "undefined",
+            "lexicalReadOrder": "undefined",
+            "ops": []
+          },
+          "raw": "{\"fetchGlobal\":\"undefined\",\"denoCore\":false,\"bootstrapCore\":false,\"lexicalCore\":\"undefined\",\"lexicalReadOrder\":\"undefined\",\"ops\":[]}",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "content-length",
+              "132"
+            ],
+            [
+              "date",
+              "Fri, 20 Nov 2026 10:39:12 GMT"
+            ]
+          ]
+        },
+        "requirement": "Las capacidades de red deben pasar por el control del Kernel"
+      }
+    },
+    {
+      "criterion": "production.raw-fetch-denial",
+      "status": "skip",
+      "detail": {
+        "reason": "op_fetch no está accesible"
+      }
+    },
+    {
+      "criterion": "native-timeout.no-mutation",
+      "status": "fail",
+      "detail": {
+        "response": {
+          "value": {
+            "status": 500,
+            "body": {
+              "error": "internal_error"
+            },
+            "raw": "{\"error\":\"internal_error\"}",
+            "headers": [
+              [
+                "content-type",
+                "application/json"
+              ],
+              [
+                "content-length",
+                "26"
+              ],
+              [
+                "date",
+                "Fri, 20 Nov 2026 10:39:13 GMT"
+              ]
+            ]
+          }
+        },
+        "before": {
+          "a": {
+            "orders": [
+              [
+                1,
+                "alice",
+                2
+              ],
+              [
+                2,
+                "bob",
+                4
+              ]
+            ],
+            "audit": [],
+            "sessions": [
+              [
+                "a-alice",
+                "alice",
+                4102444800
+              ],
+              [
+                "a-bob",
+                "bob",
+                4102444800
+              ],
+              [
+                "a-expired",
+                "alice",
+                1
+              ]
+            ]
+          },
+          "b": {
+            "orders": [
+              [
+                1,
+                "alice",
+                2
+              ],
+              [
+                2,
+                "bob",
+                4
+              ]
+            ],
+            "audit": [],
+            "sessions": [
+              [
+                "b-alice",
+                "alice",
+                4102444800
+              ],
+              [
+                "b-bob",
+                "bob",
+                4102444800
+              ],
+              [
+                "b-expired",
+                "alice",
+                1
+              ]
+            ]
+          }
+        },
+        "after": {
+          "a": {
+            "orders": [
+              [
+                1,
+                "alice",
+                7
+              ],
+              [
+                2,
+                "bob",
+                4
+              ]
+            ],
+            "audit": [
+              [
+                1,
+                1,
+                "alice",
+                7
+              ]
+            ],
+            "sessions": [
+              [
+                "a-alice",
+                "alice",
+                4102444800
+              ],
+              [
+                "a-bob",
+                "bob",
+                4102444800
+              ],
+              [
+                "a-expired",
+                "alice",
+                1
+              ]
+            ]
+          },
+          "b": {
+            "orders": [
+              [
+                1,
+                "alice",
+                2
+              ],
+              [
+                2,
+                "bob",
+                4
+              ]
+            ],
+            "audit": [],
+            "sessions": [
+              [
+                "b-alice",
+                "alice",
+                4102444800
+              ],
+              [
+                "b-bob",
+                "bob",
+                4102444800
+              ],
+              [
+                "b-expired",
+                "alice",
+                1
+              ]
+            ]
+          }
+        },
+        "stats": {
+          "mode": "deno",
+          "functionsEnabled": true,
+          "engineInitialized": true,
+          "initializationAttempts": 1,
+          "queueCapacity": 64,
+          "runtimesCreated": 1,
+          "runtimesLive": 0,
+          "cacheHits": 1,
+          "evictions": 0,
+          "timeouts": 1,
+          "capacity": 2,
+          "ttlMs": 60000,
+          "instances": [
+            {
+              "app": "a",
+              "function": "orders",
+              "version": "v1",
+              "runtimesCreated": 1,
+              "requests": 2,
+              "busy": 0,
+              "idleMs": 1
+            }
+          ]
+        },
+        "lock_ms": 350,
+        "js_budget_ms": 100,
+        "requirement": "Un fallo no modifica las tablas; SPEC Datos y HTTP"
+      }
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "fail": 1,
+    "skip": 1
+  }
+}

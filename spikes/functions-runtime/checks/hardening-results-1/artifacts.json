@@ -1,0 +1,29 @@
+{
+  "captured_at": "2026-11-20T11:57:40.600377+00:00",
+  "python": "3.14.5",
+  "node": "v26.0.0",
+  "artifacts": {
+    "/private/tmp/konae-deno-core-target/release/konae-functions-spike": "9bd53bb4e988210360f45a33771ef45b55274f9ab36afe0c8e480796f0460b0f",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/Cargo.lock": "04235cc4ec9f4f58ff9f3279b78dbc7e04d59d65c8c63169cb956cc0c12a788b",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/baselines/package-lock.json": "60f0bae27e20ac03b7ee2d06f298205822d9263963537433ef9aefa1d46315a2",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/bootstrap.js": "cd37f4396cdf739ecb3b9691fb14a529b81dcf9fb20efff2ec1637e6ee20a0b6",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/budget.rs": "29ac8062129ea07703503b2dcbc23088364d7e12ea2712b9a6de79996e466caa",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/cache.rs": "46695a56eb0bfd94e84fb15bf26df0a4b575efc7ddddebe0e581ecbc1a6bfa96",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/data.rs": "4bfe95d751b438fa3256a30910f2aba6269129f4497fbacf0bb640a35303e09f",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/data_tests.rs": "777ad9a724e995c1168023aa76ff63ed30be7e7621bbabc8756552a1c9674c3e",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/main.rs": "e492d18e53990094d2b4ac748382d83cf2c9275a201c48483487cf7ddf12d7c5",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/runtime.rs": "f59972cbf1650e1f25d469ceeff23370e0d6237c7078f07c358a58f39c16d6e9",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/worker.rs": "26137ef5cdbfc269e31f4f465adbb135050d4c95a91eb5de1588388ec766fbed",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/app/dist/orders.js": "715143f4f158380976a54ad928584f0728dab65ac730a12483413e4b8b7d9669",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/app/dist/preferences.js": "a628f2de2e3e60491ddf8b9eaa73509210396a4c81d3867694d7a7df988f9857",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/app/dist/schema.js": "a19d2e87ae0a5342f6402ca713c067c1b6c8b3c412fe09f97f048a134b876cab",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/checks/hardening_http.py": "0e329999ac470550bd0e7c7b569205f030d4178a0cc853001ad446175a46bed1",
+    "/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor/Cargo.toml": "cecf45a1ff8aa4295773a0a52227de9010cccae7a51e3f40c464c02f8e52c7c4",
+    "/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor/src/budget.rs": "57cd46b8591cf5f3ba9eb8a361ea9d9e247be123528f0b12421e17316644a0e1",
+    "/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor/src/containment.rs": "c4eb39be8bbc135f4fde96a46d2a35aa8944a19ef1409c03e8ee1b85f277a72e",
+    "/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor/src/lib.rs": "af043158bdb7e82668c1ee246e0364f8bbb511b8bbc7ac4383f5fbb665c43980",
+    "/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor/src/protocol.rs": "fffda518d1e101f195012749c7d859289fffbdf15fa3649a1f5a854e410d05a8",
+    "/Users/dbr/htdocs/miniapp-builder/kernel-rs/functions-executor/src/supervisor.rs": "6604062776b691d229b5e05240235f7ba45687b5e766ddbcb64f002fec4e9ad8",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/bin/native-data-tests.rs": "2318090628a0d92622ec257adc2a54fa3b1a9a857e265e45caf2fbc3a174b018"
+  }
+}

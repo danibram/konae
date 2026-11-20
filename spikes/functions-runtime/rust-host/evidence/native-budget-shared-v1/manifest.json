@@ -1,0 +1,22 @@
+{
+  "captured_at_utc": "2026-11-20T12:17:36.276073+00:00",
+  "tests_passed": 19,
+  "regression_tests_passed": 0,
+  "scope": "Spike per-operation mutation with shared Budget",
+  "capture_note": "Sources captured after tests. Shared integration files may contain concurrent work; this archive is a component capture, not a full tested workspace. Test logs identify the commands and cases executed.",
+  "sha256": {
+    "spikes/functions-runtime/rust-host/src/budget.rs": "29ac8062129ea07703503b2dcbc23088364d7e12ea2712b9a6de79996e466caa",
+    "spikes/functions-runtime/rust-host/src/data.rs": "4bfe95d751b438fa3256a30910f2aba6269129f4497fbacf0bb640a35303e09f",
+    "spikes/functions-runtime/rust-host/src/data_tests.rs": "777ad9a724e995c1168023aa76ff63ed30be7e7621bbabc8756552a1c9674c3e",
+    "spikes/functions-runtime/rust-host/src/bin/native-data-tests.rs": "2318090628a0d92622ec257adc2a54fa3b1a9a857e265e45caf2fbc3a174b018",
+    "spikes/functions-runtime/rust-host/Cargo.toml": "ffbc899d5f538fc3898fc546087e360f646561a3cc68bdbfd0ab0b5e8b48e098",
+    "spikes/functions-runtime/rust-host/Cargo.lock": "04235cc4ec9f4f58ff9f3279b78dbc7e04d59d65c8c63169cb956cc0c12a788b",
+    "kernel-rs/functions-executor/src/budget.rs": "57cd46b8591cf5f3ba9eb8a361ea9d9e247be123528f0b12421e17316644a0e1",
+    "kernel-rs/functions-executor/Cargo.toml": "cecf45a1ff8aa4295773a0a52227de9010cccae7a51e3f40c464c02f8e52c7c4",
+    "kernel-rs/functions-executor/src/lib.rs": "f886abb651efbeab456b923fde85c0b82db73873ab945770ed72c6c43dde3560"
+  },
+  "artifacts_sha256": {
+    "source-capture.tar.gz": "a0fa0e1938743da2dda9f567608c13f3d66e735ee8cfc4d3412978ab43d8bf23",
+    "test.txt": "c644e43ffe698a2712209ca48f6aefa802e8f4d2ddd64d441b3a03bf33a005de"
+  }
+}

@@ -1,0 +1,258 @@
+{
+  "capturedAt": "2026-11-20T12:14:59.373450+00:00",
+  "gitBase": "c29e1fd43fbc095409bda7deda6ac39527aedd1c",
+  "tools": {
+    "bun": "1.3.11",
+    "node": "26.0.0",
+    "typescript": "5.9.3",
+    "esbuild": "0.25.12"
+  },
+  "commands": [
+    "bun test src/kernel/functions-artifact.test.ts src/kernel/functions.test.ts src/agent/gate-functions.test.ts src/runtime/functions-build.test.ts src/lib/functions-transport.test.ts scripts/functions-transport.test.ts src/lib/import-folder.test.ts src/lib/export-project.test.ts src/lib/app-folder.test.ts src/runtime/browser-build.test.ts src/lib/static-artifact.test.ts src/agent/gate.test.ts src/deployments/release.test.ts scripts/pull.test.ts src/sdk/contract.test.ts --timeout 30000",
+    "bunx tsc --noEmit -p tsconfig.app.json --pretty false",
+    "bun run sdk:render"
+  ],
+  "results": {
+    "tests": {
+      "exitCode": 0,
+      "passed": 485,
+      "failed": 0,
+      "assertions": 1486,
+      "files": 15
+    },
+    "typecheck": {
+      "exitCode": 0,
+      "diagnostics": 0
+    },
+    "rust": {
+      "executedHere": false,
+      "pending": [
+        "shared_server_artifact_cases_and_portable_boundaries",
+        "deploy_input_keeps_artifact_refusal_before_serde",
+        "HTTP and MCP boundary tests"
+      ],
+      "productionCallersMigrated": true
+    }
+  },
+  "sharedCases": {
+    "declarations": 25,
+    "artifacts": 58
+  },
+  "files": [
+    {
+      "path": "src/kernel/functions.ts",
+      "bytes": 13566,
+      "sha256": "9d2df0add0f20822dcf35e7f2955f3c5a51976e289a20fd068cffea961cf18da"
+    },
+    {
+      "path": "src/kernel/functions.test.ts",
+      "bytes": 2584,
+      "sha256": "36e79243f2205bc996df02339cdb9f27e8d333f1f957c20b3bffc11dde4b6f6e"
+    },
+    {
+      "path": "src/kernel/actions.ts",
+      "bytes": 36323,
+      "sha256": "7f5b95612cfcaeb93b3565df7fb755ac44ae14e2a5cf401d05a6c6d8615cdeba"
+    },
+    {
+      "path": "src/agent/gate.ts",
+      "bytes": 19930,
+      "sha256": "d60d399f6ee4bbedeb6216b1654ce3e349be399d6bcc3a25de0802231957f595"
+    },
+    {
+      "path": "src/agent/contracts.ts",
+      "bytes": 4727,
+      "sha256": "c2e0de88c0d1c93a34845b4aadcd4f82d7e3c14c3b924f2bbe1a59dbe5da7b2e"
+    },
+    {
+      "path": "src/agent/gate-functions.test.ts",
+      "bytes": 3847,
+      "sha256": "40e84028c0b8b50f8f5551285b59c439044c2c7bf61a8936a923b07bbec677a4"
+    },
+    {
+      "path": "src/runtime/browser-build.ts",
+      "bytes": 13647,
+      "sha256": "ba2ba6e32cb713b5b12160a75730ad70ca4788c92ff3c47470fcb11b4289d135"
+    },
+    {
+      "path": "src/runtime/artifact.ts",
+      "bytes": 1165,
+      "sha256": "861510ec3ce0a711900dc3edbb6de984c7349d9b6da1547e47bfd81f24a46a6c"
+    },
+    {
+      "path": "src/runtime/functions-build.test.ts",
+      "bytes": 8148,
+      "sha256": "e1ec58f835a02e22c6d49a599cc255e393c6f7d52a3e284274f37a6d990a9932"
+    },
+    {
+      "path": "src/lib/local-builder.js",
+      "bytes": 3928,
+      "sha256": "75685dd5d2da6298d9818ab0a4ef8fbd78dfe9eb9614fc1219193b1216e6d7ad"
+    },
+    {
+      "path": "src/lib/static-artifact.js",
+      "bytes": 28092,
+      "sha256": "08731eb734c50211af0a61a729d0bdfc68bc7287f47b37cbe71f910c6d759540"
+    },
+    {
+      "path": "src/lib/app-folder.ts",
+      "bytes": 20872,
+      "sha256": "8bb5b8cecd6a2f18c9eb6f9280a79fe195dfcd95b44998dbbef9a52a8179a1f1"
+    },
+    {
+      "path": "src/lib/export-project.ts",
+      "bytes": 4794,
+      "sha256": "81c820032c15072b91d1ce279a9a5156df7e257bc535f9de4c0c8b8b811303c0"
+    },
+    {
+      "path": "src/lib/import-folder.ts",
+      "bytes": 4463,
+      "sha256": "5b5f8fbba5ec2e378d9efa5f6550a255ea8c31361ec8f98df85c8950878fcd8a"
+    },
+    {
+      "path": "src/lib/portable-package.ts",
+      "bytes": 3043,
+      "sha256": "cc5868944fef217972bd12750b5968319db10cb7b153052445915f12a843eccb"
+    },
+    {
+      "path": "src/lib/functions-transport.test.ts",
+      "bytes": 5599,
+      "sha256": "957f9c8797a8701b9b54a171f7ccce0fdfca802e36c22aaee0f8d7106e41ceea"
+    },
+    {
+      "path": "src/deployments/import.ts",
+      "bytes": 2397,
+      "sha256": "336a50d33260ade9406facc42957cdd67c4aea37d5932ef24c82c794f6b22136"
+    },
+    {
+      "path": "src/deployments/release.ts",
+      "bytes": 8286,
+      "sha256": "4c355415363a6b108a19b79dcc55b5e1977f39278be713317fe5b1f0881a28f3"
+    },
+    {
+      "path": "src/sdk/contract.ts",
+      "bytes": 82850,
+      "sha256": "509b8efeda1003e2af3bb85f0d1bf32e878cd0d098347fc394eb40d420b7510b"
+    },
+    {
+      "path": "src/sdk/functions.ts",
+      "bytes": 378,
+      "sha256": "191abaa7c4931e77949eec0126cb4efa4a543f15f0bf283fe8ebf1eb50e7c0f6"
+    },
+    {
+      "path": "src/sdk/render.ts",
+      "bytes": 10670,
+      "sha256": "41a0e633de90b33df229dea803e50ad758b88afbecd1b73af4358dff276ca6f5"
+    },
+    {
+      "path": "src/sdk/contract.test.ts",
+      "bytes": 19260,
+      "sha256": "81200f633654846102fdd0c6e8c00d8eb4f40d0715d881b6d9476d9c7b46be37"
+    },
+    {
+      "path": "src/agent/sdk-section.generated.ts",
+      "bytes": 57053,
+      "sha256": "b5fb8997c46ce2c33d69243016193761234b8f6cf6f6c38e189d4cf338d3d53d"
+    },
+    {
+      "path": "kernel-rs/konae/src/sdk-guide.json",
+      "bytes": 87080,
+      "sha256": "2545198d26f4057c53d4474e28db4ee515fcf131a8731d5d3d80c926f500a92c"
+    },
+    {
+      "path": "kernel-rs/kernel/src/modules.json",
+      "bytes": 5735,
+      "sha256": "251d37f93c9e78c6bdff0c7bc56f5d5b1e92bc782866ba6fe5c5d15ee1c3ccd0"
+    },
+    {
+      "path": "kernel-rs/kernel/src/functions-cases.json",
+      "bytes": 16041,
+      "sha256": "406832658fcdceaf06230cd3126c98c4c57901ab8f17809b653b00806a013d52"
+    },
+    {
+      "path": "kernel-rs/kernel/src/functions.rs",
+      "bytes": 29708,
+      "sha256": "e6091a4735dfba79e33e5c91aea9c5d1c41b5221b719adcceda6a55c448981eb"
+    },
+    {
+      "path": "kernel-rs/kernel/src/refusal-codes.json",
+      "bytes": 25689,
+      "sha256": "47826be932a036f9b5740049b8f964a9ccc9db04b6de7f3ffb39d5907d8ba9b2"
+    },
+    {
+      "path": "docs/sdk.md",
+      "bytes": 70741,
+      "sha256": "b98fa9b522d133eb3585bc4ec4d0fcce7ed49fcb84376c68d6ba793c83b81b3b"
+    },
+    {
+      "path": "scripts/konae.ts",
+      "bytes": 115390,
+      "sha256": "58b51e0088383543fc547aedfb7d107484e1598fb4b6919b22cffd18c9525331"
+    },
+    {
+      "path": "scripts/pull.ts",
+      "bytes": 20584,
+      "sha256": "a392fb1df5f136ffaea6219196038058144adfede8127e8681ca030d3c2d84ca"
+    },
+    {
+      "path": "scripts/rehearse.ts",
+      "bytes": 4585,
+      "sha256": "f29499d3842c0cdbb60203267124755677385744f1869f39e3031a46992c6560"
+    },
+    {
+      "path": "scripts/functions-transport.test.ts",
+      "bytes": 4475,
+      "sha256": "b541a1758b40c3a89cb5ab421fa38214f228fb3fbc0384e2fc14bb7e25702e06"
+    },
+    {
+      "path": "package.json",
+      "bytes": 3156,
+      "sha256": "dbd08a8d3fbc856482f4070e80836a0c20998222e2efaa5acbd1b79363b19df1"
+    },
+    {
+      "path": "bun.lock",
+      "bytes": 132679,
+      "sha256": "7ca9db35c17448849467487aedd3e8a77d7ccd09ac664884163d54fb59c46382"
+    },
+    {
+      "path": "tsconfig.app.json",
+      "bytes": 563,
+      "sha256": "cfd8603c6200f64bafd0f4a17a468c30a7e4b711a42396273066bcb2f8fc636d"
+    },
+    {
+      "path": "src/kernel/functions-artifact.test.ts",
+      "bytes": 2094,
+      "sha256": "8abc0b4c36996b4c02134823bd39dca04e88e094726fdb3a4e99a3151e565382"
+    },
+    {
+      "path": "kernel-rs/kernel/src/functions-artifact-cases.json",
+      "bytes": 851601,
+      "sha256": "72f17b619a46c3a1993d09e4c9a20ae08b0e259dfcb04efa1f63117409044c41"
+    },
+    {
+      "path": "kernel-rs/kernel/src/lib.rs",
+      "bytes": 318007,
+      "sha256": "e296c84f08fea9aafd9c98c77c4ce9c56443aacab6613586b5752315301aa131"
+    },
+    {
+      "path": "kernel-rs/konae/src/mcp.rs",
+      "bytes": 214099,
+      "sha256": "92d705a2633e3cf09e1a1319d9dd0a6f938b92c922e4230a23fc36a3606f85b9"
+    }
+  ],
+  "sourceArchive": {
+    "path": "tested-source.tar.gz",
+    "bytes": 356726,
+    "sha256": "330e4f3038df039e81ba36959d40cd846d5fe6aab73711002b6cdf7fe58f7d62"
+  },
+  "logs": [
+    {
+      "path": "tests.txt",
+      "sha256": "3ab16e5fb05877d83e7da849332e64daf056cf1a416c88459f4765a5a066db92"
+    },
+    {
+      "path": "typecheck.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

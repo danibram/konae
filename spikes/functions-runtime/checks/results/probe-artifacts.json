@@ -1,0 +1,18 @@
+{
+  "captured_at": "2026-11-20T10:41:12.834236+00:00",
+  "python": "3.14.5",
+  "node": "v26.0.0",
+  "artifacts": {
+    "/tmp/konae-deno-core-target/release/konae-functions-spike": "d59381ace482cf10373418cfebe8077c21d9341a70bf9a6b9b94b60d966355e8",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/Cargo.lock": "660f6adc6791842b7dfc5d214f48493fac37aca219b76fa3995a3b59a0f43428",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/baselines/package-lock.json": "60f0bae27e20ac03b7ee2d06f298205822d9263963537433ef9aefa1d46315a2",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/bootstrap.js": "d84a01a9df5444d1436090ad6d9c6810636c3dd01e497f2180fef3516a3d3850",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/cache.rs": "6ab4b70b7c1dee770ae939b4461b608fc3f5a698f1577b21018fe1c85e4d7742",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/data.rs": "369ec28645c81211f189d6cb3a33e9d22c545d10a07803c446cd8d72dd09eb7e",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/main.rs": "c1c5bf406f0e2eb6de20950287ce856517a19e51e2e9617bd6ed1b74b74fcd78",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/rust-host/src/runtime.rs": "08f23c679bf468be5b483a9f63d5bfbab51b409b65294777defc5f4669ca609b",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/app/dist/orders.js": "715143f4f158380976a54ad928584f0728dab65ac730a12483413e4b8b7d9669",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/app/dist/preferences.js": "a628f2de2e3e60491ddf8b9eaa73509210396a4c81d3867694d7a7df988f9857",
+    "/Users/dbr/htdocs/miniapp-builder/spikes/functions-runtime/app/dist/schema.js": "a19d2e87ae0a5342f6402ca713c067c1b6c8b3c412fe09f97f048a134b876cab"
+  }
+}
