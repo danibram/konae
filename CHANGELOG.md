@@ -6,9 +6,15 @@ How a release is cut is in [Releasing](./docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Server Actions and HTTP routes check app sessions on worker threads with read-only SQLite connections. HTTP routes use the same approach for API keys. Requests without a session token skip the session lookup.
+- Usage groups counters for up to 2 ms before writing them in the background. A mutation that declares a Signal still waits for confirmation that the Signal was written.
+
 ### Fixed
 
-- A Server Action route no longer reopens the app's account store on every request. A request without a session skips it, a request with one reuses a kept connection, and the Usage writer keeps its connection between batches. On a local run, a GET route that reads one row went from 0.66 ms to 0.08 ms at the median without a session and from 1.3 ms to 0.11 ms with one, and the Kernel's CPU per request fell from 1.1 ms to 0.13 ms.
+- Imports wait for runtime credential checks and Usage operations before replacing their SQLite files.
+- The Kernel bundles SQLite 3.51.3, which fixes the WAL reset race.
 
 ## [0.12.1] - 2026-11-19
 

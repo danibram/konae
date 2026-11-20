@@ -36,7 +36,7 @@ async fn change(state: &AppState, headers: &HeaderMap, id: &str, change: Change<
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
     if let Err(refused) = modules::require_on(&deployment.modules, "files") { return refusal_error(&refused); }
-    let actor = match authenticate_deployment(state, &deployment, headers) {
+    let actor = match authenticate_deployment(state, &deployment, headers).await {
         Ok(Some(actor)) => actor,
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "authentication-required"),
         Err(response) => return response,

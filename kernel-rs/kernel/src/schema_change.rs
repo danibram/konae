@@ -109,7 +109,7 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
     // row, so a value has the runtime's size limit here too, and the whole
     connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    connection.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    connection.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline))?;
     connection.execute_batch("PRAGMA foreign_keys=OFF")?;
     connection.authorizer(Some(|context: AuthContext<'_>| match context.action {
         AuthAction::Function { function_name } if denied_function(function_name) => Authorization::Deny,
@@ -117,7 +117,7 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
         AuthAction::CreateView { .. } | AuthAction::CreateTempView { .. } => Authorization::Deny,
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Authorization::Deny,
         _ => Authorization::Allow,
-    }));
+    }))?;
     let transaction = connection.transaction()?;
     let violations_before = foreign_key_violations(&transaction)?;
     let mut change = Change::default();
@@ -127,7 +127,7 @@ pub fn apply(path: &Path, schema: &str, program: &ActionProgram, mode: Mode<'_>)
     }
     // Actions prepare without the authorizer, as they always did. The
     // runtime's own authorizer refuses a denied function when the action runs.
-    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
     for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
         let statement = transaction.prepare(&action.statement).map_err(|error| {
             anyhow::anyhow!("action {name} does not match the deployed schema: {error}")
@@ -186,7 +186,7 @@ pub fn apply_with_transforms(
     connection.execute_batch("PRAGMA foreign_keys=ON")?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let transaction = connection.transaction()?;
-    transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline))?;
     let is_fresh = transaction.query_row(
         "SELECT count(*) FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND lower(name) NOT IN ('__konae_schema_state','__konae_schema_history')",
         [], |row| row.get::<_, i64>(0),
@@ -201,7 +201,7 @@ pub fn apply_with_transforms(
     } else {
         super::schema_transform::apply_in_transaction(&transaction, plan.as_ref().expect("existing database has a plan"), schema).map_err(anyhow::Error::new)?
     };
-    transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline));
+    transaction.progress_handler(10_000, Some(move || std::time::Instant::now() > deadline))?;
     let change = Change {
         transformations: Some(applied.transitions.iter().filter_map(|applied_transition| {
             let transition = definition.transitions.iter().find(|transition| transition.id == applied_transition.id)?;
@@ -221,7 +221,7 @@ pub fn apply_with_transforms(
     };
     let final_fingerprint = super::schema_transform::fingerprint(&transaction).map_err(anyhow::Error::new)?;
     anyhow::ensure!(final_fingerprint == super::schema_transform::fingerprint_schema(schema).map_err(anyhow::Error::new)?, "schema transformation chain did not produce schema.sql");
-    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+    transaction.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
     for (name, action) in program.actions.iter().filter(|(_, action)| action.kind != "signal") {
         let statement = transaction.prepare(&action.statement).map_err(|error| anyhow::anyhow!("action {name} does not match the deployed schema: {error}"))?;
         if action.kind == "mutation" && statement.column_count() > 0 {
@@ -448,7 +448,7 @@ fn schema_connection(schema: &str) -> Result<Connection> {
             AuthAction::Read { .. } => Authorization::Allow,
             AuthAction::Reindex { .. } => Authorization::Allow,
             _ => Authorization::Deny,
-        }));
+        }))?;
         connection
             .execute_batch(schema)
             .map_err(|error| anyhow::anyhow!("schema may only create tables and indexes: {error}"))?;
@@ -457,7 +457,7 @@ fn schema_connection(schema: &str) -> Result<Connection> {
         connection
             .execute_batch(schema)
             .map_err(|error| anyhow::anyhow!("schema.sql is not idempotent: it fails when it is run a second time. {error}"))?;
-        connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None);
+        connection.authorizer::<fn(AuthContext<'_>) -> Authorization>(None)?;
         let reserved: Option<String> = connection.query_row(
             "SELECT name FROM sqlite_schema WHERE lower(name) IN ('__konae_schema_state','__konae_schema_history') ORDER BY lower(name), name LIMIT 1",
             [], |row| row.get(0),

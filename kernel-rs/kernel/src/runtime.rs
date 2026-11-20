@@ -132,7 +132,7 @@ async fn runtime_caller(state: &AppState, headers: &HeaderMap, peer: Option<std:
         return Err(error(StatusCode::FORBIDDEN, API_KEY_ON_RUNTIME));
     }
     let visitor = || format!("runtime:{}:anon:{}", deployment.id, limits::client_key(state.guards.client_ip(peer, headers)));
-    let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers) {
+    let (principal, tools, anonymous, account_only) = match authenticate_deployment(state, &deployment, headers).await {
         Ok(Some(user)) => (format!("runtime:{}:{}", deployment.id, user.user_id), runtime_tools(), false, false),
         Ok(None) if !is_private(&deployment) => (visitor(), anonymous_runtime_tools(), true, false),
         Ok(None) => (visitor(), account_tools(), true, true),
@@ -750,7 +750,10 @@ pub async fn validate_release(state: &AppState, input: &DeployInput, against: Op
 
 async fn counted(state: &AppState, app: &str, headers: &HeaderMap) -> bool {
     let deployment = state.deployments.read().await.values().find(|d| d.id == app).cloned();
-    !deployment.is_some_and(|deployment| super::enter::entered_request(state, &deployment, headers))
+    match deployment {
+        Some(deployment) => !super::enter::entered_request(state, &deployment, headers).await,
+        None => true,
+    }
 }
 
 pub async fn runtime_call(

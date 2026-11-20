@@ -36,12 +36,12 @@ fn pool() -> std::sync::MutexGuard<'static, Pool> {
 }
 
 #[cfg(unix)]
-pub(crate) type FileId = (u64, u64);
+type FileId = (u64, u64);
 #[cfg(not(unix))]
-pub(crate) type FileId = ();
+type FileId = ();
 
 #[cfg(unix)]
-pub(crate) fn file_id(path: &Path) -> Option<FileId> {
+fn file_id(path: &Path) -> Option<FileId> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|metadata| (metadata.dev(), metadata.ino()))
 }
@@ -49,12 +49,12 @@ pub(crate) fn file_id(path: &Path) -> Option<FileId> {
 /// Without inode numbers there is no way to tell a replaced file, so
 /// nothing is kept.
 #[cfg(not(unix))]
-pub(crate) fn file_id(_path: &Path) -> Option<FileId> {
+fn file_id(_path: &Path) -> Option<FileId> {
     None
 }
 
-/// A kept connection to one SQLite file. Dropping it gives it back for the
-/// next caller of that file.
+/// A connection to an app Database, configured by `restrict_database`.
+/// Dropping it gives it back for the next Server Action.
 pub struct AppConnection {
     connection: Option<Connection>,
     path: PathBuf,
@@ -88,42 +88,38 @@ impl Drop for AppConnection {
 /// Borrows a kept connection to the Database at `path`, or opens one. Each
 /// borrow starts a fresh 2-second deadline.
 pub fn open(path: &Path) -> anyhow::Result<AppConnection> {
-    let connection = open_kept(path, |connection| {
-        super::restrict_database(connection)?;
+    let connection = kept_or_open(path, || {
+        let connection = Connection::open(path)?;
+        super::restrict_database(&connection)?;
         connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
-        anyhow::Ok(())
+        Ok::<_, anyhow::Error>(connection)
     })?;
-    super::arm_deadline(&connection);
-    // A mutation answers SQLite's last inserted rowid, which belongs to the
+    super::arm_deadline(&connection)?;
+    // Each mutation starts with a fresh last inserted rowid.
     unsafe { rusqlite::ffi::sqlite3_set_last_insert_rowid(connection.handle(), 0) };
     Ok(connection)
 }
 
-/// Borrows a kept connection to the SQLite file at `path`, or opens one and
-/// runs `configure` on it once. A connection is kept only while its file keeps
-/// the inode it was opened on, so a borrower never reads a replaced file.
-/// Whoever replaces a file calls `forget` first, so no idle connection
-/// outlives it.
-pub fn open_kept<E: From<rusqlite::Error>>(
+/// Borrows a read-only connection while the caller holds the app's identity lock.
+pub(crate) fn identity_reader(path: &Path) -> rusqlite::Result<AppConnection> {
+    kept_or_open(path, || {
+        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(connection)
+    })
+}
+
+fn kept_or_open<E>(
     path: &Path,
-    configure: impl FnOnce(&Connection) -> Result<(), E>,
+    open: impl FnOnce() -> Result<Connection, E>,
 ) -> Result<AppConnection, E> {
     let file = file_id(path);
     let connection = match file.and_then(|file| take(path, file)) {
         Some(connection) => connection,
-        None => {
-            let connection = Connection::open(path)?;
-            configure(&connection)?;
-            connection
-        }
+        None => open()?,
     };
     let file = file.filter(|file| file_id(path) == Some(*file));
     Ok(AppConnection { connection: Some(connection), path: path.to_owned(), file })
-}
-
-/// Wraps a connection that is closed when dropped instead of kept.
-pub fn unkept(connection: Connection, path: &Path) -> AppConnection {
-    AppConnection { connection: Some(connection), path: path.to_owned(), file: None }
 }
 
 fn take(path: &Path, file: FileId) -> Option<Connection> {

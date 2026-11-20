@@ -437,8 +437,11 @@ fn key_hash(token: &str) -> String {
     super::digest(token.as_bytes())
 }
 
-fn find_key(state: &AppState, deployment: &Deployment, token: &str) -> Result<Option<ApiKey>> {
-    let Some(db) = crate::app_db::read_optional(&crate::layout::identity(&state.data_root, &deployment.id))? else { return Ok(None); };
+fn find_key(path: &Path, token: &str) -> Result<Option<ApiKey>> {
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    let db = crate::app_db::identity_reader(path)?;
     if !table_exists(&db, "api_keys")? { return Ok(None); }
     let row: Option<(String, String, String)> = db
         .query_row(
@@ -599,12 +602,14 @@ fn own_origin(headers: &HeaderMap) -> bool {
     same_origin(headers) && !matches!(site, Some("same-site" | "cross-site"))
 }
 
-fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap, client: std::net::IpAddr) -> Result<Caller, Response> {
+async fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap, client: std::net::IpAddr) -> Result<Caller, Response> {
     if let Some(token) = bearer(headers).filter(|token| token.starts_with(KEY_PREFIX)) {
         if let Err(wait) = state.guards.key_attempt(&deployment.id, client) {
             return Err(rate_limited(wait));
         }
-        return match find_key(state, deployment, token) {
+        let path = crate::layout::identity(&state.data_root, &deployment.id);
+        let token = token.to_owned();
+        return match crate::runtime_identity(state, &deployment.id, move || find_key(&path, &token)).await? {
             Ok(Some(key)) => Ok(Caller::Key(key)),
             Ok(None) => {
                 state.guards.key_failed(&deployment.id, client);
@@ -616,7 +621,7 @@ fn resolve_caller(state: &AppState, deployment: &Deployment, headers: &HeaderMap
     if !own_origin(headers) {
         return Ok(Caller::Visitor);
     }
-    match authenticate_deployment(state, deployment, headers) {
+    match authenticate_deployment(state, deployment, headers).await {
         Ok(Some(user)) => Ok(Caller::Person(user)),
         Ok(None) => Ok(Caller::Visitor),
         Err(response) => Err(response),
@@ -883,7 +888,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     if !table.has_pages() { return None }
     let (definition, page, params) = table.find_page(path)?;
     if is_private(deployment) {
-        match authenticate_deployment(state, deployment, headers) {
+        match authenticate_deployment(state, deployment, headers).await {
             Ok(Some(_)) => {}
             Ok(None) => return Some(private_login_page(&deployment.project_name, &deployment.signup_policy, state.accounts.verification, google::offered_here(state, deployment, headers))),
             Err(response) => return Some(response),
@@ -939,7 +944,7 @@ pub(crate) async fn serve_page_path(state: &AppState, deployment: &Deployment, t
     let seo_state = serde_json::to_vec(&deployment.modules["seo"]).unwrap_or_default();
     let digest = sha2::Sha256::digest([deployment.artifact_version.as_bytes(), row_bytes.as_slice(), canonical.as_deref().unwrap_or("").as_bytes(), seo_state.as_slice()].concat());
     let etag = format!("\"{}-{}\"", deployment.artifact_version, hex::encode(digest));
-    count_page_view(state, deployment, headers, file);
+    count_page_view(state, deployment, headers, file).await;
     if crate::etag_matches(headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
         response.headers_mut().insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
@@ -1102,7 +1107,7 @@ async fn run_route(
     body: &[u8],
 ) -> Response {
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "http") { return crate::refusal_error(&refused); }
-    let mut caller = match resolve_caller(state, deployment, headers, client) {
+    let mut caller = match resolve_caller(state, deployment, headers, client).await {
         Ok(caller) => caller,
         Err(response) => return response,
     };
@@ -1128,56 +1133,73 @@ async fn run_route(
     if signs && !accepts("signature") {
         return refusal(StatusCode::UNAUTHORIZED, "authentication-required");
     }
-    let konae = http.signature.as_ref().filter(|signature| signature.scheme == super::provider::Scheme::Konae);
-    if let (Some(signature), true) = (konae, signs) {
-        let secret = match read_secrets(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
-            Ok(Some(secret)) => secret,
-            Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
-            Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
-        };
-        let header_value = headers.get(signature.header.as_str()).and_then(|value| value.to_str().ok());
-        let signed = SignedRequest { method: &http.method, path: &http.path, query: raw_query, body };
-        let checked = identity_connection(state, deployment)
-            .and_then(|db| verify_signature(&db, &signed, &secret, header_value, now_ms() / 1000));
-        match checked {
-            Ok(SignatureCheck::Valid) => {}
-            Ok(SignatureCheck::Invalid) => return refusal(StatusCode::UNAUTHORIZED, "invalid-signature"),
-            Ok(SignatureCheck::Stale) => return refusal(StatusCode::UNAUTHORIZED, "stale-timestamp"),
-            Ok(SignatureCheck::Replayed) => return refusal(StatusCode::CONFLICT, "replayed-signature"),
-            Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
+    let delivery = if let Some(signature) = http.signature.as_ref().filter(|_| signs) {
+        let (worker_state, worker_deployment) = (state.clone(), deployment.clone());
+        let (signature, headers) = (signature.clone(), headers.clone());
+        let (method, path, query, body) = (http.method.clone(), http.path.clone(), raw_query.to_owned(), body.to_vec());
+        let proof = crate::runtime_identity(state, &deployment.id, move || {
+            let request = SignedRequest { method: &method, path: &path, query: &query, body: &body };
+            check_route_signature(&worker_state, &worker_deployment, &signature, &headers, request)
+        }).await;
+        match proof {
+            Ok(Ok(delivery)) => delivery,
+            Ok(Err(response)) | Err(response) => return response,
         }
-    }
-    let mut delivery = None;
-    if let (Some(signature), true) = (&http.signature, signs) {
-        if signature.scheme != super::provider::Scheme::Konae {
-            let secret = match read_secrets(&state.data_root, &deployment.id).and_then(|db| secret_value(&db, &signature.secret)) {
-                Ok(Some(secret)) => secret,
-                Ok(None) => return refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."),
-                Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
-            };
-            let read = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).map(str::to_owned);
-            let now = now_ms() / 1000;
-            let key = match super::provider::verify(&signature.scheme, &signature.header, &secret, &read, body, now) {
-                super::provider::Delivery::Valid { key, expires } => {
-                    match identity_connection(state, deployment).and_then(|db| super::provider::claim(&db, &http.path, &key, expires, now)) {
-                        Ok(true) => key,
-                        Ok(false) => return refusal(StatusCode::CONFLICT, "replayed-signature"),
-                        Err(error_value) => return error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string()),
-                    }
-                }
-                super::provider::Delivery::Invalid => return refusal(StatusCode::UNAUTHORIZED, "invalid-signature"),
-                super::provider::Delivery::Stale => return refusal(StatusCode::UNAUTHORIZED, "stale-timestamp"),
-            };
-            delivery = Some(key);
-        }
-    }
+    } else {
+        None
+    };
     let response = run_verified(state, deployment, table, name, http, &caller, query, body).await;
     if let Some(key) = delivery.filter(|_| !response.status().is_success()) {
-        if let Err(error_value) = identity_connection(state, deployment).and_then(|db| super::provider::release(&db, &http.path, &key)) {
+        let guard = crate::named_lock(state, &format!("identity:{}", deployment.id), false).await;
+        let (worker_state, worker_deployment, path) = (state.clone(), deployment.clone(), http.path.clone());
+        let released = tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            identity_connection(&worker_state, &worker_deployment)
+                .and_then(|db| super::provider::release(&db, &path, &key))
+        }).await;
+        if let Err(error_value) = released.map_err(anyhow::Error::from).and_then(|result| result) {
             eprintln!("Could not release a delivery on {}: {error_value}", http.path);
         }
     }
     response
+}
+
+fn check_route_signature(
+    state: &AppState,
+    deployment: &Deployment,
+    signature: &SignatureBinding,
+    headers: &HeaderMap,
+    request: SignedRequest<'_>,
+) -> std::result::Result<Option<String>, Response> {
+    let storage_error = |error_value: anyhow::Error| error(StatusCode::INTERNAL_SERVER_ERROR, &error_value.to_string());
+    let secret = read_secrets(&state.data_root, &deployment.id)
+        .and_then(|db| secret_value(&db, &signature.secret))
+        .map_err(storage_error)?
+        .ok_or_else(|| refusal(StatusCode::SERVICE_UNAVAILABLE, "The route's signing secret is not set."))?;
+    let now = now_ms() / 1000;
+    if signature.scheme == super::provider::Scheme::Konae {
+        let header = headers.get(signature.header.as_str()).and_then(|value| value.to_str().ok());
+        let db = identity_connection(state, deployment).map_err(storage_error)?;
+        return match verify_signature(&db, &request, &secret, header, now).map_err(storage_error)? {
+            SignatureCheck::Valid => Ok(None),
+            SignatureCheck::Invalid => Err(refusal(StatusCode::UNAUTHORIZED, "invalid-signature")),
+            SignatureCheck::Stale => Err(refusal(StatusCode::UNAUTHORIZED, "stale-timestamp")),
+            SignatureCheck::Replayed => Err(refusal(StatusCode::CONFLICT, "replayed-signature")),
+        };
+    }
+    let read = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).map(str::to_owned);
+    match super::provider::verify(&signature.scheme, &signature.header, &secret, &read, request.body, now) {
+        super::provider::Delivery::Valid { key, expires } => {
+            let db = identity_connection(state, deployment).map_err(storage_error)?;
+            if super::provider::claim(&db, request.path, &key, expires, now).map_err(storage_error)? {
+                Ok(Some(key))
+            } else {
+                Err(refusal(StatusCode::CONFLICT, "replayed-signature"))
+            }
+        }
+        super::provider::Delivery::Invalid => Err(refusal(StatusCode::UNAUTHORIZED, "invalid-signature")),
+        super::provider::Delivery::Stale => Err(refusal(StatusCode::UNAUTHORIZED, "stale-timestamp")),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1269,7 +1291,7 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
     let Some(deployment) = deployment_for(&state, &headers).await else {
         return error(StatusCode::NOT_FOUND, "Deployment not found.");
     };
-    let caller = match resolve_caller(&state, &deployment, &headers, client) {
+    let caller = match resolve_caller(&state, &deployment, &headers, client).await {
         Ok(caller) => caller,
         Err(response) => return response,
     };

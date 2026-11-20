@@ -23,8 +23,8 @@ pub fn entered(actor: Option<&AuthUser>) -> bool {
 
 /// Whether the session a request carries came through an entry link, for
 /// counters that do not otherwise read the session.
-pub fn entered_request(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> bool {
-    matches!(authenticate_deployment(state, deployment, headers), Ok(Some(user)) if user.entered_by.is_some())
+pub async fn entered_request(state: &AppState, deployment: &Deployment, headers: &HeaderMap) -> bool {
+    matches!(authenticate_deployment(state, deployment, headers).await, Ok(Some(user)) if user.entered_by.is_some())
 }
 
 /// Issues a one-time link that signs `entered_by` in as the account
