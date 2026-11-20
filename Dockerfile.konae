@@ -10,37 +10,54 @@ RUN bun run build
 
 FROM rust:1.91-bookworm AS build
 
+ARG TARGETARCH
 WORKDIR /src
 COPY kernel-rs/Cargo.toml kernel-rs/Cargo.lock ./
 COPY kernel-rs/backup/Cargo.toml backup/Cargo.toml
+COPY kernel-rs/functions-executor/Cargo.toml functions-executor/Cargo.toml
 COPY kernel-rs/kernel/Cargo.toml kernel/Cargo.toml
 COPY kernel-rs/konae/Cargo.toml konae/Cargo.toml
 # Builds the dependencies once, on empty crates, so a source change rebuilds only Konae and the Kernel.
-RUN mkdir backup/src kernel/src konae/src \
-  && touch backup/src/lib.rs && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
-  && cargo build --release --locked --bin konae && rm -rf backup/src kernel/src konae/src
+RUN mkdir backup/src functions-executor/src kernel/src konae/src \
+  && touch backup/src/lib.rs functions-executor/src/lib.rs && printf '' > kernel/src/lib.rs && printf 'fn main() {}\n' > kernel/src/main.rs && printf 'fn main() {}\n' > konae/src/main.rs \
+  && cargo build --release --locked --bin konae && rm -rf backup/src functions-executor/src kernel/src konae/src
 COPY kernel-rs/backup/src ./backup/src
+COPY kernel-rs/functions-executor/src ./functions-executor/src
 COPY kernel-rs/kernel/src ./kernel/src
 COPY kernel-rs/konae/src ./konae/src
-RUN touch backup/src/lib.rs kernel/src/lib.rs kernel/src/main.rs konae/src/main.rs && cargo build --release --locked --bin konae
+RUN rm -f target/release/konae \
+  && touch backup/src/lib.rs functions-executor/src/lib.rs kernel/src/lib.rs kernel/src/main.rs konae/src/main.rs \
+  && cargo build --release --locked --bin konae \
+  && test "$(od -An -tx1 -N4 target/release/konae | tr -d ' \n')" = 7f454c46 \
+  && case "$TARGETARCH:$(od -An -tx1 -j18 -N2 target/release/konae | tr -d ' \n')" in amd64:3e00|arm64:b700) ;; *) echo "Konae ELF does not match target architecture $TARGETARCH" >&2; exit 1 ;; esac
 
 FROM debian:bookworm-slim
 
+ARG TARGETARCH
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && apt-get install -y --no-install-recommends ca-certificates curl util-linux \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --system --gid 10001 konae \
   && useradd --system --uid 10001 --gid konae --home-dir /data --no-create-home --shell /usr/sbin/nologin konae \
+  && groupadd --system --gid 10002 konae-functions \
+  && useradd --system --uid 10002 --gid konae-functions --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin konae-functions \
   && mkdir -p /data \
   && chown konae:konae /data \
   && chmod 0700 /data
 COPY --from=build /src/target/release/konae /usr/local/bin/konae
+RUN test "$(od -An -tx1 -N4 /usr/local/bin/konae | tr -d ' \n')" = 7f454c46 \
+  && case "$TARGETARCH:$(od -An -tx1 -j18 -N2 /usr/local/bin/konae | tr -d ' \n')" in amd64:3e00|arm64:b700) ;; *) echo "Packaged Konae ELF does not match target architecture $TARGETARCH" >&2; exit 1 ;; esac
+ARG FUNCTIONS_RUNNER_SHA256
+COPY --from=functions-runner /konae-functions-spike /usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}
+RUN test -n "$FUNCTIONS_RUNNER_SHA256" \
+  && printf '%s  %s\n' "$FUNCTIONS_RUNNER_SHA256" "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" | sha256sum --check --status \
+  && mv "/usr/local/lib/konae/functions-runner-${FUNCTIONS_RUNNER_SHA256}" /usr/local/lib/konae/functions-runner
 COPY --from=editor /app/dist /usr/local/share/konae/editor
 COPY ops/konae-entrypoint.sh /usr/local/bin/konae-entrypoint
 RUN chmod 755 /usr/local/bin/konae-entrypoint
 # The Kernel binds all interfaces here, so it refuses the local development
 # key unless the compose file opts in.
 # An empty KONAE_EDITOR_DIR serves no editor.
-ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_EDITOR_DIR=/usr/local/share/konae/editor
+ENV KONAE_BIND=0.0.0.0 KONAE_DATA_DIR=/data KONAE_EDITOR_DIR=/usr/local/share/konae/editor KONAE_FUNCTIONS_UID=10002 KONAE_FUNCTIONS_GID=10002
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/konae-entrypoint"]

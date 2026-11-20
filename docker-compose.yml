@@ -54,6 +54,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.konae
+      additional_contexts:
+        functions-runner: ${KONAE_FUNCTIONS_RUNNER_CONTEXT:-.konae/functions-runner}
+      args:
+        FUNCTIONS_RUNNER_SHA256: ${KONAE_FUNCTIONS_RUNNER_SHA256:?run scripts/dev-compose.sh or set the runner hash}
     depends_on:
       minio-init:
         condition: service_completed_successfully

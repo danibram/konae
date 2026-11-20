@@ -1,0 +1,14 @@
+FROM rust:1.91-bookworm AS build
+
+WORKDIR /src
+COPY kernel-rs/functions-executor ./kernel-rs/functions-executor
+COPY spikes/functions-runtime/rust-host ./spikes/functions-runtime/rust-host
+RUN cargo build --release --locked \
+    --manifest-path spikes/functions-runtime/rust-host/Cargo.toml \
+    --bin konae-functions-spike \
+  && install -D -m 755 \
+    spikes/functions-runtime/rust-host/target/release/konae-functions-spike \
+    /out/konae-functions-spike
+
+FROM scratch AS artifact
+COPY --from=build /out/konae-functions-spike /konae-functions-spike

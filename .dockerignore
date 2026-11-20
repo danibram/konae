@@ -4,6 +4,7 @@
 data/
 dist/
 node_modules/
+**/node_modules/
 kernel-rs/target/
 test-results/
 playwright-report/
