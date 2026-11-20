@@ -540,6 +540,7 @@ Routes on the Deployment's own host for programs and other services: a JSON endp
 
 Owner control: the owner can change this module with module_set. Permission: `publish`. Build agent: waits for owner confirmation.
 
+- The 64 KiB POST body limit applies to routes backed by Server Actions. Server functions use the separate streamed 100 MB request-body limit.
 - Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.
 - Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.
 - An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.
@@ -603,7 +604,6 @@ Declared with `http` in `actions.json`. { "method": "GET" | "POST", "path": "/ap
 
 Limits:
 
-- The POST body limit in this section applies to HTTP routes backed by Server Actions. Server functions use the separate 100 MB streamed request-body limit below.
 - a POST body of 64 KiB
 - a signature's t within 300 seconds of the Kernel's clock, a nonce of 1 to 64 letters, digits, - and _, and each signature accepted once
 - a provider's scheme: an hmac-body MAC accepted once in 72 hours, a timestamped t within its window of 1 to 3600 seconds, a svix timestamp within 300 seconds and its id accepted once in 72 hours, and at most 4 signature values in a header
@@ -632,9 +632,9 @@ Owner control: the owner can change this module with module_set. Permission: `pu
 - The action allowlist accepts queries and mutations without external effects. It refuses notify, signal, schedule, subscribe, HTTP routes, grants, granted access and targets of outgoing calls.
 - For POST functions with allowed actions, send Idempotency-Key with 1 to 128 visible ASCII bytes. Keep the same key when retrying the same request. The Kernel scopes it to the actor and function; a changed request with that key is refused.
 - For Hono, export const handle = (request, context) => app.fetch(request, context). A handler without Hono exports handle(request, context) and returns a Response whose body is valid UTF-8. The current ABI refuses binary response bodies and provides no outbound network fetch. context.actions.call returns a Promise; use await and validate request input before calling it.
-- The Kernel accepts up to 100000000 request-body bytes (100 MB decimal). It counts received bytes, including chunked requests without Content-Length, and returns 413 above the limit. The Kernel streams 64 KiB binary chunks to Hono through Request.body with backpressure. It caps pending request chunks across Functions at 8 MiB; capacity exhaustion fails fast with 503. Authentication, admission and the absolute request deadline apply before and during upload. The Kernel does not decompress Content-Encoding; Hono receives those bytes as sent.
-- POST handlers with an action allowlist must consume the complete body before the first context.actions.call. An early call fails the request, even if the handler catches the error. `await request.json()` and `await request.text()` consume ordinary bodies, but parsing a large JSON value allocates it inside the worker. The default worker heap is 64 MiB and its RSS cap is 256 MiB, so a 100 MB transport body is not a promise that request.json() can parse it. Use Request.body when processing large bodies incrementally.
-- Each serialized action operation has a separate 1 MiB transport limit after JSON escaping, and a function still allows at most 64 operations. A single 100000-character value fits when its serialized operation stays below that cap; several escaped fields can exceed it. Action schemas, SQL bindings, query row limits, result limits, response bytes and miniapp.files quotas keep their own existing bounds. A large HTTP body does not raise those limits; an action may reject an input that exceeds its schema or the serialized operation budget.
+- Functions accept request bodies up to 100000000 bytes (100 MB decimal). The Kernel counts actual bytes, including chunked bodies without Content-Length, and responds 413 above the limit. It streams 64 KiB binary chunks into Request.body and caps aggregate pending chunks at 8 MiB, returning 503 if that budget is full. The worker keeps its separate 64 MiB heap and 256 MiB RSS limits; request.json() can exceed them, so large bodies should be processed through Request.body.
+- A POST handler with an action allowlist must consume the full request body before its first context.actions.call. The rejection remains active if JavaScript catches the Promise error. The private Kernel-runner protocol is konae-functions-ipc/2; the published bundle ABI stays konae-functions/1. Upgrade the Kernel and runner together and restart the service.
+- Each serialized action operation has a 1 MiB limit after JSON escaping. One 100000-character value fits when the complete operation stays below that limit; several escaped fields can exceed it. The 64-operation, action schema, SQL, query, result, response and file limits remain separate.
 - The editor preview does not execute server functions. The experimental runtime requires an operator-configured function runner. Try konae dev or a published Deployment only where that runner is configured.
 - Server bundles travel in server/, separate from the public dist/.
 - An optional shutdown(signal) can release resources. It grants no request operations and may not run after a crash, memory exhaustion or a blocked loop.
@@ -649,7 +649,8 @@ Declared with `functions` in `functions.json`. Version 1 maps names to entry, mo
 | `Server Artifact manifest does not match functions.json.` | the built declaration differs from the release declaration | Kernel | Same |
 | `Idempotency-Key is required for this function.` | a POST function with an action allowlist has no idempotency key | Kernel | Same |
 | `Idempotency-Key was already used with a different request.` | the same actor reuses a function key for another request | Kernel | Same |
-| `worker_protocol_mismatch` | the private Kernel and runner IPC versions do not match (503); restart with a matching pair | Kernel | Same |
+| `The function request exceeds 100000000 bytes.` | the request body exceeds the decimal 100 MB limit (413) | Kernel | Same |
+| `worker_protocol_mismatch` | the private Kernel and runner IPC versions differ; restart with a matching pair (503) | Kernel | Same |
 
 Limits:
 

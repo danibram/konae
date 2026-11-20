@@ -1056,6 +1056,7 @@
       "summary": "Routes on the Deployment's own host for programs and other services: a JSON endpoint, a webhook, a file a program fetches. There is no browser call; the app's own pages keep using miniapp.actions.call, and may use a file's route as an img src.",
       "switch": true,
       "notes": [
+        "The 64 KiB POST body limit applies to routes backed by Server Actions. Server functions use the separate streamed 100 MB request-body limit.",
         "Only an action declared anonymous may bind a route. A route has three kinds of caller: a service that signs the request (signature), a program that sends Authorization: Bearer with an API key the owner issued (key), and a person signed in to the app, from the app's own origin (session). An actor binding yields the key's ID or the user's ID; a signed request has no actor.",
         "Without callers, a signed route takes the signature or a key, an unsigned route on a private app a key or a session, and an unsigned route on a public app anyone. A person whose session the route does not take must sign like any sender.",
         "An action whose route does not answer anyone answers only on that route: miniapp.actions.call refuses it. The app's own page calls such a route with fetch, which sends the session cookie.",
@@ -1345,8 +1346,9 @@
             "262144 UTF-8 bytes for server/manifest.json, including its hashes",
             "GET and POST methods; mounts own their exact path and descendants",
             "ESM bundles contain their dependencies and export handle; the request resolves no npm package",
-            "100000000 bytes per request body (100 MB decimal); 8 MiB aggregate pending body bytes",
-            "1 MiB maximum serialized action operation after JSON escaping; 64 operations per invocation"
+            "100000000 bytes per HTTP request body (100 MB decimal); this limit does not raise worker heap, action, SQL, query, file or response limits",
+            "8 MiB of aggregate pending request chunks; the HTTP-to-Hono body stream is bounded and does not spool the complete request",
+            "1 MiB per serialized action operation, measured after JSON escaping; 64 action operations per invocation"
           ],
           "summary": "Version 1 maps names to entry, mount, methods, access and allowed actions. Access defaults to authenticated. Bundles export handle(request, context) and use ABI konae-functions/1. context.actions.call(name, input) invokes an allowed action with the actor fixed by the Kernel. Request.signal reports cancellation.",
           "errors": [
