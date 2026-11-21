@@ -1,0 +1,6 @@
+when	decision	evidence
+startup	Use the current checkout's kernel and rebuild the runner rather than using the stale /tmp binary	sha256 values and build commands in provenance.json
+startup	Use the kernel binary, not the konae binary, as KONAE_KERNEL_BIN	First dev attempt refused local testing because the wrong binary lacked the local testing capability
+http	Pass only the five functions worker settings through localKernel's environment allowlist	Before fix, real dev HTTP returned 503 function.runner-unavailable; after fix, authenticated HTTP checks passed
+sql	Keep the existing SQL policy and test a parameterized json_each batch against build and Kernel	Gate build and real POST passed; invalid batch guard returned 403 with row count unchanged
+security	Use fake example.test accounts and the macOS development switch	No production services or Kamynando data used; this run does not claim Linux isolation
