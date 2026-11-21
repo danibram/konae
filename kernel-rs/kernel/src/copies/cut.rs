@@ -276,7 +276,7 @@ fn attachments(app: &str, index: &[u8], prior: &HashMap<&str, &str>) -> Result<V
         .map(|entry| {
             let id = entry["id"]
                 .as_str()
-                .filter(|id| crate::valid_file_id(id))
+                .filter(|id| crate::files::valid_file_id(id))
                 .context("The file index has an invalid ID.")?;
             ensure!(seen.insert(id), "The file index lists {id} twice.");
             let size = entry["size"]

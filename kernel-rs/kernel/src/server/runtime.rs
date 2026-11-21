@@ -172,7 +172,7 @@ pub async fn runtime(State(state): State<AppState>, request: Request) -> Respons
         Ok(caller) => caller,
         Err(response) => return response,
     };
-    let fixed_file_access = app_user_files(&deployment);
+    let fixed_file_access = files::app_user_files(&deployment);
     let app = deployment.id;
     let call = match read_call(request).await {
         Ok(call) => call,
@@ -674,7 +674,7 @@ pub async fn runtime_call(
         }
         "files_list" => {
             let mut files =
-                response_value(list_files(State(state.clone()), headers.clone()).await).await?;
+                response_value(files::list_files(State(state.clone()), headers.clone()).await).await?;
             if let Some(files) = files.as_array_mut() {
                 for file in files {
                     file.as_object_mut().unwrap().remove("url");
@@ -686,7 +686,7 @@ pub async fn runtime_call(
             let mut whole = headers.clone();
             whole.remove(header::RANGE);
             whole.remove(header::IF_NONE_MATCH);
-            let response = serve_file(
+            let response = files::serve_file(
                 State(state.clone()),
                 AxumPath(a["fileId"].as_str().unwrap().to_owned()),
                 whole,
@@ -716,14 +716,14 @@ pub async fn runtime_call(
                 t["complete"] == true && t["direction"] == "upload",
                 "File upload is incomplete."
             );
-            let upload = crate::Upload {
+            let upload = files::Upload {
                 name: a["name"].as_str(),
                 content_type: a.get("type").and_then(Value::as_str),
                 visibility: a.get("visibility").and_then(Value::as_str),
             };
             let source = transfer_path(state, id)?;
             let mut result =
-                response_value(crate::upload_from_path(state, headers, upload, &source).await)
+                response_value(files::upload_from_path(state, headers, upload, &source).await)
                     .await?;
             result.as_object_mut().unwrap().remove("url");
             crate::transfers::store(state)?.execute("INSERT INTO file_receipts(transfer_id,principal,request_hash,body) VALUES(?1,?2,?3,?4)",params![id,principal,request_hash,result.to_string()])?;

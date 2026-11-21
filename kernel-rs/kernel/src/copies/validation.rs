@@ -91,7 +91,7 @@ fn check_files(root: &Path, id: &str) -> Result<()> {
     let mut indexed = std::collections::HashSet::new();
     let mut accounts = None;
     for file in &index {
-        let key = file["id"].as_str().filter(|v| crate::valid_file_id(v)).context("Invalid indexed file ID.")?;
+    let key = file["id"].as_str().filter(|v| crate::files::valid_file_id(v)).context("Invalid indexed file ID.")?;
         ensure!(indexed.insert(key), "Duplicate indexed file {key}.");
         let blob = files.join(format!("{key}.blob"));
         ensure!(Some(fs::metadata(&blob)?.len()) == file["size"].as_u64(), "Indexed size differs for file {key}.");
@@ -99,7 +99,7 @@ fn check_files(root: &Path, id: &str) -> Result<()> {
             ensure!(digest.as_str() == Some(&super::checksum_file(&blob)?.1), "Indexed SHA-256 differs for file {key}.");
         }
         if !file["ownerId"].is_null() {
-            let owner = crate::file_owner(file).context("Invalid file owner.")?;
+    let owner = crate::files::file_owner(file).context("Invalid file owner.")?;
             if accounts.is_none() {
                 accounts = Some(Connection::open_with_flags(layout::identity(root, id), OpenFlags::SQLITE_OPEN_READ_ONLY)?);
             }

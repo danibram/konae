@@ -497,7 +497,7 @@ fn write_files_tar<R: Read>(
     for file in &index {
         let id = file["id"]
             .as_str()
-            .filter(|id| valid_file_id(id))
+            .filter(|id| files::valid_file_id(id))
             .context("A stored file has an invalid id.")?;
         let name = format!("{id}.blob");
         let (size, mut blob) =
@@ -699,7 +699,7 @@ pub(crate) fn unpack_files(
     for file in &index {
         let id = file["id"]
             .as_str()
-            .filter(|id| valid_file_id(id))
+            .filter(|id| files::valid_file_id(id))
             .context("The file index has an invalid file id.")?;
         let declared = file["size"]
             .as_u64()
@@ -725,10 +725,10 @@ pub(crate) fn unpack_files(
             "name": file["name"].as_str().unwrap_or("file").replace(['/', '\\'], "-").chars().take(180).collect::<String>(),
             "type": file["type"].as_str().unwrap_or("application/octet-stream"),
             "size": declared,
-            "visibility": file_visibility(file),
+            "visibility": files::file_visibility(file),
             "createdAt": file["createdAt"].as_u64().unwrap_or_else(now_ms),
         });
-        if let Some(owner) = file_owner(file) {
+        if let Some(owner) = files::file_owner(file) {
             ensure!(
                 accepted_owner_id(owner),
                 "File {id} names an invalid owner."

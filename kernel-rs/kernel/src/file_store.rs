@@ -136,7 +136,7 @@ impl FileStore for LocalFolder {
             };
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(id) = entry.file_name().to_str().and_then(|name| name.strip_suffix(".blob")) {
-                    if crate::valid_file_id(id) {
+                    if crate::files::valid_file_id(id) {
                         let metadata = entry.metadata().await?;
                         let modified_ms = metadata
                             .modified()
@@ -374,7 +374,7 @@ impl FileStore for S3Store {
                 .into_iter()
                 .filter_map(|(key, modified_ms, size)| {
                     let id = key.strip_prefix(&folder)?;
-                    crate::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), size, modified_ms })
+                    crate::files::valid_file_id(id).then(|| StoredObject { id: id.to_owned(), size, modified_ms })
                 })
                 .collect();
             objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -622,7 +622,7 @@ pub async fn indexed_files(data_root: &Path, deployment: &str) -> Result<Option<
     index
         .iter()
         .map(|file| {
-            let id = file["id"].as_str().filter(|id| crate::valid_file_id(id)).with_context(|| format!("{} names an invalid file id.", path.display()))?;
+            let id = file["id"].as_str().filter(|id| crate::files::valid_file_id(id)).with_context(|| format!("{} names an invalid file id.", path.display()))?;
             Ok((id.to_owned(), file["size"].as_u64().unwrap_or(0)))
         })
         .collect::<Result<Vec<_>>>()

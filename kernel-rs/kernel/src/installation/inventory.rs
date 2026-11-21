@@ -103,7 +103,7 @@ fn matches_name(pattern: &str, name: &str) -> bool {
         return name
             .strip_prefix('.')
             .and_then(|n| n.split_once(".import-"))
-            .is_some_and(|(blob, operation)| crate::valid_file_id(blob) && crate::valid_file_id(operation));
+            .is_some_and(|(blob, operation)| crate::files::valid_file_id(blob) && crate::files::valid_file_id(operation));
     }
     let Some((prefix, rest)) = pattern.split_once('{') else {
         return name == pattern;
@@ -116,7 +116,7 @@ fn matches_name(pattern: &str, name: &str) -> bool {
     };
     match token {
         "app" => crate::runtime::valid_app_id(id),
-        "uuid" => crate::valid_file_id(id),
+        "uuid" => crate::files::valid_file_id(id),
         "simple" => id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()),
         "backup" => crate::safe_relative_path(id) && !id.contains("..") && !id.chars().any(char::is_control),
         _ => false,
@@ -141,7 +141,7 @@ fn auxiliary(scope: &[&Policy], name: &str, entries: &BTreeMap<String, fs::FileT
         }
     }
     let (base, suffix) = name.strip_prefix('.')?.rsplit_once(".tmp-")?;
-    (crate::valid_file_id(suffix) && scope.iter().any(|row| row.kind == "file" && matches(row, base)))
+    (crate::files::valid_file_id(suffix) && scope.iter().any(|row| row.kind == "file" && matches(row, base)))
         .then_some("atomic sibling")
 }
 

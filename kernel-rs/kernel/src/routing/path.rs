@@ -253,7 +253,7 @@ pub async fn forget(state: &AppState, id: &str) -> Result<()> {
 /// one of its actions is not anonymous. An actions file the Kernel cannot read
 /// counts as having accounts.
 pub fn has_accounts(deployment: &Deployment) -> bool {
-    is_private(deployment) || crate::app_user_files(deployment)
+    is_private(deployment) || crate::files::app_user_files(deployment)
         || deployment.signup_policy.mode != SignupMode::Closed || actions_need_accounts(&deployment.actions)
 }
 

@@ -1298,12 +1298,12 @@ async fn read_file(State(state): State<AppState>, AxumPath(id): AxumPath<String>
     let counted = !matches!(&caller, Caller::Person(user) if user.entered_by.is_some());
     let mut response = match caller {
         Caller::Key(key) => read_file_as_key(&state, &deployment, &key, &id, &headers).await,
-        Caller::Person(_) => serve_file(State(state.clone()), AxumPath(id), headers).await,
+        Caller::Person(_) => files::serve_file(State(state.clone()), AxumPath(id), headers).await,
         Caller::Visitor => {
             let mut visitor = headers.clone();
             visitor.remove(header::COOKIE);
             visitor.remove(header::AUTHORIZATION);
-            serve_file(State(state.clone()), AxumPath(id), visitor).await
+            files::serve_file(State(state.clone()), AxumPath(id), visitor).await
         }
     };
     if response.status().is_success() && counted {
@@ -1323,19 +1323,14 @@ fn key_reads(key: &ApiKey, visibility: &str, private_deployment: bool) -> bool {
 async fn read_file_as_key(state: &AppState, deployment: &Deployment, key: &ApiKey, id: &str, headers: &HeaderMap) -> Response {
     let not_found = || error(StatusCode::NOT_FOUND, "File not found.");
     if let Err(refused) = crate::modules::require_on(&deployment.modules, "files") { return error(StatusCode::FORBIDDEN, &refused.message); }
-    if app_user_files(deployment) || !valid_file_id(id) {
+    if files::app_user_files(deployment) || !files::valid_file_id(id) {
         return not_found();
     }
-    let directory = crate::layout::files(&state.data_root, &deployment.id);
-    let index = match tokio::fs::read(directory.join("index.json")).await {
-        Ok(bytes) => serde_json::from_slice::<Vec<Value>>(&bytes).unwrap_or_default(),
-        Err(_) => return not_found(),
-    };
-    let Some(metadata) = index.iter().find(|file| file["id"].as_str() == Some(id)) else { return not_found() };
-    if !key_reads(key, file_visibility(metadata), is_private(deployment)) {
+    let Some(metadata) = files::find_file_metadata(state, &deployment.id, id).await else { return not_found() };
+    if !key_reads(key, files::file_visibility(&metadata), is_private(deployment)) {
         return not_found();
     }
-    file_response(state, &deployment.id, metadata, headers).await
+    files::file_response(state, &deployment.id, &metadata, headers).await
 }
 
 #[cfg(test)]

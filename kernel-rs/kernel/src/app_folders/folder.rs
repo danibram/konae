@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(rewritten["modules"]["files"]["on"], true);
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("legacy-uploads.localhost"));
-        let response = crate::serve_file(State(state), AxumPath("018f2b2c-4a10-7a01-8000-000000000001".into()), headers).await;
+        let response = crate::files::serve_file(State(state), AxumPath("018f2b2c-4a10-7a01-8000-000000000001".into()), headers).await;
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(bytes.as_ref(), b"legacy file\n");
